@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import Validators from "./pages/Validators";
+
 import RoundStats from "./pages/RoundStats";
 import ANS from "./pages/ANS";
 import Stats from "./pages/Stats";
@@ -26,6 +27,7 @@ import ValidatorLicenses from "./pages/ValidatorLicenses";
 import ExternalPartySetup from "./pages/ExternalPartySetup";
 import BackfillProgress from "./pages/BackfillProgress";
 import LiveUpdates from "./pages/LiveUpdates";
+
 import Elections from "./pages/Elections";
 import TransferCounters from "./pages/TransferCounters";
 import ExternalPartyRules from "./pages/ExternalPartyRules";
@@ -40,7 +42,7 @@ const queryClient = new QueryClient({
       staleTime: 60_000,
       gcTime: 5 * 60_000,
       refetchOnWindowFocus: false,
-      networkMode: 'offlineFirst',
+      networkMode: "offlineFirst",
     },
   },
 });
@@ -74,6 +76,7 @@ const App = () => (
           <Route path="/validator-licenses" element={<ValidatorLicenses />} />
           <Route path="/external-party-setup" element={<ExternalPartySetup />} />
           <Route path="/amulet-rules" element={<AmuletRules />} />
+
           <Route path="/elections" element={<Elections />} />
           <Route path="/transfer-counters" element={<TransferCounters />} />
           <Route path="/external-party-rules" element={<ExternalPartyRules />} />
