@@ -33,5 +33,6 @@ jobs:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKFILL_PAGE_SIZE: "200"
         run: node scripts/fetch-backfill-history.js
