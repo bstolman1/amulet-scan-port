@@ -314,55 +314,112 @@ export type Database = {
       }
       ledger_events: {
         Row: {
+          contract_id: string | null
           created_at: string
+          created_at_ts: string | null
           event_data: Json
+          event_id: string | null
           event_type: string
           id: string
+          observers: string[] | null
+          package_name: string | null
+          payload: Json | null
+          raw: Json | null
           round: number
+          signatories: string[] | null
+          template_id: string | null
           timestamp: string
+          update_id: string | null
         }
         Insert: {
+          contract_id?: string | null
           created_at?: string
+          created_at_ts?: string | null
           event_data: Json
+          event_id?: string | null
           event_type: string
           id?: string
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
           round: number
+          signatories?: string[] | null
+          template_id?: string | null
           timestamp?: string
+          update_id?: string | null
         }
         Update: {
+          contract_id?: string | null
           created_at?: string
+          created_at_ts?: string | null
           event_data?: Json
+          event_id?: string | null
           event_type?: string
           id?: string
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
           round?: number
+          signatories?: string[] | null
+          template_id?: string | null
           timestamp?: string
+          update_id?: string | null
         }
         Relationships: []
       }
       ledger_updates: {
         Row: {
           created_at: string
+          effective_at: string | null
           id: string
+          kind: string | null
+          migration_id: number | null
+          offset: number | null
+          raw: Json | null
+          record_time: string | null
           round: number
+          synchronizer_id: string | null
           timestamp: string
           update_data: Json
+          update_id: string | null
           update_type: string
+          workflow_id: string | null
         }
         Insert: {
           created_at?: string
+          effective_at?: string | null
           id?: string
+          kind?: string | null
+          migration_id?: number | null
+          offset?: number | null
+          raw?: Json | null
+          record_time?: string | null
           round: number
+          synchronizer_id?: string | null
           timestamp?: string
           update_data: Json
+          update_id?: string | null
           update_type: string
+          workflow_id?: string | null
         }
         Update: {
           created_at?: string
+          effective_at?: string | null
           id?: string
+          kind?: string | null
+          migration_id?: number | null
+          offset?: number | null
+          raw?: Json | null
+          record_time?: string | null
           round?: number
+          synchronizer_id?: string | null
           timestamp?: string
           update_data?: Json
+          update_id?: string | null
           update_type?: string
+          workflow_id?: string | null
         }
         Relationships: []
       }
