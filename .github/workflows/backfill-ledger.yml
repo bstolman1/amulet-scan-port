@@ -2,7 +2,7 @@ name: Backfill Ledger History
 
 on:
   schedule:
-    - cron: '0 0 * * 0'   # every Sunday at 00:00 UTC
+    - cron: '0 0 * * 0'
   workflow_dispatch: {}
 
 concurrency:
@@ -14,16 +14,16 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1. Checkout clean copy of the repo
+      # 1. Checkout clean repo
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          clean: true          # ensures workspace is wiped first
+          clean: true
           fetch-depth: 0
 
-      # 2. Clean any leftover files from Windows self-hosted runner
+      # 2. Ensure clean workspace on Windows
       - name: Ensure clean workspace
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Cleaning workspace..."
           git clean -xfd
@@ -35,23 +35,23 @@ jobs:
         with:
           node-version: "20"
 
-      # 4. Install dependencies from your package.json
+      # 4. Install repo dependencies
       - name: Install dependencies
-        shell: pwsh
+        shell: powershell
         run: |
-          Write-Host "Installing NPM deps..."
+          Write-Host "Installing dependencies..."
           npm ci
 
-      # 5. Show first 20 lines of the script actually running (debug)
+      # 5. Verify which script version is used
       - name: Verify script version
-        shell: pwsh
+        shell: powershell
         run: |
-          Write-Host "===== Running script version check ====="
+          Write-Host "===== Script version running ====="
           Get-Content scripts/fetch-backfill-history.js -Head 20
 
       # 6. Run the backfill script
       - name: Run backfill
-        shell: pwsh
+        shell: powershell
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
