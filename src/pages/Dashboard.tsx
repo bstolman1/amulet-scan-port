@@ -1,127 +1,137 @@
+import { DashboardLayout } from "@/components/DashboardLayout";
+import { StatCard } from "@/components/StatCard";
+import { Activity, Coins, TrendingUp, Users, Zap, Package } from "lucide-react";
+import { SearchBar } from "@/components/SearchBar";
 import { Card } from "@/components/ui/card";
-import { useAcsSnapshots } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { pickAmount, pickLockedAmount } from "@/lib/amount-utils";
-import { Loader2 } from "lucide-react";
-import DashboardLayout from "@/components/DashboardLayout";
-import StatCard from "@/components/StatCard";
-
+import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
+import { useQuery } from "@tanstack/react-query";
+import { scanApi } from "@/lib/api-client";
+import { Skeleton } from "@/components/ui/skeleton";
+import { fetchConfigData } from "@/lib/config-sync";
 const Dashboard = () => {
-  const { data: snapshots, isLoading } = useAcsSnapshots({ limit: 1 });
-  const { data: aggregatedData, isLoading: isLoadingAggregated } = useAggregatedTemplateData();
+  // Fetch real data from Canton Scan API
+  const { data: latestRound } = useQuery({
+    queryKey: ["latestRound"],
+    queryFn: () => scanApi.fetchLatestRound(),
+  });
+  const {
+    data: totalBalance,
+    isError: balanceError,
+    isLoading: balanceLoading,
+  } = useQuery({
+    queryKey: ["totalBalance"],
+    queryFn: () => scanApi.fetchTotalBalance(),
+    retry: 2,
+    retryDelay: 1000,
+  });
+  const { data: topValidators, isError: validatorsError } = useQuery({
+    queryKey: ["topValidators"],
+    queryFn: () => scanApi.fetchTopValidators(),
+    retry: 1,
+  });
+  const { data: topProviders } = useQuery({
+    queryKey: ["topProviders"],
+    queryFn: () => scanApi.fetchTopProviders(),
+    retry: 1,
+  });
+  const { data: transactions } = useQuery({
+    queryKey: ["recentTransactions"],
+    queryFn: () =>
+      scanApi.fetchTransactions({
+        page_size: 5,
+        sort_order: "desc",
+      }),
+  });
+  const { data: configData } = useQuery({
+    queryKey: ["sv-config"],
+    queryFn: () => fetchConfigData(),
+    staleTime: 24 * 60 * 60 * 1000,
+  });
 
-  if (isLoading || isLoadingAggregated) {
-    return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[400px]">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
-      </DashboardLayout>
-    );
-  }
+  // Calculate total rewards from validators (rounds collected) and providers (app rewards)
+  const totalValidatorRounds =
+    topValidators?.validatorsAndRewards.reduce((sum, v) => sum + parseFloat(v.rewards), 0) || 0;
+  const totalAppRewards = topProviders?.providersAndRewards.reduce((sum, p) => sum + parseFloat(p.rewards), 0) || 0;
+  const ccPrice = transactions?.transactions?.[0]?.amulet_price
+    ? parseFloat(transactions.transactions[0].amulet_price)
+    : undefined;
+  const marketCap =
+    totalBalance?.total_balance && ccPrice !== undefined
+      ? (parseFloat(totalBalance.total_balance) * ccPrice).toLocaleString(undefined, {
+          maximumFractionDigits: 0,
+        })
+      : "Loading...";
+  const superValidatorCount = configData?.superValidators.length || 0;
 
-  const latestSnapshot = snapshots?.[0];
-  const templates = latestSnapshot?.snapshot_data as any;
-
-  // Calculate total supply from Amulet and LockedAmulet templates
-  const amulets = templates?.["Splice:Amulet:Amulet"] || [];
-  const lockedAmulets = templates?.["Splice:Amulet:LockedAmulet"] || [];
-
-  const totalSupply = amulets.reduce((sum: number, contract: any) => {
-    return sum + pickAmount(contract);
-  }, 0);
-
-  const totalLocked = lockedAmulets.reduce((sum: number, contract: any) => {
-    return sum + pickLockedAmount(contract);
-  }, 0);
-
-  const circulating = totalSupply - totalLocked;
-
-  // Get round number
-  const roundNumber = latestSnapshot?.round || 0;
-
-  // Count validators from ValidatorLicense template
-  const validators = templates?.["Splice:ValidatorLicense:ValidatorLicense"] || [];
-  const validatorCount = validators.length;
-
-  // Count active templates
-  const activeTemplates = aggregatedData?.length || 0;
-
+  const stats = {
+    totalBalance: balanceLoading
+      ? "Loading..."
+      : balanceError
+        ? "Connection Failed"
+        : totalBalance?.total_balance
+          ? parseFloat(totalBalance.total_balance).toLocaleString(undefined, {
+              maximumFractionDigits: 2,
+            })
+          : "Loading...",
+    marketCap: balanceLoading ? "Loading..." : balanceError ? "Connection Failed" : marketCap,
+    superValidators: configData ? superValidatorCount.toString() : "Loading...",
+    currentRound: latestRound?.round.toLocaleString() || "Loading...",
+    coinPrice: ccPrice !== undefined ? `$${ccPrice.toFixed(4)}` : "Loading...",
+    totalRewards:
+      totalAppRewards > 0
+        ? parseFloat(totalAppRewards.toString()).toLocaleString(undefined, {
+            maximumFractionDigits: 2,
+          })
+        : "Connection Failed",
+    networkHealth: "99.9%",
+  };
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Real-time overview of the Amulet network
-          </p>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            title="Current Round"
-            value={roundNumber.toLocaleString()}
-            description="Latest processed round"
-          />
-          <StatCard
-            title="Total Supply"
-            value={`${totalSupply.toLocaleString()} CC`}
-            description="All Amulets in circulation"
-          />
-          <StatCard
-            title="Circulating Supply"
-            value={`${circulating.toLocaleString()} CC`}
-            description="Unlocked Amulets"
-          />
-          <StatCard
-            title="Active Validators"
-            value={validatorCount.toLocaleString()}
-            description="Current validator licenses"
-          />
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-2">Network Activity</h3>
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Active Templates</span>
-                <span className="font-medium">{activeTemplates}</span>
+      <div className="space-y-8">
+        {/* Hero Section */}
+        <div className="relative">
+          <div className="absolute inset-0 gradient-primary rounded-2xl blur-3xl opacity-20" />
+          <div className="relative glass-card p-8">
+            <div className="flex justify-end mb-4">
+              <TriggerACSSnapshotButton />
+            </div>
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-4xl font-bold mb-2">Welcome to SCANTON</h2>
+                <p className="text-lg text-muted-foreground">
+                  Explore transactions, validators, and network statistics
+                </p>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Locked Supply</span>
-                <span className="font-medium">{totalLocked.toLocaleString()} CC</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Lock Percentage</span>
-                <span className="font-medium">
-                  {totalSupply > 0 ? ((totalLocked / totalSupply) * 100).toFixed(2) : 0}%
-                </span>
+              <div className="w-full md:w-[420px]">
+                {/* Local search beside hero title */}
+                <SearchBar />
               </div>
             </div>
-          </Card>
-
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-2">Quick Links</h3>
-            <div className="space-y-2">
-              <a href="/transactions" className="block text-primary hover:underline">
-                View Recent Transactions
-              </a>
-              <a href="/validators" className="block text-primary hover:underline">
-                Validator Details
-              </a>
-              <a href="/supply" className="block text-primary hover:underline">
-                Supply Breakdown
-              </a>
-              <a href="/governance" className="block text-primary hover:underline">
-                Governance Activity
-              </a>
-            </div>
-          </Card>
+          </div>
         </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <StatCard title="Total Amulet Balance" value={stats.totalBalance} icon={Coins} gradient />
+          <StatCard
+            title="Canton Coin Price (USD)"
+            value={stats.coinPrice}
+            icon={Activity}
+            trend={{
+              value: "",
+              positive: true,
+            }}
+          />
+          <StatCard title="Market Cap (USD)" value={`$${stats.marketCap}`} icon={Users} />
+          <StatCard title="Current Round" value={stats.currentRound} icon={Package} />
+          <StatCard title="Super Validators" value={stats.superValidators} icon={Zap} />
+          <StatCard title="Cumulative App Rewards" value={stats.totalRewards} icon={TrendingUp} gradient />
+        </div>
+
+        {/* Canton Coin Price */}
+        <Card className="glass-card"></Card>
       </div>
     </DashboardLayout>
   );
 };
-
 export default Dashboard;
