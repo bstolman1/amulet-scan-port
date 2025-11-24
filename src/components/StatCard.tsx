@@ -1,21 +1,28 @@
-import { Card } from "@/components/ui/card";
-
+import { LucideIcon } from "lucide-react";
+import { ReactNode } from "react";
 interface StatCardProps {
   title: string;
   value: string | number;
-  description?: string;
+  icon: LucideIcon;
+  trend?: {
+    value: string;
+    positive: boolean;
+  };
+  gradient?: boolean;
 }
-
-const StatCard = ({ title, value, description }: StatCardProps) => {
+export const StatCard = ({ title, value, icon: Icon, trend, gradient }: StatCardProps) => {
   return (
-    <Card className="p-6">
-      <h3 className="text-sm font-medium text-muted-foreground mb-2">{title}</h3>
-      <div className="text-2xl font-bold mb-1">{value}</div>
-      {description && (
-        <p className="text-xs text-muted-foreground">{description}</p>
-      )}
-    </Card>
+    <div className={`glass-card p-6 transition-smooth hover:scale-105 ${gradient ? "glow-primary" : ""}`}>
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <p className="text-sm font-medium text-muted-foreground mb-2">{title}</p>
+          <p className="text-3xl font-bold text-foreground mb-1">{value}</p>
+          {trend && trend.value}
+        </div>
+        <div className={`p-3 rounded-lg ${gradient ? "gradient-primary" : "bg-muted"}`}>
+          <Icon className={`h-6 w-6 ${gradient ? "text-primary-foreground" : "text-foreground"}`} />
+        </div>
+      </div>
+    </div>
   );
 };
-
-export default StatCard;
