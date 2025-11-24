@@ -1,70 +1,136 @@
-import { useState } from "react";
-import DashboardLayout from "@/components/DashboardLayout";
-import { useAcsSnapshots } from "@/hooks/use-acs-snapshots";
+import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
-import SearchBar from "@/components/SearchBar";
+import { Input } from "@/components/ui/input";
+import { Search, Globe } from "lucide-react";
+import { useState } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
+import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { DataSourcesFooter } from "@/components/DataSourcesFooter";
+import { PaginationControls } from "@/components/PaginationControls";
 
 const ANS = () => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const { data: snapshots, isLoading } = useAcsSnapshots({ limit: 1 });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 20;
 
-  const latestSnapshot = snapshots?.[0];
-  const templates = latestSnapshot?.snapshot_data as any;
-  const ansEntries = templates?.["Splice:Ans:AnsEntry"] || [];
+  const { data: snapshot } = useLatestACSSnapshot();
 
-  const filteredEntries = ansEntries.filter((entry: any) => {
-    const searchLower = searchTerm.toLowerCase();
-    const contractId = entry.contractId || "";
-    return contractId.toLowerCase().includes(searchLower);
+  const ansEntriesQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntry", !!snapshot);
+  const ansContextsQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntryContext", !!snapshot);
+
+  const isLoading = ansEntriesQuery.isLoading || ansContextsQuery.isLoading;
+  const ansEntries = ansEntriesQuery.data?.data || [];
+  const ansContexts = ansContextsQuery.data?.data || [];
+
+  const enrichedEntries = ansEntries.map((entry: any) => {
+    const context = ansContexts.find(
+      (ctx: any) => ctx.payload?.name === entry.payload?.name || ctx.name === entry.payload?.name,
+    );
+    return {
+      name: entry.payload?.name || entry.name,
+      user: entry.payload?.user || entry.user,
+      url: entry.payload?.url || entry.url,
+      description: entry.payload?.description || entry.description,
+      expiresAt: entry.payload?.expiresAt || entry.expiresAt,
+      reference: context?.payload?.reference || context?.reference,
+      ...entry,
+    };
   });
+
+  const filteredEntries = enrichedEntries.filter(
+    (entry: any) =>
+      (entry.name?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
+      (entry.user?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
+      (entry.description?.toLowerCase() || "").includes(searchQuery.toLowerCase()),
+  );
+
+  const paginatedEntries = filteredEntries.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">ANS Entries</h1>
-          <p className="text-muted-foreground">
-            Amulet Name Service registry
-          </p>
+          <h2 className="text-3xl font-bold mb-2 flex items-center gap-2">
+            <Globe className="h-8 w-8 text-primary" />
+            Amulet Name Service (ANS)
+          </h2>
+          <p className="text-muted-foreground">Human-readable names for Canton Network parties</p>
         </div>
 
-        <SearchBar
-          value={searchTerm}
-          onChange={setSearchTerm}
-          placeholder="Search ANS entries..."
-        />
-
-        {isLoading ? (
-          <div className="flex items-center justify-center min-h-[400px]">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <Card className="glass-card p-6">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search ANS entries..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10"
+            />
           </div>
-        ) : (
-          <div className="space-y-2">
-            {filteredEntries.map((entry: any, index: number) => (
-              <Card key={index} className="p-4">
-                <div className="space-y-2">
-                  <div className="font-medium break-all text-sm">
-                    {entry.contractId}
-                  </div>
-                  <details className="text-sm">
-                    <summary className="cursor-pointer text-primary">
-                      View Details
-                    </summary>
-                    <pre className="mt-2 text-xs bg-muted p-2 rounded overflow-auto max-h-60">
-                      {JSON.stringify(entry, null, 2)}
-                    </pre>
-                  </details>
-                </div>
+        </Card>
+
+        {isLoading && (
+          <div className="space-y-4">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <Card key={i} className="p-6">
+                <Skeleton className="h-6 w-32 mb-2" />
+                <Skeleton className="h-4 w-full" />
               </Card>
             ))}
-            {filteredEntries.length === 0 && (
-              <div className="text-center text-muted-foreground py-8">
-                No ANS entries found
-              </div>
-            )}
           </div>
         )}
+        {!isLoading && filteredEntries.length === 0 && searchQuery && (
+          <Card className="p-6">
+            <p className="text-muted-foreground text-center">No ANS entries found</p>
+          </Card>
+        )}
+        {!isLoading && filteredEntries.length > 0 && (
+          <>
+            <div className="space-y-4">
+              {paginatedEntries.map((entry: any, i: number) => (
+                <Card key={i} className="p-6">
+                  <h3 className="text-xl font-semibold text-primary mb-2">{entry.name}</h3>
+                  {entry.expiresAt && (
+                    <p className="text-sm text-muted-foreground">
+                      Expires: {new Date(entry.expiresAt).toLocaleDateString()}
+                    </p>
+                  )}
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">User:</span>{" "}
+                    <span className="font-mono text-xs">{entry.user}</span>
+                  </p>
+                  {entry.url && (
+                    <p className="text-sm">
+                      <span className="text-muted-foreground">URL:</span>{" "}
+                      <a
+                        href={entry.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        {entry.url}
+                      </a>
+                    </p>
+                  )}
+                  {entry.description && <p className="text-sm text-muted-foreground">{entry.description}</p>}
+                </Card>
+              ))}
+            </div>
+            <PaginationControls
+              currentPage={currentPage}
+              totalItems={filteredEntries.length}
+              pageSize={pageSize}
+              onPageChange={setCurrentPage}
+            />
+          </>
+        )}
+
+        <DataSourcesFooter
+          snapshotId={snapshot?.id}
+          templateSuffixes={["Splice:Ans:AnsEntry", "Splice:Ans:AnsEntryContext"]}
+          isProcessing={false}
+        />
       </div>
     </DashboardLayout>
   );
