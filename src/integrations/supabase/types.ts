@@ -118,24 +118,39 @@ export type Database = {
       }
       backfill_cursors: {
         Row: {
+          complete: boolean | null
           cursor_name: string
           id: string
+          last_before: string | null
           last_processed_round: number
+          max_time: string | null
           migration_id: number | null
+          min_time: string | null
+          synchronizer_id: string | null
           updated_at: string
         }
         Insert: {
+          complete?: boolean | null
           cursor_name: string
           id?: string
+          last_before?: string | null
           last_processed_round?: number
+          max_time?: string | null
           migration_id?: number | null
+          min_time?: string | null
+          synchronizer_id?: string | null
           updated_at?: string
         }
         Update: {
+          complete?: boolean | null
           cursor_name?: string
           id?: string
+          last_before?: string | null
           last_processed_round?: number
+          max_time?: string | null
           migration_id?: number | null
+          min_time?: string | null
+          synchronizer_id?: string | null
           updated_at?: string
         }
         Relationships: []
