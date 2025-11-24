@@ -12,18 +12,26 @@ import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton"
 
 interface Snapshot {
   id: string;
-  status: string;
-  processed_pages: number;
-  processed_events: number;
-  total_events: number;
-  progress_percentage: number;
-  started_at: string;
-  completed_at: string | null;
-  error_message: string | null;
-  migration_id: number;
+  round: number;
+  snapshot_data: any;
   timestamp: string;
-  elapsed_time_ms: number;
-  pages_per_minute: number;
+  created_at: string;
+  migration_id: number | null;
+  record_time: string | null;
+  sv_url: string | null;
+  canonical_package: string | null;
+  amulet_total: number | null;
+  locked_total: number | null;
+  circulating_supply: number | null;
+  entry_count: number | null;
+  status: string | null;
+  error_message: string | null;
+  updated_at: string | null;
+  // Computed fields
+  processed_pages?: number;
+  processed_events?: number;
+  elapsed_time_ms?: number;
+  pages_per_minute?: number;
   template_batch_updates?: number;
   last_batch_info?: any;
 }
@@ -101,7 +109,7 @@ const SnapshotProgress = () => {
       const { data, error } = await supabase
         .from("acs_snapshots")
         .select("*")
-        .order("started_at", { ascending: false })
+        .order("timestamp", { ascending: false })
         .limit(10);
 
       if (error) throw error;
@@ -249,7 +257,7 @@ const SnapshotProgress = () => {
                     Migration #{snapshot.migration_id}
                   </CardTitle>
                   <CardDescription>
-                    Started {formatDistanceToNow(new Date(snapshot.started_at), { addSuffix: true })}
+                    Created {formatDistanceToNow(new Date(snapshot.timestamp), { addSuffix: true })}
                   </CardDescription>
                 </div>
                 {getStatusBadge(snapshot.status)}
@@ -384,9 +392,9 @@ const SnapshotProgress = () => {
               )}
 
               {/* Completion Info */}
-              {snapshot.completed_at && (
+              {snapshot.status === 'completed' && snapshot.updated_at && (
                 <div className="text-sm text-muted-foreground">
-                  Completed {formatDistanceToNow(new Date(snapshot.completed_at), { addSuffix: true })}
+                  Completed {formatDistanceToNow(new Date(snapshot.updated_at), { addSuffix: true })}
                 </div>
               )}
             </CardContent>

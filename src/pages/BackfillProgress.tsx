@@ -64,14 +64,12 @@ const BackfillProgress = () => {
   useEffect(() => {
     const allCursors = [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
 
-    const migrations = new Set(allCursors.map((c) => c.migration_id));
-
     setStats({
       totalCursors: allCursors.length,
-      completedCursors: allCursors.filter((c) => c.complete).length,
+      completedCursors: allCursors.filter((c) => c.last_processed_round > 0).length,
       totalUpdates: 0, // Will be updated by realtime
       totalEvents: 0, // Will be updated by realtime
-      activeMigrations: migrations.size,
+      activeMigrations: 0, // Not available in current schema
     });
   }, [cursors, realtimeCursors]);
 
@@ -104,18 +102,15 @@ const BackfillProgress = () => {
                   id: crypto.randomUUID(),
                   timestamp: new Date().toISOString(),
                   type: "cursor_update",
-                  migrationId: cursor.migration_id,
-                  synchronizerId: cursor.synchronizer_id,
-                  complete: cursor.complete,
                 },
               ]);
-              setLastActivity(`New cursor: ${cursor.synchronizer_id.substring(0, 20)}...`);
+              setLastActivity(`New cursor: ${cursor.cursor_name}`);
             }
           } else if (payload.eventType === "UPDATE") {
             setRealtimeCursors((prev) =>
               prev.map((c) => (c.id === payload.new.id ? (payload.new as BackfillCursor) : c)),
             );
-            if (isMonitoring && payload.new.complete) {
+            if (isMonitoring && payload.new.last_processed_round > 0) {
               const cursor = payload.new as BackfillCursor;
               setActivityLog((prev) => [
                 ...prev.slice(-99),
@@ -123,12 +118,10 @@ const BackfillProgress = () => {
                   id: crypto.randomUUID(),
                   timestamp: new Date().toISOString(),
                   type: "cursor_update",
-                  migrationId: cursor.migration_id,
-                  synchronizerId: cursor.synchronizer_id,
                   complete: true,
                 },
               ]);
-              setLastActivity(`Completed: ${cursor.synchronizer_id.substring(0, 20)}...`);
+              setLastActivity(`Updated: ${cursor.cursor_name}`);
             }
           }
         },
@@ -149,11 +142,10 @@ const BackfillProgress = () => {
                 id: crypto.randomUUID(),
                 timestamp: new Date().toISOString(),
                 type: "update",
-                updateId: payload.new.update_id,
-                migrationId: payload.new.migration_id,
+                updateId: payload.new.id,
               },
             ]);
-            setLastActivity(`New update: ${payload.new.update_id.substring(0, 30)}...`);
+            setLastActivity(`New update: ${payload.new.update_type}`);
           }
         },
       )
@@ -173,10 +165,10 @@ const BackfillProgress = () => {
                 id: crypto.randomUUID(),
                 timestamp: new Date().toISOString(),
                 type: "event",
-                eventId: payload.new.event_id,
+                eventId: payload.new.id,
               },
             ]);
-            setLastActivity(`New event: ${payload.new.event_id.substring(0, 30)}...`);
+            setLastActivity(`New event: ${payload.new.event_type}`);
           }
         },
       )
@@ -407,7 +399,7 @@ const BackfillProgress = () => {
                                 <Badge variant={log.complete ? "default" : "secondary"} className="mr-2">
                                   {log.complete ? "Completed" : "Updated"}
                                 </Badge>
-                                {log.synchronizerId}
+                                Cursor updated
                               </>
                             ) : log.type === "update" ? (
                               <>

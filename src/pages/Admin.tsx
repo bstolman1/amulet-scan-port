@@ -53,7 +53,7 @@ const Admin = () => {
   const [githubLink, setGithubLink] = useState("");
   const [requiresOnchainVote, setRequiresOnchainVote] = useState(false);
   const [cipType, setCipType] = useState("");
-  const [cipTypes, setCipTypes] = useState<{ id: string; type_name: string }[]>([]);
+  const [cipTypes, setCipTypes] = useState<{ id: string; name: string }[]>([]);
   const [newTypeName, setNewTypeName] = useState("");
   const [isAddTypeDialogOpen, setIsAddTypeDialogOpen] = useState(false);
   const [currentCipId, setCurrentCipId] = useState<string | null>(null);
@@ -87,7 +87,7 @@ const Admin = () => {
 
   const fetchCipTypes = async () => {
     try {
-      const { data, error } = await supabase.from("cip_types").select("*").order("type_name");
+      const { data, error } = await supabase.from("cip_types").select("*").order("name");
 
       if (error) throw error;
       setCipTypes(data || []);
@@ -140,7 +140,7 @@ const Admin = () => {
           const { data: votes } = await supabase
             .from("featured_app_committee_votes")
             .select("*")
-            .eq("featured_app_id", app.id);
+            .eq("app_name", app.app_name);
 
           return {
             ...app,
@@ -166,7 +166,7 @@ const Admin = () => {
     }
 
     try {
-      const { error } = await supabase.from("cip_types").insert({ type_name: newTypeName.trim() });
+      const { error } = await supabase.from("cip_types").insert({ name: newTypeName.trim() });
 
       if (error) throw error;
 
@@ -304,8 +304,9 @@ const Admin = () => {
         .from("featured_app_votes")
         .insert({
           app_name: featuredAppName,
-          description: featuredAppDescription,
-          vote_count: 0,
+          validator_address: 'admin',
+          vote: 'yes',
+          voting_power: 0,
         })
         .select()
         .single();
@@ -339,11 +340,8 @@ const Admin = () => {
     try {
       const { error } = await supabase.from("featured_app_committee_votes").insert(
         featuredAppCommitteeVotes.map((vote) => ({
-          featured_app_id: currentFeaturedAppId,
-          member_name: vote.member,
-          email: vote.email,
-          contact: vote.contact,
-          weight: vote.weight,
+          app_name: featuredAppName,
+          committee_member: vote.member,
           vote: vote.vote,
         })),
       );
@@ -377,10 +375,7 @@ const Admin = () => {
       const { error } = await supabase.from("committee_votes").insert(
         committeeVotes.map((vote) => ({
           cip_id: currentCipId,
-          member_name: vote.member,
-          email: vote.email,
-          contact: vote.contact,
-          weight: vote.weight,
+          committee_member: vote.member,
           vote: vote.vote,
         })),
       );
@@ -415,11 +410,9 @@ const Admin = () => {
       const { error } = await supabase.from("sv_votes").insert(
         svVotes.map((vote) => ({
           cip_id: currentCipId,
-          organization: vote.organization,
-          email: vote.email,
-          contact: vote.contact,
-          weight: vote.weight,
+          validator_address: vote.organization,
           vote: vote.vote,
+          voting_power: vote.weight,
         })),
       );
 
@@ -452,13 +445,9 @@ const Admin = () => {
       const { data, error } = await supabase
         .from("cips")
         .insert({
-          cip_number: cipNumber,
+          cip_number: parseInt(cipNumber),
           title: cipTitle,
-          vote_start_date: voteStart || null,
-          vote_close_date: voteClose || null,
-          github_link: githubLink,
-          requires_onchain_vote: requiresOnchainVote,
-          cip_type: cipType,
+          cip_type_id: cipType,
         })
         .select()
         .single();
@@ -579,8 +568,8 @@ const Admin = () => {
                       >
                         <option value="">Select type...</option>
                         {cipTypes.map((type) => (
-                          <option key={type.id} value={type.type_name}>
-                            {type.type_name}
+                          <option key={type.id} value={type.id}>
+                            {type.name}
                           </option>
                         ))}
                       </select>
