@@ -2,15 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
 export interface LedgerUpdate {
-  update_id: string;
-  migration_id: number | null;
-  synchronizer_id: string | null;
-  record_time: string | null;
-  effective_at: string | null;
-  offset: string | null;
-  workflow_id: string | null;
-  kind: string | null;
-  raw: any;
+  id: string;
+  round: number;
+  timestamp: string;
+  update_type: string;
+  update_data: any;
   created_at: string;
 }
 
@@ -31,23 +27,23 @@ export function useLedgerUpdates(limit: number = 50) {
   });
 }
 
-export function useLedgerUpdatesByMigration(migrationId: number | undefined, limit: number = 50) {
+export function useLedgerUpdatesByRound(round: number | undefined, limit: number = 50) {
   return useQuery({
-    queryKey: ["ledgerUpdates", migrationId, limit],
+    queryKey: ["ledgerUpdates", round, limit],
     queryFn: async () => {
-      if (!migrationId) return [];
+      if (!round) return [];
 
       const { data, error } = await supabase
         .from("ledger_updates")
         .select("*")
-        .eq("migration_id", migrationId)
+        .eq("round", round)
         .order("created_at", { ascending: false })
         .limit(limit);
 
       if (error) throw error;
       return data as LedgerUpdate[];
     },
-    enabled: !!migrationId,
+    enabled: !!round,
     staleTime: 5_000,
   });
 }

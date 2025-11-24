@@ -3,13 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 
 export interface BackfillCursor {
   id: string;
-  migration_id: number;
-  synchronizer_id: string;
-  min_time: string | null;
-  max_time: string | null;
-  last_before: string | null;
-  complete: boolean;
-  created_at: string;
+  cursor_name: string;
+  last_processed_round: number;
   updated_at: string;
 }
 
@@ -29,22 +24,22 @@ export function useBackfillCursors() {
   });
 }
 
-export function useBackfillCursorsByMigration(migrationId: number | undefined) {
+export function useBackfillCursorByName(cursorName: string | undefined) {
   return useQuery({
-    queryKey: ["backfillCursors", migrationId],
+    queryKey: ["backfillCursors", cursorName],
     queryFn: async () => {
-      if (!migrationId) return [];
+      if (!cursorName) return null;
 
       const { data, error } = await supabase
         .from("backfill_cursors")
         .select("*")
-        .eq("migration_id", migrationId)
-        .order("updated_at", { ascending: false });
+        .eq("cursor_name", cursorName)
+        .maybeSingle();
 
       if (error) throw error;
-      return data as BackfillCursor[];
+      return data as BackfillCursor | null;
     },
-    enabled: !!migrationId,
+    enabled: !!cursorName,
     staleTime: 10_000,
   });
 }
