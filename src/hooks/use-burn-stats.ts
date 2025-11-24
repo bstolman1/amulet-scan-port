@@ -115,8 +115,8 @@ function calculateBurnFromEvent(event: any, eventsById: Record<string, any>): Pa
   // 5. Pre-approvals: AmuletRules_CreateTransferPreapproval, AmuletRules_CreateExternalPartySetupProposal, TransferPreapproval_Renew
   else if (
     (choice === "AmuletRules_CreateTransferPreapproval" ||
-     choice === "AmuletRules_CreateExternalPartySetupProposal" ||
-     choice === "TransferPreapproval_Renew") &&
+      choice === "AmuletRules_CreateExternalPartySetupProposal" ||
+      choice === "TransferPreapproval_Renew") &&
     exerciseResult?.transferResult
   ) {
     const transferResult = exerciseResult.transferResult;
@@ -216,10 +216,12 @@ export function useBurnStats(options: UseBurnStatsOptions = {}) {
       while (hasMore && pagesProcessed < maxPages) {
         const response = await scanApi.fetchUpdates({
           page_size: 100,
-          after: pageEndEventId ? {
-            after_migration_id: 0,
-            after_record_time: pageEndEventId,
-          } : undefined,
+          after: pageEndEventId
+            ? {
+                after_migration_id: 0,
+                after_record_time: pageEndEventId,
+              }
+            : undefined,
         });
 
         if (!response.transactions || response.transactions.length === 0) {
