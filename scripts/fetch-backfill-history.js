@@ -206,7 +206,9 @@ async function getCursor(migration_id, synchronizer_id, min_time, max_time) {
           min_time,
           max_time,
           last_before: null,
+          last_processed_round: 0,
           complete: false,
+          updated_at: new Date().toISOString(),
         })
         .select("*")
         .single();
@@ -345,6 +347,9 @@ async function upsertUpdatesAndEvents(transactions) {
       offset: tx.offset || null,
       workflow_id: tx.workflow_id || null,
       kind,
+      update_type: kind,
+      update_data: tx,
+      round: 0,
       raw: tx,
     });
 
@@ -358,6 +363,8 @@ async function upsertUpdatesAndEvents(transactions) {
           template_id: ce.template_id,
           package_name: ce.package_name,
           event_type: "reassign_create",
+          event_data: ce,
+          round: 0,
           payload: ce.create_arguments || {},
           signatories: ce.signatories || [],
           observers: ce.observers || [],
@@ -378,6 +385,8 @@ async function upsertUpdatesAndEvents(transactions) {
           template_id: ev.template_id || null,
           package_name: ev.package_name || null,
           event_type: eventType,
+          event_data: ev,
+          round: 0,
           payload: ev.create_arguments || ev.exercise_arguments || {},
           signatories: ev.signatories || [],
           observers: ev.observers || [],
