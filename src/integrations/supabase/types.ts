@@ -131,7 +131,7 @@ export type Database = {
         }
         Insert: {
           complete?: boolean | null
-          cursor_name: string
+          cursor_name?: string
           id?: string
           last_before?: string | null
           last_processed_round?: number

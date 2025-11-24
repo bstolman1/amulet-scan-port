@@ -62,12 +62,37 @@ let pgClient = null;
 
 async function getPgClient() {
   if (!pgClient) {
+    console.log("\n🔌 Attempting PostgreSQL connection...");
+    
+    // Parse and log connection details (masking password)
+    const dbUrl = SUPABASE_DB_URL || '';
+    const urlParts = dbUrl.match(/postgresql:\/\/([^:]+):([^@]+)@([^\/]+)\/(.+)/);
+    if (urlParts) {
+      console.log('🔍 DB Connection Debug:');
+      console.log('  - User:', urlParts[1]);
+      console.log('  - Password length:', urlParts[2] ? urlParts[2].length : 0, 'chars (ends with:', urlParts[2] ? '****' + urlParts[2].slice(-4) : 'MISSING', ')');
+      console.log('  - Host:', urlParts[3]);
+      console.log('  - Database:', urlParts[4]);
+    } else {
+      console.log('⚠️ Could not parse SUPABASE_DB_URL format');
+      console.log('  - URL starts with:', dbUrl.substring(0, 30) + '...');
+    }
+    
     pgClient = new Client({
       connectionString: SUPABASE_DB_URL,
       ssl: { rejectUnauthorized: false },
     });
-    await pgClient.connect();
-    console.log("✅ PostgreSQL client connected for fast COPY operations");
+    
+    try {
+      await pgClient.connect();
+      console.log("✅ PostgreSQL client connected for fast COPY operations");
+    } catch (connError) {
+      console.error("❌ PostgreSQL connection FAILED:");
+      console.error("  - Error name:", connError.name);
+      console.error("  - Error code:", connError.code);
+      console.error("  - Error message:", connError.message);
+      throw connError;
+    }
   }
   return pgClient;
 }
@@ -486,6 +511,11 @@ async function run() {
   console.log("🚀 Backfilling full ledger history");
   console.log("   BASE_URL:", BASE_URL);
   console.log("   PAGE_SIZE:", PAGE_SIZE);
+  console.log("\n🔧 Environment Check:");
+  console.log("   SUPABASE_URL present:", !!process.env.SUPABASE_URL);
+  console.log("   SUPABASE_ANON_KEY present:", !!process.env.SUPABASE_ANON_KEY);
+  console.log("   SUPABASE_DB_URL present:", !!process.env.SUPABASE_DB_URL);
+  console.log("   SUPABASE_DB_URL length:", process.env.SUPABASE_DB_URL?.length || 0, "chars");
   console.log("=".repeat(80));
 
   const migrations = await detectAllMigrations();
@@ -526,12 +556,32 @@ async function run() {
 }
 
 run().catch(async (err) => {
-  console.error("\n❌ FATAL in backfill indexer:", err.message);
+  console.error("\n" + "=".repeat(80));
+  console.error("❌ FATAL ERROR in backfill indexer");
+  console.error("=".repeat(80));
+  console.error("📋 Error Details:");
+  console.error("  - Message:", err.message);
+  console.error("  - Name:", err.name);
+  console.error("  - Code:", err.code);
+  console.error("\n📚 Stack Trace:");
   console.error(err.stack);
+  
+  console.error("\n🔧 Environment Variables at Error Time:");
+  console.error("  - NODE_ENV:", process.env.NODE_ENV);
+  console.error("  - SUPABASE_URL:", process.env.SUPABASE_URL ? "SET" : "MISSING");
+  console.error("  - SUPABASE_ANON_KEY:", process.env.SUPABASE_ANON_KEY ? "SET (length: " + process.env.SUPABASE_ANON_KEY.length + ")" : "MISSING");
+  console.error("  - SUPABASE_DB_URL:", process.env.SUPABASE_DB_URL ? "SET (length: " + process.env.SUPABASE_DB_URL.length + ")" : "MISSING");
+  console.error("  - BASE_URL:", process.env.BASE_URL || "(using default)");
+  console.error("=".repeat(80));
   
   // Close PostgreSQL connection on error
   if (pgClient) {
-    await pgClient.end();
+    try {
+      await pgClient.end();
+      console.error("✅ PostgreSQL client disconnected");
+    } catch (closeErr) {
+      console.error("⚠️ Error closing PostgreSQL connection:", closeErr.message);
+    }
   }
   
   process.exit(1);
