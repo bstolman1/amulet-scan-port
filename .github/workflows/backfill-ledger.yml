@@ -2,7 +2,7 @@ name: Backfill Ledger History
 
 on:
   schedule:
-    - cron: '0 0 * * 0'
+    - cron: '0 0 * * 0'   # every Sunday at 00:00 UTC
   workflow_dispatch: {}
 
 concurrency:
@@ -12,32 +12,52 @@ concurrency:
 jobs:
   backfill:
     runs-on: self-hosted
-    steps:
 
-      - name: Checkout
+    steps:
+      # 1. Checkout clean copy of the repo
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          clean: true   # ensures clean directory
+          clean: true          # ensures workspace is wiped first
+          fetch-depth: 0
 
-      - name: Clean workspace
-        run: git clean -xfd
+      # 2. Clean any leftover files from Windows self-hosted runner
+      - name: Ensure clean workspace
+        shell: pwsh
+        run: |
+          Write-Host "Cleaning workspace..."
+          git clean -xfd
+          git reset --hard
 
-      - name: Setup Node
+      # 3. Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
+      # 4. Install dependencies from your package.json
       - name: Install dependencies
-        run: npm ci
+        shell: pwsh
+        run: |
+          Write-Host "Installing NPM deps..."
+          npm ci
 
+      # 5. Show first 20 lines of the script actually running (debug)
       - name: Verify script version
-        run: head -n 20 scripts/fetch-backfill-history.js
+        shell: pwsh
+        run: |
+          Write-Host "===== Running script version check ====="
+          Get-Content scripts/fetch-backfill-history.js -Head 20
 
+      # 6. Run the backfill script
       - name: Run backfill
+        shell: pwsh
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKFILL_PAGE_SIZE: "200"
-        run: node scripts/fetch-backfill-history.js
+        run: |
+          Write-Host "===== Starting backfill ====="
+          node scripts/fetch-backfill-history.js
