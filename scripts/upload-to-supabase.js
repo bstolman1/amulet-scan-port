@@ -1,66 +1,88 @@
-#!/usr/bin/env node
-
 /**
- * upload-to-supabase.js
- * Generic utility for uploading data to Supabase tables
+ * Upload fetched ACS data to Supabase Storage and Database
  */
 
-const { createClient } = require('@supabase/supabase-js');
-const fs = require('fs');
+import { createClient } from "@supabase/supabase-js";
+import fs from "fs";
+import path from "path";
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const TABLE_NAME = process.env.TABLE_NAME;
-const DATA_FILE = process.env.DATA_FILE;
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !TABLE_NAME || !DATA_FILE) {
-  console.error('❌ Missing required environment variables');
-  console.error('Required: SUPABASE_URL, SUPABASE_ANON_KEY, TABLE_NAME, DATA_FILE');
+if (!supabaseUrl || !supabaseKey) {
+  console.error("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  console.error(
+    "Available env vars:",
+    Object.keys(process.env).filter((k) => k.includes("SUPABASE")),
+  );
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function uploadData() {
-  console.log(`📂 Reading data from ${DATA_FILE}...`);
-  const fileContent = fs.readFileSync(DATA_FILE, 'utf8');
-  const data = JSON.parse(fileContent);
+async function uploadToSupabase() {
+  try {
+    // Read summary
+    const summaryData = JSON.parse(fs.readFileSync("circulating-supply-single-sv.json", "utf-8"));
 
-  console.log(`📊 Found ${data.length} records`);
+    // Create snapshot record
+    const { data: snapshot, error: snapshotError } = await supabase
+      .from("acs_snapshots")
+      .insert({
+        sv_url: summaryData.sv_url,
+        migration_id: summaryData.migration_id,
+        record_time: summaryData.record_time,
+        canonical_package: summaryData.canonical_package,
+        amulet_total: summaryData.totals.amulet,
+        locked_total: summaryData.totals.locked,
+        circulating_supply: summaryData.totals.circulating,
+        entry_count: summaryData.entry_count,
+        status: "completed",
+      })
+      .select()
+      .single();
 
-  // Upload in batches
-  const BATCH_SIZE = 100;
-  let uploaded = 0;
+    if (snapshotError) throw snapshotError;
 
-  for (let i = 0; i < data.length; i += BATCH_SIZE) {
-    const batch = data.slice(i, i + BATCH_SIZE);
-    
-    console.log(`📤 Uploading batch ${Math.floor(i / BATCH_SIZE) + 1}...`);
-    
-    const { error } = await supabase
-      .from(TABLE_NAME)
-      .upsert(batch);
+    console.log(`✅ Created snapshot record: ${snapshot.id}`);
 
-    if (error) {
-      throw error;
+    // Upload template files to storage
+    const acsDir = "./acs_full";
+    const files = fs.readdirSync(acsDir);
+
+    for (const file of files) {
+      const filePath = path.join(acsDir, file);
+      const fileContent = fs.readFileSync(filePath);
+      const storagePath = `${snapshot.id}/${file}`;
+
+      const { error: uploadError } = await supabase.storage.from("acs-data").upload(storagePath, fileContent, {
+        contentType: "application/json",
+        upsert: true,
+      });
+
+      if (uploadError) {
+        console.error(`⚠️ Failed to upload ${file}:`, uploadError.message);
+      } else {
+        console.log(`✅ Uploaded ${file}`);
+      }
+
+      // Insert template stats
+      const templateId = file.replace(/\.json$/, "").replace(/_/g, ":");
+      const data = JSON.parse(fileContent.toString());
+
+      await supabase.from("acs_template_stats").insert({
+        snapshot_id: snapshot.id,
+        template_id: templateId,
+        contract_count: data.length,
+        storage_path: storagePath,
+      });
     }
 
-    uploaded += batch.length;
-    console.log(`   ✓ Uploaded ${uploaded}/${data.length} records`);
-  }
-
-  console.log(`\n✅ Successfully uploaded ${uploaded} records to ${TABLE_NAME}`);
-}
-
-async function main() {
-  console.log('🚀 Starting data upload to Supabase...\n');
-
-  try {
-    await uploadData();
-  } catch (error) {
-    console.error('❌ Error:', error.message);
+    console.log("✅ Upload complete!");
+  } catch (err) {
+    console.error("❌ Upload failed:", err.message);
     process.exit(1);
   }
 }
 
-main();
+uploadToSupabase();
