@@ -1,53 +1,99 @@
-#!/usr/bin/env node
+import { serve } from "https://deno.land/std/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js";
 
-/**
- * purge-acs-storage.js
- * Cleans up old ACS snapshots from Supabase to manage storage
- */
-
-const { createClient } = require('@supabase/supabase-js');
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS || '30', 10);
-
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('❌ Missing SUPABASE_URL or SUPABASE_ANON_KEY');
-  process.exit(1);
-}
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-async function purgeOldSnapshots() {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - RETENTION_DAYS);
-  const cutoffISO = cutoffDate.toISOString();
-
-  console.log(`🗑️  Purging snapshots older than ${cutoffISO}...\n`);
-
-  const { data, error } = await supabase
-    .from('acs_snapshots')
-    .delete()
-    .lt('created_at', cutoffISO)
-    .select('id');
-
-  if (error) {
-    throw error;
-  }
-
-  console.log(`✅ Deleted ${data?.length || 0} old snapshots`);
-}
-
-async function main() {
-  console.log('🚀 Starting ACS storage purge...\n');
-
+serve(async (req) => {
   try {
-    await purgeOldSnapshots();
-    console.log('\n✅ Purge complete!');
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-    process.exit(1);
-  }
-}
+    const { purge_all, snapshot_id, webhookSecret } = await req.json();
 
-main();
+    // Auth guard
+    if (webhookSecret !== Deno.env.get("ACS_UPLOAD_WEBHOOK_SECRET")) {
+      return new Response("Unauthorized", { status: 403 });
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    const bucket = "acs-data";
+    let deletedFiles = 0;
+    let deletedStats = 0;
+
+    // ---------------------------
+    // BREAK ALL SNAPSHOT FK CHAINS
+    // ---------------------------
+    await supabase
+      .from("acs_snapshots")
+      .update({ previous_snapshot_id: null })
+      .not("previous_snapshot_id", "is", null);
+
+    // ---------------------------
+    // DELETE ALL DEPENDENT TABLES
+    // ---------------------------
+    await supabase.from("acs_contract_state").delete().neq("contract_id", "");
+    await supabase.from("acs_snapshot_chunks").delete().neq("id", "");
+    
+    const { count: statsCount } = await supabase
+      .from("acs_template_stats")
+      .delete({ count: "exact" })
+      .neq("id", "");
+
+    deletedStats = statsCount || 0;
+
+    // ---------------------------
+    // RECURSIVE STORAGE DELETE
+    // ---------------------------
+    async function deletePrefix(prefix: string = "") {
+      const { data: entries, error } = await supabase.storage
+        .from(bucket)
+        .list(prefix, { limit: 1000 });
+
+      if (error) {
+        console.error("List error:", error);
+        return;
+      }
+
+      for (const entry of entries ?? []) {
+        const fullPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+        if (entry.metadata) {
+          // File
+          await supabase.storage.from(bucket).remove([fullPath]);
+          deletedFiles++;
+        } else {
+          // Folder
+          await deletePrefix(fullPath);
+          await supabase.storage.from(bucket).remove([fullPath]);
+        }
+      }
+    }
+
+    if (purge_all) {
+      await deletePrefix("");
+    } else if (snapshot_id) {
+      await deletePrefix(snapshot_id);
+    }
+
+    // ---------------------------
+    // DELETE ALL SNAPSHOTS
+    // ---------------------------
+    await supabase.from("acs_snapshots").delete().neq("id", "");
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        deleted_files: deletedFiles,
+        deleted_stats: deletedStats,
+        snapshot_id: purge_all ? "all" : snapshot_id,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+
+  } catch (err) {
+    console.error("Purge failed:", err);
+    return new Response(
+      JSON.stringify({ error: err.message }),
+      { status: 500 }
+    );
+  }
+});
