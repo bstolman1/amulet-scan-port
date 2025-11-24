@@ -121,18 +121,21 @@ export type Database = {
           cursor_name: string
           id: string
           last_processed_round: number
+          migration_id: number | null
           updated_at: string
         }
         Insert: {
           cursor_name: string
           id?: string
           last_processed_round?: number
+          migration_id?: number | null
           updated_at?: string
         }
         Update: {
           cursor_name?: string
           id?: string
           last_processed_round?: number
+          migration_id?: number | null
           updated_at?: string
         }
         Relationships: []
