@@ -196,9 +196,11 @@ async function getCursor(migration_id, synchronizer_id, min_time, max_time) {
 
     if (!data) {
       console.log(`   ➕ Creating new cursor for synchronizer=${synchronizer_id.substring(0, 20)}...`);
+      const cursor_name = `backfill_m${migration_id}_${synchronizer_id.substring(0, 30)}`;
       const { data: inserted, error: insertError } = await supabase
         .from("backfill_cursors")
         .insert({
+          cursor_name,
           migration_id,
           synchronizer_id,
           min_time,
