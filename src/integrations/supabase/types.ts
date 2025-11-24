@@ -14,16 +14,384 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      acs_snapshots: {
+        Row: {
+          created_at: string
+          id: string
+          round: number
+          snapshot_data: Json
+          timestamp: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          round: number
+          snapshot_data: Json
+          timestamp?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          round?: number
+          snapshot_data?: Json
+          timestamp?: string
+        }
+        Relationships: []
+      }
+      acs_template_stats: {
+        Row: {
+          created_at: string
+          id: string
+          instance_count: number
+          round: number
+          template_name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          instance_count?: number
+          round: number
+          template_name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          instance_count?: number
+          round?: number
+          template_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      backfill_cursors: {
+        Row: {
+          cursor_name: string
+          id: string
+          last_processed_round: number
+          updated_at: string
+        }
+        Insert: {
+          cursor_name: string
+          id?: string
+          last_processed_round?: number
+          updated_at?: string
+        }
+        Update: {
+          cursor_name?: string
+          id?: string
+          last_processed_round?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      cip_types: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      cips: {
+        Row: {
+          author: string | null
+          cip_number: number
+          cip_type_id: string | null
+          created_at: string
+          description: string | null
+          id: string
+          status: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          author?: string | null
+          cip_number: number
+          cip_type_id?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          status?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          author?: string | null
+          cip_number?: number
+          cip_type_id?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          status?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cips_cip_type_id_fkey"
+            columns: ["cip_type_id"]
+            isOneToOne: false
+            referencedRelation: "cip_types"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      committee_votes: {
+        Row: {
+          cip_id: string
+          committee_member: string
+          created_at: string
+          id: string
+          timestamp: string
+          vote: string
+        }
+        Insert: {
+          cip_id: string
+          committee_member: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          vote: string
+        }
+        Update: {
+          cip_id?: string
+          committee_member?: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          vote?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "committee_votes_cip_id_fkey"
+            columns: ["cip_id"]
+            isOneToOne: false
+            referencedRelation: "cips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      featured_app_committee_votes: {
+        Row: {
+          app_name: string
+          committee_member: string
+          created_at: string
+          id: string
+          timestamp: string
+          vote: string
+        }
+        Insert: {
+          app_name: string
+          committee_member: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          vote: string
+        }
+        Update: {
+          app_name?: string
+          committee_member?: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          vote?: string
+        }
+        Relationships: []
+      }
+      featured_app_votes: {
+        Row: {
+          app_name: string
+          created_at: string
+          id: string
+          timestamp: string
+          validator_address: string
+          vote: string
+          voting_power: number | null
+        }
+        Insert: {
+          app_name: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          validator_address: string
+          vote: string
+          voting_power?: number | null
+        }
+        Update: {
+          app_name?: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          validator_address?: string
+          vote?: string
+          voting_power?: number | null
+        }
+        Relationships: []
+      }
+      ledger_events: {
+        Row: {
+          created_at: string
+          event_data: Json
+          event_type: string
+          id: string
+          round: number
+          timestamp: string
+        }
+        Insert: {
+          created_at?: string
+          event_data: Json
+          event_type: string
+          id?: string
+          round: number
+          timestamp?: string
+        }
+        Update: {
+          created_at?: string
+          event_data?: Json
+          event_type?: string
+          id?: string
+          round?: number
+          timestamp?: string
+        }
+        Relationships: []
+      }
+      ledger_updates: {
+        Row: {
+          created_at: string
+          id: string
+          round: number
+          timestamp: string
+          update_data: Json
+          update_type: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          round: number
+          timestamp?: string
+          update_data: Json
+          update_type: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          round?: number
+          timestamp?: string
+          update_data?: Json
+          update_type?: string
+        }
+        Relationships: []
+      }
+      live_update_cursor: {
+        Row: {
+          cursor_name: string
+          id: string
+          last_processed_round: number
+          updated_at: string
+        }
+        Insert: {
+          cursor_name: string
+          id?: string
+          last_processed_round?: number
+          updated_at?: string
+        }
+        Update: {
+          cursor_name?: string
+          id?: string
+          last_processed_round?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      sv_votes: {
+        Row: {
+          cip_id: string
+          created_at: string
+          id: string
+          timestamp: string
+          validator_address: string
+          vote: string
+          voting_power: number | null
+        }
+        Insert: {
+          cip_id: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          validator_address: string
+          vote: string
+          voting_power?: number | null
+        }
+        Update: {
+          cip_id?: string
+          created_at?: string
+          id?: string
+          timestamp?: string
+          validator_address?: string
+          vote?: string
+          voting_power?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sv_votes_cip_id_fkey"
+            columns: ["cip_id"]
+            isOneToOne: false
+            referencedRelation: "cips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "moderator" | "user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +518,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "moderator", "user"],
+    },
   },
 } as const
