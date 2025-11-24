@@ -1,70 +1,434 @@
-import { useState } from "react";
-import DashboardLayout from "@/components/DashboardLayout";
-import { useAcsSnapshots } from "@/hooks/use-acs-snapshots";
+import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
-import SearchBar from "@/components/SearchBar";
+import { Badge } from "@/components/ui/badge";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { scanApi } from "@/lib/api-client";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
+import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { DataSourcesFooter } from "@/components/DataSourcesFooter";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
 
 const Governance = () => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const { data: snapshots, isLoading } = useAcsSnapshots({ limit: 1 });
-
-  const latestSnapshot = snapshots?.[0];
-  const templates = latestSnapshot?.snapshot_data as any;
-  const voteRequests = templates?.["Splice:DsoRules:VoteRequest"] || [];
-
-  const filteredVotes = voteRequests.filter((vote: any) => {
-    const searchLower = searchTerm.toLowerCase();
-    const contractId = vote.contractId || "";
-    return contractId.toLowerCase().includes(searchLower);
+  const { data: dsoInfo } = useQuery({
+    queryKey: ["dsoInfo"],
+    queryFn: () => scanApi.fetchDsoInfo(),
+    retry: 1,
   });
+
+  const { data: latestSnapshot } = useLatestACSSnapshot();
+
+  // Fetch DsoRules to get SV count and voting threshold - aggregated across all packages
+  const { data: dsoRulesData } = useAggregatedTemplateData(
+    latestSnapshot?.id,
+    "Splice:DsoRules:DsoRules",
+    !!latestSnapshot,
+  );
+
+  // Fetch vote requests - aggregated across all packages
+  const {
+    data: voteRequestsData,
+    isLoading,
+    isError,
+  } = useAggregatedTemplateData(latestSnapshot?.id, "Splice:DsoRules:VoteRequest", !!latestSnapshot);
+
+  // Fetch Amulet Price Votes
+  const { data: priceVotesData, isLoading: priceVotesLoading } = useAggregatedTemplateData(
+    latestSnapshot?.id,
+    "Splice:DSO:AmuletPrice:AmuletPriceVote",
+    !!latestSnapshot,
+  );
+
+  // Fetch Confirmations
+  const { data: confirmationsData } = useAggregatedTemplateData(
+    latestSnapshot?.id,
+    "Splice:DsoRules:Confirmation",
+    !!latestSnapshot,
+  );
+
+  // Fetch AmuletRules
+  const { data: amuletRulesData } = useAggregatedTemplateData(
+    latestSnapshot?.id,
+    "Splice:AmuletRules:AmuletRules",
+    !!latestSnapshot,
+  );
+
+  const priceVotes = priceVotesData?.data || [];
+  const confirmations = confirmationsData?.data || [];
+  const amuletRules = amuletRulesData?.data || [];
+
+  // Get SV count and voting threshold from DsoRules FIRST (needed for proposals processing)
+  const dsoRules = dsoRulesData?.data?.[0];
+  const svCount = Object.keys(dsoRules?.svs || {}).length;
+  const votingThreshold = dsoInfo?.voting_threshold || Math.ceil(svCount * 0.67); // 2/3 majority
+
+  // Helper to safely extract field values from nested structure
+  const getField = (record: any, ...fieldNames: string[]) => {
+    for (const field of fieldNames) {
+      if (record[field] !== undefined && record[field] !== null) return record[field];
+      if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
+    }
+    return undefined;
+  };
+
+  // Debug logging - Log ALL data structures
+  console.log("🔍 DEBUG Governance - Full Data Dump:");
+  console.log("DsoRules:", dsoRules ? JSON.stringify(dsoRules, null, 2) : "No data");
+  console.log("Vote requests count:", voteRequestsData?.data?.length || 0);
+  if (voteRequestsData?.data?.[0]) {
+    console.log("First VoteRequest:", JSON.stringify(voteRequestsData.data[0], null, 2));
+  }
+  console.log("Price votes count:", priceVotes.length);
+  if (priceVotes[0]) {
+    console.log("First PriceVote:", JSON.stringify(priceVotes[0], null, 2));
+  }
+  console.log("Confirmations count:", confirmations.length);
+  if (confirmations[0]) {
+    console.log("First Confirmation:", JSON.stringify(confirmations[0], null, 2));
+  }
+  console.log("AmuletRules:", amuletRules[0] ? JSON.stringify(amuletRules[0], null, 2) : "No data");
+
+  // Process proposals from ACS data with full JSON parsing
+  const proposals =
+    voteRequestsData?.data.map((voteRequest: any) => {
+      const votes = voteRequest.votes || {};
+      const votesList = Object.values(votes);
+      const votesFor = votesList.filter((v: any) => v?.accept || v?.Accept).length;
+      const votesAgainst = votesList.filter((v: any) => v?.reject || v?.Reject).length;
+      const action = voteRequest.action || {};
+      const actionKey = Object.keys(action)[0] || "Unknown";
+      const actionData = action[actionKey];
+      const title = actionKey.replace(/ARC_|_/g, " ");
+
+      // Extract requester information
+      const requester = voteRequest.requester || "Unknown";
+      const requesterParty = voteRequest.requesterName || requester;
+
+      // Extract reason
+      const reason = voteRequest.reason?.url || voteRequest.reason || "No reason provided";
+
+      // Extract voting information
+      const votedSvs = Object.keys(votes).map((svParty) => ({
+        party: svParty,
+        vote: votes[svParty]?.accept || votes[svParty]?.Accept ? "accept" : "reject",
+        weight: votes[svParty]?.expiresAt || "N/A",
+      }));
+
+      // Determine status based on votes and threshold
+      const threshold = votingThreshold || svCount;
+      let status: "approved" | "rejected" | "pending" = "pending";
+      if (votesFor >= threshold) status = "approved";
+      else if (votesAgainst > svCount - threshold) status = "rejected";
+
+      return {
+        id: voteRequest.trackingCid?.slice(0, 12) || voteRequest.contractId?.slice(0, 12) || "unknown",
+        trackingCid: voteRequest.trackingCid,
+        title,
+        actionType: actionKey,
+        actionData,
+        description: reason,
+        requester,
+        requesterParty,
+        status,
+        votesFor,
+        votesAgainst,
+        votedSvs,
+        effectiveAt: voteRequest.effectiveAt,
+        expiresAt: voteRequest.expiresAt,
+        createdAt: voteRequest.effectiveAt,
+        rawData: voteRequest, // Keep full JSON for debugging
+      };
+    }) || [];
+
+  const totalProposals = proposals?.length || 0;
+  const activeProposals = proposals?.filter((p: any) => p.status === "pending").length || 0;
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "approved":
+        return "bg-success/10 text-success border-success/20";
+      case "rejected":
+        return "bg-destructive/10 text-destructive border-destructive/20";
+      case "pending":
+        return "bg-warning/10 text-warning border-warning/20";
+      default:
+        return "bg-muted text-muted-foreground";
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "approved":
+        return <CheckCircle className="h-4 w-4" />;
+      case "rejected":
+        return <XCircle className="h-4 w-4" />;
+      case "pending":
+        return <Clock className="h-4 w-4" />;
+      default:
+        return <Vote className="h-4 w-4" />;
+    }
+  };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Governance</h1>
-          <p className="text-muted-foreground">
-            DSO governance and voting activity
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-3xl font-bold mb-2">Governance</h2>
+            <p className="text-muted-foreground">DSO proposals and voting activity</p>
+          </div>
         </div>
 
-        <SearchBar
-          value={searchTerm}
-          onChange={setSearchTerm}
-          placeholder="Search governance items..."
-        />
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Card className="glass-card p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">Super Validators</h3>
+              <Users className="h-5 w-5 text-primary" />
+            </div>
+            {!svCount ? (
+              <Skeleton className="h-10 w-full" />
+            ) : (
+              <>
+                <p className="text-3xl font-bold text-primary mb-1">{svCount}</p>
+                <p className="text-xs text-muted-foreground">Active SVs</p>
+              </>
+            )}
+          </Card>
 
-        {isLoading ? (
-          <div className="flex items-center justify-center min-h-[400px]">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filteredVotes.map((vote: any, index: number) => (
-              <Card key={index} className="p-4">
-                <div className="space-y-2">
-                  <div className="font-medium break-all text-sm">
-                    {vote.contractId}
-                  </div>
-                  <details className="text-sm">
-                    <summary className="cursor-pointer text-primary">
-                      View Details
-                    </summary>
-                    <pre className="mt-2 text-xs bg-muted p-2 rounded overflow-auto max-h-60">
-                      {JSON.stringify(vote, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              </Card>
-            ))}
-            {filteredVotes.length === 0 && (
-              <div className="text-center text-muted-foreground py-8">
-                No governance items found
+          <Card className="glass-card p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">Voting Threshold</h3>
+              <Vote className="h-5 w-5 text-chart-3" />
+            </div>
+            {!votingThreshold ? (
+              <Skeleton className="h-10 w-full" />
+            ) : (
+              <>
+                <p className="text-3xl font-bold text-chart-3 mb-1">{votingThreshold}</p>
+                <p className="text-xs text-muted-foreground">Votes required</p>
+              </>
+            )}
+          </Card>
+
+          <Card className="glass-card p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">Total Proposals</h3>
+              <Vote className="h-5 w-5 text-chart-2" />
+            </div>
+            {isLoading ? (
+              <Skeleton className="h-10 w-full" />
+            ) : (
+              <>
+                <p className="text-3xl font-bold text-chart-2 mb-1">{totalProposals}</p>
+                <p className="text-xs text-muted-foreground">All time</p>
+              </>
+            )}
+          </Card>
+
+          <Card className="glass-card p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">Active Proposals</h3>
+              <Clock className="h-5 w-5 text-warning" />
+            </div>
+            {isLoading ? (
+              <Skeleton className="h-10 w-full" />
+            ) : (
+              <>
+                <p className="text-3xl font-bold text-warning mb-1">{activeProposals}</p>
+                <p className="text-xs text-muted-foreground">In voting</p>
+              </>
+            )}
+          </Card>
+
+          <Card className="glass-card p-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">DSO Party</h3>
+              <Vote className="h-5 w-5 text-chart-3" />
+            </div>
+            {!dsoInfo ? (
+              <Skeleton className="h-10 w-full" />
+            ) : (
+              <>
+                <p className="text-xs font-mono text-chart-3 mb-1 truncate">{dsoInfo.dso_party_id.split("::")[0]}</p>
+                <p className="text-xs text-muted-foreground">Governance entity</p>
+              </>
+            )}
+          </Card>
+        </div>
+
+        {/* Info Alert */}
+        <Alert>
+          <Vote className="h-4 w-4" />
+          <AlertDescription>
+            Governance proposals are voted on by Super Validators. A proposal requires{" "}
+            <strong>{dsoInfo?.voting_threshold || "N"}</strong> votes to pass. Proposals can include network parameter
+            changes, featured app approvals, and other critical network decisions.
+          </AlertDescription>
+        </Alert>
+
+        {/* Proposals List */}
+        <Card className="glass-card">
+          <div className="p-6">
+            <h3 className="text-xl font-bold mb-6">Recent Proposals</h3>
+
+            {isError ? (
+              <div className="text-center py-12">
+                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">
+                  Unable to load proposals. The governance API endpoint may be unavailable.
+                </p>
+              </div>
+            ) : isLoading ? (
+              <div className="space-y-4">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-32 w-full" />
+                ))}
+              </div>
+            ) : !proposals?.length ? (
+              <div className="text-center py-12">
+                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">No proposals available at the moment</p>
+                <p className="text-sm text-muted-foreground">
+                  Governance proposals will appear here when submitted by DSO members
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {proposals?.map((proposal: any, index: number) => (
+                  <Collapsible key={index}>
+                    <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth border border-border/50">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                            <p className="text-sm text-muted-foreground">Proposal #{proposal.id}</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Requested by: <span className="font-mono">{proposal.requesterParty.slice(0, 40)}...</span>
+                            </p>
+                          </div>
+                        </div>
+                        <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
+                      </div>
+
+                      <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                        <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                        <p className="text-sm">{proposal.description}</p>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                          <p className="text-lg font-bold text-success">{proposal.votesFor || 0}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                          <p className="text-lg font-bold text-destructive">{proposal.votesAgainst || 0}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Effective At</p>
+                          <p className="text-xs font-mono">
+                            {proposal.effectiveAt ? new Date(proposal.effectiveAt).toLocaleDateString() : "N/A"}
+                          </p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Expires At</p>
+                          <p className="text-xs font-mono">
+                            {proposal.expiresAt ? new Date(proposal.expiresAt).toLocaleDateString() : "N/A"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {proposal.votedSvs?.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {proposal.votedSvs.map((sv: any, idx: number) => (
+                              <Badge
+                                key={idx}
+                                variant="outline"
+                                className={
+                                  sv.vote === "accept"
+                                    ? "border-success/50 text-success"
+                                    : "border-destructive/50 text-destructive"
+                                }
+                              >
+                                {sv.party.slice(0, 20)}... - {sv.vote}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full mt-2">
+                          <Code className="h-4 w-4 mr-2" />
+                          View Full JSON Data
+                        </Button>
+                      </CollapsibleTrigger>
+
+                      <CollapsibleContent className="mt-4">
+                        <div className="p-4 rounded-lg bg-background/70 border border-border/50">
+                          <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                            Action Type: {proposal.actionType}
+                          </p>
+                          <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30">
+                            {JSON.stringify(proposal.rawData, null, 2)}
+                          </pre>
+                        </div>
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                ))}
               </div>
             )}
           </div>
-        )}
+        </Card>
+
+        {/* Governance Info */}
+        <Card className="glass-card">
+          <div className="p-6">
+            <h3 className="text-xl font-bold mb-4">About Canton Network Governance</h3>
+            <div className="space-y-4 text-muted-foreground">
+              <p>
+                The Canton Network is governed by the Decentralized System Operator (DSO), which consists of Super
+                Validators who participate in governance decisions through proposals and voting.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                <div className="p-4 rounded-lg bg-muted/30">
+                  <h4 className="font-semibold text-foreground mb-2">Voting Process</h4>
+                  <p className="text-sm">
+                    Proposals require a minimum threshold of votes from Super Validators to be approved. The current
+                    threshold is {dsoInfo?.voting_threshold || "N"} votes.
+                  </p>
+                </div>
+                <div className="p-4 rounded-lg bg-muted/30">
+                  <h4 className="font-semibold text-foreground mb-2">Proposal Types</h4>
+                  <p className="text-sm">
+                    Governance includes network parameters, featured app approvals, validator onboarding, and other
+                    critical network decisions.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <DataSourcesFooter
+          snapshotId={latestSnapshot?.id}
+          templateSuffixes={[
+            "Splice:DsoRules:DsoRules",
+            "Splice:DsoRules:VoteRequest",
+            "Splice:DSO:AmuletPrice:AmuletPriceVote",
+            "Splice:DsoRules:Confirmation",
+            "Splice:AmuletRules:AmuletRules",
+          ]}
+          isProcessing={false}
+        />
       </div>
     </DashboardLayout>
   );
