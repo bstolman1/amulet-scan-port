@@ -15,6 +15,11 @@ import axios from "axios";
 import { Agent as HttpAgent } from "http";
 import { Agent as HttpsAgent } from "https";
 import { createClient } from "@supabase/supabase-js";
+import pg from "pg";
+import { from as copyFrom } from "pg-copy-streams";
+import { Readable } from "stream";
+
+const { Client } = pg;
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -24,9 +29,15 @@ const BASE_URL = process.env.BASE_URL || "https://scan.sv-1.global.canton.networ
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const SUPABASE_DB_URL = process.env.SUPABASE_DB_URL;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error("❌ SUPABASE_URL or SUPABASE_ANON_KEY missing in env");
+  process.exit(1);
+}
+
+if (!SUPABASE_DB_URL) {
+  console.error("❌ SUPABASE_DB_URL missing in env - required for fast COPY operations");
   process.exit(1);
 }
 
@@ -45,6 +56,21 @@ const scanClient = axios.create({
 });
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// PostgreSQL client for fast COPY operations
+let pgClient = null;
+
+async function getPgClient() {
+  if (!pgClient) {
+    pgClient = new Client({
+      connectionString: SUPABASE_DB_URL,
+      ssl: { rejectUnauthorized: false },
+    });
+    await pgClient.connect();
+    console.log("✅ PostgreSQL client connected for fast COPY operations");
+  }
+  return pgClient;
+}
 
 // ---------- Helpers ----------
 
@@ -217,21 +243,79 @@ async function updateCursorLastBefore(migration_id, synchronizer_id, last_before
 
 // ---------- DB inserts ----------
 
-async function upsertInBatches(table, rows, batchSize = 500) {
+// Fast bulk insert using PostgreSQL COPY with ON CONFLICT handling
+async function bulkCopyWithUpsert(table, rows, columns) {
   if (!rows.length) return;
 
-  const onConflict = table === "ledger_updates" ? "update_id" : "event_id";
+  const client = await getPgClient();
+  const tempTable = `${table}_temp_${Date.now()}`;
+
+  try {
+    // Create temp table with same structure
+    const createTempTableQuery = `
+      CREATE TEMP TABLE ${tempTable} (LIKE ${table} INCLUDING DEFAULTS)
+      ON COMMIT DROP;
+    `;
+    await client.query(createTempTableQuery);
+
+    // Prepare TSV data for COPY
+    const tsvData = rows.map(row => {
+      return columns.map(col => {
+        const val = row[col];
+        if (val === null || val === undefined) return '\\N';
+        if (typeof val === 'object') return JSON.stringify(val).replace(/\t/g, ' ').replace(/\n/g, ' ');
+        return String(val).replace(/\t/g, ' ').replace(/\n/g, ' ');
+      }).join('\t');
+    }).join('\n');
+
+    // Use COPY to load data into temp table
+    const copyQuery = `COPY ${tempTable} (${columns.join(', ')}) FROM STDIN WITH (FORMAT text, NULL '\\N')`;
+    const stream = client.query(copyFrom(copyQuery));
+    
+    const readable = Readable.from([tsvData]);
+    
+    await new Promise((resolve, reject) => {
+      stream.on('finish', resolve);
+      stream.on('error', reject);
+      readable.pipe(stream);
+    });
+
+    console.log(`   ⚡ COPY inserted ${rows.length} rows into temp table ${tempTable}`);
+
+    // Upsert from temp table to actual table
+    const conflictColumn = table === "ledger_updates" ? "update_id" : "event_id";
+    const updateColumns = columns.filter(c => c !== conflictColumn);
+    
+    const upsertQuery = `
+      INSERT INTO ${table} (${columns.join(', ')})
+      SELECT ${columns.join(', ')} FROM ${tempTable}
+      ON CONFLICT (${conflictColumn}) DO UPDATE SET
+        ${updateColumns.map(c => `${c} = EXCLUDED.${c}`).join(', ')}
+    `;
+    
+    const result = await client.query(upsertQuery);
+    console.log(`   ✅ Upserted ${result.rowCount} rows to ${table}`);
+
+  } catch (error) {
+    console.error(`   ❌ Error in bulkCopyWithUpsert for ${table}:`, error.message);
+    throw error;
+  }
+}
+
+async function upsertInBatches(table, rows, batchSize = 2000) {
+  if (!rows.length) return;
+
+  // Determine columns from first row
+  const columns = Object.keys(rows[0]);
 
   for (let i = 0; i < rows.length; i += batchSize) {
     const batch = rows.slice(i, i + batchSize);
 
     await retryWithBackoff(async () => {
-      const { error } = await supabase.from(table).upsert(batch, { onConflict });
-
-      if (error) throw error;
+      await bulkCopyWithUpsert(table, batch, columns);
     });
 
-    console.log(`   📝 Upserted ${batch.length} rows to ${table} (${i + batch.length}/${rows.length})`);
+    console.log(`   📝 Processed batch (${i + batch.length}/${rows.length})`);
   }
 }
 
@@ -422,10 +506,22 @@ async function run() {
   }
 
   console.log("\n🎉 Full-history backfill run finished.");
+  
+  // Close PostgreSQL connection
+  if (pgClient) {
+    await pgClient.end();
+    console.log("✅ PostgreSQL client disconnected");
+  }
 }
 
-run().catch((err) => {
+run().catch(async (err) => {
   console.error("\n❌ FATAL in backfill indexer:", err.message);
   console.error(err.stack);
+  
+  // Close PostgreSQL connection on error
+  if (pgClient) {
+    await pgClient.end();
+  }
+  
   process.exit(1);
 });
