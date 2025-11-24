@@ -294,8 +294,17 @@ async function bulkCopyWithUpsert(table, rows, columns) {
     // Prepare TSV data for COPY
     const tsvData = rows.map(row => {
       return columns.map(col => {
-        const val = row[col];
+        let val = row[col];
         if (val === null || val === undefined) return '\\N';
+        
+        // If value is a string that looks like JSON, try to parse it
+        if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
+          try {
+            val = JSON.parse(val);
+          } catch (e) {
+            // Not valid JSON, treat as regular string
+          }
+        }
         
         // Handle PostgreSQL arrays specially
         if (Array.isArray(val)) {
@@ -314,9 +323,19 @@ async function bulkCopyWithUpsert(table, rows, columns) {
         }
         
         // Handle other objects as JSONB
-        if (typeof val === 'object') return JSON.stringify(val).replace(/\t/g, ' ').replace(/\n/g, ' ');
+        if (typeof val === 'object') {
+          const jsonStr = JSON.stringify(val);
+          // Escape backslashes, tabs, newlines for TSV format
+          return jsonStr.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        }
         
-        return String(val).replace(/\t/g, ' ').replace(/\n/g, ' ');
+        // Handle strings - escape special characters
+        if (typeof val === 'string') {
+          return val.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        }
+        
+        // Numbers and booleans
+        return String(val);
       }).join('\t');
     }).join('\n');
 
