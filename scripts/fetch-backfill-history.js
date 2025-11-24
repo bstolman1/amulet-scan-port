@@ -325,6 +325,9 @@ async function bulkCopyWithUpsert(table, rows, columns) {
         ${updateColumns.map(c => `"${c}" = EXCLUDED."${c}"`).join(', ')}
     `;
     
+    console.log(`   🔍 DEBUG: Executing upsert query for ${table}:`);
+    console.log(`   🔍 First 500 chars: ${upsertQuery.substring(0, 500)}`);
+    
     const result = await client.query(upsertQuery);
     console.log(`   ✅ Upserted ${result.rowCount} rows to ${table}`);
 
