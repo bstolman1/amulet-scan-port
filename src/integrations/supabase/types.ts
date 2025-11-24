@@ -16,50 +16,101 @@ export type Database = {
     Tables: {
       acs_snapshots: {
         Row: {
+          amulet_total: number | null
+          canonical_package: string | null
+          circulating_supply: number | null
           created_at: string
+          entry_count: number | null
+          error_message: string | null
           id: string
+          locked_total: number | null
+          migration_id: number | null
+          record_time: string | null
           round: number
           snapshot_data: Json
+          status: string | null
+          sv_url: string | null
           timestamp: string
+          updated_at: string | null
         }
         Insert: {
+          amulet_total?: number | null
+          canonical_package?: string | null
+          circulating_supply?: number | null
           created_at?: string
+          entry_count?: number | null
+          error_message?: string | null
           id?: string
+          locked_total?: number | null
+          migration_id?: number | null
+          record_time?: string | null
           round: number
           snapshot_data: Json
+          status?: string | null
+          sv_url?: string | null
           timestamp?: string
+          updated_at?: string | null
         }
         Update: {
+          amulet_total?: number | null
+          canonical_package?: string | null
+          circulating_supply?: number | null
           created_at?: string
+          entry_count?: number | null
+          error_message?: string | null
           id?: string
+          locked_total?: number | null
+          migration_id?: number | null
+          record_time?: string | null
           round?: number
           snapshot_data?: Json
+          status?: string | null
+          sv_url?: string | null
           timestamp?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
       acs_template_stats: {
         Row: {
+          contract_count: number | null
           created_at: string
+          field_sums: Json | null
           id: string
           instance_count: number
           round: number
+          snapshot_id: string | null
+          status_tallies: Json | null
+          storage_path: string | null
+          template_id: string | null
           template_name: string
           updated_at: string
         }
         Insert: {
+          contract_count?: number | null
           created_at?: string
+          field_sums?: Json | null
           id?: string
           instance_count?: number
           round: number
+          snapshot_id?: string | null
+          status_tallies?: Json | null
+          storage_path?: string | null
+          template_id?: string | null
           template_name: string
           updated_at?: string
         }
         Update: {
+          contract_count?: number | null
           created_at?: string
+          field_sums?: Json | null
           id?: string
           instance_count?: number
           round?: number
+          snapshot_id?: string | null
+          status_tallies?: Json | null
+          storage_path?: string | null
+          template_id?: string | null
           template_name?: string
           updated_at?: string
         }
