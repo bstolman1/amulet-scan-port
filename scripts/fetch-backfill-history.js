@@ -287,6 +287,9 @@ async function bulkCopyWithUpsert(table, rows, columns) {
     `;
     await client.query(createTempTableQuery);
 
+    // Quote column names to handle reserved keywords like "offset"
+    const quotedColumns = columns.map(c => `"${c}"`);
+
     // Prepare TSV data for COPY
     const tsvData = rows.map(row => {
       return columns.map(col => {
@@ -297,8 +300,8 @@ async function bulkCopyWithUpsert(table, rows, columns) {
       }).join('\t');
     }).join('\n');
 
-    // Use COPY to load data into temp table
-    const copyQuery = `COPY ${tempTable} (${columns.join(', ')}) FROM STDIN WITH (FORMAT text, NULL '\\N')`;
+    // Use COPY to load data into temp table (with quoted column names)
+    const copyQuery = `COPY ${tempTable} (${quotedColumns.join(', ')}) FROM STDIN WITH (FORMAT text, NULL '\\N')`;
     const stream = client.query(copyFrom(copyQuery));
     
     const readable = Readable.from([tsvData]);
@@ -316,10 +319,10 @@ async function bulkCopyWithUpsert(table, rows, columns) {
     const updateColumns = columns.filter(c => c !== conflictColumn);
     
     const upsertQuery = `
-      INSERT INTO ${table} (${columns.join(', ')})
-      SELECT ${columns.join(', ')} FROM ${tempTable}
-      ON CONFLICT (${conflictColumn}) DO UPDATE SET
-        ${updateColumns.map(c => `${c} = EXCLUDED.${c}`).join(', ')}
+      INSERT INTO ${table} (${quotedColumns.join(', ')})
+      SELECT ${quotedColumns.join(', ')} FROM ${tempTable}
+      ON CONFLICT ("${conflictColumn}") DO UPDATE SET
+        ${updateColumns.map(c => `"${c}" = EXCLUDED."${c}"`).join(', ')}
     `;
     
     const result = await client.query(upsertQuery);
