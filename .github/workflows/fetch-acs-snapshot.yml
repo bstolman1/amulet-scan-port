@@ -1,0 +1,53 @@
+name: Fetch ACS Snapshot
+
+on:
+  workflow_dispatch: # Manual trigger
+  schedule:
+    - cron: '0 */2 * * *' # Every 2 hours to allow resuming before 6-hour timeout
+
+# Prevent concurrent runs that could conflict with database writes
+concurrency:
+  group: ledger-ingestion
+  cancel-in-progress: false # Queue instead of canceling
+
+jobs:
+  fetch-and-upload:
+    runs-on: self-hosted
+    timeout-minutes: 330 # 5.5 hours - leave buffer before 6-hour hard limit
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install axios bignumber.js @supabase/supabase-js
+
+      - name: Fetch and Upload ACS Data in Real-Time
+        run: node scripts/fetch-acs-data.js
+        env:
+          BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
+          EDGE_FUNCTION_URL: ${{ secrets.EDGE_FUNCTION_URL }}
+          ACS_UPLOAD_WEBHOOK_SECRET: ${{ secrets.ACS_UPLOAD_WEBHOOK_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          PAGE_SIZE: '500'
+          UPLOAD_CHUNK_SIZE: '1'
+          UPLOAD_DELAY_MS: '200'
+          RETRY_COOLDOWN_MS: '15000'
+          MAX_INFLIGHT_UPLOADS: '1'
+
+      - name: Upload artifacts (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: acs-snapshot-${{ github.run_number }}
+          path: |
+            acs_full/
+            circulating-supply-single-sv.json
+          retention-days: 30

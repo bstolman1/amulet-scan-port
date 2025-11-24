@@ -1,0 +1,37 @@
+name: Backfill Ledger History
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Run every Sunday at midnight (00:00 UTC)
+  workflow_dispatch: {}  # Keep manual trigger available
+
+# Prevent concurrent runs that could conflict with database writes
+concurrency:
+  group: ledger-ingestion
+  cancel-in-progress: false # Queue instead of canceling
+
+jobs:
+  backfill:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: |
+          npm init -y
+          npm install axios @supabase/supabase-js
+
+      - name: Run backfill
+        env:
+          BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          BACKFILL_PAGE_SIZE: "200"
+        run: node scripts/fetch-backfill-history.js

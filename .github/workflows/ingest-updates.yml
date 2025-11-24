@@ -1,0 +1,37 @@
+name: Ingest Live Updates
+
+on:
+  workflow_dispatch: # Manual trigger
+  schedule:
+    - cron: '*/5 * * * *' # Every 5 minutes for near-real-time updates
+
+# Prevent concurrent runs that could conflict with database writes
+concurrency:
+  group: ledger-ingestion
+  cancel-in-progress: false # Queue instead of canceling
+
+jobs:
+  ingest:
+    runs-on: self-hosted
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install axios @supabase/supabase-js
+
+      - name: Ingest Live Updates
+        run: node scripts/ingest-updates.js
+        env:
+          BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
