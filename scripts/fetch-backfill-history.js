@@ -278,18 +278,15 @@ async function bulkCopyWithUpsert(table, rows, columns) {
 
   const client = await getPgClient();
   const tempTable = `temp_${table}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  const fullTempTable = `public.${tempTable}`; // Explicitly use public schema
 
   try {
-    console.log(`   🔨 Creating staging table: ${fullTempTable}`);
-    
-    // Create a regular (non-TEMP) table for staging in public schema
+    // Create a regular (non-TEMP) table for staging
     // Temp tables don't work reliably with connection poolers
     const createTempTableQuery = `
-      CREATE TABLE IF NOT EXISTS ${fullTempTable} (LIKE public.${table} INCLUDING DEFAULTS);
+      CREATE TABLE IF NOT EXISTS ${tempTable} (LIKE ${table} INCLUDING DEFAULTS);
     `;
     await client.query(createTempTableQuery);
-    console.log(`   ✅ Created staging table: ${fullTempTable}`);
+    console.log(`   📋 Created staging table: ${tempTable}`);
 
     // Quote column names to handle reserved keywords like "offset"
     const quotedColumns = columns.map(c => `"${c}"`);
@@ -305,8 +302,7 @@ async function bulkCopyWithUpsert(table, rows, columns) {
     }).join('\n');
 
     // Use COPY to load data into staging table (with quoted column names)
-    console.log(`   📥 Starting COPY operation to ${fullTempTable}...`);
-    const copyQuery = `COPY ${fullTempTable} (${quotedColumns.join(', ')}) FROM STDIN WITH (FORMAT text, NULL '\\N')`;
+    const copyQuery = `COPY ${tempTable} (${quotedColumns.join(', ')}) FROM STDIN WITH (FORMAT text, NULL '\\N')`;
     const stream = client.query(copyFrom(copyQuery));
     
     const readable = Readable.from([tsvData]);
@@ -317,38 +313,36 @@ async function bulkCopyWithUpsert(table, rows, columns) {
       readable.pipe(stream);
     });
 
-    console.log(`   ⚡ COPY inserted ${rows.length} rows into staging table ${fullTempTable}`);
+    console.log(`   ⚡ COPY inserted ${rows.length} rows into staging table ${tempTable}`);
 
     // Upsert from staging table to actual table
     const conflictColumn = table === "ledger_updates" ? "update_id" : "event_id";
     const updateColumns = columns.filter(c => c !== conflictColumn);
     
     const upsertQuery = `
-      INSERT INTO public.${table} (${quotedColumns.join(', ')})
-      SELECT ${quotedColumns.join(', ')} FROM ${fullTempTable}
+      INSERT INTO ${table} (${quotedColumns.join(', ')})
+      SELECT ${quotedColumns.join(', ')} FROM ${tempTable}
       ON CONFLICT ("${conflictColumn}") DO UPDATE SET
         ${updateColumns.map(c => `"${c}" = EXCLUDED."${c}"`).join(', ')}
     `;
     
-    console.log(`   🔍 Executing upsert from ${fullTempTable} to public.${table}...`);
-    console.log(`   🔍 Query preview: ${upsertQuery.substring(0, 200)}...`);
+    console.log(`   🔍 DEBUG: Executing upsert query for ${table}:`);
+    console.log(`   🔍 First 500 chars: ${upsertQuery.substring(0, 500)}`);
     
     const result = await client.query(upsertQuery);
     console.log(`   ✅ Upserted ${result.rowCount} rows to ${table}`);
 
     // Clean up staging table
-    await client.query(`DROP TABLE IF EXISTS ${fullTempTable}`);
-    console.log(`   🗑️  Dropped staging table: ${fullTempTable}`);
+    await client.query(`DROP TABLE IF EXISTS ${tempTable}`);
+    console.log(`   🗑️  Dropped staging table: ${tempTable}`);
 
   } catch (error) {
     console.error(`   ❌ Error in bulkCopyWithUpsert for ${table}:`, error.message);
-    console.error(`   ❌ Staging table was: ${fullTempTable}`);
     // Try to clean up staging table even on error
     try {
-      await client.query(`DROP TABLE IF EXISTS ${fullTempTable}`);
-      console.log(`   🗑️  Cleaned up staging table after error`);
+      await client.query(`DROP TABLE IF EXISTS ${tempTable}`);
     } catch (cleanupError) {
-      console.error(`   ⚠️  Could not clean up staging table ${fullTempTable}:`, cleanupError.message);
+      console.error(`   ⚠️  Could not clean up staging table ${tempTable}:`, cleanupError.message);
     }
     throw error;
   }
