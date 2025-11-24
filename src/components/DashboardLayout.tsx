@@ -1,52 +1,115 @@
 import { ReactNode } from "react";
-import { NavLink } from "./NavLink";
+import { Link, useLocation } from "react-router-dom";
+import {
+  Activity,
+  BarChart3,
+  Coins,
+  Database,
+  Layers,
+  Zap,
+  Globe,
+  Package,
+  Vote,
+  Award,
+  Shield,
+  Upload,
+  ArrowRightLeft,
+  Wallet,
+  FileText,
+  Radio,
+  Users,
+  Ticket,
+  UserPlus,
+  Hash,
+  Clock,
+  TrendingUp,
+} from "lucide-react";
 
 interface DashboardLayoutProps {
   children: ReactNode;
 }
 
-const DashboardLayout = ({ children }: DashboardLayoutProps) => {
+const navigation = [
+  { name: "Dashboard", href: "/", icon: BarChart3 },
+  { name: "Supply", href: "/supply", icon: Coins },
+  { name: "Rich List", href: "/rich-list", icon: Wallet },
+  { name: "Transactions", href: "/transactions", icon: Activity },
+  { name: "Transfers", href: "/transfers", icon: ArrowRightLeft },
+  { name: "Validators/SVs", href: "/validators", icon: Zap },
+  { name: "Validator Licenses", href: "/validator-licenses", icon: Ticket },
+  { name: "Round Stats", href: "/round-stats", icon: Layers },
+  { name: "ANS", href: "/ans", icon: Globe },
+  { name: "Featured Apps", href: "/apps", icon: Package },
+  { name: "Governance", href: "/governance", icon: Vote },
+  { name: "Elections", href: "/elections", icon: Vote },
+  { name: "External Party", href: "/external-party-setup", icon: UserPlus },
+  { name: "Transfer Counters", href: "/transfer-counters", icon: Hash },
+  { name: "External Party Rules", href: "/external-party-rules", icon: Shield },
+  { name: "Amulet Rules", href: "/amulet-rules", icon: Shield },
+  { name: "Statistics", href: "/stats", icon: Database },
+  { name: "SV Rewards", href: "/unclaimed-sv-rewards", icon: Award },
+  { name: "Member Traffic", href: "/member-traffic", icon: Radio },
+  { name: "Subscriptions", href: "/subscriptions", icon: Package },
+  { name: "DSO State", href: "/dso-state", icon: Users },
+  { name: "ACS Snapshot", href: "/snapshot-progress", icon: Upload },
+  { name: "Backfill Progress", href: "/backfill-progress", icon: Clock },
+  { name: "Live Updates", href: "/live-updates", icon: TrendingUp },
+  { name: "Admin", href: "/admin", icon: Shield },
+  { name: "Templates", href: "/templates", icon: FileText },
+];
+
+export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
+  const location = useLocation();
+
   return (
-    <div className="min-h-screen bg-background">
-      <nav className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4">
+    <div className="min-h-screen">
+      {/* Header */}
+      <header className="glass-card border-b border-border/50 sticky top-0 z-50">
+        <div className="container mx-auto px-6 py-4">
+          {/* Top row: Logo and Search */}
           <div className="flex items-center justify-between mb-4">
-            <h1 className="text-2xl font-bold">Amulet Ledger Probe</h1>
+            <Link to="/" className="flex items-center space-x-3 group">
+              <div className="relative">
+                <div className="absolute inset-0 gradient-primary rounded-lg blur-xl opacity-50 group-hover:opacity-100 transition-smooth" />
+                <div className="relative gradient-primary p-2 rounded-lg">
+                  <Database className="h-6 w-6 text-primary-foreground" />
+                </div>
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+                  SCANTON
+                </h1>
+                <p className="text-xs text-muted-foreground">Canton Network Analytics</p>
+              </div>
+            </Link>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <NavLink to="/">Dashboard</NavLink>
-            <NavLink to="/transactions">Transactions</NavLink>
-            <NavLink to="/validators">Validators</NavLink>
-            <NavLink to="/round-stats">Rounds</NavLink>
-            <NavLink to="/ans">ANS</NavLink>
-            <NavLink to="/stats">Stats</NavLink>
-            <NavLink to="/apps">Apps</NavLink>
-            <NavLink to="/governance">Governance</NavLink>
-            <NavLink to="/supply">Supply</NavLink>
-            <NavLink to="/unclaimed-sv-rewards">SV Rewards</NavLink>
-            <NavLink to="/admin">Admin</NavLink>
-            <NavLink to="/snapshot-progress">Snapshots</NavLink>
-            <NavLink to="/transfers">Transfers</NavLink>
-            <NavLink to="/rich-list">Rich List</NavLink>
-            <NavLink to="/templates">Templates</NavLink>
-            <NavLink to="/template-audit">Template Audit</NavLink>
-            <NavLink to="/member-traffic">Member Traffic</NavLink>
-            <NavLink to="/subscriptions">Subscriptions</NavLink>
-            <NavLink to="/dso-state">DSO State</NavLink>
-            <NavLink to="/validator-licenses">Licenses</NavLink>
-            <NavLink to="/external-party-setup">External Party</NavLink>
-            <NavLink to="/backfill-progress">Backfill</NavLink>
-            <NavLink to="/live-updates">Live Updates</NavLink>
-            <NavLink to="/elections">Elections</NavLink>
-            <NavLink to="/transfer-counters">Counters</NavLink>
-            <NavLink to="/external-party-rules">External Rules</NavLink>
-            <NavLink to="/amulet-rules">Amulet Rules</NavLink>
-          </div>
+
+          {/* Bottom row: Navigation tabs with wrapping */}
+          <nav className="flex flex-wrap gap-1">
+            {navigation.map((item) => {
+              const isActive = location.pathname === item.href;
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.name}
+                  to={item.href}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-smooth ${
+                    isActive
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="text-sm font-medium">{item.name}</span>
+                </Link>
+              );
+            })}
+          </nav>
         </div>
-      </nav>
-      <main className="container mx-auto px-4 py-8">{children}</main>
+      </header>
+
+      {/* Main Content */}
+      <main className="container mx-auto px-6 py-8">{children}</main>
     </div>
   );
 };
-
-export default DashboardLayout;

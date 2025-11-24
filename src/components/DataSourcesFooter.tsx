@@ -8,11 +8,7 @@ interface DataSourcesFooterProps {
   isProcessing?: boolean;
 }
 
-export const DataSourcesFooter = ({
-  snapshotId,
-  templateSuffixes,
-  isProcessing = false,
-}: DataSourcesFooterProps) => {
+export const DataSourcesFooter = ({ snapshotId, templateSuffixes, isProcessing = false }: DataSourcesFooterProps) => {
   return (
     <div className="mt-8 space-y-3">
       {isProcessing && (
@@ -36,9 +32,7 @@ export const DataSourcesFooter = ({
             ))}
           </div>
           {snapshotId && (
-            <p className="text-xs text-muted-foreground font-mono">
-              Snapshot: {snapshotId.substring(0, 8)}...
-            </p>
+            <p className="text-xs text-muted-foreground font-mono">Snapshot: {snapshotId.substring(0, 8)}...</p>
           )}
         </div>
       </div>
