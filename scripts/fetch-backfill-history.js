@@ -296,7 +296,26 @@ async function bulkCopyWithUpsert(table, rows, columns) {
       return columns.map(col => {
         const val = row[col];
         if (val === null || val === undefined) return '\\N';
+        
+        // Handle PostgreSQL arrays specially
+        if (Array.isArray(val)) {
+          if (val.length === 0) return '{}';
+          // Format as PostgreSQL array: {elem1,elem2}
+          const elements = val.map(elem => {
+            if (elem === null || elem === undefined) return 'NULL';
+            const str = String(elem);
+            // Quote elements with special chars, whitespace, etc.
+            if (str.match(/[{},"\\\s]/) || str === '' || str.toLowerCase() === 'null') {
+              return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+            }
+            return str;
+          });
+          return '{' + elements.join(',') + '}';
+        }
+        
+        // Handle other objects as JSONB
         if (typeof val === 'object') return JSON.stringify(val).replace(/\t/g, ' ').replace(/\n/g, ' ');
+        
         return String(val).replace(/\t/g, ' ').replace(/\n/g, ' ');
       }).join('\t');
     }).join('\n');
