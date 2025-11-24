@@ -1,70 +1,132 @@
-import { useState } from "react";
-import DashboardLayout from "@/components/DashboardLayout";
-import { useAcsSnapshots } from "@/hooks/use-acs-snapshots";
+import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
-import SearchBar from "@/components/SearchBar";
+import { Badge } from "@/components/ui/badge";
+import { Package, Star, Code } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
+import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { DataSourcesFooter } from "@/components/DataSourcesFooter";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
 
 const Apps = () => {
-  const [searchTerm, setSearchTerm] = useState("");
-  const { data: snapshots, isLoading } = useAcsSnapshots({ limit: 1 });
+  const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  const latestSnapshot = snapshots?.[0];
-  const templates = latestSnapshot?.snapshot_data as any;
-  const featuredApps = templates?.["Splice:Amulet:FeaturedAppRight"] || [];
+  const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight", !!latestSnapshot);
+  const activityQuery = useAggregatedTemplateData(
+    latestSnapshot?.id,
+    "Splice:Amulet:FeaturedAppActivityMarker",
+    !!latestSnapshot,
+  );
 
-  const filteredApps = featuredApps.filter((app: any) => {
-    const searchLower = searchTerm.toLowerCase();
-    const contractId = app.contractId || "";
-    return contractId.toLowerCase().includes(searchLower);
-  });
+  const isLoading = appsQuery.isLoading || activityQuery.isLoading;
+  const apps = appsQuery.data?.data || [];
+  const activities = activityQuery.data?.data || [];
+
+  // Helper to safely extract field values from nested structure
+  const getField = (record: any, ...fieldNames: string[]) => {
+    for (const field of fieldNames) {
+      if (record[field] !== undefined && record[field] !== null) return record[field];
+      if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
+    }
+    return undefined;
+  };
+
+  // Debug logging
+  console.log("🔍 DEBUG Apps: Total apps:", apps.length);
+  console.log("🔍 DEBUG Apps: First 3 apps:", apps.slice(0, 3));
+  if (apps.length > 0) {
+    console.log("🔍 DEBUG Apps: First app structure:", JSON.stringify(apps[0], null, 2));
+  }
+
+  const formatPartyId = (id: string) => id.split("::")[0] || id;
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="space-y-8">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Featured Apps</h1>
-          <p className="text-muted-foreground">
-            Applications with featured status
-          </p>
+          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
+            <Package className="h-8 w-8 text-primary" />
+            Canton Network Apps
+          </h1>
+          <p className="text-muted-foreground">Featured applications on the Canton Network</p>
         </div>
 
-        <SearchBar
-          value={searchTerm}
-          onChange={setSearchTerm}
-          placeholder="Search featured apps..."
-        />
-
-        {isLoading ? (
-          <div className="flex items-center justify-center min-h-[400px]">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filteredApps.map((app: any, index: number) => (
-              <Card key={index} className="p-4">
-                <div className="space-y-2">
-                  <div className="font-medium break-all text-sm">
-                    {app.contractId}
-                  </div>
-                  <details className="text-sm">
-                    <summary className="cursor-pointer text-primary">
-                      View Details
-                    </summary>
-                    <pre className="mt-2 text-xs bg-muted p-2 rounded overflow-auto max-h-60">
-                      {JSON.stringify(app, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              </Card>
+        {isLoading && (
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-32 w-full" />
             ))}
-            {filteredApps.length === 0 && (
-              <div className="text-center text-muted-foreground py-8">
-                No featured apps found
-              </div>
-            )}
           </div>
         )}
+        {!isLoading && apps.length === 0 && (
+          <Card className="p-8 text-center">
+            <Package className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+            <h3 className="text-lg font-semibold mb-2">No Apps Found</h3>
+          </Card>
+        )}
+        {!isLoading && apps.length > 0 && (
+          <>
+            <section>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-2xl font-semibold">Featured Applications</h2>
+                <Badge variant="secondary">{apps.length} Apps</Badge>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {apps.map((app: any, i: number) => {
+                  const appName = getField(app, "appName", "name", "applicationName");
+                  const provider = getField(app, "provider", "providerId", "providerParty");
+                  const dso = getField(app, "dso");
+
+                  return (
+                    <Card key={i} className="p-6 space-y-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Package className="h-5 w-5 text-primary" />
+                        <h3 className="font-semibold text-lg">{appName || "Unknown App"}</h3>
+                      </div>
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Provider</p>
+                          <p className="font-mono text-xs break-all">{formatPartyId(provider || "Unknown")}</p>
+                        </div>
+                        {dso && (
+                          <div>
+                            <p className="text-xs text-muted-foreground">DSO</p>
+                            <p className="font-mono text-xs break-all">{dso}</p>
+                          </div>
+                        )}
+                      </div>
+                      <Badge className="gradient-primary">
+                        <Star className="h-3 w-3 mr-1" />
+                        Featured
+                      </Badge>
+
+                      <Collapsible className="pt-2 border-t">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="w-full justify-start">
+                            <Code className="h-4 w-4 mr-2" />
+                            Show Raw JSON
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2">
+                          <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-96">
+                            {JSON.stringify(app, null, 2)}
+                          </pre>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+          </>
+        )}
+
+        <DataSourcesFooter
+          snapshotId={latestSnapshot?.id}
+          templateSuffixes={["Splice:Amulet:FeaturedAppRight", "Splice:Amulet:FeaturedAppActivityMarker"]}
+          isProcessing={false}
+        />
       </div>
     </DashboardLayout>
   );
