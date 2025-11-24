@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -60,18 +60,19 @@ const BackfillProgress = () => {
 
   const filteredActivityLog = activityLog.filter((log) => activeFilters.has(log.type));
 
-  // Update stats when cursors change
-  useEffect(() => {
-    const allCursors = [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
+  // Calculate merged cursors list
+  const allCursors = useMemo(() => {
+    return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
+  }, [cursors, realtimeCursors]);
 
-    setStats({
+  // Update cursor stats when cursors change
+  useEffect(() => {
+    setStats((prev) => ({
+      ...prev,
       totalCursors: allCursors.length,
       completedCursors: allCursors.filter((c) => c.last_processed_round > 0).length,
-      totalUpdates: 0, // Will be updated by realtime
-      totalEvents: 0, // Will be updated by realtime
-      activeMigrations: 0, // Not available in current schema
-    });
-  }, [cursors, realtimeCursors]);
+    }));
+  }, [allCursors]);
 
   // Auto-scroll to bottom of activity log
   useEffect(() => {
@@ -179,7 +180,7 @@ const BackfillProgress = () => {
     };
   }, [isMonitoring]);
 
-  const allCursors = [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
+  
 
   const handlePurgeAll = async () => {
     if (
