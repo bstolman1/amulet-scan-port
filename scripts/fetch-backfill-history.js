@@ -297,16 +297,7 @@ async function bulkCopyWithUpsert(table, rows, columns) {
         let val = row[col];
         if (val === null || val === undefined) return '\\N';
         
-        // If value is a string that looks like JSON, try to parse it
-        if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
-          try {
-            val = JSON.parse(val);
-          } catch (e) {
-            // Not valid JSON, treat as regular string
-          }
-        }
-        
-        // Handle PostgreSQL arrays specially
+        // Handle PostgreSQL arrays specially - must be actual arrays at this point
         if (Array.isArray(val)) {
           if (val.length === 0) return '{}';
           // Format as PostgreSQL array: {elem1,elem2}
@@ -403,6 +394,24 @@ async function upsertInBatches(table, rows, batchSize = 2000) {
   }
 }
 
+// Helper to ensure value is an array, parsing JSON strings if needed
+function ensureArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    }
+  }
+  return [];
+}
+
 async function upsertUpdatesAndEvents(transactions) {
   if (!transactions.length) return;
 
@@ -446,8 +455,8 @@ async function upsertUpdatesAndEvents(transactions) {
           event_data: ce,
           round: 0,
           payload: ce.create_arguments || {},
-          signatories: ce.signatories || [],
-          observers: ce.observers || [],
+          signatories: ensureArray(ce.signatories),
+          observers: ensureArray(ce.observers),
           created_at_ts: ce.created_at,
           raw: ce,
         });
@@ -468,8 +477,8 @@ async function upsertUpdatesAndEvents(transactions) {
           event_data: ev,
           round: 0,
           payload: ev.create_arguments || ev.exercise_arguments || {},
-          signatories: ev.signatories || [],
-          observers: ev.observers || [],
+          signatories: ensureArray(ev.signatories),
+          observers: ensureArray(ev.observers),
           created_at_ts: ev.created_at || recordTime,
           raw: ev,
         });
