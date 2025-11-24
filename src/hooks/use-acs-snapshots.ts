@@ -13,7 +13,7 @@ export interface ACSSnapshot {
   locked_total: number;
   circulating_supply: number;
   entry_count: number;
-  status: 'processing' | 'completed' | 'failed';
+  status: "processing" | "completed" | "failed";
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -99,7 +99,7 @@ export function useActiveSnapshot() {
 
       return {
         snapshot: latest as ACSSnapshot | null,
-        isProcessing: latest?.status === 'processing'
+        isProcessing: latest?.status === "processing",
       };
     },
     staleTime: 30_000,
@@ -146,25 +146,6 @@ export function useTriggerACSSnapshot() {
       toast.error("Failed to start ACS snapshot", {
         description: error.message,
       });
-    },
-  });
-}
-
-// Legacy export for backwards compatibility with old schema
-export function useAcsSnapshots(options: { limit?: number; offset?: number } = {}) {
-  const { limit = 10, offset = 0 } = options;
-  
-  return useQuery({
-    queryKey: ["acs-snapshots", limit, offset],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("acs_snapshots")
-        .select("*")
-        .order("round", { ascending: false })
-        .range(offset, offset + limit - 1);
-
-      if (error) throw error;
-      return data;
     },
   });
 }
