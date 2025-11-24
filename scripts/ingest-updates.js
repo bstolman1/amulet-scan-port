@@ -1,151 +1,254 @@
-#!/usr/bin/env node
+// scripts/ingest-updates.js
+//
+// Incremental ingester:
+// - Detects latest migration
+// - Reads last offset from ledger_updates
+// - Calls /v2/updates for that migration
+// - Appends new rows to ledger_updates + ledger_events
 
-/**
- * ingest-updates.js
- * Ingests live ledger updates from Canton Network
- */
+import axios from "axios";
+import { Agent as HttpAgent } from "http";
+import { Agent as HttpsAgent } from "https";
+import { createClient } from "@supabase/supabase-js";
 
-const axios = require('axios');
-const { createClient } = require('@supabase/supabase-js');
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const BASE_URL = process.env.BASE_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
+const BASE_URL = process.env.BASE_URL || "https://scan.sv-1.global.canton.network.sync.global/api/scan";
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('❌ Missing SUPABASE_URL or SUPABASE_ANON_KEY');
+  console.error("❌ SUPABASE_URL or SUPABASE_ANON_KEY missing in env");
   process.exit(1);
 }
 
+const scanClient = axios.create({
+  baseURL: BASE_URL,
+  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 30000 }),
+  httpsAgent: new HttpsAgent({
+    keepAlive: true,
+    keepAliveMsecs: 30000,
+    rejectUnauthorized: false,
+  }),
+  timeout: 120000,
+});
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const CURSOR_NAME = 'live_updates';
 
-async function getLastProcessedUpdate() {
-  const { data, error } = await supabase
-    .from('live_update_cursor')
-    .select('last_processed_round')
-    .eq('cursor_name', CURSOR_NAME)
-    .single();
+// ---------- Retry helper ----------
 
-  if (error && error.code !== 'PGRST116') {
-    throw error;
-  }
-
-  return data?.last_processed_round || 0;
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-async function updateCursor(round) {
-  const { error } = await supabase
-    .from('live_update_cursor')
-    .upsert({
-      cursor_name: CURSOR_NAME,
-      last_processed_round: round,
-      updated_at: new Date().toISOString(),
-    }, {
-      onConflict: 'cursor_name',
-    });
+async function retryWithBackoff(fn, options = {}) {
+  const {
+    maxRetries = 5,
+    baseDelay = 1000,
+    maxDelay = 30000,
+    shouldRetry = (error) => {
+      // Retry on timeout, connection, and temporary errors
+      const retryableCodes = ["PGRST301", "08000", "08003", "08006", "57014", "40001", "40P01"];
+      const retryableMessages = ["timeout", "connection", "temporary", "lock", "deadlock"];
 
-  if (error) {
-    throw error;
+      if (error.code && retryableCodes.includes(error.code)) return true;
+      if (error.message) {
+        const msg = error.message.toLowerCase();
+        return retryableMessages.some((term) => msg.includes(term));
+      }
+      return false;
+    },
+  } = options;
+
+  let lastError;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === maxRetries || !shouldRetry(error)) {
+        throw error;
+      }
+
+      // Exponential backoff with jitter
+      const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
+      const jitter = Math.random() * exponentialDelay * 0.3; // 30% jitter
+      const delay = exponentialDelay + jitter;
+
+      console.log(
+        `⏳ Retry attempt ${attempt + 1}/${maxRetries} after ${Math.round(delay)}ms (error: ${error.message})`,
+      );
+      await sleep(delay);
+    }
   }
+
+  throw lastError;
 }
 
-async function fetchUpdates(afterMigrationId, afterRecordTime) {
-  const payload = {
-    page_size: 100,
-  };
+async function detectLatestMigration() {
+  console.log("🔎 Detecting latest migration via /v0/state/acs/snapshot-timestamp");
+  let id = 1;
+  let latest = null;
 
-  if (afterMigrationId && afterRecordTime) {
-    payload.after = {
-      after_migration_id: afterMigrationId,
-      after_record_time: afterRecordTime,
-    };
+  while (true) {
+    try {
+      const res = await scanClient.get("/v0/state/acs/snapshot-timestamp", {
+        params: { before: new Date().toISOString(), migration_id: id },
+      });
+      if (res.data?.record_time) {
+        latest = id;
+        id++;
+      } else {
+        break;
+      }
+    } catch (err) {
+      break;
+    }
   }
 
-  const res = await axios.post(`${BASE_URL}/v2/updates`, payload);
-  return res.data;
+  if (!latest) throw new Error("No valid migration found");
+  console.log(`📘 Using latest migration_id: ${latest}`);
+  return latest;
 }
 
-async function processUpdate(transaction) {
-  const roundMatch = transaction.record_time?.match(/r(\d+)/);
-  const round = roundMatch ? parseInt(roundMatch[1], 10) : 0;
+async function run() {
+  const migrationId = await detectLatestMigration();
 
-  const updateData = {
-    round,
-    update_type: transaction.workflow_id || 'unknown',
-    timestamp: transaction.record_time,
-    update_data: transaction,
-  };
+  // Find last offset for this migration (if any)
+  const lastRow = await retryWithBackoff(async () => {
+    const { data, error } = await supabase
+      .from("ledger_updates")
+      .select("offset")
+      .eq("migration_id", migrationId)
+      .not("offset", "is", null)
+      .order("record_time", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  const { error } = await supabase
-    .from('ledger_updates')
-    .insert(updateData);
-
-  if (error) {
-    // Ignore duplicate key errors
-    if (error.code !== '23505') {
+    if (error && error.code !== "PGRST116") {
       throw error;
     }
+
+    return data;
+  });
+
+  const lastOffset = lastRow?.offset || null;
+  console.log(`🔄 ingest-updates for migration=${migrationId}, lastOffset=${lastOffset ?? "none"}`);
+
+  const body = {
+    migration_id: migrationId,
+    batch_size: 500,
+  };
+  if (lastOffset) body.begin = lastOffset;
+
+  const res = await scanClient.post("/v2/updates", body);
+  const updates = res.data?.updates || [];
+
+  if (!updates.length) {
+    console.log("✅ No new updates.");
+    return;
   }
 
-  return round;
-}
+  console.log(`📥 Received ${updates.length} updates from /v2/updates`);
 
-async function main() {
-  console.log('🚀 Starting live updates ingestion...\n');
+  const updatesRows = [];
+  const eventsRows = [];
 
-  try {
-    const lastRound = await getLastProcessedUpdate();
-    console.log(`📍 Last processed round: ${lastRound}\n`);
+  for (const u of updates) {
+    const recordTime = u.record_time || u.effective_at || null;
+    const effectiveAt = u.effective_at || null;
+    const isReassignment = !!u.event;
+    const kind = isReassignment ? "reassignment" : "transaction";
 
-    let afterMigrationId = null;
-    let afterRecordTime = null;
-    let processedCount = 0;
-    let maxRound = lastRound;
+    updatesRows.push({
+      update_id: u.update_id,
+      migration_id: u.migration_id ?? migrationId,
+      synchronizer_id: u.synchronizer_id ?? u.event?.source_synchronizer ?? null,
+      record_time: recordTime,
+      effective_at: effectiveAt,
+      offset: u.offset || null,
+      workflow_id: u.workflow_id || null,
+      kind,
+      raw: u,
+    });
 
-    // Fetch updates in pages
-    while (true) {
-      console.log(`📄 Fetching updates page...`);
-      const { transactions } = await fetchUpdates(afterMigrationId, afterRecordTime);
-
-      if (!transactions || transactions.length === 0) {
-        console.log('   ℹ️  No more updates\n');
-        break;
+    if (isReassignment) {
+      const ce = u.event.created_event;
+      if (ce) {
+        eventsRows.push({
+          event_id: ce.event_id,
+          update_id: u.update_id,
+          contract_id: ce.contract_id,
+          template_id: ce.template_id,
+          package_name: ce.package_name,
+          event_type: "reassign_create",
+          payload: ce.create_arguments || {},
+          signatories: ce.signatories || [],
+          observers: ce.observers || [],
+          created_at_ts: ce.created_at,
+          raw: ce,
+        });
       }
-
-      for (const tx of transactions) {
-        const round = await processUpdate(tx);
-        maxRound = Math.max(maxRound, round);
-        processedCount++;
-      }
-
-      console.log(`   ✓ Processed ${transactions.length} updates (total: ${processedCount})`);
-
-      // Update cursor for next page
-      const lastTx = transactions[transactions.length - 1];
-      afterMigrationId = lastTx.migration_id;
-      afterRecordTime = lastTx.record_time;
-
-      // If we got less than page size, we're done
-      if (transactions.length < 100) {
-        break;
-      }
-    }
-
-    if (maxRound > lastRound) {
-      await updateCursor(maxRound);
-      console.log(`\n✅ Ingestion complete! Processed ${processedCount} updates (up to round ${maxRound})`);
     } else {
-      console.log(`\n✅ No new updates found`);
-    }
+      const eventsById = u.events_by_id || {};
+      for (const [eventId, ev] of Object.entries(eventsById)) {
+        let eventType = ev.event_type || ev.kind || "unknown";
+        eventType = String(eventType).toLowerCase();
 
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-    if (error.response) {
-      console.error('Response data:', error.response.data);
+        eventsRows.push({
+          event_id: eventId,
+          update_id: u.update_id,
+          contract_id: ev.contract_id || null,
+          template_id: ev.template_id || null,
+          package_name: ev.package_name || null,
+          event_type: eventType,
+          payload: ev.create_arguments || ev.exercise_arguments || {},
+          signatories: ev.signatories || [],
+          observers: ev.observers || [],
+          created_at_ts: ev.created_at || recordTime,
+          raw: ev,
+        });
+      }
     }
-    process.exit(1);
   }
+
+  // Upsert in batches to avoid statement timeout
+  const batchSize = 500;
+
+  if (updatesRows.length) {
+    for (let i = 0; i < updatesRows.length; i += batchSize) {
+      const batch = updatesRows.slice(i, i + batchSize);
+
+      await retryWithBackoff(async () => {
+        const { error } = await supabase.from("ledger_updates").upsert(batch, { onConflict: "update_id" });
+        if (error) throw error;
+      });
+
+      console.log(`   📝 Upserted ${batch.length} updates (${i + batch.length}/${updatesRows.length})`);
+    }
+  }
+
+  if (eventsRows.length) {
+    for (let i = 0; i < eventsRows.length; i += batchSize) {
+      const batch = eventsRows.slice(i, i + batchSize);
+
+      await retryWithBackoff(async () => {
+        const { error } = await supabase.from("ledger_events").upsert(batch, { onConflict: "event_id" });
+        if (error) throw error;
+      });
+
+      console.log(`   📝 Upserted ${batch.length} events (${i + batch.length}/${eventsRows.length})`);
+    }
+  }
+
+  console.log(`✅ Stored ${updatesRows.length} updates and ${eventsRows.length} events for migration=${migrationId}`);
 }
 
-main();
+run().catch((err) => {
+  console.error("❌ Fatal in ingest-updates:", err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
