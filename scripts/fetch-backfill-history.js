@@ -297,9 +297,22 @@ async function bulkCopyWithUpsert(table, rows, columns) {
         let val = row[col];
         if (val === null || val === undefined) return '\\N';
         
-        // Debug logging for array columns
-        if ((col === 'signatories' || col === 'observers') && rowIdx === 0) {
-          console.log(`   🔍 DEBUG: ${col} type=${typeof val}, isArray=${Array.isArray(val)}, value=${JSON.stringify(val).substring(0, 100)}`);
+        // CRITICAL: Check if array columns got stringified somewhere
+        if ((col === 'signatories' || col === 'observers')) {
+          // If it's a string that looks like JSON, parse it AGAIN
+          if (typeof val === 'string' && val.trim().startsWith('[')) {
+            console.log(`   ⚠️  FOUND STRINGIFIED ARRAY in ${col}:`, val.substring(0, 100));
+            val = ensureArray(val);
+            console.log(`   ✅ RECOVERED to array:`, Array.isArray(val), val);
+          }
+          
+          // Debug first row
+          if (rowIdx === 0) {
+            console.log(`   🔍 TSV FORMAT: ${col} type=${typeof val}, isArray=${Array.isArray(val)}, length=${Array.isArray(val) ? val.length : 'N/A'}`);
+            if (Array.isArray(val)) {
+              console.log(`   🔍 TSV FORMAT: ${col} first element="${val[0]}"`);
+            }
+          }
         }
         
         // Handle PostgreSQL arrays specially - must be actual arrays at this point
@@ -317,7 +330,7 @@ async function bulkCopyWithUpsert(table, rows, columns) {
           });
           const formatted = '{' + elements.join(',') + '}';
           if ((col === 'signatories' || col === 'observers') && rowIdx === 0) {
-            console.log(`   🔍 DEBUG: ${col} formatted as: ${formatted.substring(0, 100)}`);
+            console.log(`   ✅ FINAL FORMAT: ${col} = ${formatted.substring(0, 200)}`);
           }
           return formatted;
         }
@@ -447,6 +460,8 @@ async function upsertUpdatesAndEvents(transactions) {
   const updatesRows = [];
   const eventsRows = [];
 
+  console.log(`   🔍 TRACE: Processing ${transactions.length} transactions`);
+
   for (const tx of transactions) {
     const isReassignment = !!tx.event;
     const kind = isReassignment ? "reassignment" : "transaction";
@@ -496,6 +511,20 @@ async function upsertUpdatesAndEvents(transactions) {
         let eventType = ev.event_type || ev.kind || "unknown";
         eventType = String(eventType).toLowerCase();
 
+        const signatories = ensureArray(ev.signatories);
+        const observers = ensureArray(ev.observers);
+        
+        // Debug first event to trace array handling
+        if (eventsRows.length === 0) {
+          console.log(`   🔍 TRACE: First event signatories:`, {
+            rawType: typeof ev.signatories,
+            rawValue: ev.signatories,
+            isArray: Array.isArray(ev.signatories),
+            afterEnsureArray: signatories,
+            isArrayAfter: Array.isArray(signatories)
+          });
+        }
+
         eventsRows.push({
           event_id: eventId,
           update_id: updateId,
@@ -506,8 +535,8 @@ async function upsertUpdatesAndEvents(transactions) {
           event_data: ev,
           round: 0,
           payload: ev.create_arguments || ev.exercise_arguments || {},
-          signatories: ensureArray(ev.signatories),
-          observers: ensureArray(ev.observers),
+          signatories,
+          observers,
           created_at_ts: ev.created_at || recordTime,
           raw: ev,
         });
