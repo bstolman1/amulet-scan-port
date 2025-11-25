@@ -3,7 +3,17 @@ name: Backfill Ledger History
 on:
   schedule:
     - cron: '0 0 * * 0'  # Run every Sunday at midnight (00:00 UTC)
-  workflow_dispatch: {}  # Keep manual trigger available
+  workflow_dispatch:
+    inputs:
+      worker_count:
+        description: 'Number of parallel workers (1=single-threaded, 8-12=parallel)'
+        required: false
+        type: number
+        default: 1
+      migration_id:
+        description: 'Specific migration ID to backfill (optional, leave empty for all)'
+        required: false
+        type: string
 
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
@@ -11,8 +21,34 @@ concurrency:
   cancel-in-progress: false # Queue instead of canceling
 
 jobs:
-  backfill:
+  setup:
     runs-on: self-hosted
+    outputs:
+      workers: ${{ steps.create-matrix.outputs.workers }}
+      worker_count: ${{ steps.create-matrix.outputs.worker_count }}
+    steps:
+      - name: Create worker matrix
+        id: create-matrix
+        run: |
+          WORKERS='[]'
+          COUNT=${{ inputs.worker_count || 1 }}
+          
+          for i in $(seq 0 $(($COUNT - 1))); do
+            WORKERS=$(echo $WORKERS | jq ". += [{\"id\": $i}]")
+          done
+          
+          echo "workers=$WORKERS" >> $GITHUB_OUTPUT
+          echo "worker_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Created $COUNT workers"
+
+  backfill:
+    needs: setup
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJson(needs.setup.outputs.worker_count) }}
+      matrix:
+        worker: ${{ fromJson(needs.setup.outputs.workers) }}
 
     steps:
       - name: Checkout
@@ -23,16 +59,40 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           npm init -y
-          npm install axios @supabase/supabase-js
+          npm install axios @supabase/supabase-js pg pg-copy-streams
 
-      - name: Run backfill
+      - name: Run backfill worker ${{ matrix.worker.id }}
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKFILL_PAGE_SIZE: "200"
-        run: node scripts/fetch-backfill-history.js
+          WORKER_ID: ${{ matrix.worker.id }}
+          WORKER_COUNT: ${{ needs.setup.outputs.worker_count }}
+          MIGRATION_ID: ${{ inputs.migration_id || '' }}
+        run: |
+          if [ "${{ needs.setup.outputs.worker_count }}" -gt 1 ]; then
+            echo "🚀 Starting parallel backfill worker ${{ matrix.worker.id }} of ${{ needs.setup.outputs.worker_count }}"
+          else
+            echo "🚀 Starting single-threaded backfill"
+          fi
+          node scripts/fetch-backfill-history.js
+        timeout-minutes: 1440  # 24 hours max per worker
+
+  verify:
+    needs: backfill
+    runs-on: self-hosted
+    steps:
+      - name: Report completion
+        run: |
+          echo "✅ Backfill complete"
+          if [ "${{ needs.setup.outputs.worker_count }}" -gt 1 ]; then
+            echo "📊 All ${{ needs.setup.outputs.worker_count }} parallel workers finished"
+            echo ""
+            echo "⚠️  IMPORTANT: Don't forget to run scripts/restore-after-backfill.sql"
+            echo "   to restore indexes and make tables LOGGED again!"
+          fi
