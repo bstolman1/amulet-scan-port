@@ -264,33 +264,54 @@ const BackfillProgress = () => {
               {allCursors.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">No cursors found</div>
               ) : (
-                allCursors.map((cursor) => (
-                  <div key={cursor.id} className="space-y-2 p-4 rounded-lg bg-muted/50">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
-                        <Badge variant={cursor.complete ? "default" : "secondary"}>
-                          {cursor.complete ? "Complete" : "In Progress"}
-                        </Badge>
-                      </div>
-                      <div className="text-sm text-muted-foreground">
-                        Round {cursor.last_processed_round.toLocaleString()}
-                      </div>
-                    </div>
-                    {cursor.min_time && cursor.max_time && (
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>{format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
-                          <span>{format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
+                allCursors.map((cursor) => {
+                  // Calculate progress percentage based on time range
+                  let progressPercent = 0;
+                  if (cursor.min_time && cursor.max_time && cursor.last_before) {
+                    const minTime = new Date(cursor.min_time).getTime();
+                    const maxTime = new Date(cursor.max_time).getTime();
+                    const currentTime = new Date(cursor.last_before).getTime();
+                    const totalRange = maxTime - minTime;
+                    const currentProgress = currentTime - minTime;
+                    progressPercent = Math.min(100, Math.max(0, (currentProgress / totalRange) * 100));
+                  } else if (cursor.complete) {
+                    progressPercent = 100;
+                  }
+
+                  return (
+                    <div key={cursor.id} className="space-y-2 p-4 rounded-lg bg-muted/50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
+                          <Badge variant={cursor.complete ? "default" : "secondary"}>
+                            {cursor.complete ? "Complete" : "In Progress"}
+                          </Badge>
                         </div>
-                        <Progress value={cursor.complete ? 100 : 50} className="h-2" />
+                        <div className="text-sm text-muted-foreground">
+                          Round {cursor.last_processed_round.toLocaleString()}
+                        </div>
                       </div>
-                    )}
-                    <div className="text-xs text-muted-foreground">
-                      Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}
+                      {cursor.min_time && cursor.max_time && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">Start: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
+                            <span className="text-muted-foreground">End: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
+                          </div>
+                          {cursor.last_before && (
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-primary font-semibold">Current: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}</span>
+                              <span className="text-primary font-semibold">{progressPercent.toFixed(1)}%</span>
+                            </div>
+                          )}
+                          <Progress value={progressPercent} className="h-2" />
+                        </div>
+                      )}
+                      <div className="text-xs text-muted-foreground">
+                        Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </CardContent>
