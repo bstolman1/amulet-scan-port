@@ -144,8 +144,8 @@ const Transactions = () => {
                           <Badge className={getStatusColor("confirmed")}>confirmed</Badge>
                         </div>
                         <div className="text-right">
-                          <p className="text-sm text-muted-foreground">Round</p>
-                          <p className="font-mono font-semibold">{event.round || "N/A"}</p>
+                          <p className="text-sm text-muted-foreground">Migration</p>
+                          <p className="font-mono font-semibold">{event.migration_id || "N/A"}</p>
                         </div>
                       </div>
 

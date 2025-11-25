@@ -540,7 +540,6 @@ async function upsertUpdatesAndEvents(transactions) {
       kind,
       update_type: kind,
       update_data: tx,
-      round: calculateRound(recordTime || effectiveAt),
       raw: tx,
     });
 
@@ -555,7 +554,6 @@ async function upsertUpdatesAndEvents(transactions) {
           package_name: ce.package_name,
           event_type: "reassign_create",
           event_data: ce,
-          round: calculateRound(ce.created_at || recordTime || effectiveAt),
           payload: ce.create_arguments || {},
           signatories: ensureArray(ce.signatories),
           observers: ensureArray(ce.observers),
@@ -592,7 +590,6 @@ async function upsertUpdatesAndEvents(transactions) {
           package_name: ev.package_name || null,
           event_type: eventType,
           event_data: ev,
-          round: calculateRound(ev.created_at || recordTime || effectiveAt),
           payload: ev.create_arguments || ev.exercise_arguments || {},
           signatories,
           observers,
