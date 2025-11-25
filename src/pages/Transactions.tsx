@@ -19,7 +19,7 @@ const Transactions = () => {
       const { data, error } = await supabase
         .from("ledger_events")
         .select("*")
-        .in("event_type", ["transfer", "mint", "tap", "TransferEvent", "MintEvent", "TapEvent"])
+        .like("template_id", "%Amulet%")
         .order("created_at", { ascending: false })
         .limit(100);
       if (error) throw error;
@@ -60,15 +60,41 @@ const Transactions = () => {
   };
 
   const parseEventPayload = (event: any) => {
-    const payload = event.payload || event.event_data || {};
-    const eventType = (event.event_type || "").toLowerCase();
+    const data = event.event_data || event.payload || {};
+    const createArgs = data.create_arguments?.record?.fields || [];
+    const exerciseArgs = data.exercise_arguments?.record?.fields || [];
+    
+    // For Amulet created events (mints)
+    if (event.event_type === "created_event" && event.template_id?.includes("Amulet:Amulet")) {
+      const amountField = createArgs.find((f: any) => f.value?.record?.fields?.[0]?.value?.numeric);
+      const amount = amountField?.value?.record?.fields?.[0]?.value?.numeric || "0";
+      return {
+        type: "mint",
+        amount,
+        from: null,
+        to: data.signatories?.[1] || null,
+        fee: "0",
+      };
+    }
+    
+    // For transfer/exercise events
+    if (event.event_type === "exercised_event") {
+      const amount = exerciseArgs.find((f: any) => f.value?.numeric)?.value?.numeric || "0";
+      return {
+        type: "transfer",
+        amount,
+        from: data.signatories?.[0] || null,
+        to: data.signatories?.[1] || null,
+        fee: "0",
+      };
+    }
     
     return {
-      type: eventType.replace("event", ""),
-      amount: payload.amount || payload.amulet_amount || payload.sender_change_amount || "0",
-      from: payload.sender?.party || payload.from || null,
-      to: payload.receiver?.party || payload.receivers?.[0]?.party || payload.to || null,
-      fee: payload.sender_fee || payload.fee || "0",
+      type: "unknown",
+      amount: "0",
+      from: null,
+      to: null,
+      fee: "0",
     };
   };
 
