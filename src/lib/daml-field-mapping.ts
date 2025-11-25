@@ -299,7 +299,7 @@ function parseTransferEvent(eventData: any): ParsedEventData {
         { label: 'Holding Fees', category: 'fee' as const },
         { label: 'Sender Change Fee', category: 'fee' as const },
         { label: 'Output Fees', category: 'fee' as const },
-        { label: 'Amulet Price (USD)', category: 'metadata' as const },
+        { label: 'Sender Balance (USD)', category: 'metadata' as const },
       ];
       
       balanceFields.slice(0, 4).forEach((field: any, idx: number) => {
