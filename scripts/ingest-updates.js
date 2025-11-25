@@ -88,6 +88,15 @@ async function retryWithBackoff(fn, options = {}) {
   throw lastError;
 }
 
+// Calculate Canton round number from timestamp (rounds occur every 10 minutes)
+function calculateRound(timestamp) {
+  if (!timestamp) return 0;
+  const date = new Date(timestamp);
+  const ms = date.getTime();
+  // Each round is 10 minutes = 600,000 milliseconds
+  return Math.floor(ms / 600000);
+}
+
 async function detectLatestMigration() {
   console.log("🔎 Detecting latest migration via /v0/state/acs/snapshot-timestamp");
   let id = 1;
@@ -172,6 +181,7 @@ async function run() {
       offset: u.offset || null,
       workflow_id: u.workflow_id || null,
       kind,
+      round: calculateRound(recordTime || effectiveAt),
       raw: u,
     });
 
@@ -185,11 +195,13 @@ async function run() {
           template_id: ce.template_id,
           package_name: ce.package_name,
           event_type: "reassign_create",
+          round: calculateRound(ce.created_at || recordTime || effectiveAt),
           payload: ce.create_arguments || {},
           signatories: ce.signatories || [],
           observers: ce.observers || [],
           created_at_ts: ce.created_at,
           raw: ce,
+          migration_id: u.migration_id ?? migrationId,
         });
       }
     } else {
@@ -205,11 +217,13 @@ async function run() {
           template_id: ev.template_id || null,
           package_name: ev.package_name || null,
           event_type: eventType,
+          round: calculateRound(ev.created_at || recordTime || effectiveAt),
           payload: ev.create_arguments || ev.exercise_arguments || {},
           signatories: ev.signatories || [],
           observers: ev.observers || [],
           created_at_ts: ev.created_at || recordTime,
           raw: ev,
+          migration_id: u.migration_id ?? migrationId,
         });
       }
     }

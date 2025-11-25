@@ -485,7 +485,7 @@ export type Database = {
           },
         ]
       }
-      temp_ledger_updates_1764077559469_849: {
+      temp_ledger_updates_1764077655231_746: {
         Row: {
           created_at: string
           effective_at: string | null
