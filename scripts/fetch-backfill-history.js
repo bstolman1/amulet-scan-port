@@ -605,8 +605,8 @@ async function upsertUpdatesAndEvents(transactions) {
   }
 
   // Upsert in batches to avoid statement timeout
-  await upsertInBatches("ledger_updates", updatesRows, 500);
-  await upsertInBatches("ledger_events", eventsRows, 500);
+  await upsertInBatches("ledger_updates", updatesRows, 10000);
+  await upsertInBatches("ledger_events", eventsRows, 10000);
 }
 
 // ---------- Core paging over /v0/backfilling/updates-before ----------
