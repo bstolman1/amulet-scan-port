@@ -1,10 +1,12 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ArrowRight, Code } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { format } from "date-fns";
 
 const Transactions = () => {
@@ -134,14 +136,15 @@ const Transactions = () => {
                 {events.map((event) => {
                   const tx = parseEventPayload(event);
                   return (
-                    <div
+                    <Card
                       key={event.id}
-                      className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth border border-border/50"
+                      className="p-6 hover:shadow-lg transition-smooth"
                     >
-                      <div className="flex items-start justify-between mb-4">
+                      <div className="flex items-start justify-between mb-6">
                         <div className="flex items-center space-x-3">
                           <Badge className={getTypeColor(tx.type)}>{tx.type}</Badge>
                           <Badge className={getStatusColor("confirmed")}>confirmed</Badge>
+                          <Badge variant="outline">{event.event_type}</Badge>
                         </div>
                         <div className="text-right">
                           <p className="text-sm text-muted-foreground">Migration</p>
@@ -149,50 +152,125 @@ const Transactions = () => {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                        <div>
+                      {/* Primary Transaction Details */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div className="p-3 rounded-lg bg-muted/30">
                           <p className="text-sm text-muted-foreground mb-1">Event ID</p>
                           <div className="flex items-center space-x-2">
-                            <p className="font-mono text-sm truncate">{(event.event_id || event.id).substring(0, 20)}...</p>
-                            <ExternalLink className="h-3 w-3 text-muted-foreground cursor-pointer hover:text-primary transition-smooth" />
+                            <p className="font-mono text-xs break-all">{event.event_id || event.id}</p>
                           </div>
                         </div>
-                        <div>
+                        <div className="p-3 rounded-lg bg-primary/10">
                           <p className="text-sm text-muted-foreground mb-1">Amount</p>
-                          <p className="font-mono font-bold text-primary text-lg">
-                            {parseFloat(tx.amount).toFixed(2)} CC
+                          <p className="font-mono font-bold text-primary text-2xl">
+                            {parseFloat(tx.amount).toFixed(4)} CC
                           </p>
                         </div>
-                        {tx.fee && parseFloat(tx.fee) > 0 && (
-                          <div>
-                            <p className="text-sm text-muted-foreground mb-1">Fee</p>
-                            <p className="font-mono text-sm">
-                              {parseFloat(tx.fee).toFixed(4)} CC
-                            </p>
+                        <div className="p-3 rounded-lg bg-muted/30">
+                          <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
+                          <p className="font-mono text-xs break-all">{event.contract_id || "N/A"}</p>
+                        </div>
+                      </div>
+
+                      {/* Template & Package Info */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                        <div className="p-3 rounded-lg bg-muted/30">
+                          <p className="text-sm text-muted-foreground mb-1">Template ID</p>
+                          <p className="font-mono text-xs break-all">{event.template_id || "N/A"}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/30">
+                          <p className="text-sm text-muted-foreground mb-1">Package Name</p>
+                          <p className="font-mono text-xs">{event.package_name || "N/A"}</p>
+                        </div>
+                      </div>
+
+                      {/* Party Information */}
+                      {(event.signatories?.length > 0 || event.observers?.length > 0 || (tx.from && tx.to)) && (
+                        <div className="mb-6 p-4 rounded-lg bg-background/50 border border-border/30">
+                          <p className="text-sm font-semibold mb-3">Parties</p>
+                          
+                          {tx.from && tx.to && (
+                            <div className="flex items-center space-x-3 mb-3">
+                              <div className="flex-1 p-2 rounded bg-muted/30">
+                                <p className="text-xs text-muted-foreground mb-1">From</p>
+                                <p className="font-mono text-xs break-all">{tx.from}</p>
+                              </div>
+                              <ArrowRight className="h-4 w-4 text-primary flex-shrink-0" />
+                              <div className="flex-1 p-2 rounded bg-muted/30">
+                                <p className="text-xs text-muted-foreground mb-1">To</p>
+                                <p className="font-mono text-xs break-all">{tx.to}</p>
+                              </div>
+                            </div>
+                          )}
+
+                          {event.signatories?.length > 0 && (
+                            <div className="mb-2">
+                              <p className="text-xs text-muted-foreground mb-1">Signatories ({event.signatories.length})</p>
+                              <div className="space-y-1">
+                                {event.signatories.map((sig: string, idx: number) => (
+                                  <p key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">{sig}</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {event.observers?.length > 0 && (
+                            <div>
+                              <p className="text-xs text-muted-foreground mb-1">Observers ({event.observers.length})</p>
+                              <div className="space-y-1">
+                                {event.observers.map((obs: string, idx: number) => (
+                                  <p key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">{obs}</p>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Timestamps */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                        <div className="p-2 rounded bg-muted/20">
+                          <p className="text-xs text-muted-foreground">Timestamp</p>
+                          <p className="text-xs font-mono">{format(new Date(event.timestamp), "MMM d, yyyy HH:mm:ss")}</p>
+                        </div>
+                        {event.created_at && (
+                          <div className="p-2 rounded bg-muted/20">
+                            <p className="text-xs text-muted-foreground">Created At</p>
+                            <p className="text-xs font-mono">{format(new Date(event.created_at), "MMM d, yyyy HH:mm:ss")}</p>
+                          </div>
+                        )}
+                        {event.created_at_ts && (
+                          <div className="p-2 rounded bg-muted/20">
+                            <p className="text-xs text-muted-foreground">Created At (TS)</p>
+                            <p className="text-xs font-mono">{format(new Date(event.created_at_ts), "MMM d, yyyy HH:mm:ss")}</p>
                           </div>
                         )}
                       </div>
 
-                      {tx.from && tx.to && (
-                        <div className="flex items-center space-x-3 p-4 rounded-lg bg-background/50">
-                          <div className="flex-1">
-                            <p className="text-xs text-muted-foreground mb-1">From</p>
-                            <p className="font-mono text-sm truncate">{formatPartyId(tx.from)}</p>
-                          </div>
-                          <ArrowRight className="h-4 w-4 text-primary flex-shrink-0" />
-                          <div className="flex-1">
-                            <p className="text-xs text-muted-foreground mb-1">To</p>
-                            <p className="font-mono text-sm truncate">{formatPartyId(tx.to)}</p>
-                          </div>
+                      {/* Update ID */}
+                      {event.update_id && (
+                        <div className="p-3 rounded-lg bg-muted/30 mb-4">
+                          <p className="text-sm text-muted-foreground mb-1">Update ID</p>
+                          <p className="font-mono text-xs break-all">{event.update_id}</p>
                         </div>
                       )}
 
-                      <div className="mt-4 pt-4 border-t border-border/50">
-                        <p className="text-xs text-muted-foreground">
-                          {format(new Date(event.timestamp), "MMM d, yyyy HH:mm:ss")}
-                        </p>
-                      </div>
-                    </div>
+                      {/* Raw Event Data Collapsible */}
+                      <Collapsible>
+                        <CollapsibleTrigger asChild>
+                          <Button variant="outline" size="sm" className="w-full">
+                            <Code className="h-4 w-4 mr-2" />
+                            View Full Event Data
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-4">
+                          <div className="p-4 rounded-lg bg-background/70 border border-border/50 max-h-96 overflow-auto">
+                            <p className="text-xs text-muted-foreground mb-2 font-semibold">Complete Event JSON:</p>
+                            <pre className="text-xs overflow-x-auto">{JSON.stringify(event, null, 2)}</pre>
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </Card>
                   );
                 })}
               </div>

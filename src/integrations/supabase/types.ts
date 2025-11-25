@@ -536,6 +536,63 @@ export type Database = {
         }
         Relationships: []
       }
+      temp_ledger_events_1764090433964_293: {
+        Row: {
+          contract_id: string | null
+          created_at: string
+          created_at_ts: string | null
+          event_data: Json
+          event_id: string | null
+          event_type: string
+          id: string
+          migration_id: number | null
+          observers: string[] | null
+          package_name: string | null
+          payload: Json | null
+          raw: Json | null
+          signatories: string[] | null
+          template_id: string | null
+          timestamp: string
+          update_id: string | null
+        }
+        Insert: {
+          contract_id?: string | null
+          created_at?: string
+          created_at_ts?: string | null
+          event_data: Json
+          event_id?: string | null
+          event_type: string
+          id?: string
+          migration_id?: number | null
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
+          signatories?: string[] | null
+          template_id?: string | null
+          timestamp?: string
+          update_id?: string | null
+        }
+        Update: {
+          contract_id?: string | null
+          created_at?: string
+          created_at_ts?: string | null
+          event_data?: Json
+          event_id?: string | null
+          event_type?: string
+          id?: string
+          migration_id?: number | null
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
+          signatories?: string[] | null
+          template_id?: string | null
+          timestamp?: string
+          update_id?: string | null
+        }
+        Relationships: []
+      }
       temp_ledger_updates_1764079271664_901: {
         Row: {
           created_at: string
