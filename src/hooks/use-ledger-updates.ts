@@ -8,6 +8,9 @@ export interface LedgerUpdate {
   update_type: string;
   update_data: any;
   created_at: string;
+  migration_id?: number | null;
+  synchronizer_id?: string | null;
+  update_id?: string | null;
 }
 
 export function useLedgerUpdates(limit: number = 50) {

@@ -1,13 +1,17 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { Clock, Database, Activity, Zap, Trash2, FileText, Layers } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 import { useBackfillCursors, BackfillCursor } from "@/hooks/use-backfill-cursors";
+import { useLedgerUpdates } from "@/hooks/use-ledger-updates";
 import { useToast } from "@/hooks/use-toast";
+import { useQuery } from "@tanstack/react-query";
 
 interface ActivityLog {
   id: string;
@@ -30,6 +34,20 @@ interface BackfillStats {
 
 const BackfillProgress = () => {
   const { data: cursors = [], isLoading, refetch } = useBackfillCursors();
+  const { data: recentUpdates = [] } = useLedgerUpdates(50);
+  const { data: recentEvents = [] } = useQuery({
+    queryKey: ["ledgerEvents", 50],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("ledger_events")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return data;
+    },
+    staleTime: 5_000,
+  });
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
   const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
@@ -460,6 +478,165 @@ const BackfillProgress = () => {
                 </div>
               )}
               <div ref={logEndRef} />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Backfill Cursors Progress */}
+        <Card className="bg-card/50 backdrop-blur">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              Backfill Cursors
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {allCursors.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No cursors found</div>
+              ) : (
+                allCursors.map((cursor) => (
+                  <div key={cursor.id} className="space-y-2 p-4 rounded-lg bg-muted/50">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
+                        <Badge variant={cursor.complete ? "default" : "secondary"}>
+                          {cursor.complete ? "Complete" : "In Progress"}
+                        </Badge>
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        Round {cursor.last_processed_round.toLocaleString()}
+                      </div>
+                    </div>
+                    {cursor.min_time && cursor.max_time && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
+                          <span>{format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
+                        </div>
+                        <Progress value={cursor.complete ? 100 : 50} className="h-2" />
+                      </div>
+                    )}
+                    <div className="text-xs text-muted-foreground">
+                      Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Recent Ledger Updates */}
+        <Card className="bg-card/50 backdrop-blur">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-blue-400" />
+              Recent Ledger Updates
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Round</TableHead>
+                    <TableHead>Migration ID</TableHead>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {recentUpdates.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                        No updates found
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    recentUpdates.slice(0, 20).map((update) => (
+                      <TableRow key={update.id}>
+                        <TableCell className="font-mono text-xs">{update.update_type}</TableCell>
+                        <TableCell>{update.round.toLocaleString()}</TableCell>
+                        <TableCell>
+                          {update.migration_id ? (
+                            <Badge variant="outline" className="text-xs">
+                              {update.migration_id}
+                            </Badge>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {format(new Date(update.timestamp), "MMM d, HH:mm:ss")}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDistanceToNow(new Date(update.created_at), { addSuffix: true })}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Recent Ledger Events */}
+        <Card className="bg-card/50 backdrop-blur">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="w-5 h-5 text-green-400" />
+              Recent Ledger Events
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Round</TableHead>
+                    <TableHead>Template</TableHead>
+                    <TableHead>Migration ID</TableHead>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Created</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {!recentEvents || recentEvents.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-muted-foreground">
+                        No events found
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    recentEvents.slice(0, 20).map((event) => (
+                      <TableRow key={event.id}>
+                        <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                        <TableCell>{event.round.toLocaleString()}</TableCell>
+                        <TableCell className="text-xs truncate max-w-[200px]">{event.template_id || "-"}</TableCell>
+                        <TableCell>
+                          {event.migration_id ? (
+                            <Badge variant="outline" className="text-xs">
+                              {event.migration_id}
+                            </Badge>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {format(new Date(event.timestamp), "MMM d, HH:mm:ss")}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
             </div>
           </CardContent>
         </Card>
