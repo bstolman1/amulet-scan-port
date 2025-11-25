@@ -653,7 +653,7 @@ export type Database = {
         }
         Relationships: []
       }
-      temp_ledger_updates_1764088457105_553: {
+      temp_ledger_updates_1764088647812_411: {
         Row: {
           created_at: string
           effective_at: string | null

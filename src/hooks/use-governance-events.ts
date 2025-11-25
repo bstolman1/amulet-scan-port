@@ -8,9 +8,7 @@ export function useGovernanceEvents() {
       const { data, error } = await supabase
         .from("ledger_events")
         .select("*")
-        .or(
-          "event_type.ilike.%vote%,event_type.ilike.%proposal%,template_id.ilike.%VoteRequest%,template_id.ilike.%Confirmation%"
-        )
+        .like("template_id", "%Confirmation%")
         .order("created_at", { ascending: false })
         .limit(200);
 
@@ -28,9 +26,7 @@ export function useRewardClaimEvents() {
       const { data, error } = await supabase
         .from("ledger_events")
         .select("*")
-        .or(
-          "event_type.ilike.%reward%,template_id.ilike.%RewardCoupon%,template_id.ilike.%ClaimReward%"
-        )
+        .like("template_id", "%RewardCoupon%")
         .order("created_at", { ascending: false })
         .limit(500);
 

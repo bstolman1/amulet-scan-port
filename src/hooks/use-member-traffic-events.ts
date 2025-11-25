@@ -8,9 +8,7 @@ export function useMemberTrafficEvents() {
       const { data, error } = await supabase
         .from("ledger_events")
         .select("*")
-        .or(
-          "template_id.ilike.%MemberTraffic%,event_type.ilike.%traffic%,event_type.ilike.%synchronizer%"
-        )
+        .like("template_id", "%MemberTraffic%")
         .order("created_at", { ascending: false })
         .limit(200);
 
