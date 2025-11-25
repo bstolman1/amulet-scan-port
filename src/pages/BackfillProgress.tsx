@@ -1,28 +1,14 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { Clock, Database, Activity, Zap, Trash2, FileText, Layers } from "lucide-react";
+import { Database, Activity, Trash2, FileText, Layers, Zap } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { useBackfillCursors, BackfillCursor } from "@/hooks/use-backfill-cursors";
-import { useLedgerUpdates } from "@/hooks/use-ledger-updates";
 import { useToast } from "@/hooks/use-toast";
-import { useQuery } from "@tanstack/react-query";
-
-interface ActivityLog {
-  id: string;
-  timestamp: string;
-  type: "update" | "event" | "cursor_update";
-  updateId?: string;
-  eventId?: string;
-  migrationId?: number;
-  synchronizerId?: string;
-  complete?: boolean;
-}
 
 interface BackfillStats {
   totalCursors: number;
@@ -34,25 +20,8 @@ interface BackfillStats {
 
 const BackfillProgress = () => {
   const { data: cursors = [], isLoading, refetch } = useBackfillCursors();
-  const { data: recentUpdates = [] } = useLedgerUpdates(50);
-  const { data: recentEvents = [] } = useQuery({
-    queryKey: ["ledgerEvents", 50],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("ledger_events")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return data;
-    },
-    staleTime: 5_000,
-  });
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
-  const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
-  const [isMonitoring, setIsMonitoring] = useState(true);
-  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set(["cursor_update", "update", "event"]));
   const [stats, setStats] = useState<BackfillStats>({
     totalCursors: 0,
     completedCursors: 0,
@@ -60,23 +29,7 @@ const BackfillProgress = () => {
     totalEvents: 0,
     activeMigrations: 0,
   });
-  const [lastActivity, setLastActivity] = useState<string>("");
-  const logEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
-
-  const toggleFilter = (type: string) => {
-    setActiveFilters((prev) => {
-      const newFilters = new Set(prev);
-      if (newFilters.has(type)) {
-        newFilters.delete(type);
-      } else {
-        newFilters.add(type);
-      }
-      return newFilters;
-    });
-  };
-
-  const filteredActivityLog = activityLog.filter((log) => activeFilters.has(log.type));
 
   // Calculate merged cursors list
   const allCursors = useMemo(() => {
@@ -87,15 +40,20 @@ const BackfillProgress = () => {
   useEffect(() => {
     const loadInitialStats = async () => {
       try {
-        const [updatesCount, eventsCount] = await Promise.all([
+        const [updatesCount, eventsCount, migrationsResult] = await Promise.all([
           supabase.from("ledger_updates").select("*", { count: "exact", head: true }),
           supabase.from("ledger_events").select("*", { count: "exact", head: true }),
+          supabase.from("ledger_updates").select("migration_id").not("migration_id", "is", null),
         ]);
+
+        // Count unique migration IDs
+        const uniqueMigrations = new Set(migrationsResult.data?.map(row => row.migration_id) || []);
 
         setStats((prev) => ({
           ...prev,
           totalUpdates: updatesCount.count || 0,
           totalEvents: eventsCount.count || 0,
+          activeMigrations: uniqueMigrations.size,
         }));
       } catch (error) {
         console.error("Failed to load initial stats:", error);
@@ -114,13 +72,6 @@ const BackfillProgress = () => {
     }));
   }, [allCursors]);
 
-  // Auto-scroll to bottom of activity log
-  useEffect(() => {
-    if (isMonitoring) {
-      logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [activityLog, isMonitoring]);
-
   useEffect(() => {
     const channel = supabase
       .channel("backfill-progress")
@@ -135,35 +86,10 @@ const BackfillProgress = () => {
           console.log("Backfill cursor update:", payload);
           if (payload.eventType === "INSERT") {
             setRealtimeCursors((prev) => [payload.new as BackfillCursor, ...prev]);
-            if (isMonitoring) {
-              const cursor = payload.new as BackfillCursor;
-              setActivityLog((prev) => [
-                ...prev.slice(-99),
-                {
-                  id: crypto.randomUUID(),
-                  timestamp: new Date().toISOString(),
-                  type: "cursor_update",
-                },
-              ]);
-              setLastActivity(`New cursor: ${cursor.cursor_name}`);
-            }
           } else if (payload.eventType === "UPDATE") {
             setRealtimeCursors((prev) =>
               prev.map((c) => (c.id === payload.new.id ? (payload.new as BackfillCursor) : c)),
             );
-            if (isMonitoring && payload.new.last_processed_round > 0) {
-              const cursor = payload.new as BackfillCursor;
-              setActivityLog((prev) => [
-                ...prev.slice(-99),
-                {
-                  id: crypto.randomUUID(),
-                  timestamp: new Date().toISOString(),
-                  type: "cursor_update",
-                  complete: true,
-                },
-              ]);
-              setLastActivity(`Updated: ${cursor.cursor_name}`);
-            }
           }
         },
       )
@@ -175,19 +101,7 @@ const BackfillProgress = () => {
           table: "ledger_updates",
         },
         (payload: any) => {
-          if (isMonitoring) {
-            setStats((prev) => ({ ...prev, totalUpdates: prev.totalUpdates + 1 }));
-            setActivityLog((prev) => [
-              ...prev.slice(-99),
-              {
-                id: crypto.randomUUID(),
-                timestamp: new Date().toISOString(),
-                type: "update",
-                updateId: payload.new.id,
-              },
-            ]);
-            setLastActivity(`New update: ${payload.new.update_type}`);
-          }
+          setStats((prev) => ({ ...prev, totalUpdates: prev.totalUpdates + 1 }));
         },
       )
       .on(
@@ -198,19 +112,7 @@ const BackfillProgress = () => {
           table: "ledger_events",
         },
         (payload: any) => {
-          if (isMonitoring) {
-            setStats((prev) => ({ ...prev, totalEvents: prev.totalEvents + 1 }));
-            setActivityLog((prev) => [
-              ...prev.slice(-99),
-              {
-                id: crypto.randomUUID(),
-                timestamp: new Date().toISOString(),
-                type: "event",
-                eventId: payload.new.id,
-              },
-            ]);
-            setLastActivity(`New event: ${payload.new.event_type}`);
-          }
+          setStats((prev) => ({ ...prev, totalEvents: prev.totalEvents + 1 }));
         },
       )
       .subscribe();
@@ -218,7 +120,7 @@ const BackfillProgress = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [isMonitoring]);
+  }, []);
 
   
 
@@ -247,7 +149,6 @@ const BackfillProgress = () => {
       // Refresh the cursors list
       refetch();
       setRealtimeCursors([]);
-      setActivityLog([]);
       setStats({
         totalCursors: 0,
         completedCursors: 0,
@@ -281,17 +182,14 @@ const BackfillProgress = () => {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <h1 className="text-2xl font-bold">Backfill Progress</h1>
-              <Badge variant={isMonitoring ? "default" : "secondary"} className="gap-1">
-                {isMonitoring && <Activity className="w-3 h-3 animate-pulse" />}
-                {isMonitoring ? "Processing" : "Paused"}
+              <Badge variant="default" className="gap-1">
+                <Activity className="w-3 h-3 animate-pulse" />
+                Live
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground">{lastActivity || "Waiting for activity..."}</p>
+            <p className="text-sm text-muted-foreground">Monitoring backfill data ingestion</p>
           </div>
           <div className="flex gap-2">
-            <Button onClick={() => setIsMonitoring(!isMonitoring)} variant="outline" size="sm">
-              {isMonitoring ? "Pause" : "Resume"}
-            </Button>
             <Button onClick={handlePurgeAll} disabled={isPurging} variant="destructive" size="sm">
               <Trash2 className={`h-4 w-4 mr-2 ${isPurging ? "animate-spin" : ""}`} />
               {isPurging ? "Purging..." : "Purge All"}
@@ -300,7 +198,7 @@ const BackfillProgress = () => {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           <Card className="bg-card/50 backdrop-blur">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 text-muted-foreground text-sm mb-1">
@@ -351,27 +249,7 @@ const BackfillProgress = () => {
             </CardContent>
           </Card>
 
-          <Card className="bg-card/50 backdrop-blur">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 text-muted-foreground text-sm mb-1">
-                <Activity className="w-4 h-4" />
-                Activity Log
-              </div>
-              <div className="text-2xl font-bold text-primary">{activityLog.length}</div>
-            </CardContent>
-          </Card>
         </div>
-
-        {/* Last Activity Bar */}
-        {lastActivity && (
-          <div className="flex items-center justify-between px-4 py-2 bg-primary/5 border border-primary/20 rounded-lg text-sm">
-            <span className="text-primary font-medium">{lastActivity}</span>
-            <span className="text-muted-foreground">
-              {activityLog.length > 0 &&
-                formatDistanceToNow(new Date(activityLog[activityLog.length - 1].timestamp), { addSuffix: true })}
-            </span>
-          </div>
-        )}
 
         {/* Backfill Cursors Progress */}
         <Card className="bg-card/50 backdrop-blur">
@@ -414,100 +292,6 @@ const BackfillProgress = () => {
                   </div>
                 ))
               )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Recent Ledger Updates */}
-        <Card className="bg-card/50 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="w-5 h-5 text-blue-400" />
-              Recent Ledger Updates
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Migration ID</TableHead>
-                    <TableHead>Timestamp</TableHead>
-                    <TableHead>Created At</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recentUpdates.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={4} className="text-center text-muted-foreground">
-                        No updates found
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    recentUpdates.slice(0, 20).map((update) => (
-                      <TableRow key={update.id}>
-                        <TableCell className="font-mono text-xs">{update.update_type}</TableCell>
-                        <TableCell>{update.migration_id || "-"}</TableCell>
-                        <TableCell className="text-xs">
-                          {format(new Date(update.timestamp), "MMM d, HH:mm:ss")}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {format(new Date(update.created_at), "MMM d, HH:mm:ss")}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Recent Ledger Events */}
-        <Card className="bg-card/50 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Layers className="w-5 h-5 text-green-400" />
-              Recent Ledger Events
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Migration ID</TableHead>
-                    <TableHead>Template</TableHead>
-                    <TableHead>Timestamp</TableHead>
-                    <TableHead>Created At</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {!recentEvents || recentEvents.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">
-                        No events found
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    recentEvents.slice(0, 20).map((event) => (
-                      <TableRow key={event.id}>
-                        <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                        <TableCell>{event.migration_id || "-"}</TableCell>
-                        <TableCell className="text-xs truncate max-w-[200px]">{event.template_id || "-"}</TableCell>
-                        <TableCell className="text-xs">
-                          {format(new Date(event.timestamp), "MMM d, HH:mm:ss")}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {format(new Date(event.created_at), "MMM d, HH:mm:ss")}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
             </div>
           </CardContent>
         </Card>
