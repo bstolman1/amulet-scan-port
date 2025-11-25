@@ -227,26 +227,6 @@ const Transactions = () => {
                         </div>
                       )}
 
-                      {/* Timestamps */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                        <div className="p-2 rounded bg-muted/20">
-                          <p className="text-xs text-muted-foreground">Timestamp</p>
-                          <p className="text-xs font-mono">{format(new Date(event.timestamp), "MMM d, yyyy HH:mm:ss")}</p>
-                        </div>
-                        {event.created_at && (
-                          <div className="p-2 rounded bg-muted/20">
-                            <p className="text-xs text-muted-foreground">Created At</p>
-                            <p className="text-xs font-mono">{format(new Date(event.created_at), "MMM d, yyyy HH:mm:ss")}</p>
-                          </div>
-                        )}
-                        {event.created_at_ts && (
-                          <div className="p-2 rounded bg-muted/20">
-                            <p className="text-xs text-muted-foreground">Created At (TS)</p>
-                            <p className="text-xs font-mono">{format(new Date(event.created_at_ts), "MMM d, yyyy HH:mm:ss")}</p>
-                          </div>
-                        )}
-                      </div>
-
                       {/* Update ID */}
                       {event.update_id && (
                         <div className="p-3 rounded-lg bg-muted/30 mb-4">
