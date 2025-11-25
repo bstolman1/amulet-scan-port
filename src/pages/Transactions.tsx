@@ -63,40 +63,71 @@ const Transactions = () => {
 
   const parseEventPayload = (event: any) => {
     const data = event.event_data || event.payload || {};
-    const createArgs = data.create_arguments?.record?.fields || [];
-    const exerciseArgs = data.exercise_arguments?.record?.fields || [];
+    const raw = event.raw || {};
+    
+    // Try multiple paths to find arguments
+    const createArgs = 
+      data.create_arguments?.record?.fields || 
+      data.create_arguments?.fields ||
+      raw.create_arguments?.record?.fields ||
+      [];
+    
+    const exerciseArgs = 
+      data.exercise_arguments?.record?.fields || 
+      data.exercise_arguments?.fields ||
+      raw.exercise_arguments?.record?.fields ||
+      [];
+    
+    // Extract signatories from multiple possible locations
+    const signatories = event.signatories || data.signatories || raw.signatories || [];
+    const observers = event.observers || data.observers || raw.observers || [];
     
     // For Amulet created events (mints)
     if (event.event_type === "created_event" && event.template_id?.includes("Amulet:Amulet")) {
-      const amountField = createArgs.find((f: any) => f.value?.record?.fields?.[0]?.value?.numeric);
-      const amount = amountField?.value?.record?.fields?.[0]?.value?.numeric || "0";
+      const amountField = createArgs.find((f: any) => 
+        f.value?.record?.fields?.[0]?.value?.numeric || f.value?.numeric
+      );
+      const amount = amountField?.value?.record?.fields?.[0]?.value?.numeric || 
+                     amountField?.value?.numeric || 
+                     "0";
+      
       return {
         type: "mint",
         amount,
-        from: null,
-        to: data.signatories?.[1] || null,
+        from: "System (Mint)",
+        to: signatories[0] || observers[0] || "Unknown",
         fee: "0",
+        hasAddresses: !!(signatories[0] || observers[0]),
       };
     }
     
-    // For transfer/exercise events
+    // For transfer/exercise events  
     if (event.event_type === "exercised_event") {
-      const amount = exerciseArgs.find((f: any) => f.value?.numeric)?.value?.numeric || "0";
+      const amountField = exerciseArgs.find((f: any) => 
+        f.value?.numeric || f.value?.record?.fields?.[0]?.value?.numeric
+      );
+      const amount = amountField?.value?.numeric || 
+                     amountField?.value?.record?.fields?.[0]?.value?.numeric || 
+                     "0";
+      
       return {
         type: "transfer",
         amount,
-        from: data.signatories?.[0] || null,
-        to: data.signatories?.[1] || null,
+        from: signatories[0] || "Unknown",
+        to: signatories[1] || observers[0] || "Unknown",
         fee: "0",
+        hasAddresses: !!(signatories[0] && (signatories[1] || observers[0])),
       };
     }
     
+    // Fallback - try to show any signatories/observers we have
     return {
-      type: "unknown",
+      type: event.event_type || "unknown",
       amount: "0",
-      from: null,
-      to: null,
+      from: signatories[0] || null,
+      to: signatories[1] || observers[0] || null,
       fee: "0",
+      hasAddresses: !!(signatories[0] || observers[0]),
     };
   };
 
@@ -185,30 +216,33 @@ const Transactions = () => {
                       </div>
 
                       {/* Party Information */}
-                      {(event.signatories?.length > 0 || event.observers?.length > 0 || (tx.from && tx.to)) && (
+                      {(tx.from || tx.to || event.signatories?.length > 0 || event.observers?.length > 0) && (
                         <div className="mb-6 p-4 rounded-lg bg-background/50 border border-border/30">
-                          <p className="text-sm font-semibold mb-3">Parties</p>
+                          <p className="text-sm font-semibold mb-3">Transaction Parties</p>
                           
                           {tx.from && tx.to && (
-                            <div className="flex items-center space-x-3 mb-3">
-                              <div className="flex-1 p-2 rounded bg-muted/30">
-                                <p className="text-xs text-muted-foreground mb-1">From</p>
-                                <p className="font-mono text-xs break-all">{tx.from}</p>
-                              </div>
-                              <ArrowRight className="h-4 w-4 text-primary flex-shrink-0" />
-                              <div className="flex-1 p-2 rounded bg-muted/30">
-                                <p className="text-xs text-muted-foreground mb-1">To</p>
-                                <p className="font-mono text-xs break-all">{tx.to}</p>
+                            <div className="mb-4 p-3 rounded-lg bg-muted/30">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                  <p className="text-xs text-muted-foreground mb-1">From</p>
+                                  <p className="font-mono text-xs break-all">{tx.from}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground mb-1">To</p>
+                                  <p className="font-mono text-xs break-all">{tx.to}</p>
+                                </div>
                               </div>
                             </div>
                           )}
 
                           {event.signatories?.length > 0 && (
-                            <div className="mb-2">
-                              <p className="text-xs text-muted-foreground mb-1">Signatories ({event.signatories.length})</p>
+                            <div className="mb-3">
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">Signatories ({event.signatories.length})</p>
                               <div className="space-y-1">
                                 {event.signatories.map((sig: string, idx: number) => (
-                                  <p key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">{sig}</p>
+                                  <div key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">
+                                    <span className="text-muted-foreground">#{idx + 1}:</span> {sig}
+                                  </div>
                                 ))}
                               </div>
                             </div>
@@ -216,10 +250,12 @@ const Transactions = () => {
 
                           {event.observers?.length > 0 && (
                             <div>
-                              <p className="text-xs text-muted-foreground mb-1">Observers ({event.observers.length})</p>
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">Observers ({event.observers.length})</p>
                               <div className="space-y-1">
                                 {event.observers.map((obs: string, idx: number) => (
-                                  <p key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">{obs}</p>
+                                  <div key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">
+                                    <span className="text-muted-foreground">#{idx + 1}:</span> {obs}
+                                  </div>
                                 ))}
                               </div>
                             </div>
