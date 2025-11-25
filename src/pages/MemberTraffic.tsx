@@ -3,13 +3,17 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, Activity, Code } from "lucide-react";
+import { Search, Activity, Code, History } from "lucide-react";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
+import { useMemberTrafficEvents } from "@/hooks/use-member-traffic-events";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { format } from "date-fns";
 
 const MemberTraffic = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -17,6 +21,7 @@ const MemberTraffic = () => {
   const pageSize = 100;
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
+  const { data: trafficEvents, isLoading: eventsLoading } = useMemberTrafficEvents();
 
   const trafficQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
@@ -113,21 +118,28 @@ const MemberTraffic = () => {
         </div>
 
         <Card className="p-6">
-          <div className="mb-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-              <Input
-                type="text"
-                placeholder="Search by member or migration ID..."
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-          </div>
+          <Tabs defaultValue="current" className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="current">Current State</TabsTrigger>
+              <TabsTrigger value="history">Traffic History</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="current" className="space-y-4">
+              <div className="mb-4">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                  <Input
+                    type="text"
+                    placeholder="Search by member or migration ID..."
+                    value={searchTerm}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="pl-10"
+                  />
+                </div>
+              </div>
 
           {isLoading ? (
             <div className="space-y-3">
@@ -229,7 +241,73 @@ const MemberTraffic = () => {
               />
             </>
           )}
-        </Card>
+        </TabsContent>
+
+        <TabsContent value="history">
+          <Card>
+            <div className="p-6">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <History className="h-5 w-5" />
+                Historical Traffic Events
+              </h3>
+              
+              {eventsLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <Skeleton key={i} className="h-20 w-full" />
+                  ))}
+                </div>
+              ) : !trafficEvents?.length ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Activity className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>No historical traffic events found</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Event Type</TableHead>
+                      <TableHead>Round</TableHead>
+                      <TableHead>Member</TableHead>
+                      <TableHead>Timestamp</TableHead>
+                      <TableHead>Details</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {trafficEvents.slice(0, 100).map((event: any) => (
+                      <TableRow key={event.id}>
+                        <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                        <TableCell>{event.round.toLocaleString()}</TableCell>
+                        <TableCell className="text-xs truncate max-w-[200px]">
+                          {event.payload?.member || event.payload?.synchronizerId || "-"}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {format(new Date(event.timestamp), "MMM d, yyyy HH:mm")}
+                        </TableCell>
+                        <TableCell>
+                          <Collapsible>
+                            <CollapsibleTrigger asChild>
+                              <Button variant="ghost" size="sm">
+                                <Code className="h-3 w-3" />
+                              </Button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
+                                {JSON.stringify(event.payload || event.event_data, null, 2)}
+                              </pre>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </Card>
 
         <DataSourcesFooter
           snapshotId={latestSnapshot?.id}
