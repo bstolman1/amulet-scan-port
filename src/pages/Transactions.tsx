@@ -1,11 +1,49 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, ExternalLink } from "lucide-react";
+import { ArrowRight, Copy, Check } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { format } from "date-fns";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { useState } from "react";
+
+const CopyButton = ({ text }: { text: string }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="ml-2 p-1 hover:bg-muted rounded transition-colors inline-flex items-center"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+};
+
+const JsonViewer = ({ data, title }: { data: any; title: string }) => {
+  if (!data) return null;
+  
+  return (
+    <div className="mt-4">
+      <h4 className="font-semibold text-sm mb-2 flex items-center">
+        {title}
+        <CopyButton text={JSON.stringify(data, null, 2)} />
+      </h4>
+      <pre className="bg-background/80 p-4 rounded-lg text-xs overflow-x-auto max-h-96 overflow-y-auto border border-border/50 font-mono">
+        {JSON.stringify(data, null, 2)}
+      </pre>
+    </div>
+  );
+};
 
 const Transactions = () => {
   const {
@@ -27,25 +65,14 @@ const Transactions = () => {
     },
   });
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "confirmed":
-        return "bg-success/10 text-success border-success/20";
-      case "pending":
-        return "bg-warning/10 text-warning border-warning/20";
-      default:
-        return "bg-muted text-muted-foreground";
-    }
-  };
-
   const getTypeColor = (type: string) => {
     switch (type) {
-      case "transfer":
-        return "bg-primary/10 text-primary border-primary/20";
-      case "mint":
+      case "created_event":
         return "bg-accent/10 text-accent border-accent/20";
-      case "tap":
-        return "bg-chart-3/10 text-chart-3 border-chart-3/20";
+      case "exercised_event":
+        return "bg-primary/10 text-primary border-primary/20";
+      case "archived_event":
+        return "bg-muted/50 text-muted-foreground border-muted";
       default:
         return "bg-muted text-muted-foreground";
     }
@@ -56,46 +83,7 @@ const Transactions = () => {
     const parts = partyId.split("::");
     const name = parts[0] || partyId;
     const hash = parts[1] || "";
-    return `${name}::${hash.substring(0, 8)}...`;
-  };
-
-  const parseEventPayload = (event: any) => {
-    const data = event.event_data || event.payload || {};
-    const createArgs = data.create_arguments?.record?.fields || [];
-    const exerciseArgs = data.exercise_arguments?.record?.fields || [];
-    
-    // For Amulet created events (mints)
-    if (event.event_type === "created_event" && event.template_id?.includes("Amulet:Amulet")) {
-      const amountField = createArgs.find((f: any) => f.value?.record?.fields?.[0]?.value?.numeric);
-      const amount = amountField?.value?.record?.fields?.[0]?.value?.numeric || "0";
-      return {
-        type: "mint",
-        amount,
-        from: null,
-        to: data.signatories?.[1] || null,
-        fee: "0",
-      };
-    }
-    
-    // For transfer/exercise events
-    if (event.event_type === "exercised_event") {
-      const amount = exerciseArgs.find((f: any) => f.value?.numeric)?.value?.numeric || "0";
-      return {
-        type: "transfer",
-        amount,
-        from: data.signatories?.[0] || null,
-        to: data.signatories?.[1] || null,
-        fee: "0",
-      };
-    }
-    
-    return {
-      type: "unknown",
-      amount: "0",
-      from: null,
-      to: null,
-      fee: "0",
-    };
+    return hash ? `${name}::${hash.substring(0, 8)}...` : name;
   };
 
   return (
@@ -103,8 +91,8 @@ const Transactions = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-3xl font-bold mb-2">Transaction History</h2>
-            <p className="text-muted-foreground">Browse recent transactions on the Canton Network</p>
+            <h2 className="text-3xl font-bold mb-2">Ledger Events - Complete Data</h2>
+            <p className="text-muted-foreground">All fields and metadata from Canton ledger events</p>
           </div>
         </div>
 
@@ -113,12 +101,12 @@ const Transactions = () => {
             {isLoading ? (
               <div className="space-y-4">
                 {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-48 w-full" />
+                  <Skeleton key={i} className="h-24 w-full" />
                 ))}
               </div>
             ) : isError ? (
               <div className="h-48 flex flex-col items-center justify-center text-center space-y-3 text-muted-foreground">
-                <p className="font-medium">Unable to load transactions</p>
+                <p className="font-medium">Unable to load events</p>
                 <p className="text-xs">The API may be temporarily unavailable. Please try again.</p>
                 <button
                   onClick={() => refetch()}
@@ -128,74 +116,172 @@ const Transactions = () => {
                 </button>
               </div>
             ) : !events?.length ? (
-              <div className="h-48 flex items-center justify-center text-muted-foreground">No recent transactions</div>
+              <div className="h-48 flex items-center justify-center text-muted-foreground">No events found</div>
             ) : (
-              <div className="space-y-4">
-                {events.map((event) => {
-                  const tx = parseEventPayload(event);
-                  return (
-                    <div
-                      key={event.id}
-                      className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth border border-border/50"
-                    >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-center space-x-3">
-                          <Badge className={getTypeColor(tx.type)}>{tx.type}</Badge>
-                          <Badge className={getStatusColor("confirmed")}>confirmed</Badge>
+              <Accordion type="single" collapsible className="w-full space-y-3">
+                {events.map((event: any) => (
+                  <AccordionItem key={event.id} value={event.id} className="border rounded-lg px-4 bg-muted/20">
+                    <AccordionTrigger className="hover:no-underline py-4">
+                      <div className="flex items-center justify-between w-full pr-4">
+                        <div className="flex items-center gap-3">
+                          <Badge className={getTypeColor(event.event_type)}>
+                            {event.event_type}
+                          </Badge>
+                          <span className="text-sm font-mono truncate max-w-[300px]">
+                            {event.template_id?.split(':').slice(-2).join(':') || 'Unknown'}
+                          </span>
                         </div>
-                        <div className="text-right">
-                          <p className="text-sm text-muted-foreground">Round</p>
-                          <p className="font-mono font-semibold">{event.round || "N/A"}</p>
-                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          {format(new Date(event.created_at), "MMM d, yyyy HH:mm:ss")}
+                        </span>
                       </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                        <div>
-                          <p className="text-sm text-muted-foreground mb-1">Event ID</p>
-                          <div className="flex items-center space-x-2">
-                            <p className="font-mono text-sm truncate">{(event.event_id || event.id).substring(0, 20)}...</p>
-                            <ExternalLink className="h-3 w-3 text-muted-foreground cursor-pointer hover:text-primary transition-smooth" />
-                          </div>
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground mb-1">Amount</p>
-                          <p className="font-mono font-bold text-primary text-lg">
-                            {parseFloat(tx.amount).toFixed(2)} CC
-                          </p>
-                        </div>
-                        {tx.fee && parseFloat(tx.fee) > 0 && (
+                    </AccordionTrigger>
+                    <AccordionContent className="space-y-6 pt-4 pb-6">
+                      {/* Core Identifiers */}
+                      <div className="space-y-4">
+                        <h3 className="font-bold text-base border-b pb-2">Core Identifiers</h3>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                           <div>
-                            <p className="text-sm text-muted-foreground mb-1">Fee</p>
-                            <p className="font-mono text-sm">
-                              {parseFloat(tx.fee).toFixed(4)} CC
-                            </p>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Database ID</h4>
+                            <div className="flex items-center">
+                              <code className="text-xs bg-background p-2 rounded break-all flex-1 border">{event.id}</code>
+                              <CopyButton text={event.id} />
+                            </div>
                           </div>
-                        )}
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Event ID</h4>
+                            <div className="flex items-center">
+                              <code className="text-xs bg-background p-2 rounded break-all flex-1 border">{event.event_id || 'N/A'}</code>
+                              {event.event_id && <CopyButton text={event.event_id} />}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Contract ID</h4>
+                            <div className="flex items-center">
+                              <code className="text-xs bg-background p-2 rounded break-all flex-1 border">{event.contract_id || 'N/A'}</code>
+                              {event.contract_id && <CopyButton text={event.contract_id} />}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Update ID</h4>
+                            <div className="flex items-center">
+                              <code className="text-xs bg-background p-2 rounded break-all flex-1 border">{event.update_id || 'N/A'}</code>
+                              {event.update_id && <CopyButton text={event.update_id} />}
+                            </div>
+                          </div>
+                        </div>
                       </div>
 
-                      {tx.from && tx.to && (
-                        <div className="flex items-center space-x-3 p-4 rounded-lg bg-background/50">
-                          <div className="flex-1">
-                            <p className="text-xs text-muted-foreground mb-1">From</p>
-                            <p className="font-mono text-sm truncate">{formatPartyId(tx.from)}</p>
+                      {/* Template & Package Info */}
+                      <div className="space-y-4">
+                        <h3 className="font-bold text-base border-b pb-2">Template & Package Information</h3>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Template ID</h4>
+                            <div className="flex items-center">
+                              <code className="text-xs bg-background p-2 rounded break-all flex-1 border">{event.template_id || 'N/A'}</code>
+                              {event.template_id && <CopyButton text={event.template_id} />}
+                            </div>
                           </div>
-                          <ArrowRight className="h-4 w-4 text-primary flex-shrink-0" />
-                          <div className="flex-1">
-                            <p className="text-xs text-muted-foreground mb-1">To</p>
-                            <p className="font-mono text-sm truncate">{formatPartyId(tx.to)}</p>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Package Name</h4>
+                            <div className="flex items-center">
+                              <code className="text-xs bg-background p-2 rounded break-all flex-1 border">{event.package_name || 'N/A'}</code>
+                              {event.package_name && <CopyButton text={event.package_name} />}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Event Type</h4>
+                            <Badge className={getTypeColor(event.event_type)}>{event.event_type}</Badge>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Migration ID</h4>
+                            <code className="text-xs bg-background p-2 rounded block border">{event.migration_id || 'N/A'}</code>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Timestamps */}
+                      <div className="space-y-4">
+                        <h3 className="font-bold text-base border-b pb-2">Timestamps</h3>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Event Timestamp</h4>
+                            <code className="text-xs bg-background p-2 rounded block border">
+                              {format(new Date(event.timestamp), "yyyy-MM-dd HH:mm:ss.SSS")}
+                            </code>
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Created At (DB)</h4>
+                            <code className="text-xs bg-background p-2 rounded block border">
+                              {format(new Date(event.created_at), "yyyy-MM-dd HH:mm:ss.SSS")}
+                            </code>
+                          </div>
+                          {event.created_at_ts && (
+                            <div>
+                              <h4 className="font-semibold text-sm mb-2 text-muted-foreground">Created At TS</h4>
+                              <code className="text-xs bg-background p-2 rounded block border">
+                                {format(new Date(event.created_at_ts), "yyyy-MM-dd HH:mm:ss.SSS")}
+                              </code>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Parties (Signatories & Observers) */}
+                      {(event.signatories?.length > 0 || event.observers?.length > 0) && (
+                        <div className="space-y-4">
+                          <h3 className="font-bold text-base border-b pb-2">Parties</h3>
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            {event.signatories && event.signatories.length > 0 && (
+                              <div>
+                                <h4 className="font-semibold text-sm mb-2 text-muted-foreground">
+                                  Signatories ({event.signatories.length})
+                                </h4>
+                                <div className="space-y-2">
+                                  {event.signatories.map((sig: string, idx: number) => (
+                                    <div key={idx} className="flex items-center gap-2">
+                                      <code className="text-xs bg-background p-2 rounded block break-all flex-1 border">
+                                        {sig}
+                                      </code>
+                                      <CopyButton text={sig} />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {event.observers && event.observers.length > 0 && (
+                              <div>
+                                <h4 className="font-semibold text-sm mb-2 text-muted-foreground">
+                                  Observers ({event.observers.length})
+                                </h4>
+                                <div className="space-y-2">
+                                  {event.observers.map((obs: string, idx: number) => (
+                                    <div key={idx} className="flex items-center gap-2">
+                                      <code className="text-xs bg-background p-2 rounded block break-all flex-1 border">
+                                        {obs}
+                                      </code>
+                                      <CopyButton text={obs} />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
 
-                      <div className="mt-4 pt-4 border-t border-border/50">
-                        <p className="text-xs text-muted-foreground">
-                          {format(new Date(event.timestamp), "MMM d, yyyy HH:mm:ss")}
-                        </p>
+                      {/* JSON Data Sections */}
+                      <div className="space-y-4">
+                        <h3 className="font-bold text-base border-b pb-2">Raw Data & Payloads</h3>
+                        <JsonViewer data={event.event_data} title="Event Data (Primary)" />
+                        {event.payload && <JsonViewer data={event.payload} title="Payload" />}
+                        {event.raw && <JsonViewer data={event.raw} title="Raw Event Data (Complete)" />}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
             )}
           </div>
         </Card>

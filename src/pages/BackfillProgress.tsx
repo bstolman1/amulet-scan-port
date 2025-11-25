@@ -597,7 +597,6 @@ const BackfillProgress = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Type</TableHead>
-                    <TableHead>Round</TableHead>
                     <TableHead>Template</TableHead>
                     <TableHead>Migration ID</TableHead>
                     <TableHead>Timestamp</TableHead>
@@ -607,7 +606,7 @@ const BackfillProgress = () => {
                 <TableBody>
                   {!recentEvents || recentEvents.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
                         No events found
                       </TableCell>
                     </TableRow>
@@ -615,7 +614,6 @@ const BackfillProgress = () => {
                     recentEvents.slice(0, 20).map((event) => (
                       <TableRow key={event.id}>
                         <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                        <TableCell>{event.round.toLocaleString()}</TableCell>
                         <TableCell className="text-xs truncate max-w-[200px]">{event.template_id || "-"}</TableCell>
                         <TableCell>
                           {event.migration_id ? (
