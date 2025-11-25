@@ -29,17 +29,23 @@ jobs:
     steps:
       - name: Create worker matrix
         id: create-matrix
+        shell: bash
         run: |
-          WORKERS='[]'
           COUNT=${{ inputs.worker_count || 1 }}
           
+          # Build JSON array without jq dependency
+          WORKERS='['
           for i in $(seq 0 $(($COUNT - 1))); do
-            WORKERS=$(echo $WORKERS | jq ". += [{\"id\": $i}]")
+            if [ $i -gt 0 ]; then
+              WORKERS="${WORKERS},"
+            fi
+            WORKERS="${WORKERS}{\"id\":$i}"
           done
+          WORKERS="${WORKERS}]"
           
           echo "workers=$WORKERS" >> $GITHUB_OUTPUT
           echo "worker_count=$COUNT" >> $GITHUB_OUTPUT
-          echo "Created $COUNT workers"
+          echo "Created $COUNT workers: $WORKERS"
 
   backfill:
     needs: setup
