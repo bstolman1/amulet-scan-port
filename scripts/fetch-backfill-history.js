@@ -292,10 +292,15 @@ async function bulkCopyWithUpsert(table, rows, columns) {
     const quotedColumns = columns.map(c => `"${c}"`);
 
     // Prepare TSV data for COPY
-    const tsvData = rows.map(row => {
+    const tsvData = rows.map((row, rowIdx) => {
       return columns.map(col => {
         let val = row[col];
         if (val === null || val === undefined) return '\\N';
+        
+        // Debug logging for array columns
+        if ((col === 'signatories' || col === 'observers') && rowIdx === 0) {
+          console.log(`   🔍 DEBUG: ${col} type=${typeof val}, isArray=${Array.isArray(val)}, value=${JSON.stringify(val).substring(0, 100)}`);
+        }
         
         // Handle PostgreSQL arrays specially - must be actual arrays at this point
         if (Array.isArray(val)) {
@@ -310,7 +315,30 @@ async function bulkCopyWithUpsert(table, rows, columns) {
             }
             return str;
           });
-          return '{' + elements.join(',') + '}';
+          const formatted = '{' + elements.join(',') + '}';
+          if ((col === 'signatories' || col === 'observers') && rowIdx === 0) {
+            console.log(`   🔍 DEBUG: ${col} formatted as: ${formatted.substring(0, 100)}`);
+          }
+          return formatted;
+        }
+        
+        // If we get here and it's supposed to be an array column, something is wrong
+        if ((col === 'signatories' || col === 'observers')) {
+          console.error(`   ❌ ${col} is not an array! type=${typeof val}, value=${JSON.stringify(val).substring(0, 100)}`);
+          // Try to recover by parsing if it's a string
+          if (typeof val === 'string') {
+            const recovered = ensureArray(val);
+            if (recovered.length === 0) return '{}';
+            const elements = recovered.map(elem => {
+              const str = String(elem);
+              if (str.match(/[{},"\\\s]/) || str === '' || str.toLowerCase() === 'null') {
+                return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+              }
+              return str;
+            });
+            return '{' + elements.join(',') + '}';
+          }
+          return '{}';
         }
         
         // Handle other objects as JSONB
@@ -405,6 +433,7 @@ function ensureArray(value) {
         const parsed = JSON.parse(trimmed);
         return Array.isArray(parsed) ? parsed : [];
       } catch (e) {
+        console.error(`   ⚠️  Failed to parse array string: ${trimmed.substring(0, 100)}...`);
         return [];
       }
     }
