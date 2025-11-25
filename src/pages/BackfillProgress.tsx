@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { Clock, Database, Activity, Zap, Trash2, FileText, Layers, ArrowLeft } from "lucide-react";
+import { Clock, Database, Activity, Zap, Trash2, FileText, Layers } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { useBackfillCursors, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useLedgerUpdates } from "@/hooks/use-ledger-updates";
@@ -299,26 +299,6 @@ const BackfillProgress = () => {
           </div>
         </div>
 
-        {/* Backfill Explanation Card */}
-        <Card className="bg-accent/5 border-accent/20">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <ArrowLeft className="h-5 w-5 text-accent mt-0.5" />
-              <div className="space-y-1">
-                <h3 className="font-semibold text-sm">How Backfilling Works</h3>
-                <p className="text-xs text-muted-foreground">
-                  The backfill process fetches historical data by walking <strong>backwards in time</strong> from recent events to older ones. 
-                  The "Target Round" (often 0) indicates where the backfill is trying to reach, not where it currently is. 
-                  The system gradually fills in historical data from present to past.
-                </p>
-                <div className="text-xs text-accent font-medium mt-2">
-                  📊 <strong>ledger_updates</strong> has round data | <strong>ledger_events</strong> does not (removed per your request)
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <Card className="bg-card/50 backdrop-blur">
@@ -516,45 +496,25 @@ const BackfillProgress = () => {
                 <div className="text-center py-8 text-muted-foreground">No cursors found</div>
               ) : (
                 allCursors.map((cursor) => (
-                  <div key={cursor.id} className="space-y-3 p-4 rounded-lg bg-muted/50 border border-border/50">
+                  <div key={cursor.id} className="space-y-2 p-4 rounded-lg bg-muted/50">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-sm font-medium truncate max-w-[300px]">
-                          {cursor.cursor_name}
-                        </span>
+                        <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
                         <Badge variant={cursor.complete ? "default" : "secondary"}>
                           {cursor.complete ? "Complete" : "In Progress"}
                         </Badge>
                       </div>
-                      <div className="text-right">
-                        <div className="text-xs text-muted-foreground">Target Round</div>
-                        <div className="text-sm font-semibold">
-                          {cursor.last_processed_round.toLocaleString()}
-                        </div>
+                      <div className="text-sm text-muted-foreground">
+                        Round {cursor.last_processed_round.toLocaleString()}
                       </div>
                     </div>
-                    
                     {cursor.min_time && cursor.max_time && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <div className="text-muted-foreground">
-                            <span className="font-semibold">From:</span> {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}
-                          </div>
-                          <ArrowLeft className="h-3 w-3 text-muted-foreground" />
-                          <div className="text-muted-foreground">
-                            <span className="font-semibold">To:</span> {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}
-                          </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
+                          <span>{format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
                         </div>
                         <Progress value={cursor.complete ? 100 : 50} className="h-2" />
-                        <div className="text-xs text-muted-foreground italic">
-                          ⏪ Backfilling backwards in time (most recent → earliest)
-                        </div>
-                      </div>
-                    )}
-                    
-                    {cursor.last_before && (
-                      <div className="text-xs text-muted-foreground pt-2 border-t border-border/30">
-                        Last checkpoint: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}
                       </div>
                     )}
                     <div className="text-xs text-muted-foreground">
@@ -637,6 +597,7 @@ const BackfillProgress = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Type</TableHead>
+                    <TableHead>Round</TableHead>
                     <TableHead>Template</TableHead>
                     <TableHead>Migration ID</TableHead>
                     <TableHead>Timestamp</TableHead>
@@ -646,7 +607,7 @@ const BackfillProgress = () => {
                 <TableBody>
                   {!recentEvents || recentEvents.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center text-muted-foreground">
                         No events found
                       </TableCell>
                     </TableRow>
@@ -654,6 +615,7 @@ const BackfillProgress = () => {
                     recentEvents.slice(0, 20).map((event) => (
                       <TableRow key={event.id}>
                         <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                        <TableCell>{event.round.toLocaleString()}</TableCell>
                         <TableCell className="text-xs truncate max-w-[200px]">{event.template_id || "-"}</TableCell>
                         <TableCell>
                           {event.migration_id ? (

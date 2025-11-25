@@ -326,6 +326,7 @@ export type Database = {
           package_name: string | null
           payload: Json | null
           raw: Json | null
+          round: number
           signatories: string[] | null
           template_id: string | null
           timestamp: string
@@ -344,6 +345,7 @@ export type Database = {
           package_name?: string | null
           payload?: Json | null
           raw?: Json | null
+          round: number
           signatories?: string[] | null
           template_id?: string | null
           timestamp?: string
@@ -362,6 +364,7 @@ export type Database = {
           package_name?: string | null
           payload?: Json | null
           raw?: Json | null
+          round?: number
           signatories?: string[] | null
           template_id?: string | null
           timestamp?: string
