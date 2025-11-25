@@ -373,115 +373,6 @@ const BackfillProgress = () => {
           </div>
         )}
 
-        {/* Activity List */}
-        <Card className="bg-card/50 backdrop-blur">
-          <CardContent className="p-0">
-            <div className="flex items-center justify-between p-4 border-b">
-              <div className="flex items-center gap-4">
-                <h3 className="font-semibold">Synchronizer Activity</h3>
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={activeFilters.has("cursor_update") ? "default" : "outline"}
-                    className="cursor-pointer hover:bg-primary/80 transition-colors"
-                    onClick={() => toggleFilter("cursor_update")}
-                  >
-                    <Database className="w-3 h-3 mr-1" />
-                    Cursors
-                  </Badge>
-                  <Badge
-                    variant={activeFilters.has("update") ? "default" : "outline"}
-                    className="cursor-pointer hover:bg-primary/80 transition-colors bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20"
-                    onClick={() => toggleFilter("update")}
-                  >
-                    <Zap className="w-3 h-3 mr-1" />
-                    Updates
-                  </Badge>
-                  <Badge
-                    variant={activeFilters.has("event") ? "default" : "outline"}
-                    className="cursor-pointer hover:bg-primary/80 transition-colors bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20"
-                    onClick={() => toggleFilter("event")}
-                  >
-                    <Layers className="w-3 h-3 mr-1" />
-                    Events
-                  </Badge>
-                  <span className="text-xs text-muted-foreground ml-2">
-                    {filteredActivityLog.length} / {activityLog.length}
-                  </span>
-                </div>
-              </div>
-              <Button onClick={() => setActivityLog([])} variant="ghost" size="sm">
-                Clear
-              </Button>
-            </div>
-            <div className="max-h-96 overflow-y-auto">
-              {filteredActivityLog.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                  <Activity className="w-12 h-12 mb-4 opacity-20" />
-                  <p>
-                    {activityLog.length === 0
-                      ? "No activity yet. Waiting for backfill data..."
-                      : "No activity matching current filters."}
-                  </p>
-                </div>
-              ) : (
-                <div className="divide-y">
-                  {filteredActivityLog
-                    .slice()
-                    .reverse()
-                    .map((log) => (
-                      <div
-                        key={log.id}
-                        className="flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="font-mono text-sm truncate">
-                            {log.type === "cursor_update" ? (
-                              <>
-                                <Badge variant={log.complete ? "default" : "secondary"} className="mr-2">
-                                  {log.complete ? "Completed" : "Updated"}
-                                </Badge>
-                                Cursor updated
-                              </>
-                            ) : log.type === "update" ? (
-                              <>
-                                <Badge
-                                  variant="secondary"
-                                  className="mr-2 bg-blue-500/10 text-blue-400 border-blue-500/20"
-                                >
-                                  Update
-                                </Badge>
-                                {log.updateId}
-                              </>
-                            ) : (
-                              <>
-                                <Badge
-                                  variant="secondary"
-                                  className="mr-2 bg-green-500/10 text-green-400 border-green-500/20"
-                                >
-                                  Event
-                                </Badge>
-                                {log.eventId}
-                              </>
-                            )}
-                          </div>
-                          {log.migrationId && (
-                            <div className="text-xs text-muted-foreground mt-1">Migration #{log.migrationId}</div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 ml-4">
-                          <span className="text-xs text-muted-foreground whitespace-nowrap">
-                            {formatDistanceToNow(new Date(log.timestamp), { addSuffix: true })}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              )}
-              <div ref={logEndRef} />
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Backfill Cursors Progress */}
         <Card className="bg-card/50 backdrop-blur">
           <CardHeader>
@@ -543,13 +434,13 @@ const BackfillProgress = () => {
                     <TableHead>Type</TableHead>
                     <TableHead>Migration ID</TableHead>
                     <TableHead>Timestamp</TableHead>
-                    <TableHead>Created</TableHead>
+                    <TableHead>Created At</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {recentUpdates.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      <TableCell colSpan={4} className="text-center text-muted-foreground">
                         No updates found
                       </TableCell>
                     </TableRow>
@@ -558,20 +449,11 @@ const BackfillProgress = () => {
                       <TableRow key={update.id}>
                         <TableCell className="font-mono text-xs">{update.update_type}</TableCell>
                         <TableCell>{update.migration_id || "-"}</TableCell>
-                        <TableCell>
-                          {update.migration_id ? (
-                            <Badge variant="outline" className="text-xs">
-                              {update.migration_id}
-                            </Badge>
-                          ) : (
-                            "-"
-                          )}
-                        </TableCell>
                         <TableCell className="text-xs">
                           {format(new Date(update.timestamp), "MMM d, HH:mm:ss")}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {formatDistanceToNow(new Date(update.created_at), { addSuffix: true })}
+                        <TableCell className="text-xs">
+                          {format(new Date(update.created_at), "MMM d, HH:mm:ss")}
                         </TableCell>
                       </TableRow>
                     ))
@@ -598,15 +480,14 @@ const BackfillProgress = () => {
                     <TableHead>Type</TableHead>
                     <TableHead>Migration ID</TableHead>
                     <TableHead>Template</TableHead>
-                    <TableHead>Migration ID</TableHead>
                     <TableHead>Timestamp</TableHead>
-                    <TableHead>Created</TableHead>
+                    <TableHead>Created At</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {!recentEvents || recentEvents.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
                         No events found
                       </TableCell>
                     </TableRow>
@@ -616,20 +497,11 @@ const BackfillProgress = () => {
                         <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
                         <TableCell>{event.migration_id || "-"}</TableCell>
                         <TableCell className="text-xs truncate max-w-[200px]">{event.template_id || "-"}</TableCell>
-                        <TableCell>
-                          {event.migration_id ? (
-                            <Badge variant="outline" className="text-xs">
-                              {event.migration_id}
-                            </Badge>
-                          ) : (
-                            "-"
-                          )}
-                        </TableCell>
                         <TableCell className="text-xs">
                           {format(new Date(event.timestamp), "MMM d, HH:mm:ss")}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
+                        <TableCell className="text-xs">
+                          {format(new Date(event.created_at), "MMM d, HH:mm:ss")}
                         </TableCell>
                       </TableRow>
                     ))
