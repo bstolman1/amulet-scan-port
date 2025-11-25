@@ -153,7 +153,7 @@ const Transactions = () => {
                       </div>
 
                       {/* Primary Transaction Details */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                         <div className="p-3 rounded-lg bg-muted/30">
                           <p className="text-sm text-muted-foreground mb-1">Event ID</p>
                           <div className="flex items-center space-x-2">
@@ -166,10 +166,40 @@ const Transactions = () => {
                             {parseFloat(tx.amount).toFixed(4)} CC
                           </p>
                         </div>
+                        <div className="p-3 rounded-lg bg-accent/10">
+                          <p className="text-sm text-muted-foreground mb-1">Fee</p>
+                          <p className="font-mono font-bold text-accent text-lg">
+                            {parseFloat(tx.fee).toFixed(4)} CC
+                          </p>
+                        </div>
                         <div className="p-3 rounded-lg bg-muted/30">
                           <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
                           <p className="font-mono text-xs break-all">{event.contract_id || "N/A"}</p>
                         </div>
+                      </div>
+
+                      {/* Timestamps */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div className="p-3 rounded-lg bg-muted/30">
+                          <p className="text-sm text-muted-foreground mb-1">Timestamp</p>
+                          <p className="font-mono text-xs">
+                            {event.timestamp ? format(new Date(event.timestamp), "PPpp") : "N/A"}
+                          </p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/30">
+                          <p className="text-sm text-muted-foreground mb-1">Created At</p>
+                          <p className="font-mono text-xs">
+                            {event.created_at ? format(new Date(event.created_at), "PPpp") : "N/A"}
+                          </p>
+                        </div>
+                        {event.created_at_ts && (
+                          <div className="p-3 rounded-lg bg-muted/30">
+                            <p className="text-sm text-muted-foreground mb-1">Created At (TS)</p>
+                            <p className="font-mono text-xs">
+                              {format(new Date(event.created_at_ts), "PPpp")}
+                            </p>
+                          </div>
+                        )}
                       </div>
 
                       {/* Template & Package Info */}
