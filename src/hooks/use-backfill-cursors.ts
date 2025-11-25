@@ -6,6 +6,12 @@ export interface BackfillCursor {
   cursor_name: string;
   last_processed_round: number;
   updated_at: string;
+  complete?: boolean | null;
+  min_time?: string | null;
+  max_time?: string | null;
+  migration_id?: number | null;
+  synchronizer_id?: string | null;
+  last_before?: string | null;
 }
 
 export function useBackfillCursors() {
