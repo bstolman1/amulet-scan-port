@@ -152,37 +152,62 @@ const RichList = () => {
             ) : topHolders.length === 0 ? (
               <p className="text-muted-foreground text-center py-8">No holders found</p>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-16">#</TableHead>
-                      <TableHead>Holder</TableHead>
-                      <TableHead className="text-right">Unlocked</TableHead>
-                      <TableHead className="text-right">Locked</TableHead>
-                      <TableHead className="text-right">Total Balance</TableHead>
-                      <TableHead className="text-right">% of Supply</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {topHolders.map((holder, index) => (
-                      <TableRow key={holder.owner}>
-                        <TableCell className="font-medium">{index + 1}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="font-mono text-xs">
-                            {formatParty(holder.owner)}
+              <div className="space-y-3">
+                {topHolders.map((holder, index) => (
+                  <Card key={holder.owner} className="p-4 hover:shadow-md transition-smooth">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center space-x-3">
+                        <div className="text-center min-w-[40px]">
+                          <Badge variant="outline" className="text-lg font-bold">
+                            #{index + 1}
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">{formatAmount(holder.amount)}</TableCell>
-                        <TableCell className="text-right text-warning">{formatAmount(holder.locked)}</TableCell>
-                        <TableCell className="text-right font-semibold">{formatAmount(holder.total)}</TableCell>
-                        <TableCell className="text-right text-muted-foreground">
-                          {((holder.total / totalSupply) * 100).toFixed(2)}%
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm text-muted-foreground mb-1">Party ID</p>
+                          <p className="font-mono text-xs break-all">{holder.owner}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {formatParty(holder.owner)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <div className="p-3 rounded-lg bg-success/10 border border-success/20">
+                        <p className="text-xs text-muted-foreground mb-1">Unlocked Balance</p>
+                        <p className="text-lg font-bold text-success">{formatAmount(holder.amount)} CC</p>
+                      </div>
+                      
+                      <div className="p-3 rounded-lg bg-warning/10 border border-warning/20">
+                        <p className="text-xs text-muted-foreground mb-1">Locked Balance</p>
+                        <p className="text-lg font-bold text-warning">{formatAmount(holder.locked)} CC</p>
+                      </div>
+                      
+                      <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+                        <p className="text-xs text-muted-foreground mb-1">Total Balance</p>
+                        <p className="text-xl font-bold text-primary">{formatAmount(holder.total)} CC</p>
+                      </div>
+                      
+                      <div className="p-3 rounded-lg bg-muted/30">
+                        <p className="text-xs text-muted-foreground mb-1">% of Total Supply</p>
+                        <p className="text-lg font-bold">{((holder.total / totalSupply) * 100).toFixed(4)}%</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 pt-3 border-t border-border/30">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <span className="text-muted-foreground">Unlocked %:</span>
+                          <span className="ml-2 font-semibold">{holder.total > 0 ? ((holder.amount / holder.total) * 100).toFixed(1) : 0}%</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Locked %:</span>
+                          <span className="ml-2 font-semibold">{holder.total > 0 ? ((holder.locked / holder.total) * 100).toFixed(1) : 0}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
               </div>
             )}
           </div>

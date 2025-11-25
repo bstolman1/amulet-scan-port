@@ -267,7 +267,7 @@ const MemberTraffic = () => {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Event Type</TableHead>
-                      <TableHead>Round</TableHead>
+                      <TableHead>Migration</TableHead>
                       <TableHead>Member</TableHead>
                       <TableHead>Timestamp</TableHead>
                       <TableHead>Details</TableHead>
@@ -277,7 +277,7 @@ const MemberTraffic = () => {
                     {trafficEvents.slice(0, 100).map((event: any) => (
                       <TableRow key={event.id}>
                         <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                        <TableCell>{event.round.toLocaleString()}</TableCell>
+                        <TableCell>{event.migration_id || "-"}</TableCell>
                         <TableCell className="text-xs truncate max-w-[200px]">
                           {event.payload?.member || event.payload?.synchronizerId || "-"}
                         </TableCell>

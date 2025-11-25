@@ -541,7 +541,6 @@ const BackfillProgress = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Type</TableHead>
-                    <TableHead>Round</TableHead>
                     <TableHead>Migration ID</TableHead>
                     <TableHead>Timestamp</TableHead>
                     <TableHead>Created</TableHead>
@@ -597,7 +596,7 @@ const BackfillProgress = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Type</TableHead>
-                    <TableHead>Round</TableHead>
+                    <TableHead>Migration ID</TableHead>
                     <TableHead>Template</TableHead>
                     <TableHead>Migration ID</TableHead>
                     <TableHead>Timestamp</TableHead>
