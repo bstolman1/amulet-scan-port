@@ -3,78 +3,36 @@ name: Backfill Ledger History
 on:
   schedule:
     - cron: '0 0 * * 0'  # Run every Sunday at midnight (00:00 UTC)
-  workflow_dispatch:
-    inputs:
-      parallel_mode:
-        description: 'Enable parallel processing (8 workers)'
-        required: false
-        type: choice
-        options:
-          - 'single'
-          - 'parallel'
-        default: 'single'
-      migration_id:
-        description: 'Specific migration ID to backfill (optional, leave empty for all)'
-        required: false
-        type: string
+  workflow_dispatch: {}  # Keep manual trigger available
 
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
   group: ledger-ingestion
-  cancel-in-progress: false
+  cancel-in-progress: false # Queue instead of canceling
 
 jobs:
   backfill:
     runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        worker_id: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
-      - name: Skip worker if single mode
-        if: inputs.parallel_mode == 'single' && matrix.worker_id != 0
-        run: |
-          echo "Skipping worker ${{ matrix.worker_id }} - single-threaded mode"
-          exit 0
-
       - name: Checkout
-        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
         uses: actions/checkout@v4
 
       - name: Setup Node
-        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
+      - name: Install deps
         run: |
           npm init -y
-          npm install axios @supabase/supabase-js pg pg-copy-streams
+          npm install axios @supabase/supabase-js
 
-      - name: Run backfill worker
-        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
+      - name: Run backfill
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKFILL_PAGE_SIZE: "200"
-          WORKER_ID: ${{ matrix.worker_id }}
-          WORKER_COUNT: ${{ inputs.parallel_mode == 'parallel' && '8' || '1' }}
         run: node scripts/fetch-backfill-history.js
-        timeout-minutes: 1440
-
-  summary:
-    needs: backfill
-    runs-on: self-hosted
-    steps:
-      - name: Report completion
-        run: |
-          echo "✅ Backfill complete"
-          if [ "${{ inputs.parallel_mode }}" = "parallel" ]; then
-            echo "📊 All 8 parallel workers finished"
-            echo "⚠️  Run scripts/restore-after-backfill.sql to restore indexes"
-          fi

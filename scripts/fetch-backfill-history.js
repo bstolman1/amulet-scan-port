@@ -43,10 +43,6 @@ if (!SUPABASE_DB_URL) {
 
 const PAGE_SIZE = parseInt(process.env.BACKFILL_PAGE_SIZE || "200", 10);
 
-// Parallel worker configuration
-const WORKER_ID = parseInt(process.env.WORKER_ID || "0", 10);
-const WORKER_COUNT = parseInt(process.env.WORKER_COUNT || "1", 10);
-
 // HTTP client
 const scanClient = axios.create({
   baseURL: BASE_URL,
@@ -544,9 +540,8 @@ async function upsertUpdatesAndEvents(transactions) {
   }
 
   // Upsert in batches to avoid statement timeout
-  // Using large batch sizes for maximum throughput during backfill
-  await upsertInBatches("ledger_updates", updatesRows, 10000);
-  await upsertInBatches("ledger_events", eventsRows, 10000);
+  await upsertInBatches("ledger_updates", updatesRows, 500);
+  await upsertInBatches("ledger_events", eventsRows, 500);
 }
 
 // ---------- Core paging over /v0/backfilling/updates-before ----------
@@ -633,11 +628,6 @@ async function run() {
   console.log("🚀 Backfilling full ledger history");
   console.log("   BASE_URL:", BASE_URL);
   console.log("   PAGE_SIZE:", PAGE_SIZE);
-  console.log("   WORKER_ID:", WORKER_ID);
-  console.log("   WORKER_COUNT:", WORKER_COUNT);
-  if (WORKER_COUNT > 1) {
-    console.log(`   🔀 Running as worker ${WORKER_ID + 1} of ${WORKER_COUNT} (parallel mode)`);
-  }
   console.log("\n🔧 Environment Check:");
   console.log("   SUPABASE_URL present:", !!process.env.SUPABASE_URL);
   console.log("   SUPABASE_ANON_KEY present:", !!process.env.SUPABASE_ANON_KEY);
@@ -666,14 +656,7 @@ async function run() {
 
     console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migration_id}`);
 
-    // Partition work among workers for parallel processing
-    let assignedRanges = ranges;
-    if (WORKER_COUNT > 1) {
-      assignedRanges = ranges.filter((_, index) => index % WORKER_COUNT === WORKER_ID);
-      console.log(`   🔀 Worker ${WORKER_ID + 1} assigned ${assignedRanges.length} of ${ranges.length} synchronizers`);
-    }
-
-    for (const range of assignedRanges) {
+    for (const range of ranges) {
       await backfillForSynchronizer(migration_id, range);
     }
 
