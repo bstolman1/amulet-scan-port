@@ -36,4 +36,5 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKFILL_PAGE_SIZE: "500"
           ENABLE_OPTIMIZATIONS: "true"
+          BACKFILL_CONCURRENCY: "3"   # Added concurrency control
         run: node scripts/fetch-backfill-history.js
