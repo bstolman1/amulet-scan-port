@@ -8,8 +8,11 @@ on:
       parallel_mode:
         description: 'Enable parallel processing (8 workers)'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - 'single'
+          - 'parallel'
+        default: 'single'
       migration_id:
         description: 'Specific migration ID to backfill (optional, leave empty for all)'
         required: false
@@ -18,32 +21,41 @@ on:
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
   group: ledger-ingestion
-  cancel-in-progress: false # Queue instead of canceling
+  cancel-in-progress: false
 
 jobs:
   backfill:
     runs-on: self-hosted
     strategy:
       fail-fast: false
-      max-parallel: ${{ inputs.parallel_mode && 8 || 1 }}
       matrix:
-        worker_id: ${{ inputs.parallel_mode && fromJson('[0,1,2,3,4,5,6,7]') || fromJson('[0]') }}
+        worker_id: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
+      - name: Skip worker if single mode
+        if: inputs.parallel_mode == 'single' && matrix.worker_id != 0
+        run: |
+          echo "Skipping worker ${{ matrix.worker_id }} - single-threaded mode"
+          exit 0
+
       - name: Checkout
+        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
         uses: actions/checkout@v4
 
       - name: Setup Node
+        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Install dependencies
+        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
         run: |
           npm init -y
           npm install axios @supabase/supabase-js pg pg-copy-streams
 
       - name: Run backfill worker
+        if: inputs.parallel_mode == 'parallel' || matrix.worker_id == 0
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -51,27 +63,18 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKFILL_PAGE_SIZE: "200"
           WORKER_ID: ${{ matrix.worker_id }}
-          WORKER_COUNT: ${{ inputs.parallel_mode && 8 || 1 }}
-          MIGRATION_ID: ${{ inputs.migration_id || '' }}
-        run: |
-          if [ "${{ inputs.parallel_mode }}" = "true" ]; then
-            echo "🚀 Starting parallel backfill worker ${{ matrix.worker_id }} of 8"
-          else
-            echo "🚀 Starting single-threaded backfill"
-          fi
-          node scripts/fetch-backfill-history.js
-        timeout-minutes: 1440  # 24 hours max per worker
+          WORKER_COUNT: ${{ inputs.parallel_mode == 'parallel' && '8' || '1' }}
+        run: node scripts/fetch-backfill-history.js
+        timeout-minutes: 1440
 
-  verify:
+  summary:
     needs: backfill
     runs-on: self-hosted
     steps:
       - name: Report completion
         run: |
           echo "✅ Backfill complete"
-          if [ "${{ inputs.parallel_mode }}" = "true" ]; then
+          if [ "${{ inputs.parallel_mode }}" = "parallel" ]; then
             echo "📊 All 8 parallel workers finished"
-            echo ""
-            echo "⚠️  IMPORTANT: Don't forget to run scripts/restore-after-backfill.sql"
-            echo "   to restore indexes and make tables LOGGED again!"
+            echo "⚠️  Run scripts/restore-after-backfill.sql to restore indexes"
           fi
