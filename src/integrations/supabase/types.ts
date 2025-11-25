@@ -482,6 +482,63 @@ export type Database = {
           },
         ]
       }
+      temp_ledger_events_1764077216763_386: {
+        Row: {
+          contract_id: string | null
+          created_at: string
+          created_at_ts: string | null
+          event_data: Json
+          event_id: string | null
+          event_type: string
+          id: string
+          observers: string[] | null
+          package_name: string | null
+          payload: Json | null
+          raw: Json | null
+          round: number
+          signatories: string[] | null
+          template_id: string | null
+          timestamp: string
+          update_id: string | null
+        }
+        Insert: {
+          contract_id?: string | null
+          created_at?: string
+          created_at_ts?: string | null
+          event_data: Json
+          event_id?: string | null
+          event_type: string
+          id?: string
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
+          round: number
+          signatories?: string[] | null
+          template_id?: string | null
+          timestamp?: string
+          update_id?: string | null
+        }
+        Update: {
+          contract_id?: string | null
+          created_at?: string
+          created_at_ts?: string | null
+          event_data?: Json
+          event_id?: string | null
+          event_type?: string
+          id?: string
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
+          round?: number
+          signatories?: string[] | null
+          template_id?: string | null
+          timestamp?: string
+          update_id?: string | null
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string
