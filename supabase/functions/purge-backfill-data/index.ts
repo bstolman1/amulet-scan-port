@@ -105,6 +105,10 @@ serve(async (req) => {
       console.log("Deleting all ledger events in batches...");
       deletedEvents = await deleteBatchByIds('ledger_events', 500);
       console.log(`✅ Deleted ${deletedEvents} total ledger events`);
+    } else if (migration_id) {
+      console.log(`Deleting ledger events for migration_id ${migration_id}...`);
+      deletedEvents = await deleteBatchByIds('ledger_events', 500, { migration_id });
+      console.log(`✅ Deleted ${deletedEvents} ledger events for migration_id ${migration_id}`);
     }
 
     // Delete ledger updates (using id as primary key)
@@ -112,6 +116,10 @@ serve(async (req) => {
       console.log("Deleting all ledger updates in batches...");
       deletedUpdates = await deleteBatchByIds('ledger_updates', 500);
       console.log(`✅ Deleted ${deletedUpdates} total ledger updates`);
+    } else if (migration_id) {
+      console.log(`Deleting ledger updates for migration_id ${migration_id}...`);
+      deletedUpdates = await deleteBatchByIds('ledger_updates', 500, { migration_id });
+      console.log(`✅ Deleted ${deletedUpdates} ledger updates for migration_id ${migration_id}`);
     }
 
     // Delete backfill cursors
@@ -119,6 +127,10 @@ serve(async (req) => {
       console.log("Deleting all backfill cursors in batches...");
       deletedCursors = await deleteBatchByIds('backfill_cursors', 200);
       console.log(`✅ Deleted ${deletedCursors} total backfill cursors`);
+    } else if (migration_id) {
+      console.log(`Deleting backfill cursors for migration_id ${migration_id}...`);
+      deletedCursors = await deleteBatchByIds('backfill_cursors', 200, { migration_id });
+      console.log(`✅ Deleted ${deletedCursors} backfill cursors for migration_id ${migration_id}`);
     }
 
     // Reset live update cursor if purging all
