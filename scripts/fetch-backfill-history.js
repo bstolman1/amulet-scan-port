@@ -43,8 +43,6 @@ if (!SUPABASE_DB_URL) {
 
 const PAGE_SIZE = parseInt(process.env.BACKFILL_PAGE_SIZE || "200", 10);
 const ENABLE_OPTIMIZATIONS = process.env.ENABLE_OPTIMIZATIONS === "true";
-// NEW: concurrency for backfill workers
-const BACKFILL_CONCURRENCY = Math.max(1, parseInt(process.env.BACKFILL_CONCURRENCY || "1", 10));
 
 // HTTP client
 const scanClient = axios.create({
@@ -697,7 +695,6 @@ async function run() {
   console.log("   PAGE_SIZE:", PAGE_SIZE);
   console.log("   BATCH_SIZE: 10000 (optimized)");
   console.log("   OPTIMIZATIONS:", ENABLE_OPTIMIZATIONS ? "ENABLED ⚡" : "DISABLED");
-  console.log("   BACKFILL_CONCURRENCY:", BACKFILL_CONCURRENCY);
   console.log("\n🔧 Environment Check:");
   console.log("   SUPABASE_URL present:", !!process.env.SUPABASE_URL);
   console.log("   SUPABASE_ANON_KEY present:", !!process.env.SUPABASE_ANON_KEY);
@@ -728,46 +725,10 @@ async function run() {
     }
 
     console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migration_id}`);
-    console.log(`   Using concurrency = ${BACKFILL_CONCURRENCY}`);
 
-    // -------- Worker pool over synchronizer ranges --------
-    let idx = 0;
-
-    async function worker(workerId) {
-      while (true) {
-        const myIndex = idx++;
-        if (myIndex >= ranges.length) return;
-
-        const range = ranges[myIndex];
-
-        console.log(
-          `   🧵 Worker ${workerId}: starting synchronizer ${range.synchronizer_id} (${myIndex + 1}/${ranges.length})`
-        );
-
-        try {
-          await backfillForSynchronizer(migration_id, range);
-          console.log(
-            `   ✅ Worker ${workerId}: finished synchronizer ${range.synchronizer_id} (${myIndex + 1}/${ranges.length})`
-          );
-        } catch (err) {
-          console.error(
-            `   ❌ Worker ${workerId}: error in synchronizer ${range.synchronizer_id} (${myIndex + 1}/${ranges.length}):`,
-            err.message
-          );
-
-          // Fail fast — safest for consistency
-          throw err;
-        }
-      }
+    for (const range of ranges) {
+      await backfillForSynchronizer(migration_id, range);
     }
-
-    const workers = [];
-    const workerCount = Math.min(BACKFILL_CONCURRENCY, ranges.length);
-    for (let i = 0; i < workerCount; i++) {
-      workers.push(worker(i + 1));
-    }
-
-    await Promise.all(workers);
 
     console.log(`✅ Completed migration ${migration_id} (all synchronizers backfilled as far as Scan allows).`);
   }
