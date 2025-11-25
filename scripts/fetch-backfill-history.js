@@ -153,6 +153,15 @@ function getEventTime(txOrReassign) {
   return txOrReassign.record_time || txOrReassign.event?.record_time || txOrReassign.effective_at;
 }
 
+// Calculate Canton round number from timestamp (rounds occur every 10 minutes)
+function calculateRound(timestamp) {
+  if (!timestamp) return 0;
+  const date = new Date(timestamp);
+  const ms = date.getTime();
+  // Each round is 10 minutes = 600,000 milliseconds
+  return Math.floor(ms / 600000);
+}
+
 // ---------- Migration discovery ----------
 
 async function detectAllMigrations() {
@@ -466,7 +475,7 @@ async function upsertUpdatesAndEvents(transactions) {
       kind,
       update_type: kind,
       update_data: tx,
-      round: 0,
+      round: calculateRound(recordTime || effectiveAt),
       raw: tx,
     });
 
@@ -481,7 +490,7 @@ async function upsertUpdatesAndEvents(transactions) {
           package_name: ce.package_name,
           event_type: "reassign_create",
           event_data: ce,
-          round: 0,
+          round: calculateRound(ce.created_at || recordTime || effectiveAt),
           payload: ce.create_arguments || {},
           signatories: ensureArray(ce.signatories),
           observers: ensureArray(ce.observers),
@@ -518,7 +527,7 @@ async function upsertUpdatesAndEvents(transactions) {
           package_name: ev.package_name || null,
           event_type: eventType,
           event_data: ev,
-          round: 0,
+          round: calculateRound(ev.created_at || recordTime || effectiveAt),
           payload: ev.create_arguments || ev.exercise_arguments || {},
           signatories,
           observers,
