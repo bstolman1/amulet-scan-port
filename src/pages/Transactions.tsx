@@ -178,29 +178,17 @@ const Transactions = () => {
                         </div>
                       </div>
 
-                      {/* Timestamps */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                        <div className="p-3 rounded-lg bg-muted/30">
-                          <p className="text-sm text-muted-foreground mb-1">Timestamp</p>
-                          <p className="font-mono text-xs">
-                            {event.timestamp ? format(new Date(event.timestamp), "PPpp") : "N/A"}
-                          </p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-muted/30">
-                          <p className="text-sm text-muted-foreground mb-1">Created At</p>
-                          <p className="font-mono text-xs">
-                            {event.created_at ? format(new Date(event.created_at), "PPpp") : "N/A"}
-                          </p>
-                        </div>
-                        {event.created_at_ts && (
+                      {/* Timestamp */}
+                      {event.created_at_ts && (
+                        <div className="mb-6">
                           <div className="p-3 rounded-lg bg-muted/30">
                             <p className="text-sm text-muted-foreground mb-1">Created At (TS)</p>
                             <p className="font-mono text-xs">
                               {format(new Date(event.created_at_ts), "PPpp")}
                             </p>
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
 
                       {/* Template & Package Info */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
