@@ -297,76 +297,60 @@ async function bulkCopyWithUpsert(table, rows, columns) {
         let val = row[col];
         if (val === null || val === undefined) return '\\N';
         
-        // CRITICAL: Check if array columns got stringified somewhere
-        if ((col === 'signatories' || col === 'observers')) {
-          // If it's a string that looks like JSON, parse it AGAIN
-          if (typeof val === 'string' && val.trim().startsWith('[')) {
-            console.log(`   ⚠️  FOUND STRINGIFIED ARRAY in ${col}:`, val.substring(0, 100));
-            val = ensureArray(val);
-            console.log(`   ✅ RECOVERED to array:`, Array.isArray(val), val);
-          }
-          
-          // Debug first row
-          if (rowIdx === 0) {
-            console.log(`   🔍 TSV FORMAT: ${col} type=${typeof val}, isArray=${Array.isArray(val)}, length=${Array.isArray(val) ? val.length : 'N/A'}`);
-            if (Array.isArray(val)) {
-              console.log(`   🔍 TSV FORMAT: ${col} first element="${val[0]}"`);
-            }
+        // ============ CRITICAL: ARRAY HANDLING FIRST ============
+        // Arrays MUST be converted to PostgreSQL syntax {elem1,elem2}
+        // NEVER JSON syntax ["elem1","elem2"]
+        
+        // Step 1: If it's a stringified JSON array, parse it
+        if (typeof val === 'string' && val.trim().startsWith('[')) {
+          if (rowIdx === 0) console.log(`   🔄 Parsing stringified array in ${col}:`, val.substring(0, 100));
+          try {
+            val = JSON.parse(val);
+            if (rowIdx === 0) console.log(`   ✅ Parsed to array:`, val);
+          } catch (e) {
+            console.error(`   ❌ Failed to parse array string in ${col}:`, e.message);
+            return '{}';
           }
         }
         
-        // Handle PostgreSQL arrays specially - must be actual arrays at this point
+        // Step 2: Convert JavaScript array → PostgreSQL array literal
         if (Array.isArray(val)) {
           if (val.length === 0) return '{}';
-          // Format as PostgreSQL array: {elem1,elem2}
+          
+          // Format each element with proper escaping
           const elements = val.map(elem => {
             if (elem === null || elem === undefined) return 'NULL';
             const str = String(elem);
-            // Quote elements with special chars, whitespace, etc.
+            // PostgreSQL needs quotes around elements with special chars
             if (str.match(/[{},"\\\s]/) || str === '' || str.toLowerCase() === 'null') {
+              // Escape backslashes and quotes
               return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
             }
             return str;
           });
-          const formatted = '{' + elements.join(',') + '}';
-          if ((col === 'signatories' || col === 'observers') && rowIdx === 0) {
-            console.log(`   ✅ FINAL FORMAT: ${col} = ${formatted.substring(0, 200)}`);
+          
+          const pgArray = '{' + elements.join(',') + '}';
+          
+          if (rowIdx === 0 && (col === 'signatories' || col === 'observers')) {
+            console.log(`   ✅ PostgreSQL array for ${col}:`, pgArray.substring(0, 200));
           }
-          return formatted;
+          
+          return pgArray;
         }
         
-        // If we get here and it's supposed to be an array column, something is wrong
-        if ((col === 'signatories' || col === 'observers')) {
-          console.error(`   ❌ ${col} is not an array! type=${typeof val}, value=${JSON.stringify(val).substring(0, 100)}`);
-          // Try to recover by parsing if it's a string
-          if (typeof val === 'string') {
-            const recovered = ensureArray(val);
-            if (recovered.length === 0) return '{}';
-            const elements = recovered.map(elem => {
-              const str = String(elem);
-              if (str.match(/[{},"\\\s]/) || str === '' || str.toLowerCase() === 'null') {
-                return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-              }
-              return str;
-            });
-            return '{' + elements.join(',') + '}';
-          }
-          return '{}';
-        }
-        
-        // Handle other objects as JSONB
+        // Step 3: Handle JSONB objects (not arrays!)
         if (typeof val === 'object') {
           const jsonStr = JSON.stringify(val);
-          // Escape backslashes, tabs, newlines for TSV format
+          // Escape special chars for TSV format
           return jsonStr.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
         }
         
-        // Handle strings - escape special characters
+        // Handle strings - escape special characters for TSV
         if (typeof val === 'string') {
           return val.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
         }
         
-        // Numbers and booleans
+        // Numbers and booleans - convert to string
         return String(val);
       }).join('\t');
     }).join('\n');
