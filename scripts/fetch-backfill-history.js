@@ -512,7 +512,7 @@ function ensureArray(value) {
   return [];
 }
 
-async function upsertUpdatesAndEvents(transactions, migration_id) {
+async function upsertUpdatesAndEvents(transactions) {
   if (!transactions.length) return;
 
   const updatesRows = [];
@@ -531,7 +531,7 @@ async function upsertUpdatesAndEvents(transactions, migration_id) {
 
     updatesRows.push({
       update_id: updateId,
-      migration_id: migration_id,
+      migration_id: tx.migration_id || tx.event?.migration_id || null,
       synchronizer_id: synchronizerId,
       record_time: recordTime,
       effective_at: effectiveAt,
@@ -559,7 +559,7 @@ async function upsertUpdatesAndEvents(transactions, migration_id) {
           observers: ensureArray(ce.observers),
           created_at_ts: ce.created_at,
           raw: ce,
-          migration_id: migration_id,
+          migration_id: tx.migration_id || tx.event?.migration_id || null,
         });
       }
     } else {
@@ -595,7 +595,7 @@ async function upsertUpdatesAndEvents(transactions, migration_id) {
           observers,
           created_at_ts: ev.created_at || recordTime,
           raw: ev,
-          migration_id: migration_id,
+          migration_id: tx.migration_id || null,
         });
       }
     }
@@ -659,7 +659,7 @@ async function backfillForSynchronizer(migration_id, range) {
       break;
     }
 
-    await upsertUpdatesAndEvents(txs, migration_id);
+    await upsertUpdatesAndEvents(txs);
 
     console.log(`   ✅ Stored ${txs.length} transactions in database`);
 
