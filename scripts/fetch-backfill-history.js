@@ -487,6 +487,7 @@ async function upsertUpdatesAndEvents(transactions) {
           observers: ensureArray(ce.observers),
           created_at_ts: ce.created_at,
           raw: ce,
+          migration_id: tx.migration_id || tx.event?.migration_id || null,
         });
       }
     } else {
@@ -523,6 +524,7 @@ async function upsertUpdatesAndEvents(transactions) {
           observers,
           created_at_ts: ev.created_at || recordTime,
           raw: ev,
+          migration_id: tx.migration_id || null,
         });
       }
     }
