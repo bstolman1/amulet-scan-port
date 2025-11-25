@@ -266,14 +266,16 @@ const BackfillProgress = () => {
               ) : (
                 allCursors.map((cursor) => {
                   // Calculate progress percentage based on time range
+                  // Note: backfill goes backwards in time (max_time -> min_time)
                   let progressPercent = 0;
                   if (cursor.min_time && cursor.max_time && cursor.last_before) {
                     const minTime = new Date(cursor.min_time).getTime();
                     const maxTime = new Date(cursor.max_time).getTime();
                     const currentTime = new Date(cursor.last_before).getTime();
                     const totalRange = maxTime - minTime;
-                    const currentProgress = currentTime - minTime;
-                    progressPercent = Math.min(100, Math.max(0, (currentProgress / totalRange) * 100));
+                    // Calculate how much we've moved backward from max_time
+                    const progressFromMax = maxTime - currentTime;
+                    progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
                   } else if (cursor.complete) {
                     progressPercent = 100;
                   }
