@@ -42,6 +42,7 @@ if (!SUPABASE_DB_URL) {
 }
 
 const PAGE_SIZE = parseInt(process.env.BACKFILL_PAGE_SIZE || "200", 10);
+const ENABLE_OPTIMIZATIONS = process.env.ENABLE_OPTIMIZATIONS === "true";
 
 // HTTP client
 const scanClient = axios.create({
@@ -95,6 +96,70 @@ async function getPgClient() {
     }
   }
   return pgClient;
+}
+
+// ---------- Performance optimizations ----------
+
+async function enableOptimizations() {
+  if (!ENABLE_OPTIMIZATIONS) return;
+  
+  const client = await getPgClient();
+  
+  console.log("\n⚡ ENABLING PERFORMANCE OPTIMIZATIONS");
+  console.log("=".repeat(80));
+  
+  try {
+    // 1. Make tables UNLOGGED (3×–10× speed boost)
+    console.log("1️⃣  Making tables UNLOGGED (massive speed boost)...");
+    await client.query("ALTER TABLE ledger_updates SET UNLOGGED");
+    await client.query("ALTER TABLE ledger_events SET UNLOGGED");
+    console.log("   ✅ Tables are now UNLOGGED");
+    
+    // 2. Drop indexes (5×–15× faster)
+    console.log("2️⃣  Dropping indexes for faster ingestion...");
+    await client.query("DROP INDEX IF EXISTS idx_ledger_updates_migration_id");
+    await client.query("DROP INDEX IF EXISTS idx_ledger_events_migration_id");
+    await client.query("DROP INDEX IF EXISTS ledger_updates_update_id_idx");
+    await client.query("DROP INDEX IF EXISTS ledger_events_event_id_idx");
+    console.log("   ✅ Indexes dropped");
+    
+    console.log("\n⚡ OPTIMIZATIONS ENABLED - Expect 3×–15× performance improvement!");
+    console.log("=".repeat(80) + "\n");
+  } catch (error) {
+    console.error("⚠️  Warning: Could not enable optimizations:", error.message);
+    console.error("   Continuing without optimizations...\n");
+  }
+}
+
+async function restoreOptimizations() {
+  if (!ENABLE_OPTIMIZATIONS) return;
+  
+  const client = await getPgClient();
+  
+  console.log("\n🔄 RESTORING PRODUCTION SETTINGS");
+  console.log("=".repeat(80));
+  
+  try {
+    // 1. Restore tables to LOGGED
+    console.log("1️⃣  Restoring tables to LOGGED...");
+    await client.query("ALTER TABLE ledger_updates SET LOGGED");
+    await client.query("ALTER TABLE ledger_events SET LOGGED");
+    console.log("   ✅ Tables are now LOGGED");
+    
+    // 2. Recreate indexes
+    console.log("2️⃣  Recreating indexes...");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_ledger_updates_migration_id ON ledger_updates(migration_id)");
+    await client.query("CREATE INDEX IF NOT EXISTS idx_ledger_events_migration_id ON ledger_events(migration_id)");
+    await client.query("CREATE INDEX IF NOT EXISTS ledger_updates_update_id_idx ON ledger_updates(update_id)");
+    await client.query("CREATE INDEX IF NOT EXISTS ledger_events_event_id_idx ON ledger_events(event_id)");
+    console.log("   ✅ Indexes recreated");
+    
+    console.log("\n✅ PRODUCTION SETTINGS RESTORED");
+    console.log("=".repeat(80) + "\n");
+  } catch (error) {
+    console.error("❌ Error restoring optimizations:", error.message);
+    throw error;
+  }
 }
 
 // ---------- Helpers ----------
@@ -411,7 +476,7 @@ async function bulkCopyWithUpsert(table, rows, columns) {
   }
 }
 
-async function upsertInBatches(table, rows, batchSize = 2000) {
+async function upsertInBatches(table, rows, batchSize = 10000) {
   if (!rows.length) return;
 
   // Determine columns from first row
@@ -628,12 +693,17 @@ async function run() {
   console.log("🚀 Backfilling full ledger history");
   console.log("   BASE_URL:", BASE_URL);
   console.log("   PAGE_SIZE:", PAGE_SIZE);
+  console.log("   BATCH_SIZE: 10000 (optimized)");
+  console.log("   OPTIMIZATIONS:", ENABLE_OPTIMIZATIONS ? "ENABLED ⚡" : "DISABLED");
   console.log("\n🔧 Environment Check:");
   console.log("   SUPABASE_URL present:", !!process.env.SUPABASE_URL);
   console.log("   SUPABASE_ANON_KEY present:", !!process.env.SUPABASE_ANON_KEY);
   console.log("   SUPABASE_DB_URL present:", !!process.env.SUPABASE_DB_URL);
   console.log("   SUPABASE_DB_URL length:", process.env.SUPABASE_DB_URL?.length || 0, "chars");
   console.log("=".repeat(80));
+
+  // Enable optimizations before starting
+  await enableOptimizations();
 
   const migrations = await detectAllMigrations();
 
@@ -665,6 +735,9 @@ async function run() {
 
   console.log("\n🎉 Full-history backfill run finished.");
   
+  // Restore optimizations after completion
+  await restoreOptimizations();
+  
   // Close PostgreSQL connection
   if (pgClient) {
     await pgClient.end();
@@ -690,6 +763,13 @@ run().catch(async (err) => {
   console.error("  - SUPABASE_DB_URL:", process.env.SUPABASE_DB_URL ? "SET (length: " + process.env.SUPABASE_DB_URL.length + ")" : "MISSING");
   console.error("  - BASE_URL:", process.env.BASE_URL || "(using default)");
   console.error("=".repeat(80));
+  
+  // Try to restore optimizations on error
+  try {
+    await restoreOptimizations();
+  } catch (restoreErr) {
+    console.error("⚠️ Warning: Could not restore optimizations:", restoreErr.message);
+  }
   
   // Close PostgreSQL connection on error
   if (pgClient) {
