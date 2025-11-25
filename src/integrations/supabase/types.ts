@@ -536,7 +536,7 @@ export type Database = {
         }
         Relationships: []
       }
-      temp_ledger_events_1764092237783_306: {
+      temp_ledger_events_1764096133149_946: {
         Row: {
           contract_id: string | null
           created_at: string
