@@ -121,7 +121,7 @@ const LiveUpdates = () => {
                     <div className="space-y-2 flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <Badge variant="outline">{update.update_type}</Badge>
-                        <span className="font-mono text-xs text-muted-foreground">Round {update.round}</span>
+                        <span className="font-mono text-xs text-muted-foreground">Migration {update.migration_id || "N/A"}</span>
                         <span className="font-mono text-xs text-muted-foreground truncate">{update.id}</span>
                       </div>
 

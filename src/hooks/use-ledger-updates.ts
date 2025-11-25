@@ -3,7 +3,6 @@ import { supabase } from "@/integrations/supabase/client";
 
 export interface LedgerUpdate {
   id: string;
-  round: number;
   timestamp: string;
   update_type: string;
   update_data: any;
@@ -30,23 +29,23 @@ export function useLedgerUpdates(limit: number = 50) {
   });
 }
 
-export function useLedgerUpdatesByRound(round: number | undefined, limit: number = 50) {
+export function useLedgerUpdatesByTimestamp(timestamp: string | undefined, limit: number = 50) {
   return useQuery({
-    queryKey: ["ledgerUpdates", round, limit],
+    queryKey: ["ledgerUpdates", timestamp, limit],
     queryFn: async () => {
-      if (!round) return [];
+      if (!timestamp) return [];
 
       const { data, error } = await supabase
         .from("ledger_updates")
         .select("*")
-        .eq("round", round)
+        .gte("created_at", timestamp)
         .order("created_at", { ascending: false })
         .limit(limit);
 
       if (error) throw error;
       return data as LedgerUpdate[];
     },
-    enabled: !!round,
+    enabled: !!timestamp,
     staleTime: 5_000,
   });
 }

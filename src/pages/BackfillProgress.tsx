@@ -558,7 +558,7 @@ const BackfillProgress = () => {
                     recentUpdates.slice(0, 20).map((update) => (
                       <TableRow key={update.id}>
                         <TableCell className="font-mono text-xs">{update.update_type}</TableCell>
-                        <TableCell>{update.round.toLocaleString()}</TableCell>
+                        <TableCell>{update.migration_id || "-"}</TableCell>
                         <TableCell>
                           {update.migration_id ? (
                             <Badge variant="outline" className="text-xs">
@@ -615,7 +615,7 @@ const BackfillProgress = () => {
                     recentEvents.slice(0, 20).map((event) => (
                       <TableRow key={event.id}>
                         <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                        <TableCell>{event.round.toLocaleString()}</TableCell>
+                        <TableCell>{event.migration_id || "-"}</TableCell>
                         <TableCell className="text-xs truncate max-w-[200px]">{event.template_id || "-"}</TableCell>
                         <TableCell>
                           {event.migration_id ? (

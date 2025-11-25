@@ -326,7 +326,6 @@ export type Database = {
           package_name: string | null
           payload: Json | null
           raw: Json | null
-          round: number
           signatories: string[] | null
           template_id: string | null
           timestamp: string
@@ -345,7 +344,6 @@ export type Database = {
           package_name?: string | null
           payload?: Json | null
           raw?: Json | null
-          round: number
           signatories?: string[] | null
           template_id?: string | null
           timestamp?: string
@@ -364,7 +362,6 @@ export type Database = {
           package_name?: string | null
           payload?: Json | null
           raw?: Json | null
-          round?: number
           signatories?: string[] | null
           template_id?: string | null
           timestamp?: string
@@ -382,7 +379,6 @@ export type Database = {
           offset: number | null
           raw: Json | null
           record_time: string | null
-          round: number
           synchronizer_id: string | null
           timestamp: string
           update_data: Json
@@ -399,7 +395,6 @@ export type Database = {
           offset?: number | null
           raw?: Json | null
           record_time?: string | null
-          round: number
           synchronizer_id?: string | null
           timestamp?: string
           update_data: Json
@@ -416,7 +411,6 @@ export type Database = {
           offset?: number | null
           raw?: Json | null
           record_time?: string | null
-          round?: number
           synchronizer_id?: string | null
           timestamp?: string
           update_data?: Json
@@ -499,7 +493,6 @@ export type Database = {
           package_name: string | null
           payload: Json | null
           raw: Json | null
-          round: number
           signatories: string[] | null
           template_id: string | null
           timestamp: string
@@ -518,7 +511,6 @@ export type Database = {
           package_name?: string | null
           payload?: Json | null
           raw?: Json | null
-          round: number
           signatories?: string[] | null
           template_id?: string | null
           timestamp?: string
@@ -537,7 +529,6 @@ export type Database = {
           package_name?: string | null
           payload?: Json | null
           raw?: Json | null
-          round?: number
           signatories?: string[] | null
           template_id?: string | null
           timestamp?: string
@@ -555,7 +546,6 @@ export type Database = {
           offset: number | null
           raw: Json | null
           record_time: string | null
-          round: number
           synchronizer_id: string | null
           timestamp: string
           update_data: Json
@@ -572,7 +562,6 @@ export type Database = {
           offset?: number | null
           raw?: Json | null
           record_time?: string | null
-          round: number
           synchronizer_id?: string | null
           timestamp?: string
           update_data: Json
@@ -589,7 +578,6 @@ export type Database = {
           offset?: number | null
           raw?: Json | null
           record_time?: string | null
-          round?: number
           synchronizer_id?: string | null
           timestamp?: string
           update_data?: Json
@@ -609,7 +597,6 @@ export type Database = {
           offset: number | null
           raw: Json | null
           record_time: string | null
-          round: number
           synchronizer_id: string | null
           timestamp: string
           update_data: Json
@@ -626,7 +613,6 @@ export type Database = {
           offset?: number | null
           raw?: Json | null
           record_time?: string | null
-          round: number
           synchronizer_id?: string | null
           timestamp?: string
           update_data: Json
@@ -643,7 +629,6 @@ export type Database = {
           offset?: number | null
           raw?: Json | null
           record_time?: string | null
-          round?: number
           synchronizer_id?: string | null
           timestamp?: string
           update_data?: Json
