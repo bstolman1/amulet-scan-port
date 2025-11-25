@@ -34,5 +34,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          BACKFILL_PAGE_SIZE: "200"
+          BACKFILL_PAGE_SIZE: "500"
+          ENABLE_OPTIMIZATIONS: "true"
         run: node scripts/fetch-backfill-history.js
