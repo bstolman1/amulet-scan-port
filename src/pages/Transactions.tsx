@@ -61,42 +61,65 @@ const Transactions = () => {
     return `${name}::${hash.substring(0, 8)}...`;
   };
 
+  // Recursively extract all numeric values from nested objects
+  const extractNumericValues = (obj: any, path: string = ''): Array<{ label: string; value: string }> => {
+    const numerics: Array<{ label: string; value: string }> = [];
+    
+    if (!obj || typeof obj !== 'object') return numerics;
+    
+    if (obj.numeric !== undefined && obj.numeric !== null) {
+      numerics.push({ 
+        label: path || 'value',
+        value: obj.numeric 
+      });
+    }
+    
+    if (Array.isArray(obj)) {
+      obj.forEach((item, idx) => {
+        numerics.push(...extractNumericValues(item, path ? `${path}[${idx}]` : `[${idx}]`));
+      });
+    } else {
+      Object.keys(obj).forEach(key => {
+        if (key === 'numeric' && obj[key] !== undefined && obj[key] !== null) {
+          numerics.push({ 
+            label: path || key,
+            value: obj[key] 
+          });
+        } else if (typeof obj[key] === 'object') {
+          const newPath = path ? `${path}.${key}` : key;
+          numerics.push(...extractNumericValues(obj[key], newPath));
+        }
+      });
+    }
+    
+    return numerics;
+  };
+
   const parseEventPayload = (event: any) => {
     const data = event.event_data || event.payload || {};
     const createArgs = data.create_arguments?.record?.fields || [];
     const exerciseArgs = data.exercise_arguments?.record?.fields || [];
     
-    // For Amulet created events (mints)
+    // Extract all numeric values
+    const allNumerics = extractNumericValues(data);
+    
+    // Determine transaction type
+    let type = "unknown";
     if (event.event_type === "created_event" && event.template_id?.includes("Amulet:Amulet")) {
-      const amountField = createArgs.find((f: any) => f.value?.record?.fields?.[0]?.value?.numeric);
-      const amount = amountField?.value?.record?.fields?.[0]?.value?.numeric || "0";
-      return {
-        type: "mint",
-        amount,
-        from: null,
-        to: data.signatories?.[1] || null,
-        fee: "0",
-      };
+      type = "mint";
+    } else if (event.event_type === "exercised_event") {
+      type = "transfer";
     }
     
-    // For transfer/exercise events
-    if (event.event_type === "exercised_event") {
-      const amount = exerciseArgs.find((f: any) => f.value?.numeric)?.value?.numeric || "0";
-      return {
-        type: "transfer",
-        amount,
-        from: data.signatories?.[0] || null,
-        to: data.signatories?.[1] || null,
-        fee: "0",
-      };
-    }
+    // Get primary amount (first numeric found, or 0)
+    const amount = allNumerics[0]?.value || "0";
     
     return {
-      type: "unknown",
-      amount: "0",
-      from: null,
-      to: null,
-      fee: "0",
+      type,
+      amount,
+      from: data.signatories?.[0] || null,
+      to: data.signatories?.[1] || null,
+      allNumerics, // All numeric values with their labels
     };
   };
 
@@ -153,30 +176,43 @@ const Transactions = () => {
                       </div>
 
                       {/* Primary Transaction Details */}
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                         <div className="p-3 rounded-lg bg-muted/30">
                           <p className="text-sm text-muted-foreground mb-1">Event ID</p>
                           <div className="flex items-center space-x-2">
                             <p className="font-mono text-xs break-all">{event.event_id || event.id}</p>
                           </div>
                         </div>
-                        <div className="p-3 rounded-lg bg-primary/10">
-                          <p className="text-sm text-muted-foreground mb-1">Amount</p>
-                          <p className="font-mono font-bold text-primary text-2xl">
-                            {parseFloat(tx.amount).toFixed(4)} CC
-                          </p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-accent/10">
-                          <p className="text-sm text-muted-foreground mb-1">Fee</p>
-                          <p className="font-mono font-bold text-accent text-lg">
-                            {parseFloat(tx.fee).toFixed(4)} CC
-                          </p>
-                        </div>
                         <div className="p-3 rounded-lg bg-muted/30">
                           <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
                           <p className="font-mono text-xs break-all">{event.contract_id || "N/A"}</p>
                         </div>
+                        <div className="p-3 rounded-lg bg-primary/10">
+                          <p className="text-sm text-muted-foreground mb-1">Primary Amount</p>
+                          <p className="font-mono font-bold text-primary text-2xl">
+                            {parseFloat(tx.amount).toFixed(4)} CC
+                          </p>
+                        </div>
                       </div>
+
+                      {/* All Numeric Values */}
+                      {tx.allNumerics && tx.allNumerics.length > 0 && (
+                        <div className="mb-6">
+                          <p className="text-sm font-semibold mb-3">Numeric Values</p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {tx.allNumerics.map((numeric: any, idx: number) => (
+                              <div key={idx} className="p-3 rounded-lg bg-accent/10 border border-accent/20">
+                                <p className="text-xs text-muted-foreground mb-1 font-mono break-all">
+                                  {numeric.label}
+                                </p>
+                                <p className="font-mono font-bold text-accent">
+                                  {parseFloat(numeric.value).toFixed(10)}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Timestamp */}
                       {event.created_at_ts && (
