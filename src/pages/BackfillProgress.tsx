@@ -65,6 +65,28 @@ const BackfillProgress = () => {
     return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
   }, [cursors, realtimeCursors]);
 
+  // Load initial stats on mount
+  useEffect(() => {
+    const loadInitialStats = async () => {
+      try {
+        const [updatesCount, eventsCount] = await Promise.all([
+          supabase.from("ledger_updates").select("*", { count: "exact", head: true }),
+          supabase.from("ledger_events").select("*", { count: "exact", head: true }),
+        ]);
+
+        setStats((prev) => ({
+          ...prev,
+          totalUpdates: updatesCount.count || 0,
+          totalEvents: eventsCount.count || 0,
+        }));
+      } catch (error) {
+        console.error("Failed to load initial stats:", error);
+      }
+    };
+
+    loadInitialStats();
+  }, []);
+
   // Update cursor stats when cursors change
   useEffect(() => {
     setStats((prev) => ({
