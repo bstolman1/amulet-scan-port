@@ -1,13 +1,13 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Code } from "lucide-react";
+import { Code, ChevronDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { format } from "date-fns";
+import { parseEventData, ParsedField } from "@/lib/daml-field-mapping";
 
 const Transactions = () => {
   const {
@@ -29,98 +29,38 @@ const Transactions = () => {
     },
   });
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "confirmed":
-        return "bg-success/10 text-success border-success/20";
-      case "pending":
-        return "bg-warning/10 text-warning border-warning/20";
+  const getEventTypeColor = (eventType: string) => {
+    switch (eventType) {
+      case "Amulet Created":
+        return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+      case "Locked Amulet":
+        return "bg-amber-500/20 text-amber-400 border-amber-500/30";
+      case "Transfer":
+        return "bg-blue-500/20 text-blue-400 border-blue-500/30";
+      case "Validator Reward":
+        return "bg-purple-500/20 text-purple-400 border-purple-500/30";
+      case "App Reward":
+        return "bg-orange-500/20 text-orange-400 border-orange-500/30";
+      case "SV Reward":
+        return "bg-teal-500/20 text-teal-400 border-teal-500/30";
       default:
-        return "bg-muted text-muted-foreground";
+        return "bg-muted text-muted-foreground border-border";
     }
   };
 
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case "transfer":
-        return "bg-primary/10 text-primary border-primary/20";
-      case "mint":
-        return "bg-accent/10 text-accent border-accent/20";
-      case "tap":
-        return "bg-chart-3/10 text-chart-3 border-chart-3/20";
-      default:
-        return "bg-muted text-muted-foreground";
-    }
-  };
-
-  const formatPartyId = (partyId: string) => {
-    if (!partyId) return "N/A";
-    const parts = partyId.split("::");
-    const name = parts[0] || partyId;
-    const hash = parts[1] || "";
-    return `${name}::${hash.substring(0, 8)}...`;
-  };
-
-  // Recursively extract all numeric values from nested objects
-  const extractNumericValues = (obj: any, path: string = ''): Array<{ label: string; value: string }> => {
-    const numerics: Array<{ label: string; value: string }> = [];
-    
-    if (!obj || typeof obj !== 'object') return numerics;
-    
-    if (obj.numeric !== undefined && obj.numeric !== null) {
-      numerics.push({ 
-        label: path || 'value',
-        value: obj.numeric 
-      });
-    }
-    
-    if (Array.isArray(obj)) {
-      obj.forEach((item, idx) => {
-        numerics.push(...extractNumericValues(item, path ? `${path}[${idx}]` : `[${idx}]`));
-      });
-    } else {
-      Object.keys(obj).forEach(key => {
-        if (key === 'numeric' && obj[key] !== undefined && obj[key] !== null) {
-          numerics.push({ 
-            label: path || key,
-            value: obj[key] 
-          });
-        } else if (typeof obj[key] === 'object') {
-          const newPath = path ? `${path}.${key}` : key;
-          numerics.push(...extractNumericValues(obj[key], newPath));
-        }
-      });
-    }
-    
-    return numerics;
-  };
-
-  const parseEventPayload = (event: any) => {
-    const data = event.event_data || event.payload || {};
-    const createArgs = data.create_arguments?.record?.fields || [];
-    const exerciseArgs = data.exercise_arguments?.record?.fields || [];
-    
-    // Extract all numeric values
-    const allNumerics = extractNumericValues(data);
-    
-    // Determine transaction type
-    let type = "unknown";
-    if (event.event_type === "created_event" && event.template_id?.includes("Amulet:Amulet")) {
-      type = "mint";
-    } else if (event.event_type === "exercised_event") {
-      type = "transfer";
-    }
-    
-    // Get primary amount (first numeric found, or 0)
-    const amount = allNumerics[0]?.value || "0";
-    
-    return {
-      type,
-      amount,
-      from: data.signatories?.[0] || null,
-      to: data.signatories?.[1] || null,
-      allNumerics, // All numeric values with their labels
+  const groupFieldsByCategory = (fields: ParsedField[]) => {
+    const groups: Record<string, ParsedField[]> = {
+      amount: [],
+      fee: [],
+      metadata: [],
+      party: [],
     };
+
+    fields.forEach(field => {
+      groups[field.category].push(field);
+    });
+
+    return groups;
   };
 
   return (
@@ -155,155 +95,136 @@ const Transactions = () => {
             ) : !events?.length ? (
               <div className="h-48 flex items-center justify-center text-muted-foreground">No recent transactions</div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-6">
                 {events.map((event) => {
-                  const tx = parseEventPayload(event);
+                  const parsedData = parseEventData(event.event_data, event.template_id || "");
+                  const groupedFields = groupFieldsByCategory(parsedData.details);
+
                   return (
-                    <Card
-                      key={event.id}
-                      className="p-6 hover:shadow-lg transition-smooth"
-                    >
-                      <div className="flex items-start justify-between mb-6">
-                        <div className="flex items-center space-x-3">
-                          <Badge className={getTypeColor(tx.type)}>{tx.type}</Badge>
-                          <Badge className={getStatusColor("confirmed")}>confirmed</Badge>
-                          <Badge variant="outline">{event.event_type}</Badge>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-muted-foreground">Migration</p>
-                          <p className="font-mono font-semibold">{event.migration_id || "N/A"}</p>
-                        </div>
-                      </div>
-
-                      {/* Primary Transaction Details */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                        <div className="p-3 rounded-lg bg-muted/30">
-                          <p className="text-sm text-muted-foreground mb-1">Event ID</p>
-                          <div className="flex items-center space-x-2">
-                            <p className="font-mono text-xs break-all">{event.event_id || event.id}</p>
+                    <Card key={event.id} className="glass-card hover:shadow-lg transition-smooth">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Badge className={getEventTypeColor(parsedData.eventType)}>
+                                {parsedData.eventType}
+                              </Badge>
+                              <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
+                                Completed
+                              </Badge>
+                            </div>
+                            {parsedData.primaryAmount && (
+                              <CardTitle className="text-3xl font-bold">
+                                <span className="font-mono text-primary">
+                                  {parsedData.primaryAmount.value}{" "}
+                                  <span className="text-lg text-muted-foreground">
+                                    {parsedData.eventType === "SV Reward" ? "Weight" : "CC"}
+                                  </span>
+                                </span>
+                              </CardTitle>
+                            )}
                           </div>
-                        </div>
-                        <div className="p-3 rounded-lg bg-muted/30">
-                          <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                          <p className="font-mono text-xs break-all">{event.contract_id || "N/A"}</p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-primary/10">
-                          <p className="text-sm text-muted-foreground mb-1">Primary Amount</p>
-                          <p className="font-mono font-bold text-primary text-2xl">
-                            {parseFloat(tx.amount).toFixed(4)} CC
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* All Numeric Values */}
-                      {tx.allNumerics && tx.allNumerics.length > 0 && (
-                        <div className="mb-6">
-                          <p className="text-sm font-semibold mb-3">Numeric Values</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {tx.allNumerics.map((numeric: any, idx: number) => (
-                              <div key={idx} className="p-3 rounded-lg bg-accent/10 border border-accent/20">
-                                <p className="text-xs text-muted-foreground mb-1 font-mono break-all">
-                                  {numeric.label}
-                                </p>
-                                <p className="font-mono font-bold text-accent">
-                                  {parseFloat(numeric.value).toFixed(10)}
-                                </p>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Timestamp */}
-                      {event.created_at_ts && (
-                        <div className="mb-6">
-                          <div className="p-3 rounded-lg bg-muted/30">
-                            <p className="text-sm text-muted-foreground mb-1">Created At (TS)</p>
-                            <p className="font-mono text-xs">
-                              {format(new Date(event.created_at_ts), "PPpp")}
+                          <div className="text-right">
+                            <p className="text-sm text-muted-foreground">
+                              {new Date(event.timestamp).toLocaleString()}
                             </p>
                           </div>
                         </div>
-                      )}
-
-                      {/* Template & Package Info */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                        <div className="p-3 rounded-lg bg-muted/30">
-                          <p className="text-sm text-muted-foreground mb-1">Template ID</p>
-                          <p className="font-mono text-xs break-all">{event.template_id || "N/A"}</p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-muted/30">
-                          <p className="text-sm text-muted-foreground mb-1">Package Name</p>
-                          <p className="font-mono text-xs">{event.package_name || "N/A"}</p>
-                        </div>
-                      </div>
-
-                      {/* Party Information */}
-                      {(event.signatories?.length > 0 || event.observers?.length > 0 || (tx.from && tx.to)) && (
-                        <div className="mb-6 p-4 rounded-lg bg-background/50 border border-border/30">
-                          <p className="text-sm font-semibold mb-3">Parties</p>
-                          
-                          {tx.from && tx.to && (
-                            <div className="flex items-center space-x-3 mb-3">
-                              <div className="flex-1 p-2 rounded bg-muted/30">
-                                <p className="text-xs text-muted-foreground mb-1">From</p>
-                                <p className="font-mono text-xs break-all">{tx.from}</p>
-                              </div>
-                              <ArrowRight className="h-4 w-4 text-primary flex-shrink-0" />
-                              <div className="flex-1 p-2 rounded bg-muted/30">
-                                <p className="text-xs text-muted-foreground mb-1">To</p>
-                                <p className="font-mono text-xs break-all">{tx.to}</p>
-                              </div>
+                      </CardHeader>
+                      <CardContent className="space-y-6">
+                        {/* Amounts Section */}
+                        {groupedFields.amount.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-semibold mb-3 text-foreground">Amounts</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {groupedFields.amount.map((field, idx) => (
+                                <div key={idx} className="flex justify-between items-center p-3 rounded-lg bg-primary/5 border border-primary/10">
+                                  <span className="text-sm text-muted-foreground">{field.label}</span>
+                                  <span className="text-base font-mono font-semibold text-foreground">
+                                    {field.value}
+                                  </span>
+                                </div>
+                              ))}
                             </div>
-                          )}
-
-                          {event.signatories?.length > 0 && (
-                            <div className="mb-2">
-                              <p className="text-xs text-muted-foreground mb-1">Signatories ({event.signatories.length})</p>
-                              <div className="space-y-1">
-                                {event.signatories.map((sig: string, idx: number) => (
-                                  <p key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">{sig}</p>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {event.observers?.length > 0 && (
-                            <div>
-                              <p className="text-xs text-muted-foreground mb-1">Observers ({event.observers.length})</p>
-                              <div className="space-y-1">
-                                {event.observers.map((obs: string, idx: number) => (
-                                  <p key={idx} className="font-mono text-xs bg-muted/30 p-2 rounded break-all">{obs}</p>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Update ID */}
-                      {event.update_id && (
-                        <div className="p-3 rounded-lg bg-muted/30 mb-4">
-                          <p className="text-sm text-muted-foreground mb-1">Update ID</p>
-                          <p className="font-mono text-xs break-all">{event.update_id}</p>
-                        </div>
-                      )}
-
-                      {/* Raw Event Data Collapsible */}
-                      <Collapsible>
-                        <CollapsibleTrigger asChild>
-                          <Button variant="outline" size="sm" className="w-full">
-                            <Code className="h-4 w-4 mr-2" />
-                            View Full Event Data
-                          </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-4">
-                          <div className="p-4 rounded-lg bg-background/70 border border-border/50 max-h-96 overflow-auto">
-                            <p className="text-xs text-muted-foreground mb-2 font-semibold">Complete Event JSON:</p>
-                            <pre className="text-xs overflow-x-auto">{JSON.stringify(event, null, 2)}</pre>
                           </div>
-                        </CollapsibleContent>
-                      </Collapsible>
+                        )}
+
+                        {/* Fees Section */}
+                        {groupedFields.fee.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-semibold mb-3 text-foreground">Fees</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {groupedFields.fee.map((field, idx) => (
+                                <div key={idx} className="flex justify-between items-center p-3 rounded-lg bg-muted/50">
+                                  <span className="text-sm text-muted-foreground">{field.label}</span>
+                                  <span className="text-sm font-mono text-foreground">{field.value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Parties Section */}
+                        {groupedFields.party.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-semibold mb-3 text-foreground">Participants</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {groupedFields.party.map((field, idx) => (
+                                <div key={idx} className="p-3 rounded-lg bg-muted/30">
+                                  <p className="text-xs text-muted-foreground mb-1">{field.label}</p>
+                                  <p className="text-sm font-mono text-foreground truncate">{field.value}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Metadata Section */}
+                        {groupedFields.metadata.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-semibold mb-3 text-foreground">Metadata</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {groupedFields.metadata.map((field, idx) => (
+                                <div key={idx} className="flex justify-between items-center p-3 rounded-lg bg-muted/30">
+                                  <span className="text-sm text-muted-foreground">{field.label}</span>
+                                  <span className="text-sm font-mono text-foreground">{field.value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Technical Details */}
+                        <div className="grid grid-cols-2 gap-4 text-sm pt-4 border-t border-border">
+                          <div>
+                            <p className="text-muted-foreground text-xs mb-1">Contract ID</p>
+                            <p className="font-mono text-xs truncate text-foreground">
+                              {event.contract_id || "N/A"}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs mb-1">Event ID</p>
+                            <p className="font-mono text-xs truncate text-foreground">
+                              {event.event_id || event.id}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Collapsible Raw Data */}
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="outline" size="sm" className="w-full">
+                              <ChevronDown className="h-4 w-4 mr-2" />
+                              View Full Event Data
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-4">
+                            <pre className="text-xs bg-muted/50 p-4 rounded-lg overflow-auto max-h-96 border border-border">
+                              {JSON.stringify(event.event_data, null, 2)}
+                            </pre>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </CardContent>
                     </Card>
                   );
                 })}
