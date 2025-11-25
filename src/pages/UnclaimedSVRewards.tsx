@@ -2,9 +2,10 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Award, Users, TrendingUp, Search, Code } from "lucide-react";
+import { Award, Users, TrendingUp, Search, Code, History } from "lucide-react";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useRewardClaimEvents } from "@/hooks/use-governance-events";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { format } from "date-fns";
 
 interface ValidatorInfo {
   user: string;
@@ -23,6 +25,7 @@ const UnclaimedSVRewards = () => {
   const [searchTerm, setSearchTerm] = useState("");
 
   const { data: snapshot } = useLatestACSSnapshot();
+  const { data: rewardEvents, isLoading: eventsLoading } = useRewardClaimEvents();
 
   // Fetch ValidatorRewardCoupon contracts - the actual unclaimed rewards
   const { data: rewardCouponsData, isLoading: couponsLoading } = useAggregatedTemplateData(
@@ -110,6 +113,17 @@ const UnclaimedSVRewards = () => {
   const totalCoupons = rewardCoupons.length;
   const uniqueUsers = aggregatedRewards.length;
   const totalRewardAmount = aggregatedRewards.reduce((sum, r) => sum + r.totalAmount, 0);
+
+  // Process historical reward events
+  const claimedRewards = (rewardEvents || []).filter((event: any) => 
+    (event.event_type || "").toLowerCase().includes("claim") ||
+    (event.template_id || "").includes("ClaimReward")
+  );
+
+  const expiredRewards = (rewardEvents || []).filter((event: any) => 
+    (event.event_type || "").toLowerCase().includes("expire") ||
+    (event.payload?.status || "").toLowerCase() === "expired"
+  );
 
   const formatParty = (party: string) => {
     if (!party) return "Unknown";
@@ -305,17 +319,53 @@ const UnclaimedSVRewards = () => {
           <TabsContent value="claimed" className="space-y-6">
             <Card className="glass-card">
               <CardHeader>
-                <CardTitle>Claimed Rewards</CardTitle>
-                <CardDescription>Rewards that have been successfully claimed by validators</CardDescription>
+                <CardTitle className="flex items-center gap-2">
+                  <History className="h-5 w-5" />
+                  Claimed Rewards History
+                </CardTitle>
+                <CardDescription>Rewards that have been successfully claimed by validators from historical data</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center justify-center py-12 text-muted-foreground">
-                  <div className="text-center space-y-2">
-                    <Award className="h-12 w-12 mx-auto opacity-50" />
-                    <p className="font-medium">Claimed rewards data will be available here</p>
-                    <p className="text-sm">This requires querying historical transaction data</p>
+                {eventsLoading ? (
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-20 w-full" />
+                    ))}
                   </div>
-                </div>
+                ) : claimedRewards.length === 0 ? (
+                  <div className="flex items-center justify-center py-12 text-muted-foreground">
+                    <div className="text-center space-y-2">
+                      <Award className="h-12 w-12 mx-auto opacity-50" />
+                      <p className="font-medium">No claimed rewards found</p>
+                      <p className="text-sm">Historical claim events will appear here</p>
+                    </div>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Event Type</TableHead>
+                        <TableHead>Round</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Timestamp</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {claimedRewards.slice(0, 50).map((event: any) => (
+                        <TableRow key={event.id}>
+                          <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                          <TableCell>{event.round.toLocaleString()}</TableCell>
+                          <TableCell className="font-semibold">
+                            {parseFloat(event.payload?.amount || "0").toFixed(4)} CC
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {format(new Date(event.timestamp), "MMM d, yyyy HH:mm")}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -323,17 +373,53 @@ const UnclaimedSVRewards = () => {
           <TabsContent value="expired" className="space-y-6">
             <Card className="glass-card">
               <CardHeader>
-                <CardTitle>Expired Rewards</CardTitle>
-                <CardDescription>Rewards that expired before being claimed</CardDescription>
+                <CardTitle className="flex items-center gap-2">
+                  <History className="h-5 w-5" />
+                  Expired Rewards History
+                </CardTitle>
+                <CardDescription>Rewards that expired before being claimed from historical data</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center justify-center py-12 text-muted-foreground">
-                  <div className="text-center space-y-2">
-                    <Award className="h-12 w-12 mx-auto opacity-50" />
-                    <p className="font-medium">Expired rewards data will be available here</p>
-                    <p className="text-sm">This requires querying historical transaction data</p>
+                {eventsLoading ? (
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-20 w-full" />
+                    ))}
                   </div>
-                </div>
+                ) : expiredRewards.length === 0 ? (
+                  <div className="flex items-center justify-center py-12 text-muted-foreground">
+                    <div className="text-center space-y-2">
+                      <Award className="h-12 w-12 mx-auto opacity-50" />
+                      <p className="font-medium">No expired rewards found</p>
+                      <p className="text-sm">Historical expiry events will appear here</p>
+                    </div>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Event Type</TableHead>
+                        <TableHead>Round</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Timestamp</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {expiredRewards.slice(0, 50).map((event: any) => (
+                        <TableRow key={event.id}>
+                          <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                          <TableCell>{event.round.toLocaleString()}</TableCell>
+                          <TableCell className="font-semibold text-muted-foreground">
+                            {parseFloat(event.payload?.amount || "0").toFixed(4)} CC
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {format(new Date(event.timestamp), "MMM d, yyyy HH:mm")}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

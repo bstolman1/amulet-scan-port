@@ -1,16 +1,20 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { format } from "date-fns";
 
 const Governance = () => {
   const { data: dsoInfo } = useQuery({
@@ -20,6 +24,7 @@ const Governance = () => {
   });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
+  const { data: governanceEvents, isLoading: eventsLoading } = useGovernanceEvents();
 
   // Fetch DsoRules to get SV count and voting threshold - aggregated across all packages
   const { data: dsoRulesData } = useAggregatedTemplateData(
@@ -271,9 +276,16 @@ const Governance = () => {
         </Alert>
 
         {/* Proposals List */}
-        <Card className="glass-card">
-          <div className="p-6">
-            <h3 className="text-xl font-bold mb-6">Recent Proposals</h3>
+        <Tabs defaultValue="active" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="active">Active Proposals</TabsTrigger>
+            <TabsTrigger value="history">Governance History</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="active">
+            <Card className="glass-card">
+              <div className="p-6">
+                <h3 className="text-xl font-bold mb-6">Recent Proposals</h3>
 
             {isError ? (
               <div className="text-center py-12">
@@ -388,6 +400,72 @@ const Governance = () => {
             )}
           </div>
         </Card>
+      </TabsContent>
+
+      <TabsContent value="history">
+        <Card className="glass-card">
+          <div className="p-6">
+            <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+              <History className="h-5 w-5" />
+              Historical Governance Events
+            </h3>
+            
+            {eventsLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-20 w-full" />
+                ))}
+              </div>
+            ) : !governanceEvents?.length ? (
+              <div className="text-center py-12">
+                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">No historical governance events found</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Event Type</TableHead>
+                    <TableHead>Round</TableHead>
+                    <TableHead>Template</TableHead>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Details</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {governanceEvents.slice(0, 100).map((event: any) => (
+                    <TableRow key={event.id}>
+                      <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                      <TableCell>{event.round.toLocaleString()}</TableCell>
+                      <TableCell className="text-xs truncate max-w-[200px]">
+                        {event.template_id?.split(":").pop() || "-"}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {format(new Date(event.timestamp), "MMM d, yyyy HH:mm")}
+                      </TableCell>
+                      <TableCell>
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <Code className="h-3 w-3" />
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
+                              {JSON.stringify(event.payload || event.event_data, null, 2)}
+                            </pre>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </Card>
+      </TabsContent>
+    </Tabs>
 
         {/* Governance Info */}
         <Card className="glass-card">
