@@ -536,6 +536,63 @@ export type Database = {
         }
         Relationships: []
       }
+      temp_ledger_events_1764096311589_121: {
+        Row: {
+          contract_id: string | null
+          created_at: string
+          created_at_ts: string | null
+          event_data: Json
+          event_id: string | null
+          event_type: string
+          id: string
+          migration_id: number | null
+          observers: string[] | null
+          package_name: string | null
+          payload: Json | null
+          raw: Json | null
+          signatories: string[] | null
+          template_id: string | null
+          timestamp: string
+          update_id: string | null
+        }
+        Insert: {
+          contract_id?: string | null
+          created_at?: string
+          created_at_ts?: string | null
+          event_data: Json
+          event_id?: string | null
+          event_type: string
+          id?: string
+          migration_id?: number | null
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
+          signatories?: string[] | null
+          template_id?: string | null
+          timestamp?: string
+          update_id?: string | null
+        }
+        Update: {
+          contract_id?: string | null
+          created_at?: string
+          created_at_ts?: string | null
+          event_data?: Json
+          event_id?: string | null
+          event_type?: string
+          id?: string
+          migration_id?: number | null
+          observers?: string[] | null
+          package_name?: string | null
+          payload?: Json | null
+          raw?: Json | null
+          signatories?: string[] | null
+          template_id?: string | null
+          timestamp?: string
+          update_id?: string | null
+        }
+        Relationships: []
+      }
       temp_ledger_updates_1764079271664_901: {
         Row: {
           created_at: string
@@ -588,57 +645,6 @@ export type Database = {
         Relationships: []
       }
       temp_ledger_updates_1764086315854_375: {
-        Row: {
-          created_at: string
-          effective_at: string | null
-          id: string
-          kind: string | null
-          migration_id: number | null
-          offset: number | null
-          raw: Json | null
-          record_time: string | null
-          synchronizer_id: string | null
-          timestamp: string
-          update_data: Json
-          update_id: string | null
-          update_type: string
-          workflow_id: string | null
-        }
-        Insert: {
-          created_at?: string
-          effective_at?: string | null
-          id?: string
-          kind?: string | null
-          migration_id?: number | null
-          offset?: number | null
-          raw?: Json | null
-          record_time?: string | null
-          synchronizer_id?: string | null
-          timestamp?: string
-          update_data: Json
-          update_id?: string | null
-          update_type: string
-          workflow_id?: string | null
-        }
-        Update: {
-          created_at?: string
-          effective_at?: string | null
-          id?: string
-          kind?: string | null
-          migration_id?: number | null
-          offset?: number | null
-          raw?: Json | null
-          record_time?: string | null
-          synchronizer_id?: string | null
-          timestamp?: string
-          update_data?: Json
-          update_id?: string | null
-          update_type?: string
-          workflow_id?: string | null
-        }
-        Relationships: []
-      }
-      temp_ledger_updates_1764096243587_550: {
         Row: {
           created_at: string
           effective_at: string | null
