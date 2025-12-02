@@ -172,7 +172,7 @@ const Transactions = () => {
                               {groupedFields.party.map((field, idx) => (
                                 <div key={idx} className="p-3 rounded-lg bg-muted/30">
                                   <p className="text-xs text-muted-foreground mb-1">{field.label}</p>
-                                  <p className="text-sm font-mono text-foreground truncate">{field.value}</p>
+                                  <p className="text-sm font-mono text-foreground break-all">{field.value}</p>
                                 </div>
                               ))}
                             </div>
