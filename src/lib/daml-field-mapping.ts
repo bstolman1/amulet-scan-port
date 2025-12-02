@@ -54,11 +54,10 @@ function extractValue(fieldValue: any): any {
   return fieldValue;
 }
 
-// Format party ID for display
+// Format party ID for display - return full ID
 function formatParty(party: string): string {
   if (!party) return '';
-  const parts = party.split('::');
-  return parts[parts.length - 1]?.substring(0, 12) + '...' || party;
+  return party;
 }
 
 // Format numeric value
