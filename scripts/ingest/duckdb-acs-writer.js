@@ -40,9 +40,9 @@ async function initDuckDB() {
   db = new duckdb.Database(':memory:');
   conn = db.connect();
 
-  conn.runAsync = (sql, params = []) =>
+  conn.runAsync = (sql) =>
     new Promise((resolve, reject) => {
-      conn.run(sql, params, err => (err ? reject(err) : resolve()));
+      conn.run(sql, (err) => (err ? reject(err) : resolve()));
     });
 
   await conn.runAsync(`

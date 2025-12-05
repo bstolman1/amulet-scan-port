@@ -41,10 +41,10 @@ async function initDuckDB() {
   db = new duckdb.Database(':memory:');
   conn = db.connect();
 
-  // helper to promisify conn.run
-  conn.runAsync = (sql, params = []) =>
+  // helper to promisify conn.run (no params version for DDL/DML)
+  conn.runAsync = (sql) =>
     new Promise((resolve, reject) => {
-      conn.run(sql, params, err => (err ? reject(err) : resolve()));
+      conn.run(sql, (err) => (err ? reject(err) : resolve()));
     });
 
   await conn.runAsync(`
