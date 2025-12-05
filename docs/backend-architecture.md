@@ -6,6 +6,43 @@ This project uses a **hybrid backend architecture**:
 - **DuckDB + Parquet** for heavy ledger data (updates, events)
 - **Supabase** for lightweight metadata (cursors, snapshots, user data)
 
+## Two Ingestion Pipelines
+
+You have two options for ingesting data:
+
+### Pipeline A: JSONL → Parquet (Original)
+```bash
+cd scripts/ingest
+node fetch-backfill-parquet.js   # Historical backfill
+node fetch-updates-parquet.js    # Live updates
+```
+- Writes intermediate JSONL files
+- Converts to Parquet on flush
+- Good for debugging (human-readable intermediate files)
+
+### Pipeline B: Direct DuckDB → Parquet (Faster)
+```bash
+cd scripts/ingest
+node fetch-backfill-duckdb.js    # Historical backfill
+node fetch-updates-duckdb.js     # Live updates
+```
+- No intermediate files
+- Uses DuckDB in-memory tables
+- Writes directly to compressed Parquet with ZSTD
+- **~2-3x faster** for large backfills
+
+### Environment Variables
+```bash
+# Both pipelines
+SCAN_URL=https://scan.sv-1.global.canton.network.sync.global/api/scan
+BATCH_SIZE=500
+PARALLEL_FETCHES=4
+
+# DuckDB pipeline only
+FLUSH_ROWS=250000    # Rows before flush (default 250k)
+FLUSH_MS=30000       # Time before flush (default 30s)
+```
+
 ## Backend Toggle
 
 The frontend can switch between backends via environment variables:
@@ -28,7 +65,7 @@ Canton Network API
         │
         ▼
 ┌───────────────────┐
-│  Ingestion Scripts │  (fetch-updates-parquet.js)
+│  Ingestion Scripts │  (fetch-*-parquet.js OR fetch-*-duckdb.js)
 └───────────────────┘
         │
         ▼
@@ -62,7 +99,11 @@ Canton Network API
    ```bash
    cd scripts/ingest
    npm install
-   node fetch-updates-parquet.js
+   
+   # Choose one:
+   node fetch-backfill-duckdb.js   # Faster (recommended)
+   # OR
+   node fetch-backfill-parquet.js  # Original pipeline
    ```
 
 3. **Access the frontend:**
