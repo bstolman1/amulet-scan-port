@@ -31,7 +31,7 @@ export interface ConfigData {
 }
 
 export async function fetchConfigData(forceRefresh = false): Promise<ConfigData> {
-  const cacheKey = "sv-config-cache-v4";
+  const cacheKey = "sv-config-cache-v5";
 
   // ─────────────────────────────
   // Cache
@@ -47,6 +47,17 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
   const res = await fetch(CONFIG_URL);
   if (!res.ok) throw new Error("Failed to fetch config file from GitHub");
   const text = await res.text();
+  
+  // Extract inline comments (# ...) from raw YAML before parsing
+  const inlineComments = new Map<string, string>();
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const beneficiaryMatch = line.match(/beneficiary:\s*"([^"]+)"\s*#\s*(.+)/);
+    if (beneficiaryMatch) {
+      inlineComments.set(beneficiaryMatch[1], beneficiaryMatch[2].trim());
+    }
+  }
+  
   const parsed = YAML.parse(text);
 
   const approved = parsed.approvedSvIdentities || [];
@@ -68,7 +79,7 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
     const normalizedExtras = extras.map((ex: any) => ({
       beneficiary: ex.beneficiary,
       weight: Number(String(ex.weight).replace(/_/g, "")),
-      comment: ex.comment || undefined,
+      comment: inlineComments.get(ex.beneficiary) || undefined,
     }));
 
     // Save operator entry
