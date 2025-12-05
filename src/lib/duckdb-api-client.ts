@@ -183,6 +183,39 @@ export async function getBurnStats(): Promise<ApiResponse<BurnStats[]>> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Backfill API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface BackfillCursor {
+  id: string;
+  cursor_name: string;
+  migration_id: number;
+  synchronizer_id: string;
+  min_time: string;
+  max_time: string;
+  last_before: string | null;
+  complete: boolean;
+  last_processed_round: number;
+  updated_at: string;
+}
+
+export interface BackfillStats {
+  totalUpdates: number;
+  totalEvents: number;
+  activeMigrations: number;
+  totalCursors: number;
+  completedCursors: number;
+}
+
+export async function getBackfillCursors(): Promise<ApiResponse<BackfillCursor[]>> {
+  return apiFetch('/api/backfill/cursors');
+}
+
+export async function getBackfillStats(): Promise<BackfillStats> {
+  return apiFetch('/api/backfill/stats');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Search API
 // ─────────────────────────────────────────────────────────────────────────────
 
