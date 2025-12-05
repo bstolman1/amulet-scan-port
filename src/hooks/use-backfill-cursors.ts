@@ -48,7 +48,8 @@ export function useBackfillCursors() {
       if (error) throw error;
       return data as BackfillCursor[];
     },
-    staleTime: 10_000,
+    staleTime: 5_000,
+    refetchInterval: 10_000, // Auto-refresh every 10s
   });
 }
 

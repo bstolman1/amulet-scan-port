@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import db from '../duckdb/connection.js';
@@ -9,49 +9,72 @@ const __dirname = dirname(__filename);
 
 const router = Router();
 
-// Path to cursor file (relative to server directory)
-const CURSOR_FILE = join(__dirname, '../../data/backfill-cursors.json');
+// Path to cursor directory (relative to server directory)
+const CURSOR_DIR = join(__dirname, '../../data/cursors');
+
+/**
+ * Read all cursor files from the cursors directory
+ */
+function readAllCursors() {
+  if (!existsSync(CURSOR_DIR)) {
+    return [];
+  }
+
+  const files = readdirSync(CURSOR_DIR).filter(f => f.startsWith('cursor-') && f.endsWith('.json'));
+  const cursors = [];
+
+  for (const file of files) {
+    try {
+      const filePath = join(CURSOR_DIR, file);
+      const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+      
+      cursors.push({
+        id: data.id || file.replace('.json', ''),
+        cursor_name: data.cursor_name || `migration-${data.migration_id}-${data.synchronizer_id?.substring(0, 20)}`,
+        migration_id: data.migration_id,
+        synchronizer_id: data.synchronizer_id,
+        min_time: data.min_time,
+        max_time: data.max_time,
+        last_before: data.last_before,
+        complete: data.complete || false,
+        last_processed_round: data.last_processed_round || 0,
+        updated_at: data.updated_at || new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error(`Error reading cursor file ${file}:`, err.message);
+    }
+  }
+
+  return cursors;
+}
 
 // GET /api/backfill/cursors - Get all backfill cursors
 router.get('/cursors', (req, res) => {
   try {
-    if (!existsSync(CURSOR_FILE)) {
-      return res.json({ data: [], count: 0 });
-    }
-
-    const data = JSON.parse(readFileSync(CURSOR_FILE, 'utf-8'));
-    const cursors = Object.values(data).map((cursor, index) => ({
-      id: cursor.id || `cursor-${index}`,
-      cursor_name: cursor.cursor_name || `migration-${cursor.migration_id}-${cursor.synchronizer_id?.substring(0, 20)}`,
-      migration_id: cursor.migration_id,
-      synchronizer_id: cursor.synchronizer_id,
-      min_time: cursor.min_time,
-      max_time: cursor.max_time,
-      last_before: cursor.last_before,
-      complete: cursor.complete,
-      last_processed_round: cursor.last_processed_round || 0,
-      updated_at: cursor.updated_at || new Date().toISOString(),
-    }));
-
+    const cursors = readAllCursors();
     res.json({ data: cursors, count: cursors.length });
   } catch (err) {
-    console.error('Error reading cursor file:', err);
+    console.error('Error reading cursors:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/backfill/stats - Get backfill statistics from Parquet files
+// GET /api/backfill/stats - Get backfill statistics from data files
 router.get('/stats', async (req, res) => {
   try {
-    // Count updates and events from Parquet files
+    // Get glob patterns for JSONL files
+    const updatesGlob = db.getFileGlob('updates', null, 'jsonl');
+    const eventsGlob = db.getFileGlob('events', null, 'jsonl');
+
+    // Count updates and events from JSONL files
     const [updatesResult, eventsResult] = await Promise.all([
       db.safeQuery(`
         SELECT COUNT(*) as count 
-        FROM read_parquet('${db.DATA_PATH}/**/*updates*.parquet', union_by_name=true)
+        FROM ${db.readJsonl(updatesGlob)}
       `).catch(() => [{ count: 0 }]),
       db.safeQuery(`
         SELECT COUNT(*) as count 
-        FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+        FROM ${db.readJsonl(eventsGlob)}
       `).catch(() => [{ count: 0 }]),
     ]);
 
@@ -60,27 +83,18 @@ router.get('/stats', async (req, res) => {
     try {
       const migrationsResult = await db.safeQuery(`
         SELECT COUNT(DISTINCT migration_id) as count 
-        FROM read_parquet('${db.DATA_PATH}/**/*updates*.parquet', union_by_name=true)
+        FROM ${db.readJsonl(updatesGlob)}
         WHERE migration_id IS NOT NULL
       `);
       activeMigrations = migrationsResult[0]?.count || 0;
     } catch (e) {
-      // Parquet files might not have migration_id column
+      // Data might not have migration_id column
     }
 
     // Read cursor stats
-    let totalCursors = 0;
-    let completedCursors = 0;
-    try {
-      if (existsSync(CURSOR_FILE)) {
-        const data = JSON.parse(readFileSync(CURSOR_FILE, 'utf-8'));
-        const cursors = Object.values(data);
-        totalCursors = cursors.length;
-        completedCursors = cursors.filter(c => c.complete).length;
-      }
-    } catch (e) {
-      // Cursor file might not exist
-    }
+    const cursors = readAllCursors();
+    const totalCursors = cursors.length;
+    const completedCursors = cursors.filter(c => c.complete).length;
 
     res.json({
       totalUpdates: Number(updatesResult[0]?.count || 0),

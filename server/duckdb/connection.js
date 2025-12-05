@@ -19,17 +19,24 @@ export function query(sql, params = []) {
   });
 }
 
-// Helper to get parquet glob pattern
-export function getParquetGlob(type = 'events', dateFilter = null) {
+// Helper to get file glob pattern (supports both jsonl and parquet)
+export function getFileGlob(type = 'events', dateFilter = null, format = 'jsonl') {
+  const ext = format === 'parquet' ? 'parquet' : 'jsonl';
+  
   if (dateFilter) {
     const { year, month, day } = dateFilter;
     let pattern = `${DATA_PATH}/year=${year}`;
     if (month) pattern += `/month=${String(month).padStart(2, '0')}`;
     if (day) pattern += `/day=${String(day).padStart(2, '0')}`;
-    pattern += `/${type}-*.parquet`;
+    pattern += `/${type}-*.${ext}`;
     return pattern;
   }
-  return `${DATA_PATH}/**/${type}-*.parquet`;
+  return `${DATA_PATH}/**/${type}-*.${ext}`;
+}
+
+// Legacy function for backward compatibility
+export function getParquetGlob(type = 'events', dateFilter = null) {
+  return getFileGlob(type, dateFilter, 'parquet');
 }
 
 // Helper for safe table reads with error handling
@@ -43,27 +50,61 @@ export async function safeQuery(sql) {
   }
 }
 
+// Read JSON-lines file using DuckDB
+export function readJsonl(globPattern) {
+  return `read_json_auto('${globPattern}', union_by_name=true, ignore_errors=true)`;
+}
+
+// Read parquet file using DuckDB  
+export function readParquet(globPattern) {
+  return `read_parquet('${globPattern}', union_by_name=true)`;
+}
+
 // Initialize views for common queries
 export async function initializeViews() {
   try {
-    // Create views for easier querying
+    // Try JSONL first (our primary format), then fallback to parquet
+    const jsonlEventsGlob = getFileGlob('events', null, 'jsonl');
+    const jsonlUpdatesGlob = getFileGlob('updates', null, 'jsonl');
+    
+    // Create views for easier querying - using JSON-lines format
     await query(`
       CREATE OR REPLACE VIEW all_events AS
-      SELECT * FROM read_parquet('${DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      SELECT * FROM ${readJsonl(jsonlEventsGlob)}
     `);
     
     await query(`
       CREATE OR REPLACE VIEW all_updates AS
-      SELECT * FROM read_parquet('${DATA_PATH}/**/*updates*.parquet', union_by_name=true)
+      SELECT * FROM ${readJsonl(jsonlUpdatesGlob)}
     `);
     
-    console.log('✅ DuckDB views initialized');
+    console.log('✅ DuckDB views initialized (JSONL format)');
   } catch (err) {
     console.warn('⚠️ Could not initialize views (data may not exist yet):', err.message);
+    
+    // Try parquet as fallback
+    try {
+      const parquetEventsGlob = getFileGlob('events', null, 'parquet');
+      const parquetUpdatesGlob = getFileGlob('updates', null, 'parquet');
+      
+      await query(`
+        CREATE OR REPLACE VIEW all_events AS
+        SELECT * FROM ${readParquet(parquetEventsGlob)}
+      `);
+      
+      await query(`
+        CREATE OR REPLACE VIEW all_updates AS
+        SELECT * FROM ${readParquet(parquetUpdatesGlob)}
+      `);
+      
+      console.log('✅ DuckDB views initialized (Parquet format)');
+    } catch (e) {
+      console.warn('⚠️ No data files found yet');
+    }
   }
 }
 
 // Initialize on import
 initializeViews();
 
-export default { query, safeQuery, getParquetGlob, DATA_PATH };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readParquet, DATA_PATH };
