@@ -12,8 +12,9 @@
  */
 
 import duckdb from 'duckdb';
-import { mkdirSync } from 'fs';
+import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { getACSPartitionPath } from './acs-schema.js';
 
@@ -165,68 +166,43 @@ async function flushToParquet() {
   console.log(`✅ Wrote ${count} contracts to ${contractsFile}`);
 }
 
+// Fast bulk insert using temp CSV file + COPY
+import { writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+
 async function bulkInsertContracts(rows) {
   if (!rows.length) return;
 
-  const chunks = chunkArray(rows, 5000);
-  for (const chunk of chunks) {
-    const values = chunk
-      .map(r => {
-        const esc = s =>
-          s === null || s === undefined
-            ? 'NULL'
-            : `'${String(s).replace(/'/g, "''")}'`;
-
-        const escArr = arr => {
-          if (!arr || !arr.length) return "ARRAY[]::VARCHAR[]";
-          const inner = arr
-            .map(v => `'${String(v).replace(/'/g, "''")}'`)
-            .join(',');
-          return `ARRAY[${inner}]::VARCHAR[]`;
-        };
-
-        return `(
-          ${esc(r.contract_id)},
-          ${esc(r.template_id)},
-          ${esc(r.package_name)},
-          ${esc(r.module_name)},
-          ${esc(r.entity_name)},
-          ${r.migration_id ?? 'NULL'},
-          ${r.record_time ? esc(r.record_time.toISOString()) : 'NULL'},
-          ${r.snapshot_time ? esc(r.snapshot_time.toISOString()) : 'NULL'},
-          ${escArr(r.signatories)},
-          ${escArr(r.observers)},
-          ${esc(r.payload)}
-        )`;
-      })
-      .join(',');
-
-    const sql = `
-      INSERT INTO contracts_mem (
-        contract_id,
-        template_id,
-        package_name,
-        module_name,
-        entity_name,
-        migration_id,
-        record_time,
-        snapshot_time,
-        signatories,
-        observers,
-        payload
-      ) VALUES ${values};
-    `;
-
-    await conn.runAsync(sql);
-  }
-}
-
-function chunkArray(arr, size) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
+  // Write to temp CSV (much faster than SQL INSERT)
+  const tmpFile = join(tmpdir(), `contracts-${Date.now()}.csv`);
+  const lines = rows.map(r => {
+    const fields = [
+      r.contract_id || '',
+      r.template_id || '',
+      r.package_name || '',
+      r.module_name || '',
+      r.entity_name || '',
+      r.migration_id ?? '',
+      r.record_time ? r.record_time.toISOString() : '',
+      r.snapshot_time ? r.snapshot_time.toISOString() : '',
+      JSON.stringify(r.signatories || []),
+      JSON.stringify(r.observers || []),
+      r.payload ? r.payload.replace(/"/g, '""') : ''
+    ];
+    return fields.map(f => `"${String(f).replace(/"/g, '""')}"`).join(',');
+  });
+  
+  writeFileSync(tmpFile, lines.join('\n'), 'utf8');
+  
+  await conn.runAsync(`
+    COPY contracts_mem FROM '${tmpFile}' (
+      FORMAT CSV,
+      HEADER FALSE,
+      NULLSTR ''
+    );
+  `);
+  
+  unlinkSync(tmpFile);
 }
 
 export default {
