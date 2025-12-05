@@ -3,7 +3,7 @@ name: Fetch ACS Snapshot
 on:
   workflow_dispatch: # Manual trigger
   schedule:
-    - cron: '0 */2 * * *' # Every 2 hours to allow resuming before 6-hour timeout
+    - cron: '0 0,3,6,9,12,15,18,21 * * *' # Every 3 hours starting at 00:00 UTC
 
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
