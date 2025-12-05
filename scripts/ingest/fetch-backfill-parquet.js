@@ -113,7 +113,14 @@ function saveCursor(migrationId, synchronizerId, cursor) {
   mkdirSync(CURSOR_DIR, { recursive: true });
   
   const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
-  writeFileSync(cursorFile, JSON.stringify(cursor, null, 2));
+  const cursorData = {
+    ...cursor,
+    migration_id: migrationId,
+    synchronizer_id: synchronizerId,
+    id: `cursor-${migrationId}-${sanitize(synchronizerId)}`,
+    cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}`,
+  };
+  writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
 }
 
 /**
