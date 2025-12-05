@@ -212,12 +212,29 @@ async function flushToParquet(latestTs) {
   - ${eventsFile}`);
 }
 
+// Safe unlink with retry for Windows file locking
+async function safeUnlink(filePath, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      unlinkSync(filePath);
+      return;
+    } catch (err) {
+      if (err.code === 'EBUSY' && i < retries - 1) {
+        await new Promise(r => setTimeout(r, 100));
+      } else if (i === retries - 1) {
+        // Give up silently - file will be cleaned up by OS
+        console.warn(`⚠️ Could not delete temp file: ${filePath}`);
+      }
+    }
+  }
+}
+
 // Fast bulk insert using temp CSV file + COPY
 async function bulkInsertUpdates(rows) {
   if (!rows.length) return;
 
   // Write to temp CSV (much faster than SQL INSERT)
-  const tmpFile = join(tmpdir(), `updates-${Date.now()}.csv`);
+  const tmpFile = join(tmpdir(), `updates-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`);
   const lines = rows.map(r => {
     const fields = [
       r.update_id || '',
@@ -245,14 +262,14 @@ async function bulkInsertUpdates(rows) {
     );
   `);
   
-  unlinkSync(tmpFile);
+  await safeUnlink(tmpFile);
 }
 
 async function bulkInsertEvents(rows) {
   if (!rows.length) return;
 
   // Write to temp CSV
-  const tmpFile = join(tmpdir(), `events-${Date.now()}.csv`);
+  const tmpFile = join(tmpdir(), `events-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`);
   const lines = rows.map(r => {
     const fields = [
       r.event_id || '',
@@ -281,7 +298,7 @@ async function bulkInsertEvents(rows) {
     );
   `);
   
-  unlinkSync(tmpFile);
+  await safeUnlink(tmpFile);
 }
 
 export default {
