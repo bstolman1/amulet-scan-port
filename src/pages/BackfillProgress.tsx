@@ -28,6 +28,33 @@ const BackfillProgress = () => {
     completedCursors: stats?.completedCursors || allCursors.filter((c) => c.complete).length,
   }), [allCursors, stats]);
 
+  // Calculate overall progress percentage
+  const overallProgress = useMemo(() => {
+    if (allCursors.length === 0) return 0;
+    
+    let totalProgress = 0;
+    let validCursors = 0;
+    
+    for (const cursor of allCursors) {
+      if (cursor.complete) {
+        totalProgress += 100;
+        validCursors++;
+      } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
+        const minTime = new Date(cursor.min_time).getTime();
+        const maxTime = new Date(cursor.max_time).getTime();
+        const currentTime = new Date(cursor.last_before).getTime();
+        const totalRange = maxTime - minTime;
+        if (totalRange > 0) {
+          const progressFromMax = maxTime - currentTime;
+          totalProgress += Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+          validCursors++;
+        }
+      }
+    }
+    
+    return validCursors > 0 ? totalProgress / validCursors : 0;
+  }, [allCursors]);
+
   useEffect(() => {
     const channel = supabase
       .channel("backfill-progress")
@@ -165,6 +192,26 @@ const BackfillProgress = () => {
             </Button>
           </div>
         </div>
+
+        {/* Overall Progress Bar */}
+        {allCursors.length > 0 && (
+          <Card className="bg-card/50 backdrop-blur border-primary/20">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-primary" />
+                  <span className="font-semibold">Overall Backfill Progress</span>
+                </div>
+                <span className="text-lg font-bold text-primary">{overallProgress.toFixed(1)}%</span>
+              </div>
+              <Progress value={overallProgress} className="h-3" />
+              <div className="flex justify-between mt-2 text-xs text-muted-foreground">
+                <span>{cursorStats.completedCursors} of {cursorStats.totalCursors} migrations complete</span>
+                <span>{stats?.totalUpdates?.toLocaleString() || 0} updates • {stats?.totalEvents?.toLocaleString() || 0} events</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
