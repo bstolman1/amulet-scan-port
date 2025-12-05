@@ -266,38 +266,36 @@ async function processBackfillItems(transactions, migrationId) {
 
 /**
  * Parallel fetch with sliding window - fetches multiple pages concurrently
- * Returns results in order as they complete
+ * Maintains full parallelism by refilling slots as requests complete
  */
-async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, count) {
+async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches) {
   const results = [];
   const pending = new Map();
+  const seenTimestamps = new Set(); // Prevent duplicate fetches
   let nextBefore = startBefore;
   let fetched = 0;
   let reachedEnd = false;
   
-  // Start initial parallel fetches
-  for (let i = 0; i < Math.min(count, PARALLEL_FETCHES); i++) {
-    if (reachedEnd) break;
+  // Helper to start a fetch
+  const startFetch = (before) => {
+    if (reachedEnd || seenTimestamps.has(before)) return false;
+    seenTimestamps.add(before);
     
-    const fetchId = fetched;
-    const before = nextBefore;
-    
+    const fetchId = fetched++;
     pending.set(fetchId, {
       before,
       promise: fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter)
         .then(data => ({ fetchId, before, data, error: null }))
         .catch(error => ({ fetchId, before, data: null, error }))
     });
-    
-    fetched++;
-    // Estimate next 'before' by subtracting time (will be corrected by actual results)
-    const d = new Date(nextBefore);
-    d.setHours(d.getHours() - 1);
-    nextBefore = d.toISOString();
-  }
+    return true;
+  };
   
-  // Process results as they complete
-  while (pending.size > 0) {
+  // Fill initial parallel slots
+  startFetch(nextBefore);
+  
+  // Process results as they complete, keeping slots full
+  while (pending.size > 0 && !reachedEnd) {
     // Wait for any fetch to complete
     const completed = await Promise.race(
       Array.from(pending.values()).map(p => p.promise)
@@ -306,7 +304,6 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     pending.delete(completed.fetchId);
     
     if (completed.error) {
-      // Re-throw errors to be handled by caller
       throw completed.error;
     }
     
@@ -314,38 +311,35 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     
     if (txs.length === 0) {
       reachedEnd = true;
-      continue;
+      break;
     }
     
     results.push({ transactions: txs, before: completed.before });
     
-    // Find earliest timestamp from this batch for next fetch
+    // Find earliest timestamp from this batch
     let earliest = null;
     for (const tx of txs) {
       const t = getEventTime(tx);
-      if (!t) continue;
-      if (!earliest || t < earliest) earliest = t;
+      if (t && (!earliest || t < earliest)) earliest = t;
     }
     
     if (earliest && earliest <= atOrAfter) {
       reachedEnd = true;
-      continue;
+      break;
     }
     
-    // Start a new fetch if we haven't reached the limit
-    if (!reachedEnd && fetched < count && pending.size < PARALLEL_FETCHES) {
-      const fetchId = fetched;
-      const before = earliest || nextBefore;
-      
-      pending.set(fetchId, {
-        before,
-        promise: fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter)
-          .then(data => ({ fetchId, before, data, error: null }))
-          .catch(error => ({ fetchId, before, data: null, error }))
-      });
-      
-      fetched++;
-      nextBefore = before;
+    // Update nextBefore for future fetches
+    if (earliest && earliest < nextBefore) {
+      nextBefore = earliest;
+    }
+    
+    // Refill ALL empty slots, not just one
+    while (pending.size < PARALLEL_FETCHES && fetched < maxBatches && !reachedEnd) {
+      if (!startFetch(nextBefore)) break;
+      // Decrement slightly to avoid exact duplicates
+      const d = new Date(nextBefore);
+      d.setMilliseconds(d.getMilliseconds() - 1);
+      nextBefore = d.toISOString();
     }
   }
   
