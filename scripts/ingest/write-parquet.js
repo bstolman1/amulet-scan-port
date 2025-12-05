@@ -18,9 +18,9 @@ import { getPartitionPath, UPDATES_COLUMNS, EVENTS_COLUMNS } from './parquet-sch
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - OPTIMIZED for throughput
+// Configuration - balanced for visibility and throughput
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 100000; // 20x larger buffers
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000; // Write more frequently for progress visibility
 const COMPRESSION = process.env.PARQUET_COMPRESSION || 'zstd';
 
 // In-memory buffers for batching
