@@ -167,9 +167,6 @@ async function flushToParquet() {
 }
 
 // Fast bulk insert using temp CSV file + COPY
-import { writeFileSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-
 async function bulkInsertContracts(rows) {
   if (!rows.length) return;
 
