@@ -61,7 +61,7 @@ const Dashboard = () => {
           maximumFractionDigits: 0,
         })
       : "Loading...";
-  const superValidatorCount = configData?.superValidators.length || 0;
+  const superValidatorCount = configData?.operators?.length || 0;
 
   const stats = {
     totalBalance: balanceLoading
