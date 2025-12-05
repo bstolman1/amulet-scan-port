@@ -73,7 +73,7 @@ async function fetchUpdates(afterOffset = null) {
 /**
  * Process a batch of updates
  */
-function processUpdates(items) {
+async function processUpdates(items) {
   const updates = [];
   const events = [];
   
@@ -96,9 +96,9 @@ function processUpdates(items) {
     if (offset) lastOffset = offset;
   }
   
-  // Buffer for batch writing
-  bufferUpdates(updates);
-  bufferEvents(events);
+  // Buffer for batch writing (async)
+  await bufferUpdates(updates);
+  await bufferEvents(events);
   
   return { updates: updates.length, events: events.length };
 }
@@ -125,7 +125,7 @@ async function runIngestion() {
         
         // Flush any remaining buffered data
         if (emptyPolls === 1) {
-          const flushed = flushAll();
+          const flushed = await flushAll();
           if (flushed.length > 0) {
             console.log(`💾 Flushed ${flushed.length} files`);
           }
@@ -143,7 +143,7 @@ async function runIngestion() {
       
       emptyPolls = 0;
       
-      const { updates, events } = processUpdates(data.items);
+      const { updates, events } = await processUpdates(data.items);
       totalUpdates += updates;
       totalEvents += events;
       
@@ -167,12 +167,12 @@ function sleep(ms) {
 /**
  * Graceful shutdown
  */
-function shutdown() {
+async function shutdown() {
   console.log('\n🛑 Shutting down...');
   isRunning = false;
   
   // Flush remaining data
-  const flushed = flushAll();
+  const flushed = await flushAll();
   if (flushed.length > 0) {
     console.log(`💾 Flushed ${flushed.length} files on shutdown`);
   }
@@ -180,8 +180,8 @@ function shutdown() {
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown());
+process.on('SIGTERM', () => shutdown());
 
 // Run
 runIngestion().catch(err => {
