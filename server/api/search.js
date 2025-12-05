@@ -3,6 +3,9 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
+// Helper to get the correct read function for JSONL files
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
+
 // GET /api/search - Full text search across events
 router.get('/', async (req, res) => {
   try {
@@ -37,7 +40,7 @@ router.get('/', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       ${whereClause}
       ORDER BY timestamp DESC
       LIMIT ${limit}
@@ -57,7 +60,7 @@ router.get('/contract/:id', async (req, res) => {
     
     const sql = `
       SELECT DISTINCT contract_id, template_id, MIN(timestamp) as created_at
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE contract_id LIKE '${id}%'
       GROUP BY contract_id, template_id
       ORDER BY created_at DESC

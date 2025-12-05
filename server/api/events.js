@@ -3,6 +3,9 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
+// Helper to get the correct read function for JSONL files
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
+
 // GET /api/events/latest - Get latest events
 router.get('/latest', async (req, res) => {
   try {
@@ -20,7 +23,7 @@ router.get('/latest', async (req, res) => {
         signatories,
         observers,
         payload
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       ORDER BY timestamp DESC
       LIMIT ${limit}
       OFFSET ${offset}
@@ -42,7 +45,7 @@ router.get('/by-type/:type', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE event_type = '${type}'
       ORDER BY timestamp DESC
       LIMIT ${limit}
@@ -63,7 +66,7 @@ router.get('/by-template/:templateId', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE template_id LIKE '%${templateId}%'
       ORDER BY timestamp DESC
       LIMIT ${limit}
@@ -88,7 +91,7 @@ router.get('/by-date', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE 1=1 ${whereClause}
       ORDER BY timestamp DESC
       LIMIT ${limit}
@@ -106,7 +109,7 @@ router.get('/count', async (req, res) => {
   try {
     const sql = `
       SELECT COUNT(*) as total
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
     `;
     
     const rows = await db.safeQuery(sql);
