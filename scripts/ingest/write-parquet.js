@@ -2,16 +2,16 @@
  * Parquet Writer Module
  * 
  * Handles writing ledger data to partitioned parquet files.
- * Uses parquet-wasm for Node.js parquet generation.
+ * Uses streaming writes to avoid memory limits with large datasets.
  */
 
-import { writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
+import { createWriteStream, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { getPartitionPath, UPDATES_COLUMNS, EVENTS_COLUMNS } from './parquet-schema.js';
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || './data/raw';
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 25000;
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const COMPRESSION = process.env.PARQUET_COMPRESSION || 'snappy';
 
 // In-memory buffers for batching
@@ -34,12 +34,12 @@ function getNextFileNumber(partitionDir, prefix) {
   ensureDir(partitionDir);
   
   const files = readdirSync(partitionDir)
-    .filter(f => f.startsWith(prefix) && f.endsWith('.parquet'));
+    .filter(f => f.startsWith(prefix) && f.endsWith('.jsonl'));
   
   if (files.length === 0) return 1;
   
   const numbers = files.map(f => {
-    const match = f.match(/-(\d+)\.parquet$/);
+    const match = f.match(/-(\d+)\.jsonl$/);
     return match ? parseInt(match[1]) : 0;
   });
   
@@ -47,12 +47,21 @@ function getNextFileNumber(partitionDir, prefix) {
 }
 
 /**
- * Write rows to a JSON-lines file (for later parquet conversion)
- * This is a simpler approach that can be converted to parquet via DuckDB
+ * Write rows to a JSON-lines file using streaming to avoid memory limits
  */
 function writeJsonLines(rows, filePath) {
-  const content = rows.map(r => JSON.stringify(r)).join('\n');
-  writeFileSync(filePath, content);
+  return new Promise((resolve, reject) => {
+    const stream = createWriteStream(filePath, { encoding: 'utf8' });
+    
+    stream.on('error', reject);
+    stream.on('finish', resolve);
+    
+    for (const row of rows) {
+      stream.write(JSON.stringify(row) + '\n');
+    }
+    
+    stream.end();
+  });
 }
 
 /**
@@ -79,11 +88,11 @@ COPY (
 /**
  * Add updates to buffer
  */
-export function bufferUpdates(updates) {
+export async function bufferUpdates(updates) {
   updatesBuffer.push(...updates);
   
   if (updatesBuffer.length >= MAX_ROWS_PER_FILE) {
-    return flushUpdates();
+    return await flushUpdates();
   }
   return null;
 }
@@ -91,11 +100,11 @@ export function bufferUpdates(updates) {
 /**
  * Add events to buffer
  */
-export function bufferEvents(events) {
+export async function bufferEvents(events) {
   eventsBuffer.push(...events);
   
   if (eventsBuffer.length >= MAX_ROWS_PER_FILE) {
-    return flushEvents();
+    return await flushEvents();
   }
   return null;
 }
@@ -103,7 +112,7 @@ export function bufferEvents(events) {
 /**
  * Flush updates buffer to file
  */
-export function flushUpdates() {
+export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
   
   const timestamp = updatesBuffer[0]?.timestamp || new Date();
@@ -116,7 +125,7 @@ export function flushUpdates() {
   const fileName = `updates-${String(fileNum).padStart(5, '0')}.jsonl`;
   const filePath = join(partitionDir, fileName);
   
-  writeJsonLines(updatesBuffer, filePath);
+  await writeJsonLines(updatesBuffer, filePath);
   
   const count = updatesBuffer.length;
   updatesBuffer = [];
@@ -128,7 +137,7 @@ export function flushUpdates() {
 /**
  * Flush events buffer to file
  */
-export function flushEvents() {
+export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
   
   const timestamp = eventsBuffer[0]?.timestamp || new Date();
@@ -141,7 +150,7 @@ export function flushEvents() {
   const fileName = `events-${String(fileNum).padStart(5, '0')}.jsonl`;
   const filePath = join(partitionDir, fileName);
   
-  writeJsonLines(eventsBuffer, filePath);
+  await writeJsonLines(eventsBuffer, filePath);
   
   const count = eventsBuffer.length;
   eventsBuffer = [];
@@ -153,13 +162,13 @@ export function flushEvents() {
 /**
  * Flush all buffers
  */
-export function flushAll() {
+export async function flushAll() {
   const results = [];
   
-  const updatesResult = flushUpdates();
+  const updatesResult = await flushUpdates();
   if (updatesResult) results.push(updatesResult);
   
-  const eventsResult = flushEvents();
+  const eventsResult = await flushEvents();
   if (eventsResult) results.push(eventsResult);
   
   return results;
