@@ -1,46 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { supabase } from "@/integrations/supabase/client";
-import { Activity, Database, Clock, Search } from "lucide-react";
+import { Activity, Clock, Search, Database, Wifi, WifiOff } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useLedgerUpdates, LedgerUpdate } from "@/hooks/use-ledger-updates";
+import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
+import { useDuckDBForLedger } from "@/lib/backend-config";
 
 const LiveUpdates = () => {
   const { data: updates = [], isLoading } = useLedgerUpdates(100);
-  const [realtimeUpdates, setRealtimeUpdates] = useState<LedgerUpdate[]>([]);
+  const { data: isDuckDBAvailable } = useDuckDBHealth();
+  const usingDuckDB = useDuckDBForLedger();
   const [searchTerm, setSearchTerm] = useState("");
 
-  useEffect(() => {
-    const channel = supabase
-      .channel("ledger-updates-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "ledger_updates",
-        },
-        (payload) => {
-          console.log("New ledger update:", payload);
-          setRealtimeUpdates((prev) => [payload.new as LedgerUpdate, ...prev.slice(0, 49)]);
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  const allUpdates = [
-    ...realtimeUpdates,
-    ...updates.filter((u) => !realtimeUpdates.some((ru) => ru.id === u.id)),
-  ];
-
-  const filteredUpdates = allUpdates.filter((update) => {
+  const filteredUpdates = updates.filter((update) => {
     const matchesSearch =
       !searchTerm ||
       update.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -49,7 +24,7 @@ const LiveUpdates = () => {
     return matchesSearch;
   });
 
-  const updatesByType = allUpdates.reduce(
+  const updatesByType = updates.reduce(
     (acc, u) => {
       const type = u.update_type || "unknown";
       acc[type] = (acc[type] || 0) + 1;
@@ -73,7 +48,21 @@ const LiveUpdates = () => {
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold mb-2">Live Ledger Updates</h1>
-          <p className="text-muted-foreground">Real-time stream of ledger updates from V2 API</p>
+          <p className="text-muted-foreground">Ledger updates from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
+        </div>
+
+        {/* Backend Status */}
+        <div className="flex items-center gap-2">
+          <Badge variant={usingDuckDB ? "default" : "secondary"} className="flex items-center gap-1">
+            <Database className="w-3 h-3" />
+            {usingDuckDB ? "DuckDB" : "Supabase"}
+          </Badge>
+          {usingDuckDB && (
+            <Badge variant={isDuckDBAvailable ? "outline" : "destructive"} className="flex items-center gap-1">
+              {isDuckDBAvailable ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              {isDuckDBAvailable ? "Connected" : "Disconnected"}
+            </Badge>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -82,7 +71,7 @@ const LiveUpdates = () => {
               <CardTitle className="text-sm font-medium text-muted-foreground">Total Updates</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-3xl font-bold text-primary">{allUpdates.length}</p>
+              <p className="text-3xl font-bold text-primary">{updates.length}</p>
             </CardContent>
           </Card>
 
@@ -140,7 +129,7 @@ const LiveUpdates = () => {
 
               {filteredUpdates.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground">
-                  {searchTerm ? "No matching updates found." : "No updates yet."}
+                  {searchTerm ? "No matching updates found." : "No updates yet. Start the DuckDB API server to see data."}
                 </div>
               )}
             </div>
