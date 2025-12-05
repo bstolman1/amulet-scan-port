@@ -12,8 +12,9 @@
  */
 
 import duckdb from 'duckdb';
-import { mkdirSync } from 'fs';
+import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { getPartitionPath } from './parquet-schema.js';
 
@@ -211,119 +212,79 @@ async function flushToParquet(latestTs) {
   - ${eventsFile}`);
 }
 
-// Insert helpers: keep it simple with many VALUES clauses
+// Fast bulk insert using temp CSV file + COPY
+import { writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+
 async function bulkInsertUpdates(rows) {
   if (!rows.length) return;
 
-  const chunks = chunkArray(rows, 5000); // avoid massive single SQL
-  for (const chunk of chunks) {
-    const values = chunk
-      .map(r => {
-        const esc = s =>
-          s === null || s === undefined
-            ? 'NULL'
-            : `'${String(s).replace(/'/g, "''")}'`;
-
-        return `(
-          ${esc(r.update_id)},
-          ${esc(r.update_type)},
-          ${r.migration_id ?? 'NULL'},
-          ${esc(r.synchronizer_id)},
-          ${esc(r.workflow_id)},
-          ${r.offset ?? 'NULL'},
-          ${r.record_time ? esc(r.record_time.toISOString()) : 'NULL'},
-          ${r.effective_at ? esc(r.effective_at.toISOString()) : 'NULL'},
-          ${r.timestamp ? esc(r.timestamp.toISOString()) : 'NULL'},
-          ${esc(r.kind)},
-          ${esc(r.update_data)}
-        )`;
-      })
-      .join(',');
-
-    const sql = `
-      INSERT INTO updates_mem (
-        update_id,
-        update_type,
-        migration_id,
-        synchronizer_id,
-        workflow_id,
-        "offset",
-        record_time,
-        effective_at,
-        timestamp,
-        kind,
-        update_data
-      ) VALUES ${values};
-    `;
-
-    await conn.runAsync(sql);
-  }
+  // Write to temp CSV (much faster than SQL INSERT)
+  const tmpFile = join(tmpdir(), `updates-${Date.now()}.csv`);
+  const lines = rows.map(r => {
+    const fields = [
+      r.update_id || '',
+      r.update_type || '',
+      r.migration_id ?? '',
+      r.synchronizer_id || '',
+      r.workflow_id || '',
+      r.offset ?? '',
+      r.record_time ? r.record_time.toISOString() : '',
+      r.effective_at ? r.effective_at.toISOString() : '',
+      r.timestamp ? r.timestamp.toISOString() : '',
+      r.kind || '',
+      r.update_data ? r.update_data.replace(/"/g, '""') : ''
+    ];
+    return fields.map(f => `"${String(f).replace(/"/g, '""')}"`).join(',');
+  });
+  
+  writeFileSync(tmpFile, lines.join('\n'), 'utf8');
+  
+  await conn.runAsync(`
+    COPY updates_mem FROM '${tmpFile}' (
+      FORMAT CSV, 
+      HEADER FALSE,
+      NULLSTR ''
+    );
+  `);
+  
+  unlinkSync(tmpFile);
 }
 
 async function bulkInsertEvents(rows) {
   if (!rows.length) return;
 
-  const chunks = chunkArray(rows, 5000);
-  for (const chunk of chunks) {
-    const values = chunk
-      .map(r => {
-        const esc = s =>
-          s === null || s === undefined
-            ? 'NULL'
-            : `'${String(s).replace(/'/g, "''")}'`;
-
-        const escArr = arr => {
-          if (!arr || !arr.length) return "ARRAY[]::VARCHAR[]";
-          const inner = arr
-            .map(v => `'${String(v).replace(/'/g, "''")}'`)
-            .join(',');
-          return `ARRAY[${inner}]::VARCHAR[]`;
-        };
-
-        return `(
-          ${esc(r.event_id)},
-          ${esc(r.update_id)},
-          ${esc(r.event_type)},
-          ${esc(r.contract_id)},
-          ${esc(r.template_id)},
-          ${esc(r.package_name)},
-          ${r.migration_id ?? 'NULL'},
-          ${r.timestamp ? esc(r.timestamp.toISOString()) : 'NULL'},
-          ${r.created_at_ts ? esc(r.created_at_ts.toISOString()) : 'NULL'},
-          ${escArr(r.signatories)},
-          ${escArr(r.observers)},
-          ${esc(r.payload)}
-        )`;
-      })
-      .join(',');
-
-    const sql = `
-      INSERT INTO events_mem (
-        event_id,
-        update_id,
-        event_type,
-        contract_id,
-        template_id,
-        package_name,
-        migration_id,
-        timestamp,
-        created_at_ts,
-        signatories,
-        observers,
-        payload
-      ) VALUES ${values};
-    `;
-
-    await conn.runAsync(sql);
-  }
-}
-
-function chunkArray(arr, size) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
+  // Write to temp CSV
+  const tmpFile = join(tmpdir(), `events-${Date.now()}.csv`);
+  const lines = rows.map(r => {
+    const fields = [
+      r.event_id || '',
+      r.update_id || '',
+      r.event_type || '',
+      r.contract_id || '',
+      r.template_id || '',
+      r.package_name || '',
+      r.migration_id ?? '',
+      r.timestamp ? r.timestamp.toISOString() : '',
+      r.created_at_ts ? r.created_at_ts.toISOString() : '',
+      JSON.stringify(r.signatories || []),
+      JSON.stringify(r.observers || []),
+      r.payload ? r.payload.replace(/"/g, '""') : ''
+    ];
+    return fields.map(f => `"${String(f).replace(/"/g, '""')}"`).join(',');
+  });
+  
+  writeFileSync(tmpFile, lines.join('\n'), 'utf8');
+  
+  await conn.runAsync(`
+    COPY events_mem FROM '${tmpFile}' (
+      FORMAT CSV,
+      HEADER FALSE,
+      NULLSTR ''
+    );
+  `);
+  
+  unlinkSync(tmpFile);
 }
 
 export default {
