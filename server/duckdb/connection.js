@@ -62,41 +62,42 @@ export function readParquet(globPattern) {
 
 // Initialize views for common queries
 export async function initializeViews() {
-  // Try parquet FIRST (preferred format from DuckDB writer), then JSONL fallback
   try {
-    const parquetEventsGlob = getFileGlob('events', null, 'parquet');
-    const parquetUpdatesGlob = getFileGlob('updates', null, 'parquet');
+    // Try JSONL first (our primary format), then fallback to parquet
+    const jsonlEventsGlob = getFileGlob('events', null, 'jsonl');
+    const jsonlUpdatesGlob = getFileGlob('updates', null, 'jsonl');
     
+    // Create views for easier querying - using JSON-lines format
     await query(`
       CREATE OR REPLACE VIEW all_events AS
-      SELECT * FROM ${readParquet(parquetEventsGlob)}
+      SELECT * FROM ${readJsonl(jsonlEventsGlob)}
     `);
     
     await query(`
       CREATE OR REPLACE VIEW all_updates AS
-      SELECT * FROM ${readParquet(parquetUpdatesGlob)}
+      SELECT * FROM ${readJsonl(jsonlUpdatesGlob)}
     `);
     
-    console.log('✅ DuckDB views initialized (Parquet format)');
+    console.log('✅ DuckDB views initialized (JSONL format)');
   } catch (err) {
-    console.warn('⚠️ Parquet not found, trying JSONL:', err.message);
+    console.warn('⚠️ Could not initialize views (data may not exist yet):', err.message);
     
-    // Try JSONL as fallback
+    // Try parquet as fallback
     try {
-      const jsonlEventsGlob = getFileGlob('events', null, 'jsonl');
-      const jsonlUpdatesGlob = getFileGlob('updates', null, 'jsonl');
+      const parquetEventsGlob = getFileGlob('events', null, 'parquet');
+      const parquetUpdatesGlob = getFileGlob('updates', null, 'parquet');
       
       await query(`
         CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readJsonl(jsonlEventsGlob)}
+        SELECT * FROM ${readParquet(parquetEventsGlob)}
       `);
       
       await query(`
         CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readJsonl(jsonlUpdatesGlob)}
+        SELECT * FROM ${readParquet(parquetUpdatesGlob)}
       `);
       
-      console.log('✅ DuckDB views initialized (JSONL format)');
+      console.log('✅ DuckDB views initialized (Parquet format)');
     } catch (e) {
       console.warn('⚠️ No data files found yet');
     }

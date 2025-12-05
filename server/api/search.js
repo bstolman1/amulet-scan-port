@@ -3,17 +3,8 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
-// Helper sources - try parquet first, then JSONL
-const getParquetSource = () => `read_parquet('${db.DATA_PATH}/**/updates-*.parquet', union_by_name=true)`;
-const getJsonlSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
-
-async function queryWithFallback(parquetSql, jsonlSql) {
-  try {
-    return await db.safeQuery(parquetSql);
-  } catch (e) {
-    return await db.safeQuery(jsonlSql);
-  }
-}
+// Helper to get the correct read function for JSONL files
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
 
 // GET /api/search - Full text search across events
 router.get('/', async (req, res) => {
@@ -47,15 +38,15 @@ router.get('/', async (req, res) => {
       ? `WHERE ${conditions.join(' AND ')}` 
       : '';
     
-    const sql = (source) => `
+    const sql = `
       SELECT *
-      FROM ${source}
+      FROM ${getUpdatesSource()}
       ${whereClause}
       ORDER BY timestamp DESC
       LIMIT ${limit}
     `;
     
-    const rows = await queryWithFallback(sql(getParquetSource()), sql(getJsonlSource()));
+    const rows = await db.safeQuery(sql);
     res.json({ data: rows, count: rows.length, query: { q, type, template, party } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -67,16 +58,16 @@ router.get('/contract/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const sql = (source) => `
+    const sql = `
       SELECT DISTINCT contract_id, template_id, MIN(timestamp) as created_at
-      FROM ${source}
+      FROM ${getUpdatesSource()}
       WHERE contract_id LIKE '${id}%'
       GROUP BY contract_id, template_id
       ORDER BY created_at DESC
       LIMIT 50
     `;
     
-    const rows = await queryWithFallback(sql(getParquetSource()), sql(getJsonlSource()));
+    const rows = await db.safeQuery(sql);
     res.json({ data: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
