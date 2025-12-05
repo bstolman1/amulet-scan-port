@@ -12,8 +12,8 @@ import { readdirSync, statSync, unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const DATA_DIR = process.env.DATA_DIR || './data/raw';
-const MIN_FILE_SIZE_MB = 50;  // Minimum file size before compaction
-const TARGET_FILE_SIZE_MB = 200;  // Target file size after compaction
+const MIN_FILE_SIZE_MB = 100;  // Minimum file size before compaction (increased for larger files)
+const TARGET_FILE_SIZE_MB = 500;  // Target file size after compaction (larger = faster reads)
 
 /**
  * Find all JSON-lines files that need conversion
@@ -51,7 +51,7 @@ export function convertJsonlToParquet(jsonlPath) {
     const sql = `
       COPY (
         SELECT * FROM read_json_auto('${jsonlPath}')
-      ) TO '${parquetPath}' (FORMAT PARQUET, COMPRESSION ZSTD);
+      ) TO '${parquetPath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
     `;
     
     execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
@@ -126,7 +126,7 @@ export function compactParquetFiles(inputFiles, outputPath) {
     const sql = `
       COPY (
         SELECT * FROM read_parquet([${fileList}])
-      ) TO '${outputPath}' (FORMAT PARQUET, COMPRESSION ZSTD);
+      ) TO '${outputPath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
     `;
     
     execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
