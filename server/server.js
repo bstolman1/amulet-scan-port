@@ -5,6 +5,7 @@ import partyRouter from './api/party.js';
 import contractsRouter from './api/contracts.js';
 import statsRouter from './api/stats.js';
 import searchRouter from './api/search.js';
+import backfillRouter from './api/backfill.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,6 +24,7 @@ app.use('/api/party', partyRouter);
 app.use('/api/contracts', contractsRouter);
 app.use('/api/stats', statsRouter);
 app.use('/api/search', searchRouter);
+app.use('/api/backfill', backfillRouter);
 
 app.listen(PORT, () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);

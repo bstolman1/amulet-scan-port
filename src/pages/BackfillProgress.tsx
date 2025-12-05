@@ -7,28 +7,14 @@ import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { Database, Activity, Trash2, FileText, Layers, Zap } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
-import { useBackfillCursors, BackfillCursor } from "@/hooks/use-backfill-cursors";
+import { useBackfillCursors, useBackfillStats, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
-
-interface BackfillStats {
-  totalCursors: number;
-  completedCursors: number;
-  totalUpdates: number;
-  totalEvents: number;
-  activeMigrations: number;
-}
 
 const BackfillProgress = () => {
   const { data: cursors = [], isLoading, refetch } = useBackfillCursors();
+  const { data: stats, refetch: refetchStats } = useBackfillStats();
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
-  const [stats, setStats] = useState<BackfillStats>({
-    totalCursors: 0,
-    completedCursors: 0,
-    totalUpdates: 0,
-    totalEvents: 0,
-    activeMigrations: 0,
-  });
   const { toast } = useToast();
 
   // Calculate merged cursors list
@@ -38,42 +24,9 @@ const BackfillProgress = () => {
 
   // Calculate cursor stats from allCursors (derived, not in useEffect)
   const cursorStats = useMemo(() => ({
-    totalCursors: allCursors.length,
-    completedCursors: allCursors.filter((c) => c.last_processed_round > 0).length,
-  }), [allCursors]);
-
-  // Load initial stats on mount only
-  useEffect(() => {
-    let isMounted = true;
-    
-    const loadInitialStats = async () => {
-      try {
-        const [updatesCount, eventsCount, migrationsResult] = await Promise.all([
-          supabase.from("ledger_updates").select("*", { count: "exact", head: true }),
-          supabase.from("ledger_events").select("*", { count: "exact", head: true }),
-          supabase.from("ledger_updates").select("migration_id").not("migration_id", "is", null),
-        ]);
-
-        if (!isMounted) return;
-
-        // Count unique migration IDs
-        const uniqueMigrations = new Set(migrationsResult.data?.map(row => row.migration_id) || []);
-
-        setStats({
-          totalCursors: 0,
-          completedCursors: 0,
-          totalUpdates: updatesCount.count || 0,
-          totalEvents: eventsCount.count || 0,
-          activeMigrations: uniqueMigrations.size,
-        });
-      } catch (error) {
-        console.error("Failed to load initial stats:", error);
-      }
-    };
-
-    loadInitialStats();
-    return () => { isMounted = false; };
-  }, []);
+    totalCursors: stats?.totalCursors || allCursors.length,
+    completedCursors: stats?.completedCursors || allCursors.filter((c) => c.complete).length,
+  }), [allCursors, stats]);
 
   useEffect(() => {
     const channel = supabase
@@ -103,8 +56,8 @@ const BackfillProgress = () => {
           schema: "public",
           table: "ledger_updates",
         },
-        (payload: any) => {
-          setStats((prev) => ({ ...prev, totalUpdates: prev.totalUpdates + 1 }));
+        () => {
+          refetchStats();
         },
       )
       .on(
@@ -114,8 +67,8 @@ const BackfillProgress = () => {
           schema: "public",
           table: "ledger_events",
         },
-        (payload: any) => {
-          setStats((prev) => ({ ...prev, totalEvents: prev.totalEvents + 1 }));
+        () => {
+          refetchStats();
         },
       )
       .subscribe();
@@ -123,7 +76,7 @@ const BackfillProgress = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [refetchStats]);
 
   
 
@@ -151,14 +104,8 @@ const BackfillProgress = () => {
 
       // Refresh the cursors list
       refetch();
+      refetchStats();
       setRealtimeCursors([]);
-      setStats({
-        totalCursors: 0,
-        completedCursors: 0,
-        totalUpdates: 0,
-        totalEvents: 0,
-        activeMigrations: 0,
-      });
     } catch (error: any) {
       console.error("Purge error:", error);
       toast({ title: "Purge failed", description: error.message || "Unknown error", variant: "destructive" });
@@ -228,7 +175,7 @@ const BackfillProgress = () => {
                 <Zap className="w-4 h-4" />
                 Updates Received
               </div>
-              <div className="text-2xl font-bold text-blue-400">{stats.totalUpdates}</div>
+              <div className="text-2xl font-bold text-blue-400">{stats?.totalUpdates?.toLocaleString() || 0}</div>
             </CardContent>
           </Card>
 
@@ -238,7 +185,7 @@ const BackfillProgress = () => {
                 <Layers className="w-4 h-4" />
                 Events Received
               </div>
-              <div className="text-2xl font-bold text-green-400">{stats.totalEvents}</div>
+              <div className="text-2xl font-bold text-green-400">{stats?.totalEvents?.toLocaleString() || 0}</div>
             </CardContent>
           </Card>
 
@@ -248,7 +195,7 @@ const BackfillProgress = () => {
                 <Database className="w-4 h-4" />
                 Active Migrations
               </div>
-              <div className="text-2xl font-bold text-primary">{stats.activeMigrations}</div>
+              <div className="text-2xl font-bold text-primary">{stats?.activeMigrations || 0}</div>
             </CardContent>
           </Card>
 
