@@ -6,6 +6,9 @@
  * and writes to partitioned parquet files.
  */
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 import axios from 'axios';
 import https from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';

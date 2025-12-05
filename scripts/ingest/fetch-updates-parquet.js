@@ -6,6 +6,9 @@
  * This replaces the Supabase/Postgres ingestion with local file storage.
  */
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
