@@ -166,12 +166,28 @@ async function flushToParquet() {
   console.log(`✅ Wrote ${count} contracts to ${contractsFile}`);
 }
 
+// Safe unlink with retry for Windows file locking
+async function safeUnlink(filePath, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      unlinkSync(filePath);
+      return;
+    } catch (err) {
+      if (err.code === 'EBUSY' && i < retries - 1) {
+        await new Promise(r => setTimeout(r, 100));
+      } else if (i === retries - 1) {
+        console.warn(`⚠️ Could not delete temp file: ${filePath}`);
+      }
+    }
+  }
+}
+
 // Fast bulk insert using temp CSV file + COPY
 async function bulkInsertContracts(rows) {
   if (!rows.length) return;
 
   // Write to temp CSV (much faster than SQL INSERT)
-  const tmpFile = join(tmpdir(), `contracts-${Date.now()}.csv`);
+  const tmpFile = join(tmpdir(), `contracts-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`);
   const lines = rows.map(r => {
     const fields = [
       r.contract_id || '',
@@ -199,7 +215,7 @@ async function bulkInsertContracts(rows) {
     );
   `);
   
-  unlinkSync(tmpFile);
+  await safeUnlink(tmpFile);
 }
 
 export default {
