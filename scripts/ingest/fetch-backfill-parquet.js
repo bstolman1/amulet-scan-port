@@ -110,20 +110,28 @@ function loadCursor(migrationId, synchronizerId) {
  * Save cursor to file
  */
 function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime) {
-  mkdirSync(CURSOR_DIR, { recursive: true });
-  
-  const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
-  const cursorData = {
-    ...cursor,
-    migration_id: migrationId,
-    synchronizer_id: synchronizerId,
-    id: `cursor-${migrationId}-${sanitize(synchronizerId)}`,
-    cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}`,
-    min_time: minTime || cursor.min_time,
-    max_time: maxTime || cursor.max_time,
-    last_processed_round: cursor.last_processed_round || 0,
-  };
-  writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
+  try {
+    mkdirSync(CURSOR_DIR, { recursive: true });
+    
+    const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
+    console.log(`   [saveCursor] Writing to: ${cursorFile}`);
+    
+    const cursorData = {
+      ...cursor,
+      migration_id: migrationId,
+      synchronizer_id: synchronizerId,
+      id: `cursor-${migrationId}-${sanitize(synchronizerId)}`,
+      cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}`,
+      min_time: minTime || cursor.min_time,
+      max_time: maxTime || cursor.max_time,
+      last_processed_round: cursor.last_processed_round || 0,
+    };
+    writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
+    console.log(`   [saveCursor] ✅ Written successfully`);
+  } catch (err) {
+    console.error(`   [saveCursor] ❌ FAILED to save cursor: ${err.message}`);
+    console.error(`   [saveCursor] Stack: ${err.stack}`);
+  }
 }
 
 /**
@@ -295,7 +303,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         break;
       }
       
-      const { updates, events } = processBackfillItems(txs, migrationId);
+      const { updates, events } = await processBackfillItems(txs, migrationId);
       totalUpdates += updates;
       totalEvents += events;
       pageCount++;
@@ -385,7 +393,12 @@ async function runBackfill() {
   console.log("🚀 Starting Canton ledger backfill (Parquet mode)");
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
+  console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
+  
+  // Ensure cursor directory exists at startup
+  mkdirSync(CURSOR_DIR, { recursive: true });
+  console.log(`📁 Cursor directory verified: ${CURSOR_DIR}`);
   
   // Detect migrations
   const migrations = await detectMigrations();
