@@ -99,7 +99,7 @@ router.get('/stats', async (req, res) => {
         FROM ${db.readJsonl(updatesGlob)}
         WHERE migration_id IS NOT NULL
       `);
-      activeMigrations = migrationsResult[0]?.count || 0;
+      activeMigrations = Number(migrationsResult[0]?.count || 0);
     } catch (e) {
       // Data might not have migration_id column
     }
