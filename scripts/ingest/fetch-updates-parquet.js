@@ -26,10 +26,102 @@ const client = axios.create({
   httpsAgent: new https.Agent({ rejectUnauthorized: false }),
 });
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import readline from 'readline';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.join(__dirname, '../../data');
+
 // Track state
 let lastOffset = null;
+let lastTimestamp = null;
 let migrationId = null;
 let isRunning = true;
+
+/**
+ * Find the latest timestamp from existing data files (backfill or previous runs)
+ */
+async function findLatestTimestamp() {
+  const eventsDir = path.join(DATA_DIR, 'events');
+  
+  if (!fs.existsSync(eventsDir)) {
+    console.log('📁 No existing data directory found, starting fresh');
+    return null;
+  }
+  
+  // Get all date directories, sorted descending
+  const dateDirs = fs.readdirSync(eventsDir)
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort()
+    .reverse();
+  
+  if (dateDirs.length === 0) {
+    console.log('📁 No existing data files found, starting fresh');
+    return null;
+  }
+  
+  // Check most recent directories for latest timestamp
+  for (const dateDir of dateDirs.slice(0, 3)) {
+    const dirPath = path.join(eventsDir, dateDir);
+    const files = fs.readdirSync(dirPath)
+      .filter(f => f.endsWith('.jsonl'))
+      .sort()
+      .reverse();
+    
+    for (const file of files.slice(0, 3)) {
+      const filePath = path.join(dirPath, file);
+      const latest = await getLatestTimestampFromFile(filePath);
+      if (latest) {
+        console.log(`📍 Found latest timestamp: ${latest} from ${dateDir}/${file}`);
+        return latest;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Read the last few lines of a JSONL file to find latest timestamp
+ */
+async function getLatestTimestampFromFile(filePath) {
+  return new Promise((resolve) => {
+    const lines = [];
+    const rl = readline.createInterface({
+      input: fs.createReadStream(filePath),
+      crlfDelay: Infinity
+    });
+    
+    rl.on('line', (line) => {
+      if (line.trim()) {
+        lines.push(line);
+        if (lines.length > 100) lines.shift(); // Keep last 100 lines
+      }
+    });
+    
+    rl.on('close', () => {
+      // Find latest timestamp from last lines
+      let latest = null;
+      for (const line of lines.reverse()) {
+        try {
+          const obj = JSON.parse(line);
+          const ts = obj.timestamp || obj.record_time;
+          if (ts && (!latest || ts > latest)) {
+            latest = ts;
+          }
+        } catch (e) {
+          // Skip invalid JSON
+        }
+      }
+      resolve(latest);
+    });
+    
+    rl.on('error', () => resolve(null));
+  });
+}
 
 /**
  * Detect latest migration from the scan API
@@ -48,8 +140,9 @@ async function detectLatestMigration() {
 
 /**
  * Fetch updates from the scan API
+ * Can use either offset-based or timestamp-based pagination
  */
-async function fetchUpdates(afterOffset = null) {
+async function fetchUpdates(afterOffset = null, afterTimestamp = null) {
   try {
     const payload = {
       migration_id: migrationId,
@@ -58,6 +151,9 @@ async function fetchUpdates(afterOffset = null) {
     
     if (afterOffset) {
       payload.after = afterOffset;
+    } else if (afterTimestamp) {
+      // Use begin_exclusive for timestamp-based fetching (after backfill)
+      payload.begin_exclusive = afterTimestamp;
     }
     
     const response = await client.post('/v2/updates', payload);
@@ -112,13 +208,26 @@ async function runIngestion() {
   // Detect migration
   await detectLatestMigration();
   
+  // Check for existing data from backfill
+  lastTimestamp = await findLatestTimestamp();
+  
+  if (lastTimestamp) {
+    console.log(`📍 Resuming from backfill timestamp: ${lastTimestamp}`);
+  } else {
+    console.log('📍 Starting fresh (no existing data found)');
+  }
+  
   let totalUpdates = 0;
   let totalEvents = 0;
   let emptyPolls = 0;
+  let usingTimestamp = !!lastTimestamp; // Start with timestamp if we have backfill data
   
   while (isRunning) {
     try {
-      const data = await fetchUpdates(lastOffset);
+      // Use timestamp-based fetching until we get an offset, then switch to offset-based
+      const data = usingTimestamp && !lastOffset
+        ? await fetchUpdates(null, lastTimestamp)
+        : await fetchUpdates(lastOffset, null);
       
       if (!data.items || data.items.length === 0) {
         emptyPolls++;
@@ -146,6 +255,12 @@ async function runIngestion() {
       const { updates, events } = await processUpdates(data.items);
       totalUpdates += updates;
       totalEvents += events;
+      
+      // Once we have an offset, we're caught up and can use offset-based pagination
+      if (lastOffset && usingTimestamp) {
+        console.log(`✅ Caught up with live updates, switching to offset-based pagination`);
+        usingTimestamp = false;
+      }
       
       const stats = getBufferStats();
       console.log(`📦 Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Buffer: ${stats.updates}/${stats.events}`);
