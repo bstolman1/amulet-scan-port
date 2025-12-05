@@ -7,19 +7,23 @@ export interface ConfigData {
   superValidators: {
     name: string;
     address: string;
+    fullPartyId: string;
     operatorName: string;
     weight: number;
     parentWeight: number;
     joinRound?: number | null;
     isGhost: boolean;
+    comment?: string;
   }[];
   operators: {
     name: string;
     rewardWeightBps: number;
     joinRound?: number | null;
+    comment?: string;
     extraBeneficiaries: {
       beneficiary: string;
       weight: number;
+      comment?: string;
     }[];
   }[];
   totalRewardBps: number;
@@ -27,7 +31,7 @@ export interface ConfigData {
 }
 
 export async function fetchConfigData(forceRefresh = false): Promise<ConfigData> {
-  const cacheKey = "sv-config-cache-v3";
+  const cacheKey = "sv-config-cache-v4";
 
   // ─────────────────────────────
   // Cache
@@ -58,11 +62,13 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
     const operatorName = sv.name;
     const rewardWeightBps = Number(String(sv.rewardWeightBps).replace(/_/g, ""));
     totalRewardBps += rewardWeightBps;
+    const operatorComment = sv.comment || undefined;
 
     const extras = sv.extraBeneficiaries || [];
     const normalizedExtras = extras.map((ex: any) => ({
       beneficiary: ex.beneficiary,
       weight: Number(String(ex.weight).replace(/_/g, "")),
+      comment: ex.comment || undefined,
     }));
 
     // Save operator entry
@@ -70,20 +76,24 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
       name: operatorName,
       rewardWeightBps,
       joinRound: sv.joinRound ?? null,
+      comment: operatorComment,
       extraBeneficiaries: normalizedExtras,
     });
 
     // Flatten beneficiaries for UI tables
     for (const ex of normalizedExtras) {
+      const fullPartyId = ex.beneficiary;
       const [beneficiaryName, address] = ex.beneficiary.split("::");
       flattened.push({
         name: beneficiaryName,
         address: address || "",
+        fullPartyId,
         operatorName,
         weight: ex.weight,
         parentWeight: rewardWeightBps,
         joinRound: sv.joinRound ?? null,
         isGhost: beneficiaryName.toLowerCase().includes("ghost"),
+        comment: ex.comment || undefined,
       });
     }
   }

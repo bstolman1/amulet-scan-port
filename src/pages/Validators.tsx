@@ -83,15 +83,18 @@ const Validators = () => {
   const totalNetworkWeight = totalOperatorWeightBps;
   const operatorsView = operators.map((op: any) => {
     const operatorWeight = normalizeBps(op.rewardWeightBps);
+    const operatorComment = op.comment;
     const beneficiaries = allSVs
       .filter((sv: any) => sv.operatorName === op.name)
       .map((sv: any) => ({
         name: sv.name,
         address: sv.address,
+        fullPartyId: sv.fullPartyId,
         weightBps: normalizeBps(sv.weight),
         weightPct: bpsToPercent(sv.weight),
         isGhost: sv.isGhost ?? false,
         joinedRound: sv.joinRound ?? "Unknown",
+        comment: sv.comment,
       }));
 
     const totalBeneficiaryWeight = beneficiaries.reduce((sum: number, b: any) => sum + b.weightBps, 0);
@@ -118,6 +121,7 @@ const Validators = () => {
       beneficiaries,
       statusLabel,
       hasBeneficiaries,
+      comment: operatorComment,
     };
   });
 
@@ -129,17 +133,18 @@ const Validators = () => {
   // ─────────────────────────────
   const exportCSV = () => {
     const rows = [
-      ["Operator", "SuperValidator", "Address", "Weight (bps)", "Weight (%)", "Ghost", "Joined Round", "Network Share"],
+      ["Operator", "SuperValidator", "Full Party ID", "Weight (bps)", "Weight (%)", "Ghost", "Joined Round", "Network Share", "Comment"],
       ...operatorsView.flatMap((op) =>
         op.beneficiaries.map((b) => [
           op.operator,
           b.name,
-          b.address,
+          b.fullPartyId,
           b.weightBps,
           b.weightPct,
           b.isGhost ? "Yes" : "No",
           b.joinedRound,
           op.networkShare,
+          b.comment || "",
         ]),
       ),
     ];
@@ -239,18 +244,23 @@ const Validators = () => {
                   <div className="mt-3 pl-4 border-l border-gray-700 space-y-2">
                     {op.beneficiaries.map((b, idx) => (
                       <div
-                        key={b.address + idx}
-                        className="flex flex-col sm:flex-row sm:justify-between sm:items-center bg-gray-900/40 p-2 rounded-lg"
+                        key={b.fullPartyId + idx}
+                        className="flex flex-col bg-gray-900/40 p-3 rounded-lg space-y-2"
                       >
-                        <div>
-                          <span className="font-medium">{b.name}</span>{" "}
-                          <span className="text-xs text-muted-foreground">{b.address}</span>
-                          <p className="text-xs text-muted-foreground">Joined Round: {b.joinedRound}</p>
-                        </div>
-                        <div className="text-right mt-1 sm:mt-0">
-                          <span className="text-sm text-gray-200">
-                            {b.weightPct} ({b.weightBps.toLocaleString()} bps)
-                          </span>
+                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start">
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium">{b.name}</span>
+                            <p className="text-xs text-muted-foreground font-mono break-all mt-1">{b.fullPartyId}</p>
+                            <p className="text-xs text-muted-foreground mt-1">Joined Round: {b.joinedRound}</p>
+                            {b.comment && (
+                              <p className="text-xs text-primary/80 mt-1 italic">💬 {b.comment}</p>
+                            )}
+                          </div>
+                          <div className="text-right mt-2 sm:mt-0 sm:ml-4 flex-shrink-0">
+                            <span className="text-sm text-gray-200">
+                              {b.weightPct} ({b.weightBps.toLocaleString()} bps)
+                            </span>
+                          </div>
                         </div>
                       </div>
                     ))}
