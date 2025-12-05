@@ -36,8 +36,16 @@ const BackfillProgress = () => {
     return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
   }, [cursors, realtimeCursors]);
 
-  // Load initial stats on mount
+  // Calculate cursor stats from allCursors (derived, not in useEffect)
+  const cursorStats = useMemo(() => ({
+    totalCursors: allCursors.length,
+    completedCursors: allCursors.filter((c) => c.last_processed_round > 0).length,
+  }), [allCursors]);
+
+  // Load initial stats on mount only
   useEffect(() => {
+    let isMounted = true;
+    
     const loadInitialStats = async () => {
       try {
         const [updatesCount, eventsCount, migrationsResult] = await Promise.all([
@@ -46,31 +54,26 @@ const BackfillProgress = () => {
           supabase.from("ledger_updates").select("migration_id").not("migration_id", "is", null),
         ]);
 
+        if (!isMounted) return;
+
         // Count unique migration IDs
         const uniqueMigrations = new Set(migrationsResult.data?.map(row => row.migration_id) || []);
 
-        setStats((prev) => ({
-          ...prev,
+        setStats({
+          totalCursors: 0,
+          completedCursors: 0,
           totalUpdates: updatesCount.count || 0,
           totalEvents: eventsCount.count || 0,
           activeMigrations: uniqueMigrations.size,
-        }));
+        });
       } catch (error) {
         console.error("Failed to load initial stats:", error);
       }
     };
 
     loadInitialStats();
+    return () => { isMounted = false; };
   }, []);
-
-  // Update cursor stats when cursors change
-  useEffect(() => {
-    setStats((prev) => ({
-      ...prev,
-      totalCursors: allCursors.length,
-      completedCursors: allCursors.filter((c) => c.last_processed_round > 0).length,
-    }));
-  }, [allCursors]);
 
   useEffect(() => {
     const channel = supabase
@@ -205,7 +208,7 @@ const BackfillProgress = () => {
                 <Database className="w-4 h-4" />
                 Cursors Completed
               </div>
-              <div className="text-2xl font-bold text-primary">{stats.completedCursors}</div>
+              <div className="text-2xl font-bold text-primary">{cursorStats.completedCursors}</div>
             </CardContent>
           </Card>
 
@@ -215,7 +218,7 @@ const BackfillProgress = () => {
                 <FileText className="w-4 h-4" />
                 Total Cursors
               </div>
-              <div className="text-2xl font-bold text-primary">{stats.totalCursors}</div>
+              <div className="text-2xl font-bold text-primary">{cursorStats.totalCursors}</div>
             </CardContent>
           </Card>
 
