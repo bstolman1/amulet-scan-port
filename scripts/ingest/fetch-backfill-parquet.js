@@ -64,8 +64,11 @@ function sanitize(str) {
 async function detectMigrations() {
   const migrations = [];
   
+  console.log(`   Checking API at: ${SCAN_URL}`);
+  
   for (let id = 0; id <= 10; id++) {
     try {
+      console.log(`   Checking migration ${id}...`);
       const response = await client.post('/v0/backfilling/updates-before', {
         migration_id: id,
         page_size: 1,
@@ -76,7 +79,7 @@ async function detectMigrations() {
         console.log(`✅ Found migration ${id}`);
       }
     } catch (err) {
-      // Migration doesn't exist
+      console.log(`   ❌ Migration ${id}: ${err.code || err.message}`);
     }
   }
   
