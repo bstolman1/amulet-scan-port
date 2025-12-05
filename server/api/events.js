@@ -1,0 +1,119 @@
+import { Router } from 'express';
+import db from '../duckdb/connection.js';
+
+const router = Router();
+
+// GET /api/events/latest - Get latest events
+router.get('/latest', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    
+    const sql = `
+      SELECT 
+        event_id,
+        event_type,
+        contract_id,
+        template_id,
+        package_name,
+        timestamp,
+        signatories,
+        observers,
+        payload
+      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      ORDER BY timestamp DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length });
+  } catch (err) {
+    console.error('Error fetching latest events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/by-type/:type - Get events by type
+router.get('/by-type/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    
+    const sql = `
+      SELECT *
+      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      WHERE event_type = '${type}'
+      ORDER BY timestamp DESC
+      LIMIT ${limit}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/by-template/:templateId - Get events by template
+router.get('/by-template/:templateId', async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    
+    const sql = `
+      SELECT *
+      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      WHERE template_id LIKE '%${templateId}%'
+      ORDER BY timestamp DESC
+      LIMIT ${limit}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/by-date - Get events for a specific date range
+router.get('/by-date', async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 1000, 10000);
+    
+    let whereClause = '';
+    if (start) whereClause += ` AND timestamp >= '${start}'`;
+    if (end) whereClause += ` AND timestamp <= '${end}'`;
+    
+    const sql = `
+      SELECT *
+      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      WHERE 1=1 ${whereClause}
+      ORDER BY timestamp DESC
+      LIMIT ${limit}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/count - Get total event count
+router.get('/count', async (req, res) => {
+  try {
+    const sql = `
+      SELECT COUNT(*) as total
+      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ count: rows[0]?.total || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;

@@ -1,0 +1,20 @@
+{
+  "scan_url": "https://scan.sv-2.us.cip-testing.network.canton.global/api",
+  "data_dir": "./data/raw",
+  "cursor_dir": "./data/cursors",
+  "server_port": 3001,
+  "ingestion": {
+    "batch_size": 500,
+    "poll_interval_ms": 5000,
+    "max_rows_per_file": 25000
+  },
+  "parquet": {
+    "compression": "zstd",
+    "min_file_size_mb": 50,
+    "target_file_size_mb": 200
+  },
+  "api": {
+    "default_limit": 100,
+    "max_limit": 10000
+  }
+}
