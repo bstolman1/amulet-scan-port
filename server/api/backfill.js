@@ -48,10 +48,23 @@ function readAllCursors() {
   return cursors;
 }
 
+// GET /api/backfill/debug - Debug endpoint to check paths
+router.get('/debug', (req, res) => {
+  const cursorExists = existsSync(CURSOR_DIR);
+  const cursorFiles = cursorExists ? readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json')) : [];
+  
+  res.json({
+    cursorDir: CURSOR_DIR,
+    cursorDirExists: cursorExists,
+    cursorFiles,
+  });
+});
+
 // GET /api/backfill/cursors - Get all backfill cursors
 router.get('/cursors', (req, res) => {
   try {
     const cursors = readAllCursors();
+    console.log(`[backfill] Found ${cursors.length} cursors in ${CURSOR_DIR}`);
     res.json({ data: cursors, count: cursors.length });
   } catch (err) {
     console.error('Error reading cursors:', err);
