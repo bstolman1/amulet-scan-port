@@ -192,10 +192,10 @@ async function runMigrationSnapshot(migrationId) {
     const stats = getBufferStats();
     console.log(`   📦 Processed ${contracts.length} contracts (total: ${totalContracts}, buffer: ${stats.contracts})`);
     
-    // Get cursor for next page
-    after = data.range?.to || events[events.length - 1]?.contract_id;
+    // Get cursor for next page - use next_page_token from API response
+    after = data.next_page_token;
     
-    if (!after) break;
+    if (after === undefined || after === null) break;
   }
   
   // Flush remaining
