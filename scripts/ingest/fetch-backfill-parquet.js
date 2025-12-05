@@ -109,7 +109,7 @@ function loadCursor(migrationId, synchronizerId) {
 /**
  * Save cursor to file
  */
-function saveCursor(migrationId, synchronizerId, cursor) {
+function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime) {
   mkdirSync(CURSOR_DIR, { recursive: true });
   
   const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
@@ -119,6 +119,9 @@ function saveCursor(migrationId, synchronizerId, cursor) {
     synchronizer_id: synchronizerId,
     id: `cursor-${migrationId}-${sanitize(synchronizerId)}`,
     cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}`,
+    min_time: minTime || cursor.min_time,
+    max_time: maxTime || cursor.max_time,
+    last_processed_round: cursor.last_processed_round || 0,
   };
   writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
 }
@@ -304,7 +307,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           total_events: totalEvents,
           complete: true,
           updated_at: new Date().toISOString(),
-        });
+        }, minTime, maxTime);
         break;
       }
       
@@ -317,7 +320,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           total_updates: totalUpdates,
           total_events: totalEvents,
           updated_at: new Date().toISOString(),
-        });
+        }, minTime, maxTime);
         
         const stats = getBufferStats();
         console.log(`   📦 Page ${pageCount}: ${totalUpdates} updates, ${totalEvents} events | Buffer: ${stats.updates}/${stats.events}`);
@@ -339,7 +342,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           total_events: totalEvents,
           error: msg,
           updated_at: new Date().toISOString(),
-        });
+        }, minTime, maxTime);
         await sleep(5000);
         continue;
       }
@@ -358,7 +361,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     total_events: totalEvents,
     complete: true,
     updated_at: new Date().toISOString(),
-  });
+  }, minTime, maxTime);
   
   return { updates: totalUpdates, events: totalEvents };
 }
