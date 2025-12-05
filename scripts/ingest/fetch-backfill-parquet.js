@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * Canton Ledger Backfill Script - Parquet Version
+ * Canton Ledger Backfill Script - OPTIMIZED Parquet Version
  * 
  * Fetches historical ledger data using the backfilling API
  * and writes to partitioned parquet files.
  * 
- * Uses the same API endpoints and configuration as the working
- * fetch-backfill-history.js script.
+ * Optimizations:
+ * - Parallel API fetching (configurable concurrency)
+ * - Prefetch queue for continuous data flow
+ * - Minimal blocking between fetch and write
  */
 
 import dotenv from 'dotenv';
@@ -27,19 +29,21 @@ const __dirname = dirname(__filename);
 // TLS config - must be set before any requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-// Configuration - use absolute paths relative to project root
+// Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 4; // Concurrent API requests
 
-// Axios client
+// Axios client with connection pooling
 const client = axios.create({
   baseURL: SCAN_URL,
-  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 30000 }),
+  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 30000, maxSockets: PARALLEL_FETCHES + 2 }),
   httpsAgent: new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 30000,
     rejectUnauthorized: false,
+    maxSockets: PARALLEL_FETCHES + 2,
   }),
   timeout: 120000,
 });
@@ -114,7 +118,6 @@ function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime) {
     mkdirSync(CURSOR_DIR, { recursive: true });
     
     const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
-    console.log(`   [saveCursor] Writing to: ${cursorFile}`);
     
     const cursorData = {
       ...cursor,
@@ -127,10 +130,8 @@ function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime) {
       last_processed_round: cursor.last_processed_round || 0,
     };
     writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
-    console.log(`   [saveCursor] ✅ Written successfully`);
   } catch (err) {
-    console.error(`   [saveCursor] ❌ FAILED to save cursor: ${err.message}`);
-    console.error(`   [saveCursor] Stack: ${err.stack}`);
+    console.error(`   [saveCursor] ❌ FAILED: ${err.message}`);
   }
 }
 
@@ -143,7 +144,6 @@ function sanitize(str) {
 
 /**
  * Detect all available migrations via /v0/state/acs/snapshot-timestamp
- * This matches the working fetch-acs-data.js approach
  */
 async function detectMigrations() {
   console.log("🔎 Detecting available migrations via /v0/state/acs/snapshot-timestamp");
@@ -179,7 +179,6 @@ async function detectMigrations() {
 
 /**
  * Get migration info via POST /v0/backfilling/migration-info
- * Returns synchronizer ranges for backfilling
  */
 async function getMigrationInfo(migrationId) {
   try {
@@ -197,7 +196,7 @@ async function getMigrationInfo(migrationId) {
 }
 
 /**
- * Fetch backfill data before a timestamp
+ * Fetch backfill data before a timestamp (single request)
  */
 async function fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter) {
   const payload = {
@@ -266,11 +265,100 @@ async function processBackfillItems(transactions, migrationId) {
 }
 
 /**
- * Backfill a single synchronizer
+ * Parallel fetch with sliding window - fetches multiple pages concurrently
+ * Returns results in order as they complete
+ */
+async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, count) {
+  const results = [];
+  const pending = new Map();
+  let nextBefore = startBefore;
+  let fetched = 0;
+  let reachedEnd = false;
+  
+  // Start initial parallel fetches
+  for (let i = 0; i < Math.min(count, PARALLEL_FETCHES); i++) {
+    if (reachedEnd) break;
+    
+    const fetchId = fetched;
+    const before = nextBefore;
+    
+    pending.set(fetchId, {
+      before,
+      promise: fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter)
+        .then(data => ({ fetchId, before, data, error: null }))
+        .catch(error => ({ fetchId, before, data: null, error }))
+    });
+    
+    fetched++;
+    // Estimate next 'before' by subtracting time (will be corrected by actual results)
+    const d = new Date(nextBefore);
+    d.setHours(d.getHours() - 1);
+    nextBefore = d.toISOString();
+  }
+  
+  // Process results as they complete
+  while (pending.size > 0) {
+    // Wait for any fetch to complete
+    const completed = await Promise.race(
+      Array.from(pending.values()).map(p => p.promise)
+    );
+    
+    pending.delete(completed.fetchId);
+    
+    if (completed.error) {
+      // Re-throw errors to be handled by caller
+      throw completed.error;
+    }
+    
+    const txs = completed.data?.transactions || [];
+    
+    if (txs.length === 0) {
+      reachedEnd = true;
+      continue;
+    }
+    
+    results.push({ transactions: txs, before: completed.before });
+    
+    // Find earliest timestamp from this batch for next fetch
+    let earliest = null;
+    for (const tx of txs) {
+      const t = getEventTime(tx);
+      if (!t) continue;
+      if (!earliest || t < earliest) earliest = t;
+    }
+    
+    if (earliest && earliest <= atOrAfter) {
+      reachedEnd = true;
+      continue;
+    }
+    
+    // Start a new fetch if we haven't reached the limit
+    if (!reachedEnd && fetched < count && pending.size < PARALLEL_FETCHES) {
+      const fetchId = fetched;
+      const before = earliest || nextBefore;
+      
+      pending.set(fetchId, {
+        before,
+        promise: fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter)
+          .then(data => ({ fetchId, before, data, error: null }))
+          .catch(error => ({ fetchId, before, data: null, error }))
+      });
+      
+      fetched++;
+      nextBefore = before;
+    }
+  }
+  
+  return { results, reachedEnd };
+}
+
+/**
+ * Backfill a single synchronizer with parallel fetching
  */
 async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime) {
   console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...`);
   console.log(`   Range: ${minTime} to ${maxTime}`);
+  console.log(`   Parallel fetches: ${PARALLEL_FETCHES}`);
   
   // Load existing cursor
   let cursor = loadCursor(migrationId, synchronizerId);
@@ -279,9 +367,10 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   
   let totalUpdates = 0;
   let totalEvents = 0;
-  let pageCount = 0;
+  let batchCount = 0;
+  const startTime = Date.now();
   
-  // Save initial cursor immediately so it shows up in UI
+  // Save initial cursor
   saveCursor(migrationId, synchronizerId, {
     last_before: before,
     total_updates: 0,
@@ -289,70 +378,69 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     started_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }, minTime, maxTime);
-  console.log(`   💾 Created initial cursor file`);
   
   while (true) {
     try {
-      console.log(`   ➜ Requesting updates-before: before=${before}`);
+      // Fetch multiple pages in parallel
+      const { results, reachedEnd } = await parallelFetchBatch(
+        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 3
+      );
       
-      const data = await fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter);
-      const txs = data?.transactions || [];
-      
-      if (!txs.length) {
+      if (results.length === 0) {
         console.log(`   ✅ No more transactions. Marking complete.`);
         break;
       }
       
-      const { updates, events } = await processBackfillItems(txs, migrationId);
-      totalUpdates += updates;
-      totalEvents += events;
-      pageCount++;
+      // Process all fetched batches
+      let batchUpdates = 0;
+      let batchEvents = 0;
+      let earliestTime = before;
       
-      // Get earliest timestamp from batch
-      let earliest = null;
-      for (const tx of txs) {
-        const t = getEventTime(tx);
-        if (!t) continue;
-        if (!earliest || t < earliest) earliest = t;
+      for (const { transactions } of results) {
+        const { updates, events } = await processBackfillItems(transactions, migrationId);
+        batchUpdates += updates;
+        batchEvents += events;
+        
+        // Track earliest timestamp
+        for (const tx of transactions) {
+          const t = getEventTime(tx);
+          if (t && t < earliestTime) earliestTime = t;
+        }
       }
       
-      // Check if we've reached the lower bound
-      if (!earliest || earliest <= atOrAfter) {
-        console.log(`   ✅ Reached lower bound of range. Complete.`);
-        saveCursor(migrationId, synchronizerId, {
-          last_before: earliest,
-          total_updates: totalUpdates,
-          total_events: totalEvents,
-          complete: true,
-          updated_at: new Date().toISOString(),
-        }, minTime, maxTime);
+      totalUpdates += batchUpdates;
+      totalEvents += batchEvents;
+      batchCount++;
+      
+      // Update cursor position
+      before = earliestTime;
+      
+      // Calculate throughput
+      const elapsed = (Date.now() - startTime) / 1000;
+      const throughput = Math.round(totalUpdates / elapsed);
+      
+      // Save cursor and log progress
+      saveCursor(migrationId, synchronizerId, {
+        last_before: before,
+        total_updates: totalUpdates,
+        total_events: totalEvents,
+        updated_at: new Date().toISOString(),
+      }, minTime, maxTime);
+      
+      const stats = getBufferStats();
+      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} updates, +${batchEvents} events | Total: ${totalUpdates.toLocaleString()} | ${throughput}/s | Queue: ${stats.queuedWrites}/${stats.activeWrites}`);
+      
+      if (reachedEnd || earliestTime <= atOrAfter) {
+        console.log(`   ✅ Reached lower bound. Complete.`);
         break;
       }
-      
-      before = earliest;
-      
-      // Save cursor frequently (every 5 pages = 2,500 items)
-      if (pageCount % 5 === 0 || pageCount === 1) {
-        console.log(`   💾 Saving cursor at page ${pageCount}...`);
-        saveCursor(migrationId, synchronizerId, {
-          last_before: before,
-          total_updates: totalUpdates,
-          total_events: totalEvents,
-          updated_at: new Date().toISOString(),
-        }, minTime, maxTime);
-        
-        const stats = getBufferStats();
-        console.log(`   📦 Page ${pageCount}: ${totalUpdates} updates, ${totalEvents} events | Buffer: ${stats.updates}/${stats.events}`);
-      }
-      
-      console.log(`   📥 Stored ${txs.length} updates, new before=${before}`);
       
     } catch (err) {
       const status = err.response?.status;
       const msg = err.response?.data?.error || err.message;
-      console.error(`   ❌ Error at page ${pageCount} (status ${status || "n/a"}): ${msg}`);
+      console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}): ${msg}`);
       
-      // Save cursor and wait before retry for transient errors
+      // Save cursor and retry for transient errors
       if ([429, 500, 502, 503, 504].includes(status)) {
         console.log("   ⏳ Transient error, backing off...");
         saveCursor(migrationId, synchronizerId, {
@@ -371,7 +459,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   }
   
   // Flush remaining data
-  flushAll();
+  await flushAll();
   
   // Mark as complete
   saveCursor(migrationId, synchronizerId, {
@@ -382,6 +470,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     updated_at: new Date().toISOString(),
   }, minTime, maxTime);
   
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`   ⏱️ Completed in ${totalTime}s (${Math.round(totalUpdates / parseFloat(totalTime))}/s avg)`);
+  
   return { updates: totalUpdates, events: totalEvents };
 }
 
@@ -390,15 +481,15 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
  */
 async function runBackfill() {
   console.log("\n" + "=".repeat(80));
-  console.log("🚀 Starting Canton ledger backfill (Parquet mode)");
+  console.log("🚀 Starting Canton ledger backfill (OPTIMIZED Parquet mode)");
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
+  console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES);
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
   
-  // Ensure cursor directory exists at startup
+  // Ensure cursor directory exists
   mkdirSync(CURSOR_DIR, { recursive: true });
-  console.log(`📁 Cursor directory verified: ${CURSOR_DIR}`);
   
   // Detect migrations
   const migrations = await detectMigrations();
@@ -410,6 +501,7 @@ async function runBackfill() {
   
   let grandTotalUpdates = 0;
   let grandTotalEvents = 0;
+  const grandStartTime = Date.now();
   
   for (const migrationId of migrations) {
     console.log(`\n${"─".repeat(80)}`);
@@ -423,7 +515,6 @@ async function runBackfill() {
       continue;
     }
     
-    // API returns record_time_range array (not synchronizer_ranges object)
     const ranges = info.record_time_range || [];
     
     if (!ranges.length) {
@@ -453,10 +544,14 @@ async function runBackfill() {
     console.log(`✅ Completed migration ${migrationId}`);
   }
   
+  const grandTotalTime = ((Date.now() - grandStartTime) / 1000).toFixed(1);
+  
   console.log(`\n${"═".repeat(80)}`);
   console.log(`🎉 Backfill complete!`);
   console.log(`   Total updates: ${grandTotalUpdates.toLocaleString()}`);
   console.log(`   Total events: ${grandTotalEvents.toLocaleString()}`);
+  console.log(`   Total time: ${grandTotalTime}s`);
+  console.log(`   Average throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s`);
   console.log(`${"═".repeat(80)}\n`);
 }
 

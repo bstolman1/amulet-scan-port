@@ -1,35 +1,38 @@
 /**
- * Parquet Writer Module - Optimized for High Throughput
+ * Parquet Writer Module - OPTIMIZED for Maximum Throughput
  * 
  * Handles writing ledger data to partitioned parquet files.
- * Uses large buffers and async write queues for maximum performance.
  * 
  * Optimizations:
- * - Large buffer size (100K rows) for better compression
- * - Async write queue for parallel fetch + write
- * - Streaming writes to avoid memory pressure
+ * - Timestamp-based filenames (no directory scans)
+ * - Batch JSON serialization with join()
+ * - Parallel concurrent writes (configurable)
+ * - Buffer swap instead of copy
+ * - Large I/O buffers (256KB)
  */
 
-import { createWriteStream, mkdirSync, existsSync, readdirSync } from 'fs';
+import { createWriteStream, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { getPartitionPath, UPDATES_COLUMNS, EVENTS_COLUMNS } from './parquet-schema.js';
+import { randomBytes } from 'crypto';
+import { getPartitionPath } from './parquet-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - balanced for visibility and throughput
+// Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000; // Write more frequently for progress visibility
-const COMPRESSION = process.env.PARQUET_COMPRESSION || 'zstd';
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
+const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 3;
+const IO_BUFFER_SIZE = 256 * 1024; // 256KB for better disk throughput
 
 // In-memory buffers for batching
 let updatesBuffer = [];
 let eventsBuffer = [];
 
-// Async write queue for parallel fetch + write
+// Async write queue with parallel execution
 let writeQueue = [];
-let isWriting = false;
+let activeWrites = 0;
 
 /**
  * Ensure directory exists
@@ -41,54 +44,43 @@ function ensureDir(dirPath) {
 }
 
 /**
- * Get next file number for a partition
+ * Generate unique filename using timestamp + random suffix (no directory scan needed)
  */
-function getNextFileNumber(partitionDir, prefix) {
-  ensureDir(partitionDir);
-  
-  const files = readdirSync(partitionDir)
-    .filter(f => f.startsWith(prefix) && f.endsWith('.jsonl'));
-  
-  if (files.length === 0) return 1;
-  
-  const numbers = files.map(f => {
-    const match = f.match(/-(\d+)\.jsonl$/);
-    return match ? parseInt(match[1]) : 0;
-  });
-  
-  return Math.max(...numbers) + 1;
+function generateFileName(prefix) {
+  const ts = Date.now();
+  const rand = randomBytes(4).toString('hex');
+  return `${prefix}-${ts}-${rand}.jsonl`;
 }
 
 /**
- * Write rows to a JSON-lines file using streaming to avoid memory limits
+ * Write rows to JSON-lines file using streaming with batch serialization
  * Returns a promise that resolves when writing is complete
  */
 function writeJsonLines(rows, filePath) {
   return new Promise((resolve, reject) => {
     const stream = createWriteStream(filePath, { 
       encoding: 'utf8',
-      highWaterMark: 64 * 1024 // 64KB write buffer for better I/O
+      highWaterMark: IO_BUFFER_SIZE
     });
     
     stream.on('error', reject);
     stream.on('finish', resolve);
     
-    // Write in chunks for better memory efficiency
-    const chunkSize = 1000;
+    // Batch serialize and write in chunks for memory efficiency
+    const chunkSize = 2000;
     let i = 0;
     
     function writeChunk() {
       let ok = true;
       while (i < rows.length && ok) {
         const end = Math.min(i + chunkSize, rows.length);
-        for (let j = i; j < end; j++) {
-          ok = stream.write(JSON.stringify(rows[j]) + '\n');
-        }
+        // Batch serialize entire chunk at once (faster than individual writes)
+        const chunk = rows.slice(i, end).map(r => JSON.stringify(r)).join('\n') + '\n';
+        ok = stream.write(chunk);
         i = end;
       }
       
       if (i < rows.length) {
-        // Wait for drain before continuing
         stream.once('drain', writeChunk);
       } else {
         stream.end();
@@ -100,32 +92,40 @@ function writeJsonLines(rows, filePath) {
 }
 
 /**
- * Process the async write queue
- * Runs writes in background while fetching continues
+ * Process the async write queue with parallel execution
  */
 async function processWriteQueue() {
-  if (isWriting || writeQueue.length === 0) return;
-  
-  isWriting = true;
-  
-  while (writeQueue.length > 0) {
+  // Start multiple writes concurrently up to MAX_CONCURRENT_WRITES
+  while (writeQueue.length > 0 && activeWrites < MAX_CONCURRENT_WRITES) {
     const task = writeQueue.shift();
-    try {
-      await task.execute();
-      console.log(`📝 Wrote ${task.count} ${task.type} to ${task.file}`);
-    } catch (err) {
-      console.error(`❌ Write error for ${task.file}:`, err.message);
-      // Re-queue on failure
-      writeQueue.unshift(task);
-      await new Promise(r => setTimeout(r, 1000));
-    }
+    activeWrites++;
+    
+    // Execute write without awaiting (parallel)
+    executeWrite(task).finally(() => {
+      activeWrites--;
+      // Trigger next batch when a write completes
+      setImmediate(() => processWriteQueue());
+    });
   }
-  
-  isWriting = false;
 }
 
 /**
- * Queue a write task for async processing
+ * Execute a single write task
+ */
+async function executeWrite(task) {
+  try {
+    await task.execute();
+    console.log(`📝 Wrote ${task.count} ${task.type} to ${task.file}`);
+  } catch (err) {
+    console.error(`❌ Write error for ${task.file}:`, err.message);
+    // Re-queue on failure with delay
+    await new Promise(r => setTimeout(r, 1000));
+    writeQueue.unshift(task);
+  }
+}
+
+/**
+ * Queue a write task for async parallel processing
  */
 function queueWrite(rows, filePath, type) {
   const task = {
@@ -141,35 +141,6 @@ function queueWrite(rows, filePath, type) {
   setImmediate(() => processWriteQueue());
   
   return { file: filePath, count: rows.length, queued: true };
-}
-
-/**
- * Convert JSON-lines to parquet using DuckDB
- * Run this as a separate step after ingestion
- */
-export function createConversionScript() {
-  return `
--- DuckDB script to convert JSON-lines to Parquet
--- Run: duckdb -c ".read convert-to-parquet.sql"
-
--- Convert updates with optimized settings
-COPY (
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl')
-) TO 'data/raw/updates.parquet' (
-  FORMAT PARQUET, 
-  COMPRESSION ZSTD,
-  ROW_GROUP_SIZE 100000
-);
-
--- Convert events with optimized settings
-COPY (
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl')
-) TO 'data/raw/events.parquet' (
-  FORMAT PARQUET, 
-  COMPRESSION ZSTD,
-  ROW_GROUP_SIZE 100000
-);
-`;
 }
 
 /**
@@ -208,15 +179,15 @@ export async function flushUpdates() {
   
   ensureDir(partitionDir);
   
-  const fileNum = getNextFileNumber(partitionDir, 'updates');
-  const fileName = `updates-${String(fileNum).padStart(5, '0')}.jsonl`;
+  // Use timestamp-based filename (no directory scan)
+  const fileName = generateFileName('updates');
   const filePath = join(partitionDir, fileName);
   
-  // Copy buffer and clear immediately (allows fetching to continue)
-  const rowsToWrite = [...updatesBuffer];
+  // Swap buffer reference instead of copying (faster)
+  const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
-  // Queue write for async processing
+  // Queue write for async parallel processing
   return queueWrite(rowsToWrite, filePath, 'updates');
 }
 
@@ -232,15 +203,15 @@ export async function flushEvents() {
   
   ensureDir(partitionDir);
   
-  const fileNum = getNextFileNumber(partitionDir, 'events');
-  const fileName = `events-${String(fileNum).padStart(5, '0')}.jsonl`;
+  // Use timestamp-based filename (no directory scan)
+  const fileName = generateFileName('events');
   const filePath = join(partitionDir, fileName);
   
-  // Copy buffer and clear immediately (allows fetching to continue)
-  const rowsToWrite = [...eventsBuffer];
+  // Swap buffer reference instead of copying (faster)
+  const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
-  // Queue write for async processing
+  // Queue write for async parallel processing
   return queueWrite(rowsToWrite, filePath, 'events');
 }
 
@@ -258,7 +229,7 @@ export async function flushAll() {
   if (eventsResult) results.push(eventsResult);
   
   // Wait for all queued writes to complete
-  while (writeQueue.length > 0 || isWriting) {
+  while (writeQueue.length > 0 || activeWrites > 0) {
     await new Promise(r => setTimeout(r, 100));
   }
   
@@ -274,7 +245,8 @@ export function getBufferStats() {
     events: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
     queuedWrites: writeQueue.length,
-    isWriting,
+    activeWrites,
+    maxConcurrentWrites: MAX_CONCURRENT_WRITES,
   };
 }
 
@@ -282,9 +254,38 @@ export function getBufferStats() {
  * Wait for write queue to drain (useful before shutdown)
  */
 export async function waitForWrites() {
-  while (writeQueue.length > 0 || isWriting) {
+  while (writeQueue.length > 0 || activeWrites > 0) {
     await new Promise(r => setTimeout(r, 100));
   }
+}
+
+/**
+ * Convert JSON-lines to parquet using DuckDB
+ * Run this as a separate step after ingestion
+ */
+export function createConversionScript() {
+  return `
+-- DuckDB script to convert JSON-lines to Parquet
+-- Run: duckdb -c ".read convert-to-parquet.sql"
+
+-- Convert updates with optimized settings
+COPY (
+  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl')
+) TO 'data/raw/updates.parquet' (
+  FORMAT PARQUET, 
+  COMPRESSION ZSTD,
+  ROW_GROUP_SIZE 100000
+);
+
+-- Convert events with optimized settings
+COPY (
+  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl')
+) TO 'data/raw/events.parquet' (
+  FORMAT PARQUET, 
+  COMPRESSION ZSTD,
+  ROW_GROUP_SIZE 100000
+);
+`;
 }
 
 export default {
