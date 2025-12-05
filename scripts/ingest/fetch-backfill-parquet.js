@@ -4,29 +4,90 @@
  * 
  * Fetches historical ledger data using the backfilling API
  * and writes to partitioned parquet files.
+ * 
+ * Uses the same API endpoints and configuration as the working
+ * fetch-backfill-history.js script.
  */
 
 import dotenv from 'dotenv';
 dotenv.config();
 
 import axios from 'axios';
-import https from 'https';
+import { Agent as HttpAgent } from 'http';
+import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats } from './write-parquet.js';
 
+// TLS config - must be set before any requests
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 // Configuration
-const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
+const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
 const CURSOR_DIR = process.env.CURSOR_DIR || './data/cursors';
 
 // Axios client
 const client = axios.create({
   baseURL: SCAN_URL,
+  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 30000 }),
+  httpsAgent: new HttpsAgent({
+    keepAlive: true,
+    keepAliveMsecs: 30000,
+    rejectUnauthorized: false,
+  }),
   timeout: 120000,
-  httpsAgent: new https.Agent({ rejectUnauthorized: false }),
 });
+
+/**
+ * Sleep helper
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry with exponential backoff
+ */
+async function retryWithBackoff(fn, options = {}) {
+  const {
+    maxRetries = 5,
+    baseDelay = 1000,
+    maxDelay = 30000,
+    shouldRetry = (error) => {
+      const retryableCodes = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE'];
+      const retryableStatuses = [429, 500, 502, 503, 504];
+      
+      if (error.code && retryableCodes.includes(error.code)) return true;
+      if (error.response?.status && retryableStatuses.includes(error.response.status)) return true;
+      return false;
+    }
+  } = options;
+
+  let lastError;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      
+      if (attempt === maxRetries || !shouldRetry(error)) {
+        throw error;
+      }
+
+      const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
+      const jitter = Math.random() * exponentialDelay * 0.3;
+      const delay = exponentialDelay + jitter;
+      
+      console.log(`   ⏳ Retry attempt ${attempt + 1}/${maxRetries} after ${Math.round(delay)}ms (error: ${error.code || error.message})`);
+      await sleep(delay);
+    }
+  }
+  
+  throw lastError;
+}
 
 /**
  * Load cursor from file
@@ -59,81 +120,118 @@ function sanitize(str) {
 }
 
 /**
- * Detect all available migrations
+ * Detect all available migrations via /v0/state/acs/snapshot-timestamp
+ * This matches the working fetch-acs-data.js approach
  */
 async function detectMigrations() {
+  console.log("🔎 Detecting available migrations via /v0/state/acs/snapshot-timestamp");
+
   const migrations = [];
-  
-  console.log(`   Checking API at: ${SCAN_URL}`);
-  
-  for (let id = 0; id <= 10; id++) {
+  let id = 1;
+
+  while (true) {
     try {
-      console.log(`   Checking migration ${id}...`);
-      const response = await client.post('/v0/backfilling/updates-before', {
-        migration_id: id,
-        page_size: 1,
+      const res = await client.get("/v0/state/acs/snapshot-timestamp", {
+        params: { migration_id: id, before: new Date().toISOString() },
       });
-      
-      if (response.data) {
+
+      if (res.data?.record_time) {
         migrations.push(id);
-        console.log(`✅ Found migration ${id}`);
+        console.log(`  • migration_id=${id} record_time=${res.data.record_time}`);
+        id++;
+      } else {
+        break;
       }
     } catch (err) {
-      console.log(`   ❌ Migration ${id}: ${err.code || err.message}`);
+      if (err.response && err.response.status === 404) {
+        break;
+      }
+      console.error(`❌ Error probing migration_id=${id}:`, err.response?.status, err.message);
+      break;
     }
   }
-  
+
+  console.log(`✅ Found migrations: ${migrations.join(", ")}`);
   return migrations;
 }
 
 /**
- * Get migration info (synchronizer ranges)
+ * Get migration info via POST /v0/backfilling/migration-info
+ * Returns synchronizer ranges for backfilling
  */
 async function getMigrationInfo(migrationId) {
   try {
-    const response = await client.get(`/v0/backfilling/synchronizer-ranges/${migrationId}`);
-    return response.data;
+    const res = await client.post("/v0/backfilling/migration-info", {
+      migration_id: migrationId,
+    });
+    return res.data;
   } catch (err) {
-    console.error(`Failed to get migration info for ${migrationId}:`, err.message);
-    return null;
+    if (err.response && err.response.status === 404) {
+      console.log(`ℹ️  No backfilling info for migration_id=${migrationId} (404)`);
+      return null;
+    }
+    throw err;
   }
 }
 
 /**
  * Fetch backfill data before a timestamp
  */
-async function fetchBackfillBefore(migrationId, synchronizerId, before) {
+async function fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter) {
   const payload = {
     migration_id: migrationId,
     synchronizer_id: synchronizerId,
-    page_size: BATCH_SIZE,
+    before,
+    count: BATCH_SIZE,
   };
   
-  if (before) {
-    payload.before = before;
+  if (atOrAfter) {
+    payload.at_or_after = atOrAfter;
   }
   
-  const response = await client.post('/v0/backfilling/updates-before', payload);
-  return response.data;
+  return await retryWithBackoff(async () => {
+    const response = await client.post('/v0/backfilling/updates-before', payload);
+    return response.data;
+  });
 }
 
 /**
- * Process backfill items
+ * Get event time from transaction or reassignment
  */
-function processBackfillItems(items, migrationId) {
+function getEventTime(txOrReassign) {
+  return (
+    txOrReassign.record_time ||
+    txOrReassign.event?.record_time ||
+    txOrReassign.effective_at
+  );
+}
+
+/**
+ * Process backfill items (transactions array from API response)
+ */
+function processBackfillItems(transactions, migrationId) {
   const updates = [];
   const events = [];
   
-  for (const item of items) {
-    const update = normalizeUpdate(item);
+  for (const tx of transactions) {
+    const isReassignment = !!tx.event;
+    const update = normalizeUpdate(tx);
     update.migration_id = migrationId;
     updates.push(update);
     
-    // Extract events
-    const tx = item.transaction;
-    if (tx?.events) {
-      for (const event of tx.events) {
-        const normalizedEvent = normalizeEvent(event, update.update_id, migrationId);
+    // Extract events based on type
+    if (isReassignment) {
+      const ce = tx.event?.created_event;
+      if (ce) {
+        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
+        normalizedEvent.event_type = 'reassign_create';
+        events.push(normalizedEvent);
+      }
+    } else {
+      const eventsById = tx.events_by_id || {};
+      for (const [eventId, ev] of Object.entries(eventsById)) {
+        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
+        normalizedEvent.event_id = eventId;
         events.push(normalizedEvent);
       }
     }
@@ -148,14 +246,14 @@ function processBackfillItems(items, migrationId) {
 /**
  * Backfill a single synchronizer
  */
-async function backfillSynchronizer(migrationId, synchronizerId, range) {
-  console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId}`);
-  console.log(`   Range: ${range.min_time} to ${range.max_time}`);
+async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime) {
+  console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...`);
+  console.log(`   Range: ${minTime} to ${maxTime}`);
   
   // Load existing cursor
   let cursor = loadCursor(migrationId, synchronizerId);
-  let lastBefore = cursor?.last_before || range.max_time;
-  const minTime = new Date(range.min_time).getTime();
+  let before = cursor?.last_before || maxTime;
+  const atOrAfter = minTime;
   
   let totalUpdates = 0;
   let totalEvents = 0;
@@ -163,31 +261,48 @@ async function backfillSynchronizer(migrationId, synchronizerId, range) {
   
   while (true) {
     try {
-      const data = await fetchBackfillBefore(migrationId, synchronizerId, lastBefore);
+      console.log(`   ➜ Requesting updates-before: before=${before}`);
       
-      if (!data.items || data.items.length === 0) {
-        console.log(`   ✅ Completed synchronizer ${synchronizerId}`);
+      const data = await fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter);
+      const txs = data?.transactions || [];
+      
+      if (!txs.length) {
+        console.log(`   ✅ No more transactions. Marking complete.`);
         break;
       }
       
-      const { updates, events } = processBackfillItems(data.items, migrationId);
+      const { updates, events } = processBackfillItems(txs, migrationId);
       totalUpdates += updates;
       totalEvents += events;
       pageCount++;
       
       // Get earliest timestamp from batch
-      const timestamps = data.items
-        .map(i => i.transaction?.record_time || i.reassignment?.record_time)
-        .filter(Boolean)
-        .map(t => new Date(t).getTime());
+      let earliest = null;
+      for (const tx of txs) {
+        const t = getEventTime(tx);
+        if (!t) continue;
+        if (!earliest || t < earliest) earliest = t;
+      }
       
-      const earliestTime = Math.min(...timestamps);
-      lastBefore = new Date(earliestTime).toISOString();
+      // Check if we've reached the lower bound
+      if (!earliest || earliest <= atOrAfter) {
+        console.log(`   ✅ Reached lower bound of range. Complete.`);
+        saveCursor(migrationId, synchronizerId, {
+          last_before: earliest,
+          total_updates: totalUpdates,
+          total_events: totalEvents,
+          complete: true,
+          updated_at: new Date().toISOString(),
+        });
+        break;
+      }
+      
+      before = earliest;
       
       // Save cursor periodically
       if (pageCount % 10 === 0) {
         saveCursor(migrationId, synchronizerId, {
-          last_before: lastBefore,
+          last_before: before,
           total_updates: totalUpdates,
           total_events: totalEvents,
           updated_at: new Date().toISOString(),
@@ -197,25 +312,28 @@ async function backfillSynchronizer(migrationId, synchronizerId, range) {
         console.log(`   📦 Page ${pageCount}: ${totalUpdates} updates, ${totalEvents} events | Buffer: ${stats.updates}/${stats.events}`);
       }
       
-      // Check if we've reached the beginning
-      if (earliestTime <= minTime) {
-        console.log(`   ✅ Reached min_time for synchronizer ${synchronizerId}`);
-        break;
-      }
+      console.log(`   📥 Stored ${txs.length} updates, new before=${before}`);
       
     } catch (err) {
-      console.error(`   ❌ Error at page ${pageCount}:`, err.message);
+      const status = err.response?.status;
+      const msg = err.response?.data?.error || err.message;
+      console.error(`   ❌ Error at page ${pageCount} (status ${status || "n/a"}): ${msg}`);
       
-      // Save cursor and wait before retry
-      saveCursor(migrationId, synchronizerId, {
-        last_before: lastBefore,
-        total_updates: totalUpdates,
-        total_events: totalEvents,
-        error: err.message,
-        updated_at: new Date().toISOString(),
-      });
+      // Save cursor and wait before retry for transient errors
+      if ([429, 500, 502, 503, 504].includes(status)) {
+        console.log("   ⏳ Transient error, backing off...");
+        saveCursor(migrationId, synchronizerId, {
+          last_before: before,
+          total_updates: totalUpdates,
+          total_events: totalEvents,
+          error: msg,
+          updated_at: new Date().toISOString(),
+        });
+        await sleep(5000);
+        continue;
+      }
       
-      await sleep(5000);
+      throw err;
     }
   }
   
@@ -224,7 +342,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, range) {
   
   // Mark as complete
   saveCursor(migrationId, synchronizerId, {
-    last_before: lastBefore,
+    last_before: before,
     total_updates: totalUpdates,
     total_events: totalEvents,
     complete: true,
@@ -235,57 +353,73 @@ async function backfillSynchronizer(migrationId, synchronizerId, range) {
 }
 
 /**
- * Sleep helper
- */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
  * Main backfill function
  */
 async function runBackfill() {
-  console.log('🚀 Starting Canton ledger backfill (Parquet mode)\n');
+  console.log("\n" + "=".repeat(80));
+  console.log("🚀 Starting Canton ledger backfill (Parquet mode)");
+  console.log("   SCAN_URL:", SCAN_URL);
+  console.log("   BATCH_SIZE:", BATCH_SIZE);
+  console.log("=".repeat(80));
   
   // Detect migrations
-  console.log('🔍 Detecting migrations...');
   const migrations = await detectMigrations();
-  console.log(`Found ${migrations.length} migrations: ${migrations.join(', ')}\n`);
+  
+  if (!migrations.length) {
+    console.log("⚠️ No migrations found. Exiting.");
+    return;
+  }
   
   let grandTotalUpdates = 0;
   let grandTotalEvents = 0;
   
   for (const migrationId of migrations) {
-    console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-    console.log(`📋 Processing migration ${migrationId}`);
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`\n${"─".repeat(80)}`);
+    console.log(`📘 Migration ${migrationId}: fetching backfilling metadata`);
+    console.log(`${"─".repeat(80)}`);
     
     const info = await getMigrationInfo(migrationId);
     
-    if (!info?.synchronizer_ranges) {
-      console.log(`   ⚠️ No synchronizer ranges found`);
+    if (!info) {
+      console.log("   ℹ️  No backfilling info; skipping this migration.");
       continue;
     }
     
-    for (const [synchronizerId, range] of Object.entries(info.synchronizer_ranges)) {
+    // API returns record_time_range array (not synchronizer_ranges object)
+    const ranges = info.record_time_range || [];
+    
+    if (!ranges.length) {
+      console.log("   ℹ️  No synchronizer ranges; skipping.");
+      continue;
+    }
+    
+    console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migrationId}`);
+    
+    for (const range of ranges) {
+      const synchronizerId = range.synchronizer_id;
+      const minTime = range.min;
+      const maxTime = range.max;
+      
       // Check if already complete
       const cursor = loadCursor(migrationId, synchronizerId);
       if (cursor?.complete) {
-        console.log(`   ⏭️ Skipping ${synchronizerId} (already complete)`);
+        console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)`);
         continue;
       }
       
-      const { updates, events } = await backfillSynchronizer(migrationId, synchronizerId, range);
+      const { updates, events } = await backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime);
       grandTotalUpdates += updates;
       grandTotalEvents += events;
     }
+    
+    console.log(`✅ Completed migration ${migrationId}`);
   }
   
-  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`✅ Backfill complete!`);
+  console.log(`\n${"═".repeat(80)}`);
+  console.log(`🎉 Backfill complete!`);
   console.log(`   Total updates: ${grandTotalUpdates.toLocaleString()}`);
   console.log(`   Total events: ${grandTotalEvents.toLocaleString()}`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+  console.log(`${"═".repeat(80)}\n`);
 }
 
 // Graceful shutdown
@@ -297,7 +431,8 @@ process.on('SIGINT', () => {
 
 // Run
 runBackfill().catch(err => {
-  console.error('Fatal error:', err);
+  console.error('\n❌ FATAL:', err.message);
+  console.error(err.stack);
   flushAll();
   process.exit(1);
 });
