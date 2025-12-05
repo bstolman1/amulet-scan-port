@@ -3,6 +3,9 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
+// Helper to get the correct read function for JSONL files
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
+
 // GET /api/stats/overview - Dashboard overview stats
 router.get('/overview', async (req, res) => {
   try {
@@ -13,7 +16,7 @@ router.get('/overview', async (req, res) => {
         COUNT(DISTINCT template_id) as unique_templates,
         MIN(timestamp) as earliest_event,
         MAX(timestamp) as latest_event
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
     `;
     
     const rows = await db.safeQuery(sql);
@@ -33,7 +36,7 @@ router.get('/daily', async (req, res) => {
         DATE_TRUNC('day', timestamp) as date,
         COUNT(*) as event_count,
         COUNT(DISTINCT contract_id) as contract_count
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE timestamp >= NOW() - INTERVAL '${days} days'
       GROUP BY DATE_TRUNC('day', timestamp)
       ORDER BY date DESC
@@ -53,7 +56,7 @@ router.get('/by-type', async (req, res) => {
       SELECT 
         event_type,
         COUNT(*) as count
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       GROUP BY event_type
       ORDER BY count DESC
     `;
@@ -77,7 +80,7 @@ router.get('/by-template', async (req, res) => {
         COUNT(DISTINCT contract_id) as contract_count,
         MIN(timestamp) as first_seen,
         MAX(timestamp) as last_seen
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE template_id IS NOT NULL
       GROUP BY template_id
       ORDER BY event_count DESC
@@ -98,7 +101,7 @@ router.get('/hourly', async (req, res) => {
       SELECT 
         DATE_TRUNC('hour', timestamp) as hour,
         COUNT(*) as event_count
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE timestamp >= NOW() - INTERVAL '24 hours'
       GROUP BY DATE_TRUNC('hour', timestamp)
       ORDER BY hour DESC
@@ -118,7 +121,7 @@ router.get('/burn', async (req, res) => {
       SELECT 
         DATE_TRUNC('day', timestamp) as date,
         SUM(CAST(json_extract(payload, '$.amount.amount') AS DOUBLE)) as burn_amount
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE template_id LIKE '%BurnMintSummary%'
       GROUP BY DATE_TRUNC('day', timestamp)
       ORDER BY date DESC

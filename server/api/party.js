@@ -3,6 +3,9 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
+// Helper to get the correct read function for JSONL files
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
+
 // GET /api/party/:partyId - Get all events for a party
 router.get('/:partyId', async (req, res) => {
   try {
@@ -12,7 +15,7 @@ router.get('/:partyId', async (req, res) => {
     // Search in signatories and observers arrays
     const sql = `
       SELECT *
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE 
         list_contains(signatories, '${partyId}')
         OR list_contains(observers, '${partyId}')
@@ -38,7 +41,7 @@ router.get('/:partyId/summary', async (req, res) => {
         COUNT(*) as count,
         MIN(timestamp) as first_seen,
         MAX(timestamp) as last_seen
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE 
         list_contains(signatories, '${partyId}')
         OR list_contains(observers, '${partyId}')
@@ -61,10 +64,10 @@ router.get('/list/all', async (req, res) => {
     const sql = `
       WITH all_parties AS (
         SELECT DISTINCT unnest(signatories) as party_id
-        FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+        FROM ${getUpdatesSource()}
         UNION
         SELECT DISTINCT unnest(observers) as party_id
-        FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+        FROM ${getUpdatesSource()}
       )
       SELECT party_id FROM all_parties
       WHERE party_id IS NOT NULL

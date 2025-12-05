@@ -3,6 +3,9 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
+// Helper to get the correct read function for JSONL files
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
+
 // GET /api/contracts/:contractId - Get contract lifecycle
 router.get('/:contractId', async (req, res) => {
   try {
@@ -10,7 +13,7 @@ router.get('/:contractId', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE contract_id = '${contractId}'
       ORDER BY timestamp ASC
     `;
@@ -32,12 +35,12 @@ router.get('/active/by-template/:templateSuffix', async (req, res) => {
     const sql = `
       WITH created AS (
         SELECT contract_id, template_id, timestamp as created_at, payload
-        FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+        FROM ${getUpdatesSource()}
         WHERE event_type = 'created' AND template_id LIKE '%${templateSuffix}'
       ),
       archived AS (
         SELECT DISTINCT contract_id
-        FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+        FROM ${getUpdatesSource()}
         WHERE event_type = 'archived'
       )
       SELECT c.*
@@ -63,7 +66,7 @@ router.get('/templates/list', async (req, res) => {
         template_id,
         COUNT(*) as event_count,
         COUNT(DISTINCT contract_id) as contract_count
-      FROM read_parquet('${db.DATA_PATH}/**/*events*.parquet', union_by_name=true)
+      FROM ${getUpdatesSource()}
       WHERE template_id IS NOT NULL
       GROUP BY template_id
       ORDER BY contract_count DESC
