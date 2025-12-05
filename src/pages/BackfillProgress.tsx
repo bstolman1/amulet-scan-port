@@ -83,7 +83,7 @@ const BackfillProgress = () => {
   const handlePurgeAll = async () => {
     if (
       !confirm(
-        "Are you sure you want to purge ALL backfill data? This will delete all backfill cursors, ledger updates, and ledger events. This action cannot be undone.",
+        "Are you sure you want to purge ALL backfill data? This will delete all backfill cursors and data files. This action cannot be undone.",
       )
     ) {
       return;
@@ -91,6 +91,26 @@ const BackfillProgress = () => {
 
     setIsPurging(true);
     try {
+      // Try local DuckDB API first
+      const localApiUrl = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
+      try {
+        const response = await fetch(`${localApiUrl}/api/backfill/purge`, { method: "DELETE" });
+        if (response.ok) {
+          const data = await response.json();
+          toast({
+            title: "Purge complete",
+            description: `Deleted ${data.deleted_cursors} cursor files${data.deleted_data_dir ? " and raw data directory" : ""}`,
+          });
+          refetch();
+          refetchStats();
+          setRealtimeCursors([]);
+          return;
+        }
+      } catch (localError) {
+        console.log("Local API not available, falling back to Supabase edge function");
+      }
+
+      // Fallback to Supabase edge function
       const { data, error } = await supabase.functions.invoke("purge-backfill-data", {
         body: { purge_all: true },
       });
@@ -102,7 +122,6 @@ const BackfillProgress = () => {
         description: `Deleted ${data.deleted_cursors} cursors, ${data.deleted_updates} updates, ${data.deleted_events} events`,
       });
 
-      // Refresh the cursors list
       refetch();
       refetchStats();
       setRealtimeCursors([]);

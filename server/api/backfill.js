@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import db from '../duckdb/connection.js';
@@ -118,6 +118,50 @@ router.get('/stats', async (req, res) => {
     });
   } catch (err) {
     console.error('Error getting backfill stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/backfill/purge - Purge all backfill data (local files)
+router.delete('/purge', (req, res) => {
+  try {
+    const dataDir = join(__dirname, '../../data');
+    const rawDir = join(dataDir, 'raw');
+    let deletedCursors = 0;
+    let deletedDataFiles = 0;
+
+    // Delete cursor files
+    if (existsSync(CURSOR_DIR)) {
+      const cursorFiles = readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json'));
+      for (const file of cursorFiles) {
+        try {
+          unlinkSync(join(CURSOR_DIR, file));
+          deletedCursors++;
+        } catch (err) {
+          console.error(`Error deleting cursor file ${file}:`, err.message);
+        }
+      }
+    }
+
+    // Delete raw data directory recursively
+    if (existsSync(rawDir)) {
+      try {
+        rmSync(rawDir, { recursive: true, force: true });
+        deletedDataFiles = 1; // Directory deleted
+      } catch (err) {
+        console.error('Error deleting raw data directory:', err.message);
+      }
+    }
+
+    console.log(`[backfill] Purged ${deletedCursors} cursors, deleted raw data: ${deletedDataFiles > 0}`);
+    
+    res.json({
+      success: true,
+      deleted_cursors: deletedCursors,
+      deleted_data_dir: deletedDataFiles > 0,
+    });
+  } catch (err) {
+    console.error('Error purging backfill data:', err);
     res.status(500).json({ error: err.message });
   }
 });
