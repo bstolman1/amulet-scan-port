@@ -16,17 +16,21 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats } from './write-parquet.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // TLS config - must be set before any requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-// Configuration
+// Configuration - use absolute paths relative to project root
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
-const CURSOR_DIR = process.env.CURSOR_DIR || './data/cursors';
+const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
 
 // Axios client
 const client = axios.create({

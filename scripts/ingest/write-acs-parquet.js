@@ -6,11 +6,15 @@
  */
 
 import { createWriteStream, mkdirSync, existsSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { getACSPartitionPath, ACS_COLUMNS } from './acs-schema.js';
 
-// Configuration
-const DATA_DIR = process.env.DATA_DIR || './data/raw';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Configuration - use absolute path relative to project root
+const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
 // In-memory buffer for batching
