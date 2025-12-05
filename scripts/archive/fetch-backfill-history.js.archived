@@ -1,0 +1,15 @@
+/**
+ * ARCHIVED: This script used to write to Supabase/Postgres.
+ * 
+ * The project now uses Parquet files + DuckDB for ledger data storage.
+ * See scripts/ingest/fetch-backfill-parquet.js for the new implementation.
+ * 
+ * Original file preserved for reference.
+ * Archived on: 2024-12-05
+ */
+
+// Original content moved to prevent accidental use.
+// See git history for full implementation.
+
+console.log("⚠️  This script is archived. Use scripts/ingest/fetch-backfill-parquet.js instead.");
+process.exit(1);
