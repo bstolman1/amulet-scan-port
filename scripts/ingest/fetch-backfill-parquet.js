@@ -273,6 +273,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   let totalEvents = 0;
   let pageCount = 0;
   
+  // Save initial cursor immediately so it shows up in UI
+  saveCursor(migrationId, synchronizerId, {
+    last_before: before,
+    total_updates: 0,
+    total_events: 0,
+    started_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }, minTime, maxTime);
+  console.log(`   💾 Created initial cursor file`);
+  
   while (true) {
     try {
       console.log(`   ➜ Requesting updates-before: before=${before}`);
@@ -313,8 +323,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       
       before = earliest;
       
-      // Save cursor periodically
-      if (pageCount % 10 === 0) {
+      // Save cursor frequently (every 5 pages = 2,500 items)
+      if (pageCount % 5 === 0 || pageCount === 1) {
+        console.log(`   💾 Saving cursor at page ${pageCount}...`);
         saveCursor(migrationId, synchronizerId, {
           last_before: before,
           total_updates: totalUpdates,
