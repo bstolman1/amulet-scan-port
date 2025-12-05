@@ -1,0 +1,17 @@
+{
+  "name": "ingest",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Canton ledger ingestion scripts for Parquet/DuckDB",
+  "scripts": {
+    "backfill": "node fetch-backfill-parquet.js",
+    "ingest": "node fetch-updates-parquet.js",
+    "rotate": "node rotate-parquet.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "duckdb": "^1.0.0",
+    "parquetjs": "^0.11.2"
+  }
+}
