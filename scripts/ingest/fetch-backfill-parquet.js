@@ -209,7 +209,7 @@ function getEventTime(txOrReassign) {
 /**
  * Process backfill items (transactions array from API response)
  */
-function processBackfillItems(transactions, migrationId) {
+async function processBackfillItems(transactions, migrationId) {
   const updates = [];
   const events = [];
   
@@ -237,8 +237,8 @@ function processBackfillItems(transactions, migrationId) {
     }
   }
   
-  bufferUpdates(updates);
-  bufferEvents(events);
+  await bufferUpdates(updates);
+  await bufferEvents(events);
   
   return { updates: updates.length, events: events.length };
 }
