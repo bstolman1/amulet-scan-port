@@ -1,8 +1,13 @@
 /**
- * Parquet Writer Module
+ * Parquet Writer Module - Optimized for High Throughput
  * 
  * Handles writing ledger data to partitioned parquet files.
- * Uses streaming writes to avoid memory limits with large datasets.
+ * Uses large buffers and async write queues for maximum performance.
+ * 
+ * Optimizations:
+ * - Large buffer size (100K rows) for better compression
+ * - Async write queue for parallel fetch + write
+ * - Streaming writes to avoid memory pressure
  */
 
 import { createWriteStream, mkdirSync, existsSync, readdirSync } from 'fs';
@@ -13,14 +18,18 @@ import { getPartitionPath, UPDATES_COLUMNS, EVENTS_COLUMNS } from './parquet-sch
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - use absolute path relative to project root
+// Configuration - OPTIMIZED for throughput
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
-const COMPRESSION = process.env.PARQUET_COMPRESSION || 'snappy';
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 100000; // 20x larger buffers
+const COMPRESSION = process.env.PARQUET_COMPRESSION || 'zstd';
 
 // In-memory buffers for batching
 let updatesBuffer = [];
 let eventsBuffer = [];
+
+// Async write queue for parallel fetch + write
+let writeQueue = [];
+let isWriting = false;
 
 /**
  * Ensure directory exists
@@ -52,20 +61,86 @@ function getNextFileNumber(partitionDir, prefix) {
 
 /**
  * Write rows to a JSON-lines file using streaming to avoid memory limits
+ * Returns a promise that resolves when writing is complete
  */
 function writeJsonLines(rows, filePath) {
   return new Promise((resolve, reject) => {
-    const stream = createWriteStream(filePath, { encoding: 'utf8' });
+    const stream = createWriteStream(filePath, { 
+      encoding: 'utf8',
+      highWaterMark: 64 * 1024 // 64KB write buffer for better I/O
+    });
     
     stream.on('error', reject);
     stream.on('finish', resolve);
     
-    for (const row of rows) {
-      stream.write(JSON.stringify(row) + '\n');
+    // Write in chunks for better memory efficiency
+    const chunkSize = 1000;
+    let i = 0;
+    
+    function writeChunk() {
+      let ok = true;
+      while (i < rows.length && ok) {
+        const end = Math.min(i + chunkSize, rows.length);
+        for (let j = i; j < end; j++) {
+          ok = stream.write(JSON.stringify(rows[j]) + '\n');
+        }
+        i = end;
+      }
+      
+      if (i < rows.length) {
+        // Wait for drain before continuing
+        stream.once('drain', writeChunk);
+      } else {
+        stream.end();
+      }
     }
     
-    stream.end();
+    writeChunk();
   });
+}
+
+/**
+ * Process the async write queue
+ * Runs writes in background while fetching continues
+ */
+async function processWriteQueue() {
+  if (isWriting || writeQueue.length === 0) return;
+  
+  isWriting = true;
+  
+  while (writeQueue.length > 0) {
+    const task = writeQueue.shift();
+    try {
+      await task.execute();
+      console.log(`📝 Wrote ${task.count} ${task.type} to ${task.file}`);
+    } catch (err) {
+      console.error(`❌ Write error for ${task.file}:`, err.message);
+      // Re-queue on failure
+      writeQueue.unshift(task);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  
+  isWriting = false;
+}
+
+/**
+ * Queue a write task for async processing
+ */
+function queueWrite(rows, filePath, type) {
+  const task = {
+    type,
+    file: filePath,
+    count: rows.length,
+    execute: () => writeJsonLines(rows, filePath)
+  };
+  
+  writeQueue.push(task);
+  
+  // Start processing queue in background (non-blocking)
+  setImmediate(() => processWriteQueue());
+  
+  return { file: filePath, count: rows.length, queued: true };
 }
 
 /**
@@ -77,15 +152,23 @@ export function createConversionScript() {
 -- DuckDB script to convert JSON-lines to Parquet
 -- Run: duckdb -c ".read convert-to-parquet.sql"
 
--- Convert updates
+-- Convert updates with optimized settings
 COPY (
   SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl')
-) TO 'data/raw/updates.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+) TO 'data/raw/updates.parquet' (
+  FORMAT PARQUET, 
+  COMPRESSION ZSTD,
+  ROW_GROUP_SIZE 100000
+);
 
--- Convert events  
+-- Convert events with optimized settings
 COPY (
   SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl')
-) TO 'data/raw/events.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+) TO 'data/raw/events.parquet' (
+  FORMAT PARQUET, 
+  COMPRESSION ZSTD,
+  ROW_GROUP_SIZE 100000
+);
 `;
 }
 
@@ -114,7 +197,7 @@ export async function bufferEvents(events) {
 }
 
 /**
- * Flush updates buffer to file
+ * Flush updates buffer to file (async queued)
  */
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
@@ -129,17 +212,16 @@ export async function flushUpdates() {
   const fileName = `updates-${String(fileNum).padStart(5, '0')}.jsonl`;
   const filePath = join(partitionDir, fileName);
   
-  await writeJsonLines(updatesBuffer, filePath);
-  
-  const count = updatesBuffer.length;
+  // Copy buffer and clear immediately (allows fetching to continue)
+  const rowsToWrite = [...updatesBuffer];
   updatesBuffer = [];
   
-  console.log(`📝 Wrote ${count} updates to ${filePath}`);
-  return { file: filePath, count };
+  // Queue write for async processing
+  return queueWrite(rowsToWrite, filePath, 'updates');
 }
 
 /**
- * Flush events buffer to file
+ * Flush events buffer to file (async queued)
  */
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
@@ -154,39 +236,55 @@ export async function flushEvents() {
   const fileName = `events-${String(fileNum).padStart(5, '0')}.jsonl`;
   const filePath = join(partitionDir, fileName);
   
-  await writeJsonLines(eventsBuffer, filePath);
-  
-  const count = eventsBuffer.length;
+  // Copy buffer and clear immediately (allows fetching to continue)
+  const rowsToWrite = [...eventsBuffer];
   eventsBuffer = [];
   
-  console.log(`📝 Wrote ${count} events to ${filePath}`);
-  return { file: filePath, count };
+  // Queue write for async processing
+  return queueWrite(rowsToWrite, filePath, 'events');
 }
 
 /**
- * Flush all buffers
+ * Flush all buffers and wait for write queue to complete
  */
 export async function flushAll() {
   const results = [];
   
+  // Flush any remaining buffered data
   const updatesResult = await flushUpdates();
   if (updatesResult) results.push(updatesResult);
   
   const eventsResult = await flushEvents();
   if (eventsResult) results.push(eventsResult);
   
+  // Wait for all queued writes to complete
+  while (writeQueue.length > 0 || isWriting) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  
   return results;
 }
 
 /**
- * Get buffer stats
+ * Get buffer and queue stats
  */
 export function getBufferStats() {
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
+    queuedWrites: writeQueue.length,
+    isWriting,
   };
+}
+
+/**
+ * Wait for write queue to drain (useful before shutdown)
+ */
+export async function waitForWrites() {
+  while (writeQueue.length > 0 || isWriting) {
+    await new Promise(r => setTimeout(r, 100));
+  }
 }
 
 export default {
@@ -196,5 +294,6 @@ export default {
   flushEvents,
   flushAll,
   getBufferStats,
+  waitForWrites,
   createConversionScript,
 };

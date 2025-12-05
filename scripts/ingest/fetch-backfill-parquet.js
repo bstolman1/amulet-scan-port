@@ -19,7 +19,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats } from './write-parquet.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites } from './write-parquet.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -437,16 +437,19 @@ async function runBackfill() {
 }
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down...');
-  flushAll();
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Shutting down... waiting for writes to complete');
+  await flushAll();
+  await waitForWrites();
+  console.log('✅ All writes complete');
   process.exit(0);
 });
 
 // Run
-runBackfill().catch(err => {
+runBackfill().catch(async err => {
   console.error('\n❌ FATAL:', err.message);
   console.error(err.stack);
-  flushAll();
+  await flushAll();
+  await waitForWrites();
   process.exit(1);
 });
