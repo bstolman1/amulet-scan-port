@@ -11,19 +11,24 @@ const db = new duckdb.Database(':memory:');
 const conn = db.connect();
 
 /**
- * Check if any files matching patterns exist (for graceful handling when no data)
+ * Find all data files matching patterns (for graceful handling when no data)
+ * Returns array of full file paths
  */
-function hasDataFiles(type = 'events') {
+function findDataFiles(type = 'events') {
   try {
-    if (!fs.existsSync(DATA_PATH)) return false;
-    const files = fs.readdirSync(DATA_PATH, { recursive: true });
-    return files.some(f => {
-      const name = String(f);
-      return name.includes(`${type}-`) && (name.endsWith('.jsonl') || name.endsWith('.jsonl.gz'));
-    });
+    if (!fs.existsSync(DATA_PATH)) return [];
+    const allFiles = fs.readdirSync(DATA_PATH, { recursive: true });
+    return allFiles
+      .map(f => String(f))
+      .filter(f => f.includes(`${type}-`) && (f.endsWith('.jsonl') || f.endsWith('.jsonl.gz')))
+      .map(f => path.join(DATA_PATH, f).replace(/\\/g, '/')); // Normalize to forward slashes for DuckDB
   } catch {
-    return false;
+    return [];
   }
+}
+
+function hasDataFiles(type = 'events') {
+  return findDataFiles(type).length > 0;
 }
 
 // Helper to run queries
@@ -67,8 +72,23 @@ export async function safeQuery(sql) {
   }
 }
 
-// Read JSON-lines file using DuckDB (supports both .jsonl and .jsonl.gz)
-// Uses UNION to work cross-platform (Windows doesn't support brace expansion)
+// Read JSON-lines files using DuckDB from explicit file list
+// This avoids glob pattern issues on Windows
+export function readJsonlFiles(filePaths) {
+  if (filePaths.length === 0) {
+    return `(SELECT NULL as placeholder WHERE false)`;
+  }
+  if (filePaths.length === 1) {
+    return `read_json_auto('${filePaths[0]}', union_by_name=true, ignore_errors=true)`;
+  }
+  // Union all files together
+  const selects = filePaths.map(f => 
+    `SELECT * FROM read_json_auto('${f}', union_by_name=true, ignore_errors=true)`
+  );
+  return `(${selects.join(' UNION ALL ')})`;
+}
+
+// Legacy function using glob patterns (may fail on Windows with no files)
 export function readJsonl(globPattern) {
   const gzPattern = globPattern.replace('.jsonl', '.jsonl.gz');
   return `(
@@ -98,46 +118,39 @@ export async function initializeViews() {
   }
   
   try {
-    // Try JSONL first (our primary format), then fallback to parquet
-    const jsonlEventsGlob = getFileGlob('events', null, 'jsonl');
-    const jsonlUpdatesGlob = getFileGlob('updates', null, 'jsonl');
+    // Find actual files and create views from them (avoids glob issues on Windows)
+    const eventFiles = findDataFiles('events');
+    const updateFiles = findDataFiles('updates');
     
-    if (hasEvents) {
+    console.log(`📂 Found ${eventFiles.length} event files, ${updateFiles.length} update files`);
+    
+    if (eventFiles.length > 0) {
       await query(`
         CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readJsonl(jsonlEventsGlob)}
+        SELECT * FROM ${readJsonlFiles(eventFiles)}
       `);
+    } else {
+      await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     }
     
-    if (hasUpdates) {
+    if (updateFiles.length > 0) {
       await query(`
         CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readJsonl(jsonlUpdatesGlob)}
+        SELECT * FROM ${readJsonlFiles(updateFiles)}
       `);
+    } else {
+      await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     }
     
-    console.log('✅ DuckDB views initialized (JSONL format)');
+    console.log('✅ DuckDB views initialized');
   } catch (err) {
-    console.warn('⚠️ Could not initialize JSONL views:', err.message);
-    
-    // Try parquet as fallback
+    console.error('❌ Failed to initialize views:', err.message);
+    // Create empty placeholder views as fallback
     try {
-      const parquetEventsGlob = getFileGlob('events', null, 'parquet');
-      const parquetUpdatesGlob = getFileGlob('updates', null, 'parquet');
-      
-      await query(`
-        CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readParquet(parquetEventsGlob)}
-      `);
-      
-      await query(`
-        CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readParquet(parquetUpdatesGlob)}
-      `);
-      
-      console.log('✅ DuckDB views initialized (Parquet format)');
+      await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
+      await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     } catch (e) {
-      console.warn('⚠️ Could not initialize views:', e.message);
+      console.error('❌ Failed to create placeholder views:', e.message);
     }
   }
 }
