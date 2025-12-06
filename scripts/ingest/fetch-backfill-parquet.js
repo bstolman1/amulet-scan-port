@@ -33,7 +33,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 4; // Concurrent API requests
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 1; // Sequential by default (set higher for parallel)
 
 // Axios client with connection pooling
 const client = axios.create({
@@ -475,10 +475,11 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
  */
 async function runBackfill() {
   console.log("\n" + "=".repeat(80));
-  console.log("🚀 Starting Canton ledger backfill (OPTIMIZED Parquet mode)");
+  console.log("🚀 Starting Canton ledger backfill (SEQUENTIAL Parquet mode)");
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES);
+  console.log("   Processing: Migrations sequentially, one at a time");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
   
