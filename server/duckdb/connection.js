@@ -50,11 +50,15 @@ export async function safeQuery(sql) {
   }
 }
 
-// Read JSON-lines file using DuckDB
+// Read JSON-lines file using DuckDB (supports both .jsonl and .jsonl.gz)
+// Uses UNION to work cross-platform (Windows doesn't support brace expansion)
 export function readJsonl(globPattern) {
-  // Support both .jsonl and .jsonl.gz files - DuckDB handles gzip automatically
-  const gzPattern = globPattern.replace('.jsonl', '.jsonl{,.gz}');
-  return `read_json_auto('${gzPattern}', union_by_name=true, ignore_errors=true)`;
+  const gzPattern = globPattern.replace('.jsonl', '.jsonl.gz');
+  return `(
+    SELECT * FROM read_json_auto('${globPattern}', union_by_name=true, ignore_errors=true)
+    UNION ALL
+    SELECT * FROM read_json_auto('${gzPattern}', union_by_name=true, ignore_errors=true)
+  )`;
 }
 
 // Read parquet file using DuckDB  
