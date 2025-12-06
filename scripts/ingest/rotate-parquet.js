@@ -31,7 +31,7 @@ function findJsonlFiles(dir) {
       
       if (entry.isDirectory()) {
         walk(fullPath);
-      } else if (entry.name.endsWith('.jsonl')) {
+      } else if (entry.name.endsWith('.jsonl') || entry.name.endsWith('.jsonl.gz')) {
         files.push(fullPath);
       }
     }
@@ -45,13 +45,16 @@ function findJsonlFiles(dir) {
  * Convert JSON-lines to parquet using DuckDB CLI
  */
 export function convertJsonlToParquet(jsonlPath) {
-  const parquetPath = jsonlPath.replace('.jsonl', '.parquet');
+  // Handle both .jsonl and .jsonl.gz files
+  const parquetPath = jsonlPath.replace('.jsonl.gz', '.parquet').replace('.jsonl', '.parquet');
   
   try {
+    // DuckDB's read_json_auto handles gzip automatically
     const sql = `
       COPY (
         SELECT * FROM read_json_auto('${jsonlPath}')
       ) TO '${parquetPath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
+    `;
     `;
     
     execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });

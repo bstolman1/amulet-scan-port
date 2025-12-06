@@ -276,10 +276,11 @@ export function createConversionScript() {
   return `
 -- DuckDB script to convert JSON-lines to Parquet
 -- Run: duckdb -c ".read convert-to-parquet.sql"
+-- Supports both .jsonl and .jsonl.gz files automatically
 
 -- Convert updates with optimized settings
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl')
+  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl{,.gz}')
 ) TO 'data/raw/updates.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
@@ -288,7 +289,7 @@ COPY (
 
 -- Convert events with optimized settings
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl')
+  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl{,.gz}')
 ) TO 'data/raw/events.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,

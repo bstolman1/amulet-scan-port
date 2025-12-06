@@ -67,7 +67,7 @@ async function findLatestTimestamp() {
   for (const dateDir of dateDirs.slice(0, 3)) {
     const dirPath = path.join(eventsDir, dateDir);
     const files = fs.readdirSync(dirPath)
-      .filter(f => f.endsWith('.jsonl'))
+      .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz'))
       .sort()
       .reverse();
     

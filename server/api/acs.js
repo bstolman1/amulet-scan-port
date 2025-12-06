@@ -10,7 +10,8 @@ const ACS_DATA_PATH = path.resolve(db.DATA_PATH, '../acs');
 
 // Helper to get ACS file glob
 const getACSSource = () => {
-  const jsonlPattern = `${ACS_DATA_PATH}/**/*.jsonl`;
+  // Support both .jsonl and .jsonl.gz files - DuckDB handles gzip automatically
+  const jsonlPattern = `${ACS_DATA_PATH}/**/*.jsonl{,.gz}`;
   return `read_json_auto('${jsonlPattern}', union_by_name=true, ignore_errors=true)`;
 };
 
@@ -19,7 +20,7 @@ function hasACSData() {
   try {
     if (!fs.existsSync(ACS_DATA_PATH)) return false;
     const files = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
-    return files.some(f => String(f).endsWith('.jsonl'));
+    return files.some(f => String(f).endsWith('.jsonl') || String(f).endsWith('.jsonl.gz'));
   } catch {
     return false;
   }

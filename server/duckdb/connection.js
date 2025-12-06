@@ -52,7 +52,9 @@ export async function safeQuery(sql) {
 
 // Read JSON-lines file using DuckDB
 export function readJsonl(globPattern) {
-  return `read_json_auto('${globPattern}', union_by_name=true, ignore_errors=true)`;
+  // Support both .jsonl and .jsonl.gz files - DuckDB handles gzip automatically
+  const gzPattern = globPattern.replace('.jsonl', '.jsonl{,.gz}');
+  return `read_json_auto('${gzPattern}', union_by_name=true, ignore_errors=true)`;
 }
 
 // Read parquet file using DuckDB  

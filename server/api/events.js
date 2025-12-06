@@ -3,8 +3,8 @@ import db from '../duckdb/connection.js';
 
 const router = Router();
 
-// Helper to get the correct read function for JSONL files
-const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`;
+// Helper to get the correct read function for JSONL files (supports both .jsonl and .jsonl.gz)
+const getUpdatesSource = () => `read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl{,.gz}', union_by_name=true, ignore_errors=true)`;
 
 // GET /api/events/latest - Get latest events
 router.get('/latest', async (req, res) => {
