@@ -138,13 +138,17 @@ function extractPackageName(templateId) {
 }
 
 /**
- * Get partition path for a timestamp
+ * Get partition path for a timestamp and optional migration ID
  */
-export function getPartitionPath(timestamp) {
+export function getPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   
+  // Include migration_id in path to keep migrations separate
+  if (migrationId) {
+    return `migration=${migrationId}/year=${year}/month=${month}/day=${day}`;
+  }
   return `year=${year}/month=${month}/day=${day}`;
 }
