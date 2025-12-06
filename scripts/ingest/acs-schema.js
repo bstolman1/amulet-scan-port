@@ -83,13 +83,17 @@ export function isTemplate(event, moduleName, entityName) {
 }
 
 /**
- * Get partition path for ACS snapshots (by date)
+ * Get partition path for ACS snapshots (by date and migration)
  */
-export function getACSPartitionPath(timestamp) {
+export function getACSPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   
+  // Include migration_id in path to keep migrations separate
+  if (migrationId) {
+    return `acs/migration=${migrationId}/year=${year}/month=${month}/day=${day}`;
+  }
   return `acs/year=${year}/month=${month}/day=${day}`;
 }

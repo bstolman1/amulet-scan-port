@@ -136,7 +136,7 @@ async function runMigrationSnapshot(migrationId) {
   const recordTime = await getSnapshotTimestamp(migrationId);
   console.log(`   Record time: ${recordTime}`);
   
-  setSnapshotTime(recordTime);
+  setSnapshotTime(recordTime, migrationId);
   
   // Stats
   let totalContracts = 0;

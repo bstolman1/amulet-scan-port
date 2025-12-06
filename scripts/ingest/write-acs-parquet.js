@@ -20,6 +20,7 @@ const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 // In-memory buffer for batching
 let contractsBuffer = [];
 let currentSnapshotTime = null;
+let currentMigrationId = null;
 
 /**
  * Ensure directory exists
@@ -68,10 +69,11 @@ function writeJsonLines(rows, filePath) {
 }
 
 /**
- * Set current snapshot time (for partitioning)
+ * Set current snapshot time and migration ID (for partitioning)
  */
-export function setSnapshotTime(time) {
+export function setSnapshotTime(time, migrationId = null) {
   currentSnapshotTime = time;
+  currentMigrationId = migrationId;
 }
 
 /**
@@ -93,7 +95,8 @@ export async function flushContracts() {
   if (contractsBuffer.length === 0) return null;
   
   const timestamp = currentSnapshotTime || contractsBuffer[0]?.snapshot_time || new Date();
-  const partition = getACSPartitionPath(timestamp);
+  const migrationId = currentMigrationId || contractsBuffer[0]?.migration_id || null;
+  const partition = getACSPartitionPath(timestamp, migrationId);
   const partitionDir = join(DATA_DIR, partition);
   
   ensureDir(partitionDir);
@@ -139,6 +142,7 @@ export function getBufferStats() {
 export function clearBuffers() {
   contractsBuffer = [];
   currentSnapshotTime = null;
+  currentMigrationId = null;
 }
 
 export default {
