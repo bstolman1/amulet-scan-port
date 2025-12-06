@@ -12,6 +12,9 @@
  */
 
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
+import { createGzip } from 'zlib';
+import { pipeline } from 'stream/promises';
+import { Readable } from 'stream';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
@@ -25,6 +28,7 @@ const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
 const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 3;
 const IO_BUFFER_SIZE = 256 * 1024; // 256KB for better disk throughput
+const USE_GZIP = process.env.DISABLE_GZIP !== 'true'; // Gzip enabled by default
 
 // In-memory buffers for batching
 let updatesBuffer = [];
@@ -50,46 +54,48 @@ function ensureDir(dirPath) {
 function generateFileName(prefix) {
   const ts = Date.now();
   const rand = randomBytes(4).toString('hex');
-  return `${prefix}-${ts}-${rand}.jsonl`;
+  const ext = USE_GZIP ? '.jsonl.gz' : '.jsonl';
+  return `${prefix}-${ts}-${rand}${ext}`;
 }
 
 /**
  * Write rows to JSON-lines file using streaming with batch serialization
+ * Optionally compresses with gzip for ~5-10x smaller files
  * Returns a promise that resolves when writing is complete
  */
-function writeJsonLines(rows, filePath) {
-  return new Promise((resolve, reject) => {
-    const stream = createWriteStream(filePath, { 
-      encoding: 'utf8',
-      highWaterMark: IO_BUFFER_SIZE
-    });
+async function writeJsonLines(rows, filePath) {
+  // Batch serialize all rows
+  const chunkSize = 2000;
+  const chunks = [];
+  
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const end = Math.min(i + chunkSize, rows.length);
+    chunks.push(rows.slice(i, end).map(r => JSON.stringify(r)).join('\n') + '\n');
+  }
+  
+  const content = chunks.join('');
+  
+  if (USE_GZIP) {
+    // Gzip compressed write
+    const readable = Readable.from([content]);
+    const gzip = createGzip({ level: 6 }); // Level 6 is good balance of speed/compression
+    const writable = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
     
-    stream.on('error', reject);
-    stream.on('finish', resolve);
-    
-    // Batch serialize and write in chunks for memory efficiency
-    const chunkSize = 2000;
-    let i = 0;
-    
-    function writeChunk() {
-      let ok = true;
-      while (i < rows.length && ok) {
-        const end = Math.min(i + chunkSize, rows.length);
-        // Batch serialize entire chunk at once (faster than individual writes)
-        const chunk = rows.slice(i, end).map(r => JSON.stringify(r)).join('\n') + '\n';
-        ok = stream.write(chunk);
-        i = end;
-      }
+    await pipeline(readable, gzip, writable);
+  } else {
+    // Plain text write
+    return new Promise((resolve, reject) => {
+      const stream = createWriteStream(filePath, { 
+        encoding: 'utf8',
+        highWaterMark: IO_BUFFER_SIZE
+      });
       
-      if (i < rows.length) {
-        stream.once('drain', writeChunk);
-      } else {
-        stream.end();
-      }
-    }
-    
-    writeChunk();
-  });
+      stream.on('error', reject);
+      stream.on('finish', resolve);
+      stream.write(content);
+      stream.end();
+    });
+  }
 }
 
 /**

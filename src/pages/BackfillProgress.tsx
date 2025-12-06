@@ -22,6 +22,29 @@ const BackfillProgress = () => {
     return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
   }, [cursors, realtimeCursors]);
 
+  // Group cursors by migration_id
+  const cursorsByMigration = useMemo(() => {
+    const grouped: Record<number, BackfillCursor[]> = {};
+    for (const cursor of allCursors) {
+      const migrationId = cursor.migration_id || 0;
+      if (!grouped[migrationId]) grouped[migrationId] = [];
+      grouped[migrationId].push(cursor);
+    }
+    // Sort by migration_id
+    return Object.entries(grouped)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([id, cursors]) => ({ migrationId: Number(id), cursors }));
+  }, [allCursors]);
+
+  // Determine current active migration (first non-complete migration)
+  const activeMigrationId = useMemo(() => {
+    for (const { migrationId, cursors } of cursorsByMigration) {
+      const allComplete = cursors.every(c => c.complete);
+      if (!allComplete) return migrationId;
+    }
+    return null;
+  }, [cursorsByMigration]);
+
   // Calculate cursor stats from allCursors (derived, not in useEffect)
   const cursorStats = useMemo(() => ({
     totalCursors: stats?.totalCursors || allCursors.length,
@@ -276,56 +299,83 @@ const BackfillProgress = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {allCursors.length === 0 ? (
+            <div className="space-y-6">
+              {cursorsByMigration.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">No cursors found</div>
               ) : (
-                allCursors.map((cursor) => {
-                  // Calculate progress percentage based on time range
-                  // Note: backfill goes backwards in time (max_time -> min_time)
-                  let progressPercent = 0;
-                  if (cursor.min_time && cursor.max_time && cursor.last_before) {
-                    const minTime = new Date(cursor.min_time).getTime();
-                    const maxTime = new Date(cursor.max_time).getTime();
-                    const currentTime = new Date(cursor.last_before).getTime();
-                    const totalRange = maxTime - minTime;
-                    // Calculate how much we've moved backward from max_time
-                    const progressFromMax = maxTime - currentTime;
-                    progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
-                  } else if (cursor.complete) {
-                    progressPercent = 100;
-                  }
-
+                cursorsByMigration.map(({ migrationId, cursors: migrationCursors }) => {
+                  const allComplete = migrationCursors.every(c => c.complete);
+                  const isActive = migrationId === activeMigrationId;
+                  const completedCount = migrationCursors.filter(c => c.complete).length;
+                  
                   return (
-                    <div key={cursor.id} className="space-y-2 p-4 rounded-lg bg-muted/50">
-                      <div className="flex items-center justify-between">
+                    <div key={migrationId} className="space-y-3">
+                      {/* Migration Header */}
+                      <div className="flex items-center justify-between border-b border-border/50 pb-2">
                         <div className="flex items-center gap-3">
-                          <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
-                          <Badge variant={cursor.complete ? "default" : "secondary"}>
-                            {cursor.complete ? "Complete" : "In Progress"}
-                          </Badge>
-                        </div>
-                        <div className="text-sm text-muted-foreground">
-                          Round {cursor.last_processed_round.toLocaleString()}
-                        </div>
-                      </div>
-                      {cursor.min_time && cursor.max_time && (
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="text-muted-foreground">Start: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
-                            <span className="text-muted-foreground">End: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
-                          </div>
-                          {cursor.last_before && (
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="text-primary font-semibold">Current: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}</span>
-                              <span className="text-primary font-semibold">{progressPercent.toFixed(1)}%</span>
-                            </div>
+                          <span className="text-lg font-semibold">Migration {migrationId}</span>
+                          {allComplete ? (
+                            <Badge variant="default" className="bg-green-600">Complete</Badge>
+                          ) : isActive ? (
+                            <Badge variant="default" className="bg-primary animate-pulse">Active</Badge>
+                          ) : (
+                            <Badge variant="secondary">Waiting</Badge>
                           )}
-                          <Progress value={progressPercent} className="h-2" />
                         </div>
-                      )}
-                      <div className="text-xs text-muted-foreground">
-                        Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}
+                        <span className="text-sm text-muted-foreground">
+                          {completedCount} / {migrationCursors.length} synchronizers
+                        </span>
+                      </div>
+                      
+                      {/* Cursors for this migration */}
+                      <div className="space-y-3 pl-4 border-l-2 border-border/30">
+                        {migrationCursors.map((cursor) => {
+                          let progressPercent = 0;
+                          if (cursor.min_time && cursor.max_time && cursor.last_before) {
+                            const minTime = new Date(cursor.min_time).getTime();
+                            const maxTime = new Date(cursor.max_time).getTime();
+                            const currentTime = new Date(cursor.last_before).getTime();
+                            const totalRange = maxTime - minTime;
+                            const progressFromMax = maxTime - currentTime;
+                            progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+                          } else if (cursor.complete) {
+                            progressPercent = 100;
+                          }
+
+                          return (
+                            <div key={cursor.id} className="space-y-2 p-3 rounded-lg bg-muted/50">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
+                                  <Badge variant={cursor.complete ? "default" : "secondary"} className="text-xs">
+                                    {cursor.complete ? "Complete" : "In Progress"}
+                                  </Badge>
+                                </div>
+                                <div className="text-sm text-muted-foreground">
+                                  Round {cursor.last_processed_round.toLocaleString()}
+                                </div>
+                              </div>
+                              {cursor.min_time && cursor.max_time && (
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-muted-foreground">Start: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
+                                    <span className="text-muted-foreground">End: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
+                                  </div>
+                                  {cursor.last_before && (
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="text-primary font-semibold">Current: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}</span>
+                                      <span className="text-primary font-semibold">{progressPercent.toFixed(1)}%</span>
+                                    </div>
+                                  )}
+                                  <Progress value={progressPercent} className="h-2" />
+                                </div>
+                              )}
+                              <div className="text-xs text-muted-foreground">
+                                Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
