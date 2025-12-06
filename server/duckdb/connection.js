@@ -1,5 +1,6 @@
 import duckdb from 'duckdb';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -8,6 +9,22 @@ const DATA_PATH = path.resolve(__dirname, '../../data/raw');
 // In-memory DuckDB instance
 const db = new duckdb.Database(':memory:');
 const conn = db.connect();
+
+/**
+ * Check if any files matching patterns exist (for graceful handling when no data)
+ */
+function hasDataFiles(type = 'events') {
+  try {
+    if (!fs.existsSync(DATA_PATH)) return false;
+    const files = fs.readdirSync(DATA_PATH, { recursive: true });
+    return files.some(f => {
+      const name = String(f);
+      return name.includes(`${type}-`) && (name.endsWith('.jsonl') || name.endsWith('.jsonl.gz'));
+    });
+  } catch {
+    return false;
+  }
+}
 
 // Helper to run queries
 export function query(sql, params = []) {
@@ -68,25 +85,40 @@ export function readParquet(globPattern) {
 
 // Initialize views for common queries
 export async function initializeViews() {
+  // Check if data files exist first to avoid DuckDB errors
+  const hasEvents = hasDataFiles('events');
+  const hasUpdates = hasDataFiles('updates');
+  
+  if (!hasEvents && !hasUpdates) {
+    console.log('ℹ️ No data files found yet - views will be created when data arrives');
+    // Create empty placeholder views
+    await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
+    await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
+    return;
+  }
+  
   try {
     // Try JSONL first (our primary format), then fallback to parquet
     const jsonlEventsGlob = getFileGlob('events', null, 'jsonl');
     const jsonlUpdatesGlob = getFileGlob('updates', null, 'jsonl');
     
-    // Create views for easier querying - using JSON-lines format
-    await query(`
-      CREATE OR REPLACE VIEW all_events AS
-      SELECT * FROM ${readJsonl(jsonlEventsGlob)}
-    `);
+    if (hasEvents) {
+      await query(`
+        CREATE OR REPLACE VIEW all_events AS
+        SELECT * FROM ${readJsonl(jsonlEventsGlob)}
+      `);
+    }
     
-    await query(`
-      CREATE OR REPLACE VIEW all_updates AS
-      SELECT * FROM ${readJsonl(jsonlUpdatesGlob)}
-    `);
+    if (hasUpdates) {
+      await query(`
+        CREATE OR REPLACE VIEW all_updates AS
+        SELECT * FROM ${readJsonl(jsonlUpdatesGlob)}
+      `);
+    }
     
     console.log('✅ DuckDB views initialized (JSONL format)');
   } catch (err) {
-    console.warn('⚠️ Could not initialize views (data may not exist yet):', err.message);
+    console.warn('⚠️ Could not initialize JSONL views:', err.message);
     
     // Try parquet as fallback
     try {
@@ -105,7 +137,7 @@ export async function initializeViews() {
       
       console.log('✅ DuckDB views initialized (Parquet format)');
     } catch (e) {
-      console.warn('⚠️ No data files found yet');
+      console.warn('⚠️ Could not initialize views:', e.message);
     }
   }
 }
