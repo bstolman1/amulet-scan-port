@@ -8,11 +8,13 @@ const router = Router();
 // ACS data path
 const ACS_DATA_PATH = path.resolve(db.DATA_PATH, '../acs');
 
-// Helper to get ACS file glob
+// Helper to get ACS file glob (uses UNION for cross-platform compatibility)
 const getACSSource = () => {
-  // Support both .jsonl and .jsonl.gz files - DuckDB handles gzip automatically
-  const jsonlPattern = `${ACS_DATA_PATH}/**/*.jsonl{,.gz}`;
-  return `read_json_auto('${jsonlPattern}', union_by_name=true, ignore_errors=true)`;
+  return `(
+    SELECT * FROM read_json_auto('${ACS_DATA_PATH}/**/*.jsonl', union_by_name=true, ignore_errors=true)
+    UNION ALL
+    SELECT * FROM read_json_auto('${ACS_DATA_PATH}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)
+  )`;
 };
 
 // Check if ACS data exists
