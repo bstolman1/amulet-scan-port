@@ -91,6 +91,12 @@ The DuckDB server exposes these endpoints:
 | `GET /api/contracts/templates/list` | All templates |
 | `GET /api/stats/overview` | Overview statistics |
 | `GET /api/search` | Search events |
+| `GET /api/acs/snapshots` | List ACS snapshots |
+| `GET /api/acs/latest` | Latest ACS snapshot |
+| `GET /api/acs/templates` | Template statistics |
+| `GET /api/acs/contracts` | Contracts by template |
+| `GET /api/acs/stats` | ACS overview stats |
+| `GET /api/acs/supply` | Supply statistics |
 
 ## Supabase Tables (Metadata Only)
 
@@ -102,3 +108,23 @@ These tables remain in Supabase for lightweight metadata:
 - `user_roles` - Authentication
 
 Heavy data tables (`ledger_updates`, `ledger_events`) are now stored in Parquet files.
+
+## Local ACS Snapshots
+
+The ACS snapshot data is stored in `data/acs/` directory with the following structure:
+```
+data/acs/
+  year=2024/
+    month=12/
+      day=11/
+        contracts-1.jsonl
+        contracts-2.jsonl
+```
+
+Run the ACS snapshot script to populate local data:
+```bash
+cd scripts/ingest
+node fetch-acs-parquet.js
+```
+
+The UI will automatically use local ACS data when `VITE_LEDGER_BACKEND=duckdb` is set.

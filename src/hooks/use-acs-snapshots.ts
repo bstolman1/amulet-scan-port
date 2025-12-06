@@ -1,39 +1,60 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useDuckDBForLedger } from "@/lib/backend-config";
+import {
+  getACSSnapshots as getLocalACSSnapshots,
+  getLatestACSSnapshot as getLocalLatestACSSnapshot,
+  getACSTemplates as getLocalACSTemplates,
+  getACSStats as getLocalACSStats,
+} from "@/lib/duckdb-api-client";
 
 export interface ACSSnapshot {
   id: string;
   timestamp: string;
   migration_id: number;
   record_time: string;
-  sv_url: string;
-  canonical_package: string | null;
-  amulet_total: number;
-  locked_total: number;
-  circulating_supply: number;
+  sv_url?: string;
+  canonical_package?: string | null;
+  amulet_total?: number;
+  locked_total?: number;
+  circulating_supply?: number;
   entry_count: number;
-  status: "processing" | "completed" | "failed";
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
+  status: "processing" | "completed" | "failed" | string;
+  error_message?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  source?: string;
 }
 
 export interface ACSTemplateStats {
-  id: string;
-  snapshot_id: string;
+  id?: string;
+  snapshot_id?: string;
   template_id: string;
   contract_count: number;
-  field_sums: Record<string, string> | null;
-  status_tallies: Record<string, number> | null;
-  storage_path: string | null;
-  created_at: string;
+  field_sums?: Record<string, string> | null;
+  status_tallies?: Record<string, number> | null;
+  storage_path?: string | null;
+  created_at?: string;
+  entity_name?: string;
+  module_name?: string;
 }
 
 export function useACSSnapshots() {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["acsSnapshots"],
+    queryKey: ["acsSnapshots", useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
+      if (useDuckDB) {
+        try {
+          const response = await getLocalACSSnapshots();
+          return response.data as ACSSnapshot[];
+        } catch (error) {
+          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+        }
+      }
+
       const { data, error } = await supabase
         .from("acs_snapshots")
         .select("*")
@@ -48,9 +69,20 @@ export function useACSSnapshots() {
 }
 
 export function useLatestACSSnapshot() {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["latestAcsSnapshot"],
+    queryKey: ["latestAcsSnapshot", useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
+      if (useDuckDB) {
+        try {
+          const response = await getLocalLatestACSSnapshot();
+          return response.data as ACSSnapshot | null;
+        } catch (error) {
+          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+        }
+      }
+
       const { data, error } = await supabase
         .from("acs_snapshots")
         .select("*")
@@ -68,9 +100,22 @@ export function useLatestACSSnapshot() {
 
 // Hook that returns the latest snapshot regardless of status (for pages that need data even from processing snapshots)
 export function useActiveSnapshot() {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["activeAcsSnapshot"],
+    queryKey: ["activeAcsSnapshot", useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
+      if (useDuckDB) {
+        try {
+          const response = await getLocalLatestACSSnapshot();
+          if (response.data) {
+            return { snapshot: response.data as ACSSnapshot, isProcessing: false };
+          }
+        } catch (error) {
+          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+        }
+      }
+
       // First try to get latest completed snapshot
       const { data: completed, error: completedError } = await supabase
         .from("acs_snapshots")
@@ -107,9 +152,27 @@ export function useActiveSnapshot() {
 }
 
 export function useTemplateStats(snapshotId: string | undefined) {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["acsTemplateStats", snapshotId],
+    queryKey: ["acsTemplateStats", snapshotId, useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
+      if (useDuckDB) {
+        try {
+          const response = await getLocalACSTemplates(100);
+          return response.data.map(t => ({
+            id: t.template_id,
+            snapshot_id: snapshotId,
+            template_id: t.template_id,
+            contract_count: t.contract_count,
+            entity_name: t.entity_name,
+            module_name: t.module_name,
+          })) as ACSTemplateStats[];
+        } catch (error) {
+          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+        }
+      }
+
       if (!snapshotId) return [];
 
       const { data, error } = await supabase
