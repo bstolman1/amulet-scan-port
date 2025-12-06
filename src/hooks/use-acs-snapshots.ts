@@ -1,13 +1,26 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { useDuckDBForLedger } from "@/lib/backend-config";
+import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
 import {
   getACSSnapshots as getLocalACSSnapshots,
   getLatestACSSnapshot as getLocalLatestACSSnapshot,
   getACSTemplates as getLocalACSTemplates,
-  getACSStats as getLocalACSStats,
 } from "@/lib/duckdb-api-client";
+
+// Cached DuckDB availability check to avoid repeated failed fetches
+let duckDBAvailable: boolean | null = null;
+let duckDBCheckTime = 0;
+async function isDuckDBAvailable(): Promise<boolean> {
+  const now = Date.now();
+  // Re-check every 30 seconds
+  if (duckDBAvailable !== null && now - duckDBCheckTime < 30_000) {
+    return duckDBAvailable;
+  }
+  duckDBAvailable = await checkDuckDBConnection();
+  duckDBCheckTime = now;
+  return duckDBAvailable;
+}
 
 export interface ACSSnapshot {
   id: string;
@@ -46,12 +59,13 @@ export function useACSSnapshots() {
   return useQuery({
     queryKey: ["acsSnapshots", useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
-      if (useDuckDB) {
+      // Only try DuckDB if configured AND server is available
+      if (useDuckDB && await isDuckDBAvailable()) {
         try {
           const response = await getLocalACSSnapshots();
           return response.data as ACSSnapshot[];
         } catch (error) {
-          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+          console.warn("DuckDB ACS fetch failed, falling back to Supabase:", error);
         }
       }
 
@@ -74,12 +88,13 @@ export function useLatestACSSnapshot() {
   return useQuery({
     queryKey: ["latestAcsSnapshot", useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
-      if (useDuckDB) {
+      // Only try DuckDB if configured AND server is available
+      if (useDuckDB && await isDuckDBAvailable()) {
         try {
           const response = await getLocalLatestACSSnapshot();
           return response.data as ACSSnapshot | null;
         } catch (error) {
-          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+          console.warn("DuckDB ACS fetch failed, falling back to Supabase:", error);
         }
       }
 
@@ -105,14 +120,15 @@ export function useActiveSnapshot() {
   return useQuery({
     queryKey: ["activeAcsSnapshot", useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
-      if (useDuckDB) {
+      // Only try DuckDB if configured AND server is available
+      if (useDuckDB && await isDuckDBAvailable()) {
         try {
           const response = await getLocalLatestACSSnapshot();
           if (response.data) {
             return { snapshot: response.data as ACSSnapshot, isProcessing: false };
           }
         } catch (error) {
-          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+          console.warn("DuckDB ACS fetch failed, falling back to Supabase:", error);
         }
       }
 
@@ -157,7 +173,8 @@ export function useTemplateStats(snapshotId: string | undefined) {
   return useQuery({
     queryKey: ["acsTemplateStats", snapshotId, useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
-      if (useDuckDB) {
+      // Only try DuckDB if configured AND server is available
+      if (useDuckDB && await isDuckDBAvailable()) {
         try {
           const response = await getLocalACSTemplates(100);
           return response.data.map(t => ({
@@ -169,7 +186,7 @@ export function useTemplateStats(snapshotId: string | undefined) {
             module_name: t.module_name,
           })) as ACSTemplateStats[];
         } catch (error) {
-          console.warn("DuckDB ACS API unavailable, falling back to Supabase:", error);
+          console.warn("DuckDB ACS fetch failed, falling back to Supabase:", error);
         }
       }
 
