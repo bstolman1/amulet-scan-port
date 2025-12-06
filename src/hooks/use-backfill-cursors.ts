@@ -13,6 +13,9 @@ export interface BackfillCursor {
   migration_id?: number | null;
   synchronizer_id?: string | null;
   last_before?: string | null;
+  total_updates?: number | null;
+  total_events?: number | null;
+  started_at?: string | null;
 }
 
 export interface BackfillStats {
