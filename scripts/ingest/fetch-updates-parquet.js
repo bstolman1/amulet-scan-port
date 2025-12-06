@@ -12,7 +12,7 @@ dotenv.config();
 import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats } from './write-parquet.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-parquet.js';
 
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
@@ -131,6 +131,8 @@ async function detectLatestMigration() {
     const response = await client.get('/v0/state/acs/snapshot-timestamp');
     migrationId = response.data.migration_id;
     console.log(`📍 Detected migration_id: ${migrationId}`);
+    // Set migration ID for partitioning
+    setMigrationId(migrationId);
     return migrationId;
   } catch (err) {
     console.error('Failed to detect migration:', err.message);

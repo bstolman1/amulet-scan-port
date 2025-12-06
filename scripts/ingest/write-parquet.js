@@ -29,6 +29,7 @@ const IO_BUFFER_SIZE = 256 * 1024; // 256KB for better disk throughput
 // In-memory buffers for batching
 let updatesBuffer = [];
 let eventsBuffer = [];
+let currentMigrationId = null;
 
 // Async write queue with parallel execution
 let writeQueue = [];
@@ -174,7 +175,8 @@ export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
   
   const timestamp = updatesBuffer[0]?.timestamp || new Date();
-  const partition = getPartitionPath(timestamp);
+  const migrationId = currentMigrationId || updatesBuffer[0]?.migration_id || null;
+  const partition = getPartitionPath(timestamp, migrationId);
   const partitionDir = join(DATA_DIR, partition);
   
   ensureDir(partitionDir);
@@ -198,7 +200,8 @@ export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
   
   const timestamp = eventsBuffer[0]?.timestamp || new Date();
-  const partition = getPartitionPath(timestamp);
+  const migrationId = currentMigrationId || eventsBuffer[0]?.migration_id || null;
+  const partition = getPartitionPath(timestamp, migrationId);
   const partitionDir = join(DATA_DIR, partition);
   
   ensureDir(partitionDir);
@@ -288,6 +291,20 @@ COPY (
 `;
 }
 
+/**
+ * Set current migration ID for partitioning
+ */
+export function setMigrationId(id) {
+  currentMigrationId = id;
+}
+
+/**
+ * Clear migration ID
+ */
+export function clearMigrationId() {
+  currentMigrationId = null;
+}
+
 export default {
   bufferUpdates,
   bufferEvents,
@@ -297,4 +314,6 @@ export default {
   getBufferStats,
   waitForWrites,
   createConversionScript,
+  setMigrationId,
+  clearMigrationId,
 };
