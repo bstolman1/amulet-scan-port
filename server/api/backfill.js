@@ -75,33 +75,33 @@ router.get('/cursors', (req, res) => {
 // GET /api/backfill/stats - Get backfill statistics from data files
 router.get('/stats', async (req, res) => {
   try {
-    // Get glob patterns for JSONL files
-    const updatesGlob = db.getFileGlob('updates', null, 'jsonl');
-    const eventsGlob = db.getFileGlob('events', null, 'jsonl');
+    // Find actual files (avoids Windows glob pattern issues)
+    const updateFiles = db.findDataFiles('updates');
+    const eventFiles = db.findDataFiles('events');
 
     // Count updates and events from JSONL files
     const [updatesResult, eventsResult] = await Promise.all([
-      db.safeQuery(`
-        SELECT COUNT(*) as count 
-        FROM ${db.readJsonl(updatesGlob)}
-      `).catch(() => [{ count: 0 }]),
-      db.safeQuery(`
-        SELECT COUNT(*) as count 
-        FROM ${db.readJsonl(eventsGlob)}
-      `).catch(() => [{ count: 0 }]),
+      updateFiles.length > 0 
+        ? db.safeQuery(`SELECT COUNT(*) as count FROM ${db.readJsonlFiles(updateFiles)}`).catch(() => [{ count: 0 }])
+        : Promise.resolve([{ count: 0 }]),
+      eventFiles.length > 0
+        ? db.safeQuery(`SELECT COUNT(*) as count FROM ${db.readJsonlFiles(eventFiles)}`).catch(() => [{ count: 0 }])
+        : Promise.resolve([{ count: 0 }]),
     ]);
 
     // Get unique migrations
     let activeMigrations = 0;
-    try {
-      const migrationsResult = await db.safeQuery(`
-        SELECT COUNT(DISTINCT migration_id) as count 
-        FROM ${db.readJsonl(updatesGlob)}
-        WHERE migration_id IS NOT NULL
-      `);
-      activeMigrations = Number(migrationsResult[0]?.count || 0);
-    } catch (e) {
-      // Data might not have migration_id column
+    if (updateFiles.length > 0) {
+      try {
+        const migrationsResult = await db.safeQuery(`
+          SELECT COUNT(DISTINCT migration_id) as count 
+          FROM ${db.readJsonlFiles(updateFiles)}
+          WHERE migration_id IS NOT NULL
+        `);
+        activeMigrations = Number(migrationsResult[0]?.count || 0);
+      } catch (e) {
+        // Data might not have migration_id column
+      }
     }
 
     // Read cursor stats

@@ -158,4 +158,4 @@ export async function initializeViews() {
 // Initialize on import
 initializeViews();
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readParquet, DATA_PATH };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readParquet, findDataFiles, DATA_PATH };
