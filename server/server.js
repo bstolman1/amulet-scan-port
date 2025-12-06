@@ -7,6 +7,7 @@ import statsRouter from './api/stats.js';
 import searchRouter from './api/search.js';
 import backfillRouter from './api/backfill.js';
 import acsRouter from './api/acs.js';
+import db, { initializeViews } from './duckdb/connection.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -14,9 +15,39 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// Root route - API info
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Amulet Scan DuckDB API',
+    version: '1.0.0',
+    status: 'ok',
+    endpoints: [
+      'GET /health',
+      'GET /api/events/latest',
+      'GET /api/stats/overview',
+      'GET /api/backfill/cursors',
+      'GET /api/backfill/stats',
+      'POST /api/refresh-views',
+    ],
+    dataPath: db.DATA_PATH,
+  });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Refresh DuckDB views (call after data ingestion)
+app.post('/api/refresh-views', async (req, res) => {
+  try {
+    console.log('🔄 Refreshing DuckDB views...');
+    await initializeViews();
+    res.json({ status: 'ok', message: 'Views refreshed successfully' });
+  } catch (err) {
+    console.error('Failed to refresh views:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // API routes
@@ -30,5 +61,5 @@ app.use('/api/acs', acsRouter);
 
 app.listen(PORT, () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
-  console.log(`📁 Reading data files from ../data/`);
+  console.log(`📁 Reading data files from ${db.DATA_PATH}`);
 });
