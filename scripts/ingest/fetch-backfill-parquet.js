@@ -21,7 +21,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites } from './write-parquet.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData } from './write-parquet.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,6 +34,7 @@ const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.networ
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
 const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 4; // Concurrent API requests per synchronizer
+const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
 
 // Axios client with connection pooling
 const client = axios.create({
@@ -479,6 +480,7 @@ async function runBackfill() {
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES, "(per synchronizer)");
+  console.log("   PURGE_AFTER_MIGRATION:", PURGE_AFTER_MIGRATION);
   console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
@@ -537,6 +539,13 @@ async function runBackfill() {
     }
     
     console.log(`✅ Completed migration ${migrationId}`);
+    
+    // Purge migration data to free disk space before next migration
+    if (PURGE_AFTER_MIGRATION) {
+      console.log(`\n🗑️ Purging migration ${migrationId} data to free disk space...`);
+      await waitForWrites(); // Ensure all writes are complete
+      purgeMigrationData(migrationId);
+    }
   }
   
   const grandTotalTime = ((Date.now() - grandStartTime) / 1000).toFixed(1);
