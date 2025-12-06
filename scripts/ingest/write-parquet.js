@@ -11,7 +11,7 @@
  * - Large I/O buffers (256KB)
  */
 
-import { createWriteStream, mkdirSync, existsSync } from 'fs';
+import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
@@ -305,6 +305,58 @@ export function clearMigrationId() {
   currentMigrationId = null;
 }
 
+/**
+ * Purge all data files for a specific migration
+ * Call this after migration data has been processed/uploaded to free disk space
+ */
+export function purgeMigrationData(migrationId) {
+  const migrationPrefix = `migration_id=${migrationId}`;
+  let deletedFiles = 0;
+  let deletedDirs = 0;
+  
+  if (!existsSync(DATA_DIR)) {
+    console.log(`   ℹ️ Data directory doesn't exist, nothing to purge`);
+    return { deletedFiles: 0, deletedDirs: 0 };
+  }
+  
+  // Find and delete migration-specific partition directories
+  const entries = readdirSync(DATA_DIR, { withFileTypes: true });
+  
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith(migrationPrefix)) {
+      const dirPath = join(DATA_DIR, entry.name);
+      try {
+        rmSync(dirPath, { recursive: true, force: true });
+        deletedDirs++;
+        console.log(`   🗑️ Deleted partition: ${entry.name}`);
+      } catch (err) {
+        console.error(`   ❌ Failed to delete ${dirPath}: ${err.message}`);
+      }
+    }
+  }
+  
+  console.log(`   ✅ Purged migration ${migrationId}: ${deletedDirs} directories removed`);
+  return { deletedFiles, deletedDirs };
+}
+
+/**
+ * Purge all data in the raw directory
+ */
+export function purgeAllData() {
+  if (!existsSync(DATA_DIR)) {
+    console.log(`   ℹ️ Data directory doesn't exist, nothing to purge`);
+    return;
+  }
+  
+  try {
+    rmSync(DATA_DIR, { recursive: true, force: true });
+    mkdirSync(DATA_DIR, { recursive: true });
+    console.log(`   ✅ Purged all data from ${DATA_DIR}`);
+  } catch (err) {
+    console.error(`   ❌ Failed to purge data: ${err.message}`);
+  }
+}
+
 export default {
   bufferUpdates,
   bufferEvents,
@@ -316,4 +368,6 @@ export default {
   createConversionScript,
   setMigrationId,
   clearMigrationId,
+  purgeMigrationData,
+  purgeAllData,
 };
