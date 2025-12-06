@@ -5,10 +5,51 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
-import { Database, Activity, Trash2, FileText, Layers, Zap } from "lucide-react";
-import { formatDistanceToNow, format } from "date-fns";
+import { Database, Activity, Trash2, FileText, Layers, Zap, Clock } from "lucide-react";
+import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
 import { useBackfillCursors, useBackfillStats, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
+
+/**
+ * Calculate ETA for a cursor based on throughput
+ */
+function calculateETA(cursor: BackfillCursor): { eta: string | null; throughput: number | null } {
+  if (cursor.complete) return { eta: null, throughput: null };
+  if (!cursor.min_time || !cursor.max_time || !cursor.last_before) return { eta: null, throughput: null };
+  if (!cursor.started_at || !cursor.total_updates) return { eta: null, throughput: null };
+  
+  const startedAt = new Date(cursor.started_at).getTime();
+  const now = new Date(cursor.updated_at).getTime();
+  const elapsedMs = now - startedAt;
+  
+  if (elapsedMs <= 0) return { eta: null, throughput: null };
+  
+  // Calculate throughput based on time range covered
+  const minTime = new Date(cursor.min_time).getTime();
+  const maxTime = new Date(cursor.max_time).getTime();
+  const currentTime = new Date(cursor.last_before).getTime();
+  
+  const totalRange = maxTime - minTime;
+  const processedRange = maxTime - currentTime;
+  const remainingRange = currentTime - minTime;
+  
+  if (processedRange <= 0 || totalRange <= 0) return { eta: null, throughput: null };
+  
+  // Time per millisecond of data range
+  const msPerDataMs = elapsedMs / processedRange;
+  const estimatedRemainingMs = remainingRange * msPerDataMs;
+  
+  // Throughput in updates per second
+  const throughput = Math.round(cursor.total_updates / (elapsedMs / 1000));
+  
+  if (estimatedRemainingMs <= 0) return { eta: "Almost done", throughput };
+  if (estimatedRemainingMs > 365 * 24 * 60 * 60 * 1000) return { eta: "> 1 year", throughput };
+  
+  const duration = intervalToDuration({ start: 0, end: Math.round(estimatedRemainingMs) });
+  const eta = formatDuration(duration, { format: ['days', 'hours', 'minutes'], zero: false }) || "< 1 min";
+  
+  return { eta, throughput };
+}
 
 const BackfillProgress = () => {
   const { data: cursors = [], isLoading, refetch } = useBackfillCursors();
@@ -342,6 +383,8 @@ const BackfillProgress = () => {
                             progressPercent = 100;
                           }
 
+                          const { eta, throughput } = calculateETA(cursor);
+
                           return (
                             <div key={cursor.id} className="space-y-2 p-3 rounded-lg bg-muted/50">
                               <div className="flex items-center justify-between">
@@ -351,8 +394,11 @@ const BackfillProgress = () => {
                                     {cursor.complete ? "Complete" : "In Progress"}
                                   </Badge>
                                 </div>
-                                <div className="text-sm text-muted-foreground">
-                                  Round {cursor.last_processed_round.toLocaleString()}
+                                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                                  {throughput && (
+                                    <span className="text-blue-400">{throughput.toLocaleString()}/s</span>
+                                  )}
+                                  <span>Round {cursor.last_processed_round.toLocaleString()}</span>
                                 </div>
                               </div>
                               {cursor.min_time && cursor.max_time && (
@@ -368,10 +414,19 @@ const BackfillProgress = () => {
                                     </div>
                                   )}
                                   <Progress value={progressPercent} className="h-2" />
+                                  {eta && (
+                                    <div className="flex items-center gap-1 text-xs text-amber-400">
+                                      <Clock className="w-3 h-3" />
+                                      <span>ETA: {eta}</span>
+                                    </div>
+                                  )}
                                 </div>
                               )}
-                              <div className="text-xs text-muted-foreground">
-                                Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}
+                              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span>Updated {formatDistanceToNow(new Date(cursor.updated_at), { addSuffix: true })}</span>
+                                {cursor.total_updates && (
+                                  <span>{cursor.total_updates.toLocaleString()} updates processed</span>
+                                )}
                               </div>
                             </div>
                           );
