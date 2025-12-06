@@ -243,6 +243,66 @@ export async function searchContractById(idPrefix: string): Promise<ApiResponse<
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ACS (Active Contract Set) API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ACSSnapshot {
+  id: string;
+  timestamp: string;
+  migration_id: number;
+  record_time: string;
+  entry_count: number;
+  template_count?: number;
+  status: string;
+  source: string;
+}
+
+export interface ACSTemplateStats {
+  template_id: string;
+  entity_name: string;
+  module_name: string;
+  contract_count: number;
+  unique_contracts: number;
+}
+
+export interface ACSStats {
+  total_contracts: number;
+  total_templates: number;
+  total_snapshots: number;
+  latest_snapshot: string | null;
+  latest_record_time: string | null;
+}
+
+export async function getACSSnapshots(): Promise<ApiResponse<ACSSnapshot[]>> {
+  return apiFetch('/api/acs/snapshots');
+}
+
+export async function getLatestACSSnapshot(): Promise<{ data: ACSSnapshot | null }> {
+  return apiFetch('/api/acs/latest');
+}
+
+export async function getACSTemplates(limit = 100): Promise<ApiResponse<ACSTemplateStats[]>> {
+  return apiFetch(`/api/acs/templates?limit=${limit}`);
+}
+
+export async function getACSContracts(params: { template?: string; entity?: string; limit?: number; offset?: number }): Promise<ApiResponse<any[]>> {
+  const queryParams = new URLSearchParams();
+  if (params.template) queryParams.set('template', params.template);
+  if (params.entity) queryParams.set('entity', params.entity);
+  if (params.limit) queryParams.set('limit', params.limit.toString());
+  if (params.offset) queryParams.set('offset', params.offset.toString());
+  return apiFetch(`/api/acs/contracts?${queryParams}`);
+}
+
+export async function getACSStats(): Promise<{ data: ACSStats }> {
+  return apiFetch('/api/acs/stats');
+}
+
+export async function getACSSupply(): Promise<{ data: any }> {
+  return apiFetch('/api/acs/supply');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
 
