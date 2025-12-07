@@ -122,45 +122,63 @@ export function readParquet(globPattern) {
 // Initialize views for common queries
 export async function initializeViews() {
   // Check if data files exist first to avoid DuckDB errors
-  const hasEvents = hasDataFiles('events');
-  const hasUpdates = hasDataFiles('updates');
+  const eventFiles = findDataFiles('events');
+  const updateFiles = findDataFiles('updates');
   
-  if (!hasEvents && !hasUpdates) {
+  console.log(`📂 Found ${eventFiles.length} event files, ${updateFiles.length} update files`);
+  
+  if (eventFiles.length === 0 && updateFiles.length === 0) {
     console.log('ℹ️ No data files found yet - views will be created when data arrives');
-    // Create empty placeholder views
     await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     return;
   }
   
   try {
-    // Use glob patterns directly - more efficient for large datasets
-    const basePath = DATA_PATH.replace(/\\/g, '/');
-    
-    if (hasEvents) {
-      await query(`
-        CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readJsonlGlob('events')}
-      `);
-      console.log('✅ Created events view using glob pattern');
+    // For events view
+    if (eventFiles.length > 0) {
+      // Use glob pattern for large file counts, explicit list for small
+      if (eventFiles.length > 100) {
+        const basePath = DATA_PATH.replace(/\\/g, '/');
+        await query(`
+          CREATE OR REPLACE VIEW all_events AS
+          SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)
+        `);
+      } else {
+        await query(`
+          CREATE OR REPLACE VIEW all_events AS
+          SELECT * FROM ${readJsonlFiles(eventFiles)}
+        `);
+      }
+      console.log(`✅ Created events view (${eventFiles.length} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
+      console.log('ℹ️ No event files - created empty events view');
     }
     
-    if (hasUpdates) {
-      await query(`
-        CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readJsonlGlob('updates')}
-      `);
-      console.log('✅ Created updates view using glob pattern');
+    // For updates view
+    if (updateFiles.length > 0) {
+      if (updateFiles.length > 100) {
+        const basePath = DATA_PATH.replace(/\\/g, '/');
+        await query(`
+          CREATE OR REPLACE VIEW all_updates AS
+          SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
+        `);
+      } else {
+        await query(`
+          CREATE OR REPLACE VIEW all_updates AS
+          SELECT * FROM ${readJsonlFiles(updateFiles)}
+        `);
+      }
+      console.log(`✅ Created updates view (${updateFiles.length} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
+      console.log('ℹ️ No update files - created empty updates view');
     }
     
     console.log('✅ DuckDB views initialized');
   } catch (err) {
     console.error('❌ Failed to initialize views:', err.message);
-    // Create empty placeholder views as fallback
     try {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
