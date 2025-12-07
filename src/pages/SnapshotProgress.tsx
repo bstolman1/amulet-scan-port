@@ -5,28 +5,32 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { Clock, Database, FileText, Activity, CheckCircle, XCircle, Trash2 } from "lucide-react";
+import { Clock, Database, FileText, Activity, CheckCircle, XCircle, Trash2, Server } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
+import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
+import { getACSSnapshots, getACSTemplates, getACSStats, type ACSSnapshot as LocalACSSnapshot, type ACSTemplateStats as LocalACSTemplateStats } from "@/lib/duckdb-api-client";
 
 interface Snapshot {
   id: string;
-  round: number;
-  snapshot_data: any;
+  round?: number;
+  snapshot_data?: any;
   timestamp: string;
-  created_at: string;
+  created_at?: string;
   migration_id: number | null;
   record_time: string | null;
-  sv_url: string | null;
-  canonical_package: string | null;
-  amulet_total: number | null;
-  locked_total: number | null;
-  circulating_supply: number | null;
+  sv_url?: string | null;
+  canonical_package?: string | null;
+  amulet_total?: number | null;
+  locked_total?: number | null;
+  circulating_supply?: number | null;
   entry_count: number | null;
+  template_count?: number | null;
   status: string | null;
-  error_message: string | null;
-  updated_at: string | null;
+  error_message?: string | null;
+  updated_at?: string | null;
+  source?: string;
   // Computed fields
   processed_pages?: number;
   processed_events?: number;
@@ -41,7 +45,9 @@ interface TemplateStats {
   snapshot_id: string;
   template_id: string;
   contract_count: number;
-  created_at: string;
+  entity_name?: string;
+  module_name?: string;
+  created_at?: string;
   updated_at?: string;
 }
 
@@ -50,11 +56,32 @@ const SnapshotProgress = () => {
   const [templateStats, setTemplateStats] = useState<Record<string, TemplateStats[]>>({});
   const [loading, setLoading] = useState(true);
   const [isPurging, setIsPurging] = useState(false);
+  const [isLocalMode, setIsLocalMode] = useState(false);
+  const [localStats, setLocalStats] = useState<{ total_contracts: number; total_templates: number } | null>(null);
   const { toast } = useToast();
+  const useDuckDB = useDuckDBForLedger();
 
   useEffect(() => {
-    // Initial fetch
-    fetchSnapshots();
+    // Check if we should use local mode
+    const checkMode = async () => {
+      if (useDuckDB) {
+        const isConnected = await checkDuckDBConnection();
+        setIsLocalMode(isConnected);
+        if (isConnected) {
+          fetchLocalSnapshots();
+          return;
+        }
+      }
+      // Fall back to Supabase
+      fetchSnapshots();
+    };
+    
+    checkMode();
+  }, [useDuckDB]);
+
+  // Set up Supabase realtime subscriptions only when not in local mode
+  useEffect(() => {
+    if (isLocalMode) return;
 
     // Subscribe to realtime updates for snapshots
     const snapshotChannel = supabase
@@ -102,7 +129,57 @@ const SnapshotProgress = () => {
       supabase.removeChannel(snapshotChannel);
       supabase.removeChannel(templateChannel);
     };
-  }, []);
+  }, [isLocalMode]);
+
+  const fetchLocalSnapshots = async () => {
+    try {
+      const [snapshotsResponse, templatesResponse, statsResponse] = await Promise.all([
+        getACSSnapshots(),
+        getACSTemplates(100),
+        getACSStats(),
+      ]);
+
+      // Transform local snapshots to match UI format
+      const transformedSnapshots: Snapshot[] = snapshotsResponse.data.map((s: LocalACSSnapshot) => ({
+        id: s.id,
+        timestamp: s.timestamp,
+        migration_id: s.migration_id,
+        record_time: s.record_time,
+        entry_count: s.entry_count,
+        template_count: s.template_count,
+        status: s.status,
+        source: s.source,
+      }));
+
+      setSnapshots(transformedSnapshots);
+      setLocalStats({
+        total_contracts: statsResponse.data.total_contracts,
+        total_templates: statsResponse.data.total_templates,
+      });
+
+      // Set template stats for the first snapshot
+      if (transformedSnapshots.length > 0) {
+        const templates: TemplateStats[] = templatesResponse.data.map((t: LocalACSTemplateStats, idx: number) => ({
+          id: `local-template-${idx}`,
+          snapshot_id: transformedSnapshots[0].id,
+          template_id: t.template_id,
+          contract_count: t.contract_count,
+          entity_name: t.entity_name,
+          module_name: t.module_name,
+        }));
+        setTemplateStats({ [transformedSnapshots[0].id]: templates });
+      }
+    } catch (error) {
+      console.error("Error fetching local snapshots:", error);
+      toast({
+        title: "Error loading local ACS data",
+        description: "Make sure your DuckDB server is running",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchSnapshots = async () => {
     try {
@@ -146,7 +223,7 @@ const SnapshotProgress = () => {
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string | null) => {
     switch (status) {
       case "completed":
         return (
@@ -170,7 +247,7 @@ const SnapshotProgress = () => {
           </Badge>
         );
       default:
-        return <Badge>{status}</Badge>;
+        return <Badge>{status || "Unknown"}</Badge>;
     }
   };
 
@@ -220,6 +297,11 @@ const SnapshotProgress = () => {
     }
   };
 
+  const refreshLocalData = async () => {
+    setLoading(true);
+    await fetchLocalSnapshots();
+  };
+
   if (loading) {
     return (
       <DashboardLayout>
@@ -236,16 +318,56 @@ const SnapshotProgress = () => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold mb-2">ACS Snapshot</h1>
-            <p className="text-muted-foreground">Monitor live ACS snapshot uploads and template processing</p>
+            <p className="text-muted-foreground">
+              {isLocalMode ? (
+                <span className="flex items-center gap-2">
+                  <Server className="w-4 h-4 text-green-500" />
+                  Using local DuckDB data
+                </span>
+              ) : (
+                "Monitor live ACS snapshot uploads and template processing"
+              )}
+            </p>
           </div>
           <div className="flex gap-2">
-            <TriggerACSSnapshotButton />
-            <Button onClick={handlePurgeAll} disabled={isPurging} variant="destructive" size="sm">
-              <Trash2 className={`h-4 w-4 mr-2 ${isPurging ? "animate-spin" : ""}`} />
-              {isPurging ? "Purging..." : "Purge All ACS Data"}
-            </Button>
+            {isLocalMode ? (
+              <Button onClick={refreshLocalData} variant="outline" size="sm">
+                <Activity className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+            ) : (
+              <>
+                <TriggerACSSnapshotButton />
+                <Button onClick={handlePurgeAll} disabled={isPurging} variant="destructive" size="sm">
+                  <Trash2 className={`h-4 w-4 mr-2 ${isPurging ? "animate-spin" : ""}`} />
+                  {isPurging ? "Purging..." : "Purge All ACS Data"}
+                </Button>
+              </>
+            )}
           </div>
         </div>
+
+        {/* Local Mode Stats Summary */}
+        {isLocalMode && localStats && (
+          <Card className="glass-card border-green-500/20 bg-green-500/5">
+            <CardContent className="py-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <div className="text-sm text-muted-foreground">Total Contracts</div>
+                  <div className="text-2xl font-bold text-green-500">{localStats.total_contracts.toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Unique Templates</div>
+                  <div className="text-2xl font-bold text-green-500">{localStats.total_templates.toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-sm text-muted-foreground">Snapshots</div>
+                  <div className="text-2xl font-bold text-green-500">{snapshots.length}</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {snapshots.map((snapshot) => (
           <Card key={snapshot.id} className="glass-card">
@@ -255,9 +377,18 @@ const SnapshotProgress = () => {
                   <CardTitle className="flex items-center gap-2">
                     <Database className="w-5 h-5" />
                     Migration #{snapshot.migration_id}
+                    {snapshot.source === 'local' && (
+                      <Badge variant="outline" className="text-green-500 border-green-500/50">
+                        <Server className="w-3 h-3 mr-1" />
+                        Local
+                      </Badge>
+                    )}
                   </CardTitle>
                   <CardDescription>
-                    Created {formatDistanceToNow(new Date(snapshot.timestamp), { addSuffix: true })}
+                    {snapshot.record_time 
+                      ? `Record time: ${new Date(snapshot.record_time).toLocaleString()}`
+                      : `Created ${formatDistanceToNow(new Date(snapshot.timestamp), { addSuffix: true })}`
+                    }
                   </CardDescription>
                 </div>
                 {getStatusBadge(snapshot.status)}
@@ -275,74 +406,106 @@ const SnapshotProgress = () => {
                 </div>
               )}
 
-              {/* Stats Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <FileText className="w-4 h-4" />
-                    Pages Processed
+              {/* Stats Grid - Show different stats for local vs remote */}
+              {isLocalMode ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Database className="w-4 h-4" />
+                      Contracts
+                    </div>
+                    <p className="text-2xl font-bold">{snapshot.entry_count?.toLocaleString() || 0}</p>
                   </div>
-                  <p className="text-2xl font-bold">{snapshot.processed_pages?.toLocaleString() || 0}</p>
-                </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Activity className="w-4 h-4" />
-                    Events Processed
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <FileText className="w-4 h-4" />
+                      Templates
+                    </div>
+                    <p className="text-2xl font-bold">{snapshot.template_count?.toLocaleString() || 0}</p>
                   </div>
-                  <p className="text-2xl font-bold">{snapshot.processed_events?.toLocaleString() || 0}</p>
-                </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Clock className="w-4 h-4" />
-                    Elapsed Time
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Clock className="w-4 h-4" />
+                      Snapshot Time
+                    </div>
+                    <p className="text-lg font-medium">
+                      {new Date(snapshot.timestamp).toLocaleDateString()}
+                    </p>
                   </div>
-                  <p className="text-2xl font-bold">{formatDuration(snapshot.elapsed_time_ms || 0)}</p>
                 </div>
-
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Activity className="w-4 h-4" />
-                    Pages/Min
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <FileText className="w-4 h-4" />
+                      Pages Processed
+                    </div>
+                    <p className="text-2xl font-bold">{snapshot.processed_pages?.toLocaleString() || 0}</p>
                   </div>
-                  <p className="text-2xl font-bold">{Number(snapshot.pages_per_minute ?? 0).toFixed(1)}</p>
-                </div>
-              </div>
 
-              {/* New Activity Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-lg bg-primary/5 border border-primary/10">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Database className="w-4 h-4" />
-                    Total Contracts
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Activity className="w-4 h-4" />
+                      Events Processed
+                    </div>
+                    <p className="text-2xl font-bold">{snapshot.processed_events?.toLocaleString() || 0}</p>
                   </div>
-                  <p className="text-2xl font-bold text-primary">
-                    {templateStats[snapshot.id]
-                      ?.reduce((sum, stat) => sum + stat.contract_count, 0)
-                      ?.toLocaleString() || 0}
-                  </p>
-                </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Activity className="w-4 h-4" />
-                    Template Updates
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Clock className="w-4 h-4" />
+                      Elapsed Time
+                    </div>
+                    <p className="text-2xl font-bold">{formatDuration(snapshot.elapsed_time_ms || 0)}</p>
                   </div>
-                  <p className="text-2xl font-bold text-primary">{snapshot.template_batch_updates || 0}</p>
-                </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <FileText className="w-4 h-4" />
-                    Unique Templates
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Activity className="w-4 h-4" />
+                      Pages/Min
+                    </div>
+                    <p className="text-2xl font-bold">{Number(snapshot.pages_per_minute ?? 0).toFixed(1)}</p>
                   </div>
-                  <p className="text-2xl font-bold text-primary">{templateStats[snapshot.id]?.length || 0}</p>
                 </div>
-              </div>
+              )}
 
-              {/* Last Batch Info */}
-              {snapshot.last_batch_info && (
+              {/* Activity Metrics - Only for Supabase mode */}
+              {!isLocalMode && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-lg bg-primary/5 border border-primary/10">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Database className="w-4 h-4" />
+                      Total Contracts
+                    </div>
+                    <p className="text-2xl font-bold text-primary">
+                      {templateStats[snapshot.id]
+                        ?.reduce((sum, stat) => sum + stat.contract_count, 0)
+                        ?.toLocaleString() || 0}
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Activity className="w-4 h-4" />
+                      Template Updates
+                    </div>
+                    <p className="text-2xl font-bold text-primary">{snapshot.template_batch_updates || 0}</p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <FileText className="w-4 h-4" />
+                      Unique Templates
+                    </div>
+                    <p className="text-2xl font-bold text-primary">{templateStats[snapshot.id]?.length || 0}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Last Batch Info - Only for Supabase mode */}
+              {!isLocalMode && snapshot.last_batch_info && (
                 <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-green-600 dark:text-green-400 font-medium">
@@ -359,23 +522,34 @@ const SnapshotProgress = () => {
               {/* Template Stats */}
               {templateStats[snapshot.id] && templateStats[snapshot.id].length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-sm font-medium">Template Activity</h4>
+                  <h4 className="text-sm font-medium">
+                    {isLocalMode ? "Top Templates" : "Template Activity"}
+                  </h4>
                   <div className="max-h-64 overflow-y-auto space-y-2">
-                    {templateStats[snapshot.id].map((stat) => {
-                      const isRecent = new Date(stat.updated_at).getTime() > Date.now() - 5 * 60 * 1000;
+                    {templateStats[snapshot.id].slice(0, 20).map((stat, idx) => {
+                      const isRecent = stat.updated_at && new Date(stat.updated_at).getTime() > Date.now() - 5 * 60 * 1000;
                       return (
                         <div
-                          key={stat.id}
+                          key={stat.id || `stat-${idx}`}
                           className={`flex items-center justify-between p-2 rounded-lg text-sm ${
                             isRecent ? "bg-green-500/10 border border-green-500/20" : "bg-muted/50"
                           }`}
                         >
-                          <span className="font-mono text-xs truncate flex-1">{stat.template_id}</span>
+                          <div className="flex flex-col flex-1 min-w-0">
+                            {stat.entity_name && (
+                              <span className="font-medium text-foreground">{stat.entity_name}</span>
+                            )}
+                            <span className="font-mono text-xs truncate text-muted-foreground">
+                              {stat.module_name ? `${stat.module_name}:${stat.entity_name}` : stat.template_id}
+                            </span>
+                          </div>
                           <div className="flex items-center gap-2">
                             <Badge variant="secondary">{stat.contract_count.toLocaleString()} contracts</Badge>
-                            <span className="text-xs text-muted-foreground">
-                              {formatDistanceToNow(new Date(stat.updated_at), { addSuffix: true })}
-                            </span>
+                            {stat.updated_at && (
+                              <span className="text-xs text-muted-foreground">
+                                {formatDistanceToNow(new Date(stat.updated_at), { addSuffix: true })}
+                              </span>
+                            )}
                           </div>
                         </div>
                       );
@@ -405,7 +579,12 @@ const SnapshotProgress = () => {
           <Card className="glass-card">
             <CardContent className="flex flex-col items-center justify-center py-12">
               <Database className="w-12 h-12 text-muted-foreground mb-4" />
-              <p className="text-muted-foreground">No snapshots found. Trigger a snapshot to see real-time progress.</p>
+              <p className="text-muted-foreground">
+                {isLocalMode 
+                  ? "No local ACS data found. Run fetch-acs-parquet.js to populate data."
+                  : "No snapshots found. Trigger a snapshot to see real-time progress."
+                }
+              </p>
             </CardContent>
           </Card>
         )}
