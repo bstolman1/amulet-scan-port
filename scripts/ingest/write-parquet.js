@@ -27,8 +27,8 @@ const __dirname = dirname(__filename);
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000; // Reduced from 10000
-const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 3;
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000; // Streaming allows larger batches
+const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 6;
 const IO_BUFFER_SIZE = 256 * 1024; // 256KB for better disk throughput
 const USE_GZIP = process.env.DISABLE_GZIP !== 'true'; // Gzip enabled by default
 const MAX_ROW_SIZE_BYTES = 10 * 1024 * 1024; // 10MB max per row - skip larger ones
