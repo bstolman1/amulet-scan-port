@@ -74,13 +74,28 @@ export async function safeQuery(sql) {
 
 // Read JSON-lines files using DuckDB glob patterns (more efficient for large datasets)
 // Uses forward slashes which DuckDB handles on all platforms
+// Only includes patterns that have matching files to avoid "No files found" errors
 export function readJsonlGlob(type = 'events') {
   const basePath = DATA_PATH.replace(/\\/g, '/');
-  return `(
-    SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl', union_by_name=true, ignore_errors=true)
-    UNION ALL
-    SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  )`;
+  
+  // Check which file types actually exist
+  const files = findDataFiles(type);
+  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz'));
+  const hasGzip = files.some(f => f.endsWith('.jsonl.gz'));
+  
+  if (!hasJsonl && !hasGzip) {
+    return `(SELECT NULL as placeholder WHERE false)`;
+  }
+  
+  const queries = [];
+  if (hasJsonl) {
+    queries.push(`SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl', union_by_name=true, ignore_errors=true)`);
+  }
+  if (hasGzip) {
+    queries.push(`SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  }
+  
+  return `(${queries.join(' UNION ALL ')})`;
 }
 
 // Read from explicit file list - use only for small lists (<100 files)
