@@ -5,8 +5,8 @@ import fs from 'fs';
 
 const router = Router();
 
-// ACS data path
-const ACS_DATA_PATH = path.resolve(db.DATA_PATH, '../acs');
+// ACS data path - data is written to DATA_PATH/acs/ by the ingest scripts
+const ACS_DATA_PATH = path.resolve(db.DATA_PATH, 'acs');
 
 // Helper to get ACS file glob (uses UNION for cross-platform compatibility)
 const getACSSource = () => {
