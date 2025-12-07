@@ -394,11 +394,16 @@ const BackfillProgress = () => {
                                     {cursor.complete ? "Complete" : "In Progress"}
                                   </Badge>
                                 </div>
-                                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                              <div className="flex items-center gap-3 text-sm text-muted-foreground">
                                   {throughput && (
                                     <span className="text-blue-400">{throughput.toLocaleString()}/s</span>
                                   )}
-                                  <span>Round {cursor.last_processed_round.toLocaleString()}</span>
+                                  {cursor.total_updates ? (
+                                    <span className="text-green-400">{cursor.total_updates.toLocaleString()} updates</span>
+                                  ) : null}
+                                  {cursor.total_events ? (
+                                    <span className="text-yellow-400">{cursor.total_events.toLocaleString()} events</span>
+                                  ) : null}
                                 </div>
                               </div>
                               {cursor.min_time && cursor.max_time && (
