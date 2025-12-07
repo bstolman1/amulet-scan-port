@@ -72,23 +72,39 @@ export async function safeQuery(sql) {
   }
 }
 
-// Read JSON-lines files using DuckDB from explicit file list
-// This avoids glob pattern issues on Windows
+// Read JSON-lines files using DuckDB glob patterns (more efficient for large datasets)
+// Uses forward slashes which DuckDB handles on all platforms
+export function readJsonlGlob(type = 'events') {
+  const basePath = DATA_PATH.replace(/\\/g, '/');
+  return `(
+    SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl', union_by_name=true, ignore_errors=true)
+    UNION ALL
+    SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl.gz', union_by_name=true, ignore_errors=true)
+  )`;
+}
+
+// Read from explicit file list - use only for small lists (<100 files)
 export function readJsonlFiles(filePaths) {
   if (filePaths.length === 0) {
     return `(SELECT NULL as placeholder WHERE false)`;
   }
+  // For large file counts, fall back to glob patterns
+  if (filePaths.length > 100) {
+    console.warn(`⚠️ Too many files (${filePaths.length}), using glob pattern instead`);
+    // Detect type from first file path
+    const type = filePaths[0].includes('events-') ? 'events' : 'updates';
+    return readJsonlGlob(type);
+  }
   if (filePaths.length === 1) {
     return `read_json_auto('${filePaths[0]}', union_by_name=true, ignore_errors=true)`;
   }
-  // Union all files together
   const selects = filePaths.map(f => 
     `SELECT * FROM read_json_auto('${f}', union_by_name=true, ignore_errors=true)`
   );
   return `(${selects.join(' UNION ALL ')})`;
 }
 
-// Legacy function using glob patterns (may fail on Windows with no files)
+// Legacy function using glob patterns
 export function readJsonl(globPattern) {
   const gzPattern = globPattern.replace('.jsonl', '.jsonl.gz');
   return `(
@@ -118,26 +134,25 @@ export async function initializeViews() {
   }
   
   try {
-    // Find actual files and create views from them (avoids glob issues on Windows)
-    const eventFiles = findDataFiles('events');
-    const updateFiles = findDataFiles('updates');
+    // Use glob patterns directly - more efficient for large datasets
+    const basePath = DATA_PATH.replace(/\\/g, '/');
     
-    console.log(`📂 Found ${eventFiles.length} event files, ${updateFiles.length} update files`);
-    
-    if (eventFiles.length > 0) {
+    if (hasEvents) {
       await query(`
         CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readJsonlFiles(eventFiles)}
+        SELECT * FROM ${readJsonlGlob('events')}
       `);
+      console.log('✅ Created events view using glob pattern');
     } else {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     }
     
-    if (updateFiles.length > 0) {
+    if (hasUpdates) {
       await query(`
         CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readJsonlFiles(updateFiles)}
+        SELECT * FROM ${readJsonlGlob('updates')}
       `);
+      console.log('✅ Created updates view using glob pattern');
     } else {
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     }
