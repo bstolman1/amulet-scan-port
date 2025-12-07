@@ -8,24 +8,54 @@ const router = Router();
 // ACS data path - data is written to DATA_PATH/acs/ by the ingest scripts
 const ACS_DATA_PATH = path.resolve(db.DATA_PATH, 'acs');
 
-// Helper to get ACS file glob (uses UNION for cross-platform compatibility)
+// Find ACS files and return their paths
+function findACSFiles() {
+  try {
+    if (!fs.existsSync(ACS_DATA_PATH)) return [];
+    const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
+    return allFiles
+      .map(f => String(f))
+      .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz'))
+      .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
+  } catch {
+    return [];
+  }
+}
+
+// Helper to get ACS source - builds query from actual files found
 const getACSSource = () => {
-  return `(
-    SELECT * FROM read_json_auto('${ACS_DATA_PATH}/**/*.jsonl', union_by_name=true, ignore_errors=true)
-    UNION ALL
-    SELECT * FROM read_json_auto('${ACS_DATA_PATH}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  )`;
+  const files = findACSFiles();
+  if (files.length === 0) {
+    return `(SELECT NULL as placeholder WHERE false)`;
+  }
+  
+  // For small file counts, use explicit list
+  if (files.length <= 100) {
+    const selects = files.map(f => 
+      `SELECT * FROM read_json_auto('${f}', union_by_name=true, ignore_errors=true)`
+    );
+    return `(${selects.join(' UNION ALL ')})`;
+  }
+  
+  // For large counts, use glob but only for file types that exist
+  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz'));
+  const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
+  const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
+  
+  const parts = [];
+  if (hasJsonl) {
+    parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl', union_by_name=true, ignore_errors=true)`);
+  }
+  if (hasGz) {
+    parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  }
+  
+  return parts.length > 0 ? `(${parts.join(' UNION ALL ')})` : `(SELECT NULL as placeholder WHERE false)`;
 };
 
 // Check if ACS data exists
 function hasACSData() {
-  try {
-    if (!fs.existsSync(ACS_DATA_PATH)) return false;
-    const files = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
-    return files.some(f => String(f).endsWith('.jsonl') || String(f).endsWith('.jsonl.gz'));
-  } catch {
-    return false;
-  }
+  return findACSFiles().length > 0;
 }
 
 // GET /api/acs/snapshots - List all available snapshots
