@@ -120,65 +120,59 @@ export function readParquet(globPattern) {
 }
 
 // Initialize views for common queries
+// For large datasets, we skip view creation and use direct queries instead
 export async function initializeViews() {
-  // Check if data files exist first to avoid DuckDB errors
   const eventFiles = findDataFiles('events');
   const updateFiles = findDataFiles('updates');
   
   console.log(`📂 Found ${eventFiles.length} event files, ${updateFiles.length} update files`);
   
+  // For large datasets (>1000 files), skip view creation to avoid OOM
+  const MAX_FILES_FOR_VIEWS = 1000;
+  
+  if (eventFiles.length > MAX_FILES_FOR_VIEWS || updateFiles.length > MAX_FILES_FOR_VIEWS) {
+    console.log(`⚠️ Dataset too large for views (${eventFiles.length + updateFiles.length} files)`);
+    console.log('ℹ️ Using direct queries instead of materialized views');
+    
+    // Create empty placeholder views
+    await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
+    await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
+    return;
+  }
+  
   if (eventFiles.length === 0 && updateFiles.length === 0) {
-    console.log('ℹ️ No data files found yet - views will be created when data arrives');
+    console.log('ℹ️ No data files found yet');
     await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     return;
   }
   
   try {
-    // For events view
-    if (eventFiles.length > 0) {
-      // Use glob pattern for large file counts, explicit list for small
-      if (eventFiles.length > 100) {
-        const basePath = DATA_PATH.replace(/\\/g, '/');
-        await query(`
-          CREATE OR REPLACE VIEW all_events AS
-          SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-        `);
-      } else {
-        await query(`
-          CREATE OR REPLACE VIEW all_events AS
-          SELECT * FROM ${readJsonlFiles(eventFiles)}
-        `);
-      }
+    // For small datasets, create views from file list
+    if (eventFiles.length > 0 && eventFiles.length <= MAX_FILES_FOR_VIEWS) {
+      await query(`
+        CREATE OR REPLACE VIEW all_events AS
+        SELECT * FROM ${readJsonlFiles(eventFiles)}
+      `);
       console.log(`✅ Created events view (${eventFiles.length} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
-      console.log('ℹ️ No event files - created empty events view');
     }
     
-    // For updates view
-    if (updateFiles.length > 0) {
-      if (updateFiles.length > 100) {
-        const basePath = DATA_PATH.replace(/\\/g, '/');
-        await query(`
-          CREATE OR REPLACE VIEW all_updates AS
-          SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-        `);
-      } else {
-        await query(`
-          CREATE OR REPLACE VIEW all_updates AS
-          SELECT * FROM ${readJsonlFiles(updateFiles)}
-        `);
-      }
+    if (updateFiles.length > 0 && updateFiles.length <= MAX_FILES_FOR_VIEWS) {
+      await query(`
+        CREATE OR REPLACE VIEW all_updates AS
+        SELECT * FROM ${readJsonlFiles(updateFiles)}
+      `);
       console.log(`✅ Created updates view (${updateFiles.length} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
-      console.log('ℹ️ No update files - created empty updates view');
     }
     
     console.log('✅ DuckDB views initialized');
   } catch (err) {
-    console.error('❌ Failed to initialize views:', err.message);
+    console.error('❌ View creation failed:', err.message);
+    // Create empty placeholders as fallback
     try {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
@@ -191,4 +185,4 @@ export async function initializeViews() {
 // Initialize on import
 initializeViews();
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readParquet, findDataFiles, DATA_PATH };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, DATA_PATH };
