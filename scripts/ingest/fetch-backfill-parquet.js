@@ -33,7 +33,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 4; // Concurrent API requests per synchronizer
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Concurrent API requests per synchronizer
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
 
 // Axios client with connection pooling
@@ -376,9 +376,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   
   while (true) {
     try {
-      // Fetch multiple pages in parallel
+      // Fetch multiple pages in parallel (deeper prefetch queue)
       const { results, reachedEnd } = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 3
+        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 5
       );
       
       if (results.length === 0) {
