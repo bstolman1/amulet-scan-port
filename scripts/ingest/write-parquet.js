@@ -1,14 +1,16 @@
 /**
- * Parquet Writer Module - OPTIMIZED for Maximum Throughput
+ * Parquet Writer Module - STREAMING VERSION
  * 
  * Handles writing ledger data to partitioned parquet files.
  * 
  * Optimizations:
+ * - TRUE STREAMING writes (never holds entire file in memory)
  * - Timestamp-based filenames (no directory scans)
- * - Batch JSON serialization with join()
  * - Parallel concurrent writes (configurable)
  * - Buffer swap instead of copy
  * - Large I/O buffers (256KB)
+ * - Row size limits to prevent memory explosion
+ * - Retry with backoff (limited retries)
  */
 
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
@@ -25,10 +27,12 @@ const __dirname = dirname(__filename);
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000; // Reduced from 10000
 const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 3;
 const IO_BUFFER_SIZE = 256 * 1024; // 256KB for better disk throughput
 const USE_GZIP = process.env.DISABLE_GZIP !== 'true'; // Gzip enabled by default
+const MAX_ROW_SIZE_BYTES = 10 * 1024 * 1024; // 10MB max per row - skip larger ones
+const MAX_RETRIES = 3; // Max retries before dropping a failed write
 
 // In-memory buffers for batching
 let updatesBuffer = [];
@@ -59,42 +63,30 @@ function generateFileName(prefix) {
 }
 
 /**
- * Write rows to JSON-lines file using streaming with batch serialization
+ * Create a generator that yields each row as a JSON line
+ * This avoids building the entire content string in memory
+ */
+function* rowGenerator(rows) {
+  for (const row of rows) {
+    yield JSON.stringify(row) + '\n';
+  }
+}
+
+/**
+ * Write rows to JSON-lines file using TRUE STREAMING
+ * Never holds the entire file in memory - streams row by row
  * Optionally compresses with gzip for ~5-10x smaller files
- * Returns a promise that resolves when writing is complete
  */
 async function writeJsonLines(rows, filePath) {
-  // Batch serialize all rows
-  const chunkSize = 2000;
-  const chunks = [];
-  
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const end = Math.min(i + chunkSize, rows.length);
-    chunks.push(rows.slice(i, end).map(r => JSON.stringify(r)).join('\n') + '\n');
-  }
-  
-  const content = chunks.join('');
+  // Create a readable stream from the generator
+  const source = Readable.from(rowGenerator(rows));
+  const dest = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
   
   if (USE_GZIP) {
-    // Gzip compressed write
-    const readable = Readable.from([content]);
     const gzip = createGzip({ level: 6 }); // Level 6 is good balance of speed/compression
-    const writable = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
-    
-    await pipeline(readable, gzip, writable);
+    await pipeline(source, gzip, dest);
   } else {
-    // Plain text write
-    return new Promise((resolve, reject) => {
-      const stream = createWriteStream(filePath, { 
-        encoding: 'utf8',
-        highWaterMark: IO_BUFFER_SIZE
-      });
-      
-      stream.on('error', reject);
-      stream.on('finish', resolve);
-      stream.write(content);
-      stream.end();
-    });
+    await pipeline(source, dest);
   }
 }
 
@@ -117,29 +109,75 @@ async function processWriteQueue() {
 }
 
 /**
- * Execute a single write task
+ * Execute a single write task with limited retries
  */
 async function executeWrite(task) {
   try {
     await task.execute();
     console.log(`📝 Wrote ${task.count} ${task.type} to ${task.file}`);
   } catch (err) {
-    console.error(`❌ Write error for ${task.file}:`, err.message);
-    // Re-queue on failure with delay
-    await new Promise(r => setTimeout(r, 1000));
+    task.retries = (task.retries || 0) + 1;
+    
+    if (task.retries >= MAX_RETRIES) {
+      console.error(`❌ Write failed permanently for ${task.file} after ${MAX_RETRIES} retries:`, err.message);
+      // Drop the task - don't requeue forever
+      return;
+    }
+    
+    console.error(`⚠️ Write error for ${task.file} (retry ${task.retries}/${MAX_RETRIES}):`, err.message);
+    // Exponential backoff: 1s, 2s, 4s
+    const delay = 1000 * Math.pow(2, task.retries - 1);
+    await new Promise(r => setTimeout(r, delay));
     writeQueue.unshift(task);
   }
+}
+
+/**
+ * Filter out oversized rows that could cause memory issues
+ */
+function filterOversizedRows(rows, type) {
+  const filtered = [];
+  let skipped = 0;
+  
+  for (const row of rows) {
+    try {
+      const size = Buffer.byteLength(JSON.stringify(row));
+      if (size > MAX_ROW_SIZE_BYTES) {
+        skipped++;
+      } else {
+        filtered.push(row);
+      }
+    } catch {
+      // If we can't even stringify it, skip it
+      skipped++;
+    }
+  }
+  
+  if (skipped > 0) {
+    console.warn(`⚠️ Skipped ${skipped} oversized ${type} (>${MAX_ROW_SIZE_BYTES / 1024 / 1024}MB each)`);
+  }
+  
+  return filtered;
 }
 
 /**
  * Queue a write task for async parallel processing
  */
 function queueWrite(rows, filePath, type) {
+  // Filter out problematic rows before queueing
+  const safeRows = filterOversizedRows(rows, type);
+  
+  if (safeRows.length === 0) {
+    console.log(`⚠️ No ${type} to write after filtering oversized rows`);
+    return null;
+  }
+  
   const task = {
     type,
     file: filePath,
-    count: rows.length,
-    execute: () => writeJsonLines(rows, filePath)
+    count: safeRows.length,
+    retries: 0,
+    execute: () => writeJsonLines(safeRows, filePath)
   };
   
   writeQueue.push(task);
@@ -147,7 +185,7 @@ function queueWrite(rows, filePath, type) {
   // Start processing queue in background (non-blocking)
   setImmediate(() => processWriteQueue());
   
-  return { file: filePath, count: rows.length, queued: true };
+  return { file: filePath, count: safeRows.length, queued: true };
 }
 
 /**
