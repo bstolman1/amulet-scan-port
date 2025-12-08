@@ -83,7 +83,7 @@ async function writeJsonLines(rows, filePath) {
   const dest = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
   
   if (USE_GZIP) {
-    const gzip = createGzip({ level: 6 }); // Level 6 is good balance of speed/compression
+    const gzip = createGzip({ level: 1 }); // Level 1 = fastest compression (still ~5x smaller)
     await pipeline(source, gzip, dest);
   } else {
     await pipeline(source, dest);
