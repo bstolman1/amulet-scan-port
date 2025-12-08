@@ -31,7 +31,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 // Configuration - AGGRESSIVE DEFAULTS for speed
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 2000; // Larger API batches
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
 const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 20; // More concurrent API requests
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
