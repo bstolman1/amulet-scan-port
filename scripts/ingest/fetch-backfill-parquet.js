@@ -29,24 +29,24 @@ const __dirname = dirname(__filename);
 // TLS config - must be set before any requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-// Configuration
+// Configuration - AGGRESSIVE DEFAULTS for speed
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 500;
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 2000; // Larger API batches
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Concurrent API requests per synchronizer
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 20; // More concurrent API requests
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
 
-// Axios client with connection pooling
+// Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
   baseURL: SCAN_URL,
-  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 30000, maxSockets: PARALLEL_FETCHES + 2 }),
+  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 60000, maxSockets: PARALLEL_FETCHES * 2 }),
   httpsAgent: new HttpsAgent({
     keepAlive: true,
-    keepAliveMsecs: 30000,
+    keepAliveMsecs: 60000,
     rejectUnauthorized: false,
-    maxSockets: PARALLEL_FETCHES + 2,
+    maxSockets: PARALLEL_FETCHES * 2,
   }),
-  timeout: 120000,
+  timeout: 180000, // 3 min timeout for large batches
 });
 
 /**
