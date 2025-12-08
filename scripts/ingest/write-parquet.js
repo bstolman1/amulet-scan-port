@@ -25,14 +25,14 @@ import { getPartitionPath } from './parquet-schema.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration
+// Configuration - AGGRESSIVE DEFAULTS for speed
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000; // Streaming allows larger batches
-const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 6;
-const IO_BUFFER_SIZE = 256 * 1024; // 256KB for better disk throughput
-const USE_GZIP = process.env.DISABLE_GZIP !== 'true'; // Gzip enabled by default
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 50000; // Larger batches = fewer files
+const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 20; // More parallel writes
+const IO_BUFFER_SIZE = 1024 * 1024; // 1MB buffer for better disk throughput
+const USE_GZIP = process.env.DISABLE_GZIP !== 'true'; // Disable gzip for speed
 const MAX_ROW_SIZE_BYTES = 10 * 1024 * 1024; // 10MB max per row - skip larger ones
-const MAX_RETRIES = 3; // Max retries before dropping a failed write
+const MAX_RETRIES = 2; // Fewer retries - fail fast
 
 // In-memory buffers for batching
 let updatesBuffer = [];
