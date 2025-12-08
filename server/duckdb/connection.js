@@ -48,8 +48,7 @@ function countDataFiles(type = 'events', maxScan = 10000) {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           stack.push(path.join(dir, entry.name));
-        } else if (entry.name.includes(`${type}-`) && (entry.name.endsWith('.jsonl') || entry.name.endsWith('.jsonl.gz'))) {
-          count++;
+        } else if (entry.name.includes(`${type}-`) && (entry.name.endsWith('.jsonl') || entry.name.endsWith('.jsonl.gz') || entry.name.endsWith('.jsonl.zst'))) {
           if (count >= maxScan) break;
         }
       }
@@ -67,7 +66,7 @@ function findDataFiles(type = 'events') {
 }
 
 function hasDataFiles(type = 'events') {
-  return hasFileType(type, '.jsonl') || hasFileType(type, '.jsonl.gz');
+  return hasFileType(type, '.jsonl') || hasFileType(type, '.jsonl.gz') || hasFileType(type, '.jsonl.zst');
 }
 
 // Helper to run queries
@@ -120,8 +119,9 @@ export function readJsonlGlob(type = 'events') {
   // Lazy check - stops as soon as one file of each type is found
   const hasJsonl = hasFileType(type, '.jsonl');
   const hasGzip = hasFileType(type, '.jsonl.gz');
+  const hasZstd = hasFileType(type, '.jsonl.zst');
   
-  if (!hasJsonl && !hasGzip) {
+  if (!hasJsonl && !hasGzip && !hasZstd) {
     return `(SELECT NULL as placeholder WHERE false)`;
   }
   
@@ -131,6 +131,9 @@ export function readJsonlGlob(type = 'events') {
   }
   if (hasGzip) {
     queries.push(`SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  }
+  if (hasZstd) {
+    queries.push(`SELECT * FROM read_json_auto('${basePath}/**/${type}-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   }
   
   return `(${queries.join(' UNION ALL ')})`;
@@ -160,10 +163,13 @@ export function readJsonlFiles(filePaths) {
 // Legacy function using glob patterns
 export function readJsonl(globPattern) {
   const gzPattern = globPattern.replace('.jsonl', '.jsonl.gz');
+  const zstPattern = globPattern.replace('.jsonl', '.jsonl.zst');
   return `(
     SELECT * FROM read_json_auto('${globPattern}', union_by_name=true, ignore_errors=true)
     UNION ALL
     SELECT * FROM read_json_auto('${gzPattern}', union_by_name=true, ignore_errors=true)
+    UNION ALL
+    SELECT * FROM read_json_auto('${zstPattern}', union_by_name=true, ignore_errors=true)
   )`;
 }
 
