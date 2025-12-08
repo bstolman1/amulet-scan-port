@@ -5,6 +5,11 @@ import fs from 'fs';
 
 const router = Router();
 
+// Helper to convert BigInt to Number for JSON serialization
+function serializeBigInt(obj) {
+  return JSON.parse(JSON.stringify(obj, (_, v) => typeof v === 'bigint' ? Number(v) : v));
+}
+
 // ACS data path - data is written to DATA_PATH/acs/ by the ingest scripts
 const ACS_DATA_PATH = path.resolve(db.DATA_PATH, 'acs');
 
@@ -92,7 +97,7 @@ router.get('/snapshots', async (req, res) => {
       source: 'local',
     }));
 
-    res.json({ data: snapshots });
+    res.json(serializeBigInt({ data: snapshots }));
   } catch (err) {
     console.error('ACS snapshots error:', err);
     res.status(500).json({ error: err.message });
@@ -126,7 +131,7 @@ router.get('/latest', async (req, res) => {
     }
 
     const row = rows[0];
-    res.json({
+    res.json(serializeBigInt({
       data: {
         id: 'local-latest',
         timestamp: row.snapshot_time,
@@ -137,7 +142,7 @@ router.get('/latest', async (req, res) => {
         status: 'completed',
         source: 'local',
       }
-    });
+    }));
   } catch (err) {
     console.error('ACS latest error:', err);
     res.status(500).json({ error: err.message });
@@ -171,7 +176,7 @@ router.get('/templates', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows });
+    res.json(serializeBigInt({ data: rows }));
   } catch (err) {
     console.error('ACS templates error:', err);
     res.status(500).json({ error: err.message });
@@ -219,7 +224,7 @@ router.get('/contracts', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows });
+    res.json(serializeBigInt({ data: rows }));
   } catch (err) {
     console.error('ACS contracts error:', err);
     res.status(500).json({ error: err.message });
@@ -247,7 +252,7 @@ router.get('/supply', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows[0] || null });
+    res.json(serializeBigInt({ data: rows[0] || null }));
   } catch (err) {
     console.error('ACS supply error:', err);
     res.status(500).json({ error: err.message });
@@ -279,7 +284,7 @@ router.get('/stats', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows[0] || {} });
+    res.json(serializeBigInt({ data: rows[0] || {} }));
   } catch (err) {
     console.error('ACS stats error:', err);
     res.status(500).json({ error: err.message });
