@@ -11,24 +11,63 @@ const db = new duckdb.Database(':memory:');
 const conn = db.connect();
 
 /**
- * Find all data files matching patterns (for graceful handling when no data)
- * Returns array of full file paths
+ * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
  */
-function findDataFiles(type = 'events') {
+function hasFileType(type, extension) {
   try {
-    if (!fs.existsSync(DATA_PATH)) return [];
-    const allFiles = fs.readdirSync(DATA_PATH, { recursive: true });
-    return allFiles
-      .map(f => String(f))
-      .filter(f => f.includes(`${type}-`) && (f.endsWith('.jsonl') || f.endsWith('.jsonl.gz')))
-      .map(f => path.join(DATA_PATH, f).replace(/\\/g, '/')); // Normalize to forward slashes for DuckDB
+    if (!fs.existsSync(DATA_PATH)) return false;
+    const stack = [DATA_PATH];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          stack.push(path.join(dir, entry.name));
+        } else if (entry.name.includes(`${type}-`) && entry.name.endsWith(extension)) {
+          return true; // Found one, stop immediately
+        }
+      }
+    }
+    return false;
   } catch {
-    return [];
+    return false;
   }
 }
 
+/**
+ * Count files matching pattern (for logging) - limited scan
+ */
+function countDataFiles(type = 'events', maxScan = 10000) {
+  try {
+    if (!fs.existsSync(DATA_PATH)) return 0;
+    let count = 0;
+    const stack = [DATA_PATH];
+    while (stack.length > 0 && count < maxScan) {
+      const dir = stack.pop();
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          stack.push(path.join(dir, entry.name));
+        } else if (entry.name.includes(`${type}-`) && (entry.name.endsWith('.jsonl') || entry.name.endsWith('.jsonl.gz'))) {
+          count++;
+          if (count >= maxScan) break;
+        }
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+// Legacy function - now uses lazy detection
+function findDataFiles(type = 'events') {
+  console.warn('⚠️ findDataFiles() is deprecated for large datasets');
+  return []; // Return empty, force callers to use glob patterns
+}
+
 function hasDataFiles(type = 'events') {
-  return findDataFiles(type).length > 0;
+  return hasFileType(type, '.jsonl') || hasFileType(type, '.jsonl.gz');
 }
 
 // Helper to run queries
@@ -74,14 +113,13 @@ export async function safeQuery(sql) {
 
 // Read JSON-lines files using DuckDB glob patterns (more efficient for large datasets)
 // Uses forward slashes which DuckDB handles on all platforms
-// Only includes patterns that have matching files to avoid "No files found" errors
+// Uses lazy file detection to avoid memory issues with large file counts
 export function readJsonlGlob(type = 'events') {
   const basePath = DATA_PATH.replace(/\\/g, '/');
   
-  // Check which file types actually exist
-  const files = findDataFiles(type);
-  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz'));
-  const hasGzip = files.some(f => f.endsWith('.jsonl.gz'));
+  // Lazy check - stops as soon as one file of each type is found
+  const hasJsonl = hasFileType(type, '.jsonl');
+  const hasGzip = hasFileType(type, '.jsonl.gz');
   
   if (!hasJsonl && !hasGzip) {
     return `(SELECT NULL as placeholder WHERE false)`;
@@ -137,16 +175,17 @@ export function readParquet(globPattern) {
 // Initialize views for common queries
 // For large datasets, we skip view creation and use direct queries instead
 export async function initializeViews() {
-  const eventFiles = findDataFiles('events');
-  const updateFiles = findDataFiles('updates');
+  // Use lazy counting with a cap to avoid memory issues
+  const eventCount = countDataFiles('events', 10000);
+  const updateCount = countDataFiles('updates', 10000);
   
-  console.log(`📂 Found ${eventFiles.length} event files, ${updateFiles.length} update files`);
+  console.log(`📂 Found ~${eventCount}${eventCount >= 10000 ? '+' : ''} event files, ~${updateCount}${updateCount >= 10000 ? '+' : ''} update files`);
   
   // For large datasets (>1000 files), skip view creation to avoid OOM
   const MAX_FILES_FOR_VIEWS = 1000;
   
-  if (eventFiles.length > MAX_FILES_FOR_VIEWS || updateFiles.length > MAX_FILES_FOR_VIEWS) {
-    console.log(`⚠️ Dataset too large for views (${eventFiles.length + updateFiles.length} files)`);
+  if (eventCount > MAX_FILES_FOR_VIEWS || updateCount > MAX_FILES_FOR_VIEWS) {
+    console.log(`⚠️ Dataset too large for views`);
     console.log('ℹ️ Using direct queries instead of materialized views');
     
     // Create empty placeholder views
@@ -155,7 +194,7 @@ export async function initializeViews() {
     return;
   }
   
-  if (eventFiles.length === 0 && updateFiles.length === 0) {
+  if (eventCount === 0 && updateCount === 0) {
     console.log('ℹ️ No data files found yet');
     await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
@@ -163,23 +202,23 @@ export async function initializeViews() {
   }
   
   try {
-    // For small datasets, create views from file list
-    if (eventFiles.length > 0 && eventFiles.length <= MAX_FILES_FOR_VIEWS) {
+    // For small datasets, create views using glob patterns (no file list accumulation)
+    if (eventCount > 0 && eventCount <= MAX_FILES_FOR_VIEWS) {
       await query(`
         CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readJsonlFiles(eventFiles)}
+        SELECT * FROM ${readJsonlGlob('events')}
       `);
-      console.log(`✅ Created events view (${eventFiles.length} files)`);
+      console.log(`✅ Created events view (~${eventCount} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     }
     
-    if (updateFiles.length > 0 && updateFiles.length <= MAX_FILES_FOR_VIEWS) {
+    if (updateCount > 0 && updateCount <= MAX_FILES_FOR_VIEWS) {
       await query(`
         CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readJsonlFiles(updateFiles)}
+        SELECT * FROM ${readJsonlGlob('updates')}
       `);
-      console.log(`✅ Created updates view (${updateFiles.length} files)`);
+      console.log(`✅ Created updates view (~${updateCount} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     }
