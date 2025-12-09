@@ -8,31 +8,62 @@
 
 export const LEDGER_UPDATES_SCHEMA = {
   update_id: 'STRING',
-  update_type: 'STRING',
+  update_type: 'STRING',  // 'transaction' or 'reassignment'
   migration_id: 'INT64',
   synchronizer_id: 'STRING',
   workflow_id: 'STRING',
+  command_id: 'STRING',
   offset: 'INT64',
   record_time: 'TIMESTAMP',
   effective_at: 'TIMESTAMP',
+  recorded_at: 'TIMESTAMP',  // When we recorded this update
   timestamp: 'TIMESTAMP',
-  kind: 'STRING',
-  update_data: 'JSON',  // Stored as JSON string
+  kind: 'STRING',  // For reassignments: 'assign' or 'unassign'
+  root_event_ids: 'LIST<STRING>',  // Root event IDs for this transaction
+  event_count: 'INT32',  // Number of events in this update
+  // Reassignment-specific update fields
+  source_synchronizer: 'STRING',
+  target_synchronizer: 'STRING',
+  unassign_id: 'STRING',
+  submitter: 'STRING',
+  reassignment_counter: 'INT64',
+  // Tracing
+  trace_context: 'JSON',
+  update_data: 'JSON',  // Full update data as JSON string
 };
 
 export const LEDGER_EVENTS_SCHEMA = {
   event_id: 'STRING',
   update_id: 'STRING',
-  event_type: 'STRING',  // 'created', 'archived', 'exercised'
+  event_type: 'STRING',  // 'created', 'archived', 'exercised', 'reassign_create', 'reassign_archive'
   contract_id: 'STRING',
   template_id: 'STRING',
   package_name: 'STRING',
   migration_id: 'INT64',
+  synchronizer_id: 'STRING',
+  effective_at: 'TIMESTAMP',
+  recorded_at: 'TIMESTAMP',
   timestamp: 'TIMESTAMP',
   created_at_ts: 'TIMESTAMP',
   signatories: 'LIST<STRING>',
   observers: 'LIST<STRING>',
-  payload: 'JSON',  // Contract payload as JSON string
+  acting_parties: 'LIST<STRING>',  // For exercised events
+  witness_parties: 'LIST<STRING>', // Parties that witnessed the event
+  payload: 'JSON',  // Contract create_arguments or choice_argument
+  // Created event specific fields
+  contract_key: 'JSON',  // Contract key if defined
+  // Exercised event fields
+  choice: 'STRING',
+  consuming: 'BOOLEAN',
+  interface_id: 'STRING',
+  child_event_ids: 'LIST<STRING>',
+  exercise_result: 'JSON',
+  // Reassignment event fields
+  source_synchronizer: 'STRING',
+  target_synchronizer: 'STRING',
+  unassign_id: 'STRING',
+  submitter: 'STRING',
+  reassignment_counter: 'INT64',
 };
 
 // Column order for parquet files
@@ -42,11 +73,21 @@ export const UPDATES_COLUMNS = [
   'migration_id',
   'synchronizer_id',
   'workflow_id',
+  'command_id',
   'offset',
   'record_time',
   'effective_at',
+  'recorded_at',
   'timestamp',
   'kind',
+  'root_event_ids',
+  'event_count',
+  'source_synchronizer',
+  'target_synchronizer',
+  'unassign_id',
+  'submitter',
+  'reassignment_counter',
+  'trace_context',
   'update_data',
 ];
 
@@ -58,11 +99,27 @@ export const EVENTS_COLUMNS = [
   'template_id',
   'package_name',
   'migration_id',
+  'synchronizer_id',
+  'effective_at',
+  'recorded_at',
   'timestamp',
   'created_at_ts',
   'signatories',
   'observers',
+  'acting_parties',
+  'witness_parties',
   'payload',
+  'contract_key',
+  'choice',
+  'consuming',
+  'interface_id',
+  'child_event_ids',
+  'exercise_result',
+  'source_synchronizer',
+  'target_synchronizer',
+  'unassign_id',
+  'submitter',
+  'reassignment_counter',
 ];
 
 /**
@@ -70,18 +127,45 @@ export const EVENTS_COLUMNS = [
  */
 export function normalizeUpdate(raw) {
   const update = raw.transaction || raw.reassignment || raw;
+  const isReassignment = !!raw.reassignment;
+  
+  // Extract root event IDs
+  const rootEventIds = update.root_event_ids || [];
+  
+  // Count events
+  const eventsById = update.events_by_id || {};
+  const eventCount = Object.keys(eventsById).length;
+  
+  // Reassignment-specific fields
+  const sourceSynchronizer = update.source || null;
+  const targetSynchronizer = update.target || null;
+  const unassignId = update.unassign_id || null;
+  const submitter = update.submitter || null;
+  const reassignmentCounter = update.counter ?? null;
   
   return {
     update_id: update.update_id || raw.update_id,
-    update_type: raw.transaction ? 'transaction' : raw.reassignment ? 'reassignment' : 'unknown',
+    update_type: raw.transaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown',
     migration_id: parseInt(raw.migration_id) || null,
     synchronizer_id: update.synchronizer_id || null,
     workflow_id: update.workflow_id || null,
+    command_id: update.command_id || null,
     offset: parseInt(update.offset) || null,
     record_time: update.record_time ? new Date(update.record_time) : null,
     effective_at: update.effective_at ? new Date(update.effective_at) : null,
+    recorded_at: new Date(), // When we recorded this update
     timestamp: new Date(),
     kind: update.kind || null,
+    root_event_ids: rootEventIds,
+    event_count: eventCount,
+    // Reassignment fields at update level
+    source_synchronizer: sourceSynchronizer,
+    target_synchronizer: targetSynchronizer,
+    unassign_id: unassignId,
+    submitter: submitter,
+    reassignment_counter: reassignmentCounter,
+    // Tracing
+    trace_context: update.trace_context ? JSON.stringify(update.trace_context) : null,
     update_data: JSON.stringify(update),
   };
 }
@@ -128,6 +212,25 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
   // Get synchronizer from update info
   const synchronizer = updateInfo?.synchronizer_id || null;
   
+  // Extract exercise-specific fields
+  const actingParties = event.acting_parties || event.exercised_event?.acting_parties || [];
+  const choice = event.choice || event.exercised_event?.choice || null;
+  const consuming = event.consuming ?? event.exercised_event?.consuming ?? null;
+  const interfaceId = event.interface_id || event.exercised_event?.interface_id || null;
+  const childEventIds = event.child_event_ids || event.exercised_event?.child_event_ids || [];
+  const exerciseResult = event.exercise_result || event.exercised_event?.exercise_result || null;
+  
+  // Extract created event specific fields
+  const contractKey = event.contract_key || event.created_event?.contract_key || null;
+  const witnessParties = event.witness_parties || event.created_event?.witness_parties || [];
+  
+  // Extract reassignment-specific fields
+  const sourceSynchronizer = event.source || updateInfo?.source || null;
+  const targetSynchronizer = event.target || updateInfo?.target || null;
+  const unassignId = event.unassign_id || updateInfo?.unassign_id || null;
+  const submitter = event.submitter || updateInfo?.submitter || null;
+  const reassignmentCounter = event.counter ?? updateInfo?.counter ?? null;
+  
   return {
     event_id: event.event_id || `${updateId}-${contractId}`,
     update_id: updateId,
@@ -141,9 +244,23 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     recorded_at: new Date(), // When we recorded this event
     timestamp: new Date(),
     created_at_ts: effectiveAt,
-    signatories: event.signatories || event.created_event?.signatories || event.exercised_event?.acting_parties || event.acting_parties || [],
+    signatories: event.signatories || event.created_event?.signatories || [],
     observers: event.observers || event.created_event?.observers || [],
+    acting_parties: actingParties,
+    witness_parties: witnessParties,
     payload: payload ? JSON.stringify(payload) : null,
+    contract_key: contractKey ? JSON.stringify(contractKey) : null,
+    choice: choice,
+    consuming: consuming,
+    interface_id: interfaceId,
+    child_event_ids: childEventIds,
+    exercise_result: exerciseResult ? JSON.stringify(exerciseResult) : null,
+    // Reassignment fields
+    source_synchronizer: sourceSynchronizer,
+    target_synchronizer: targetSynchronizer,
+    unassign_id: unassignId,
+    submitter: submitter,
+    reassignment_counter: reassignmentCounter,
     raw: rawEvent || event, // Store complete original event
   };
 }
