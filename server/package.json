@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node --env-file=../scripts/ingest/.env server.js",
+    "dev": "node --env-file=../scripts/ingest/.env --watch server.js"
   },
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0",
