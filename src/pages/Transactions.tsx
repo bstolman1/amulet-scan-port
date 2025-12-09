@@ -280,46 +280,44 @@ const Transactions = () => {
                     </p>
                   </div>
 
-                  {/* Interactive Payload Viewer */}
-                  {event.payload && (
-                    <Collapsible>
-                      <CollapsibleTrigger asChild>
-                        <Button variant="outline" size="sm" className="w-full justify-between">
-                          <span className="flex items-center">
-                            <ChevronDown className="h-4 w-4 mr-2" />
-                            View Payload
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {Object.keys(event.payload).length} fields
-                          </span>
-                        </Button>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-3">
-                        <div className="bg-muted/30 border border-border rounded-lg p-4 font-mono text-xs overflow-x-auto">
-                          <JsonValue value={event.payload} />
-                        </div>
-                        {/* Raw JSON Toggle */}
-                        <Collapsible className="mt-2">
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="sm" className="text-xs">
-                              <ChevronRight className="h-3 w-3 mr-1" />
-                              Show Raw JSON
-                            </Button>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="mt-2">
-                            <div className="relative">
-                              <pre className="text-xs bg-black/50 text-green-400 p-4 rounded-lg overflow-auto max-h-96 border border-border">
-                                {JSON.stringify(event.payload, null, 2)}
-                              </pre>
-                              <div className="absolute top-2 right-2">
-                                <CopyButton text={JSON.stringify(event.payload, null, 2)} />
-                              </div>
+                  {/* Full Event JSON Viewer */}
+                  <Collapsible defaultOpen>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="outline" size="sm" className="w-full justify-between">
+                        <span className="flex items-center">
+                          <ChevronDown className="h-4 w-4 mr-2" />
+                          View Full Event Data
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {Object.keys(event).length} fields
+                        </span>
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-3">
+                      <div className="bg-muted/30 border border-border rounded-lg p-4 font-mono text-xs overflow-x-auto">
+                        <JsonValue value={event} />
+                      </div>
+                      {/* Raw JSON Toggle */}
+                      <Collapsible className="mt-2">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="text-xs">
+                            <ChevronRight className="h-3 w-3 mr-1" />
+                            Show Raw JSON
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2">
+                          <div className="relative">
+                            <pre className="text-xs bg-black/50 text-green-400 p-4 rounded-lg overflow-auto max-h-96 border border-border">
+                              {JSON.stringify(event, null, 2)}
+                            </pre>
+                            <div className="absolute top-2 right-2">
+                              <CopyButton text={JSON.stringify(event, null, 2)} />
                             </div>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </CollapsibleContent>
-                    </Collapsible>
-                  )}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </CardContent>
               </Card>
             ))}
