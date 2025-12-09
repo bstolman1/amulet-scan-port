@@ -21,27 +21,31 @@ message Event {
   repeated string signatories = 12;
   repeated string observers = 13;
   repeated string acting_parties = 14;  // For exercised events
+  repeated string witness_parties = 15; // Parties that witnessed the event
 
-  string payload_json = 15;  // create_arguments or choice_argument as JSON
+  string payload_json = 16;  // create_arguments or choice_argument as JSON
+  
+  // Created event specific fields
+  string contract_key_json = 17;  // Contract key if defined
   
   // Exercised event specific fields
-  string choice = 16;
-  bool consuming = 17;
-  string interface_id = 18;
-  repeated string child_event_ids = 19;
-  string exercise_result_json = 20;
+  string choice = 18;
+  bool consuming = 19;
+  string interface_id = 20;
+  repeated string child_event_ids = 21;
+  string exercise_result_json = 22;
   
   // Reassignment event specific fields
-  string source_synchronizer = 21;
-  string target_synchronizer = 22;
-  string unassign_id = 23;
-  string submitter = 24;
-  int64 reassignment_counter = 25;
+  string source_synchronizer = 23;
+  string target_synchronizer = 24;
+  string unassign_id = 25;
+  string submitter = 26;
+  int64 reassignment_counter = 27;
   
-  string raw_json = 26;  // Complete original event as JSON
+  string raw_json = 28;  // Complete original event as JSON
   
   // Deprecated/unused - kept for backwards compatibility
-  string party = 27;
+  string party = 29;
 }
 
 // Represent a single update
@@ -64,7 +68,17 @@ message Update {
   repeated string root_event_ids = 12;
   int32 event_count = 13;
   
-  string update_data_json = 14;  // Full update data as JSON
+  // Reassignment-specific update fields
+  string source_synchronizer = 14;
+  string target_synchronizer = 15;
+  string unassign_id = 16;
+  string submitter = 17;
+  int64 reassignment_counter = 18;
+  
+  // Tracing
+  string trace_context_json = 19;
+  
+  string update_data_json = 20;  // Full update data as JSON
 }
 
 // A batch of records written together

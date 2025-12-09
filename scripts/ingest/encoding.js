@@ -53,7 +53,10 @@ export function mapEvent(r) {
     signatories: safeStringArray(r.signatories),
     observers: safeStringArray(r.observers),
     actingParties: safeStringArray(r.acting_parties),
+    witnessParties: safeStringArray(r.witness_parties),
     payloadJson: r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
+    // Created event specific fields
+    contractKeyJson: r.contract_key_json || (r.contract_key ? safeStringify(r.contract_key) : ''),
     // Exercised event specific fields
     choice: String(r.choice ?? ''),
     consuming: Boolean(r.consuming ?? false),
@@ -91,6 +94,14 @@ export function mapUpdate(r) {
     offset: safeInt64(r.offset),
     rootEventIds: safeStringArray(r.root_event_ids),
     eventCount: parseInt(r.event_count) || 0,
+    // Reassignment-specific update fields
+    sourceSynchronizer: String(r.source_synchronizer ?? ''),
+    targetSynchronizer: String(r.target_synchronizer ?? ''),
+    unassignId: String(r.unassign_id ?? ''),
+    submitter: String(r.submitter ?? ''),
+    reassignmentCounter: safeInt64(r.reassignment_counter),
+    // Tracing
+    traceContextJson: r.trace_context_json || (r.trace_context ? safeStringify(r.trace_context) : ''),
     updateDataJson: r.update_data_json || (r.update_data ? safeStringify(r.update_data) : ''),
   };
 }
@@ -113,7 +124,7 @@ function safeTimestamp(value) {
  * Safely convert to int64
  */
 function safeInt64(value) {
-  if (!value) return 0;
+  if (value === null || value === undefined) return 0;
   const num = parseInt(value);
   return isNaN(num) ? 0 : num;
 }
