@@ -82,20 +82,22 @@ function* rowGenerator(rows) {
 
 /**
  * Write rows to JSON-lines file using ZSTD compression
- * Batches all rows, compresses as single block, writes to disk
+ * Uses Buffer array to avoid string length limits
  * ZSTD is ~2-3x faster than gzip with better compression
  */
 async function writeJsonLines(rows, filePath) {
   await ensureZstdReady();
   
-  // Build full content (ZSTD works best with full data)
-  let content = '';
+  // Build content as array of Buffers (avoids string length limit)
+  const chunks = [];
   for (const row of rows) {
-    content += JSON.stringify(row) + '\n';
+    chunks.push(Buffer.from(JSON.stringify(row) + '\n', 'utf8'));
   }
   
+  // Concatenate all buffers
+  const input = Buffer.concat(chunks);
+  
   // Compress with ZSTD
-  const input = Buffer.from(content, 'utf8');
   const compressed = compress(input, ZSTD_LEVEL);
   
   // Write compressed data
