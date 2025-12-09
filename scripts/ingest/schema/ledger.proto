@@ -21,6 +21,8 @@ message Event {
   repeated string signatories = 11;
   repeated string observers = 12;
   string package_name = 13;
+  
+  string raw_json = 14; // Complete original event as JSON (all data)
 }
 
 // Represent a single update

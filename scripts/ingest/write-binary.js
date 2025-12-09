@@ -115,6 +115,7 @@ function mapEventRecord(r) {
     signatories: r.signatories || [],
     observers: r.observers || [],
     package_name: r.package_name || '',
+    raw_json: r.raw ? JSON.stringify(r.raw) : '', // Complete original event
   };
 }
 
