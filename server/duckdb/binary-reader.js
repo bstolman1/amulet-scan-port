@@ -215,35 +215,78 @@ export function hasBinaryFiles(dirPath, type = 'events') {
   }
 }
 
-// Cache for loaded records (to avoid re-reading files repeatedly)
-const recordCache = {
-  events: null,
-  updates: null,
-  eventsTimestamp: 0,
-  updatesTimestamp: 0,
-};
-
-const CACHE_TTL = 60000; // 1 minute cache
-
-/**
- * Load all records of a type with caching
- */
-export async function loadAllRecords(dirPath, type = 'events') {
-  const now = Date.now();
-  const cacheKey = type;
-  const timestampKey = `${type}Timestamp`;
-  
-  // Check cache
-  if (recordCache[cacheKey] && (now - recordCache[timestampKey]) < CACHE_TTL) {
-    return recordCache[cacheKey];
-  }
+// Stream records with pagination (memory efficient for large datasets)
+export async function streamRecords(dirPath, type = 'events', options = {}) {
+  const { limit = 100, offset = 0, filter = null } = options;
   
   const files = findBinaryFiles(dirPath, type);
   
   if (files.length === 0) {
-    recordCache[cacheKey] = [];
-    recordCache[timestampKey] = now;
-    return [];
+    return { records: [], total: 0, hasMore: false };
+  }
+  
+  // Sort files by name (which includes timestamp) in descending order
+  files.sort((a, b) => b.localeCompare(a));
+  
+  const records = [];
+  let skipped = 0;
+  let totalScanned = 0;
+  
+  // Process files one at a time until we have enough records
+  for (const file of files) {
+    if (records.length >= limit) break;
+    
+    try {
+      const result = await readBinaryFile(file);
+      let fileRecords = result.records;
+      
+      // Apply filter if provided
+      if (filter) {
+        fileRecords = fileRecords.filter(filter);
+      }
+      
+      // Sort by timestamp descending within file
+      fileRecords.sort((a, b) => 
+        new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      );
+      
+      for (const record of fileRecords) {
+        totalScanned++;
+        
+        if (skipped < offset) {
+          skipped++;
+          continue;
+        }
+        
+        if (records.length < limit) {
+          records.push(record);
+        }
+        
+        if (records.length >= limit) break;
+      }
+    } catch (err) {
+      console.error(`Failed to read ${file}: ${err.message}`);
+    }
+  }
+  
+  return { 
+    records, 
+    total: files.length * 100, // Estimated total (rough approximation)
+    hasMore: records.length === limit,
+    source: 'binary'
+  };
+}
+
+// Legacy function - now uses streaming for large datasets
+export async function loadAllRecords(dirPath, type = 'events') {
+  const files = findBinaryFiles(dirPath, type);
+  
+  // For large datasets, refuse to load all
+  if (files.length > 50) {
+    console.warn(`⚠️ Too many files (${files.length}), use streamRecords() instead`);
+    // Return first batch only
+    const result = await streamRecords(dirPath, type, { limit: 100 });
+    return result.records;
   }
   
   console.log(`📖 Loading ${files.length} ${type} files...`);
@@ -251,25 +294,17 @@ export async function loadAllRecords(dirPath, type = 'events') {
   
   const allRecords = [];
   
-  // Process files in parallel (batches of 10)
-  const batchSize = 10;
-  for (let i = 0; i < files.length; i += batchSize) {
-    const batch = files.slice(i, i + batchSize);
-    const results = await Promise.all(batch.map(f => readBinaryFile(f).catch(err => {
-      console.error(`Failed to read ${f}: ${err.message}`);
-      return { records: [] };
-    })));
-    for (const result of results) {
+  for (const file of files) {
+    try {
+      const result = await readBinaryFile(file);
       allRecords.push(...result.records);
+    } catch (err) {
+      console.error(`Failed to read ${file}: ${err.message}`);
     }
   }
   
   const elapsed = Date.now() - startTime;
   console.log(`✅ Loaded ${allRecords.length} ${type} records in ${elapsed}ms`);
-  
-  // Update cache
-  recordCache[cacheKey] = allRecords;
-  recordCache[timestampKey] = now;
   
   return allRecords;
 }
@@ -289,5 +324,5 @@ export default {
   findBinaryFiles,
   hasBinaryFiles,
   loadAllRecords,
-  invalidateCache,
+  streamRecords,
 };
