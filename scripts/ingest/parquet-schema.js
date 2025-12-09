@@ -33,6 +33,7 @@ export const LEDGER_EVENTS_SCHEMA = {
   signatories: 'LIST<STRING>',
   observers: 'LIST<STRING>',
   payload: 'JSON',  // Contract payload as JSON string
+  choice: 'STRING', // For exercised events: the choice name
 };
 
 // Column order for parquet files
@@ -144,6 +145,7 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     signatories: event.signatories || event.created_event?.signatories || event.exercised_event?.acting_parties || event.acting_parties || [],
     observers: event.observers || event.created_event?.observers || [],
     payload: payload ? JSON.stringify(payload) : null,
+    choice: event.choice || event.exercised_event?.choice || null,
     raw: rawEvent || event, // Store complete original event
   };
 }
