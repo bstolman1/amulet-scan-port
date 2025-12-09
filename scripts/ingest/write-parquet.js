@@ -57,13 +57,33 @@ async function ensureWorkerPool() {
 }
 
 /**
- * Ensure directory exists (Windows-safe)
+ * Ensure directory exists (Windows-safe with race condition handling)
  */
 function ensureDir(dirPath) {
   // Normalize path separators for cross-platform compatibility
   const normalizedPath = dirPath.split('/').join(sep);
-  if (!existsSync(normalizedPath)) {
-    mkdirSync(normalizedPath, { recursive: true });
+  try {
+    if (!existsSync(normalizedPath)) {
+      mkdirSync(normalizedPath, { recursive: true });
+    }
+  } catch (err) {
+    // Handle race condition where directory was created between check and mkdir
+    if (err.code !== 'EEXIST') {
+      // Try creating parent directories explicitly for Windows edge cases
+      const parts = normalizedPath.split(sep).filter(Boolean);
+      let current = parts[0].includes(':') ? parts[0] + sep : sep; // Handle Windows drive letters
+      
+      for (let i = parts[0].includes(':') ? 1 : 0; i < parts.length; i++) {
+        current = join(current, parts[i]);
+        try {
+          if (!existsSync(current)) {
+            mkdirSync(current);
+          }
+        } catch (e) {
+          if (e.code !== 'EEXIST') throw e;
+        }
+      }
+    }
   }
 }
 
