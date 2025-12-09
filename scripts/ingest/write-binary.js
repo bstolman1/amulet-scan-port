@@ -245,19 +245,26 @@ export async function flushAll() {
  * Get buffer and queue stats
  */
 export function getBufferStats() {
-  const poolStats = writerPool ? writerPool.getStats() : { 
+  const defaultStats = { 
     activeWorkers: 0, 
     queuedJobs: 0, 
     completedJobs: 0,
-    compressionRatio: '0%' 
+    failedJobs: 0,
+    totalRecords: 0,
+    compressionRatio: '---',
+    mbPerSec: '0.00',
+    mbWritten: '0.00',
+    recordsPerSec: 0,
   };
+  
+  const poolStats = writerPool ? writerPool.getStats() : defaultStats;
   
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
-    queuedWrites: poolStats.queuedJobs,
-    activeWrites: poolStats.activeWorkers,
+    queuedWrites: poolStats.queuedJobs || 0,
+    activeWrites: poolStats.activeWorkers || 0,
     pendingWrites,
     ...poolStats
   };

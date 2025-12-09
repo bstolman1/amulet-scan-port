@@ -430,9 +430,10 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }, minTime, maxTime);
       
       const stats = getBufferStats();
-      const writeSpeed = stats.mbPerSec ? `${stats.mbPerSec} MB/s` : '---';
+      const writeSpeed = stats.mbPerSec || '0.00';
       const compression = stats.compressionRatio || '---';
-      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} (${compression}) | Q: ${stats.queuedJobs}/${stats.activeWorkers}`);
+      const queueInfo = `${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`;
+      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queueInfo}`);
       
       if (reachedEnd || earliestTime <= atOrAfter) {
         console.log(`   ✅ Reached lower bound. Complete.`);
