@@ -245,6 +245,6 @@ export async function initializeViews() {
 // Initialize on import
 initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, initializeViews };
+export { hasFileType, countDataFiles, hasDataFiles };
 
 export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH };
