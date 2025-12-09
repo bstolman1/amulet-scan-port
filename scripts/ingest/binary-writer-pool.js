@@ -24,6 +24,7 @@ export class BinaryWriterPool {
     this.slots = maxWorkers; // available slots
     this.activeWorkers = new Set();
     this.queue = [];
+    this.startTime = Date.now();
     this.stats = {
       totalJobs: 0,
       completedJobs: 0,
@@ -106,12 +107,17 @@ export class BinaryWriterPool {
   }
 
   /**
-   * Get pool statistics
+   * Get pool statistics with throughput
    */
   getStats() {
+    const elapsed = (Date.now() - this.startTime) / 1000;
     const ratio = this.stats.totalOriginalBytes > 0 
       ? (this.stats.totalCompressedBytes / this.stats.totalOriginalBytes * 100).toFixed(1)
       : 0;
+    
+    const recordsPerSec = elapsed > 0 ? Math.round(this.stats.totalRecords / elapsed) : 0;
+    const mbWritten = this.stats.totalCompressedBytes / (1024 * 1024);
+    const mbPerSec = elapsed > 0 ? (mbWritten / elapsed).toFixed(2) : 0;
     
     return {
       ...this.stats,
@@ -119,6 +125,10 @@ export class BinaryWriterPool {
       queuedJobs: this.queue.length,
       availableSlots: this.slots,
       compressionRatio: `${ratio}%`,
+      elapsedSec: elapsed.toFixed(1),
+      recordsPerSec,
+      mbWritten: mbWritten.toFixed(2),
+      mbPerSec,
     };
   }
 
