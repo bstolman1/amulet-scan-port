@@ -14,7 +14,13 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import minimist from 'minimist';
 import axios from 'axios';
+
+// Parse CLI arguments for sharding
+const args = minimist(process.argv.slice(2));
+const SHARD_INDEX = args.shard !== undefined ? parseInt(args.shard) : null;
+const SHARD_TOTAL = args.shards !== undefined ? parseInt(args.shards) : null;
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
@@ -506,6 +512,9 @@ async function runBackfill() {
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES, "(per synchronizer)");
   console.log("   PURGE_AFTER_MIGRATION:", PURGE_AFTER_MIGRATION);
+  if (SHARD_INDEX !== null && SHARD_TOTAL !== null) {
+    console.log(`   SHARDING: shard ${SHARD_INDEX} of ${SHARD_TOTAL}`);
+  }
   console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
@@ -548,17 +557,31 @@ async function runBackfill() {
     
     for (const range of ranges) {
       const synchronizerId = range.synchronizer_id;
-      const minTime = range.min;
-      const maxTime = range.max;
+      let minTime = range.min;
+      let maxTime = range.max;
       
-      // Check if already complete
-      const cursor = loadCursor(migrationId, synchronizerId);
+      // If running in sharded mode → override time range
+      if (SHARD_INDEX !== null && SHARD_TOTAL !== null) {
+        const { shardRange } = await import('./shard.js');
+        const shards = shardRange(range.min, range.max, SHARD_TOTAL);
+        const shard = shards[SHARD_INDEX];
+
+        console.log(`   ⚡ Running shard ${SHARD_INDEX}/${SHARD_TOTAL - 1}`);
+        console.log(`      Range: ${shard.min} → ${shard.max}`);
+
+        minTime = shard.min;
+        maxTime = shard.max;
+      }
+      
+      // Check if already complete (include shard in cursor key for sharded mode)
+      const cursorSuffix = SHARD_INDEX !== null ? `-shard${SHARD_INDEX}` : '';
+      const cursor = loadCursor(migrationId, synchronizerId + cursorSuffix);
       if (cursor?.complete) {
-        console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)`);
+        console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}...${cursorSuffix} (already complete)`);
         continue;
       }
       
-      const { updates, events } = await backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime);
+      const { updates, events } = await backfillSynchronizer(migrationId, synchronizerId + cursorSuffix, minTime, maxTime);
       grandTotalUpdates += updates;
       grandTotalEvents += events;
     }
