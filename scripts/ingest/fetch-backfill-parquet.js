@@ -317,9 +317,21 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     
     const txs = completed.data?.transactions || [];
     
+    // Handle empty batches - sparse region aware
     if (txs.length === 0) {
-      reachedEnd = true;
-      break;
+      // If we actually reached the lower bound, THEN stop
+      if (completed.before <= atOrAfter) {
+        reachedEnd = true;
+        break;
+      }
+
+      // Otherwise: we hit a sparse region → go backward 1 ms and continue
+      const d = new Date(completed.before);
+      d.setMilliseconds(d.getMilliseconds() - 1);
+      nextBefore = d.toISOString();
+
+      // Continue without marking reachedEnd
+      continue;
     }
     
     results.push({ transactions: txs, before: completed.before });
