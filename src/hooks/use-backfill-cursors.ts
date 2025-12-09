@@ -12,6 +12,7 @@ export interface BackfillCursor {
   max_time?: string | null;
   migration_id?: number | null;
   synchronizer_id?: string | null;
+  shard_index?: number | null;
   last_before?: string | null;
   total_updates?: number | null;
   total_events?: number | null;
