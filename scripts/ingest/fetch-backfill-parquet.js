@@ -144,29 +144,34 @@ function sanitize(str) {
 }
 
 /**
- * Detect all available migrations via /v0/state/acs/snapshot-timestamp
+ * Detect all available migrations via POST /v0/backfilling/migration-info
+ * Iterates migration_id from 1 upward until 404 (not found)
  */
 async function detectMigrations() {
-  console.log("🔎 Detecting available migrations via /v0/state/acs/snapshot-timestamp");
+  console.log("🔎 Detecting available migrations via /v0/backfilling/migration-info");
 
   const migrations = [];
   let id = 1;
 
   while (true) {
     try {
-      const res = await client.get("/v0/state/acs/snapshot-timestamp", {
-        params: { migration_id: id, before: new Date().toISOString() },
+      const res = await client.post("/v0/backfilling/migration-info", {
+        migration_id: id,
       });
 
-      if (res.data?.record_time) {
+      if (res.data?.record_time_range) {
+        const ranges = res.data.record_time_range || [];
+        const minTime = ranges[0]?.min || 'unknown';
+        const maxTime = ranges[0]?.max || 'unknown';
         migrations.push(id);
-        console.log(`  • migration_id=${id} record_time=${res.data.record_time}`);
+        console.log(`  • migration_id=${id} ranges=${ranges.length} (${minTime} to ${maxTime})`);
         id++;
       } else {
         break;
       }
     } catch (err) {
       if (err.response && err.response.status === 404) {
+        // No more migrations
         break;
       }
       console.error(`❌ Error probing migration_id=${id}:`, err.response?.status, err.message);

@@ -57,11 +57,13 @@ async function ensureWorkerPool() {
 }
 
 /**
- * Ensure directory exists
+ * Ensure directory exists (Windows-safe)
  */
 function ensureDir(dirPath) {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
+  // Normalize path separators for cross-platform compatibility
+  const normalizedPath = dirPath.split('/').join(require('path').sep);
+  if (!existsSync(normalizedPath)) {
+    mkdirSync(normalizedPath, { recursive: true });
   }
 }
 
