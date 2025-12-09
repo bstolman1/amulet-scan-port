@@ -23,6 +23,7 @@ import {
   Hash,
   Clock,
   TrendingUp,
+  GitBranch,
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -41,6 +42,7 @@ const navigation = [
   { name: "ANS", href: "/ans", icon: Globe },
   { name: "Featured Apps", href: "/apps", icon: Package },
   { name: "Governance", href: "/governance", icon: Vote },
+  { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
   { name: "Elections", href: "/elections", icon: Vote },
   { name: "External Party", href: "/external-party-setup", icon: UserPlus },
   { name: "Transfer Counters", href: "/transfer-counters", icon: Hash },
