@@ -7,6 +7,7 @@ import statsRouter from './api/stats.js';
 import searchRouter from './api/search.js';
 import backfillRouter from './api/backfill.js';
 import acsRouter from './api/acs.js';
+import explorerRouter from './api/explorer.js';
 import db, { initializeViews } from './duckdb/connection.js';
 
 const app = express();
@@ -58,6 +59,7 @@ app.use('/api/stats', statsRouter);
 app.use('/api/search', searchRouter);
 app.use('/api/backfill', backfillRouter);
 app.use('/api/acs', acsRouter);
+app.use('/api/explorer', explorerRouter);
 
 app.listen(PORT, () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
