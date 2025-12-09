@@ -88,12 +88,12 @@ function ensureDir(dirPath) {
 }
 
 /**
- * Generate unique filename
+ * Generate unique filename (now using .zst for ZSTD compression)
  */
 function generateFileName(prefix) {
   const ts = Date.now();
   const rand = randomBytes(4).toString('hex');
-  return `${prefix}-${ts}-${rand}.jsonl.gz`;
+  return `${prefix}-${ts}-${rand}.jsonl.zst`;
 }
 
 /**
@@ -350,9 +350,10 @@ export async function shutdown() {
 export function createConversionScript() {
   return `
 -- DuckDB script to convert JSON-lines to Parquet
+-- Note: .zst files are ZSTD compressed
 
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.gz')
+  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.zst')
 ) TO 'data/raw/updates.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
@@ -360,7 +361,7 @@ COPY (
 );
 
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.gz')
+  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.zst')
 ) TO 'data/raw/events.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
