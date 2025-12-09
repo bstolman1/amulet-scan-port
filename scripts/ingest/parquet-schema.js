@@ -27,7 +27,7 @@ export const LEDGER_UPDATES_SCHEMA = {
 export const LEDGER_EVENTS_SCHEMA = {
   event_id: 'STRING',
   update_id: 'STRING',
-  event_type: 'STRING',  // 'created', 'archived', 'exercised'
+  event_type: 'STRING',  // 'created', 'archived', 'exercised', 'reassign_create', 'reassign_archive'
   contract_id: 'STRING',
   template_id: 'STRING',
   package_name: 'STRING',
@@ -41,11 +41,18 @@ export const LEDGER_EVENTS_SCHEMA = {
   observers: 'LIST<STRING>',
   acting_parties: 'LIST<STRING>',  // For exercised events
   payload: 'JSON',  // Contract create_arguments or choice_argument
-  choice: 'STRING', // For exercised events: the choice name
-  consuming: 'BOOLEAN', // For exercised events: whether the choice consumed the contract
-  interface_id: 'STRING', // For exercised events: interface used
-  child_event_ids: 'LIST<STRING>', // For exercised events: child event IDs
-  exercise_result: 'JSON', // For exercised events: result of the exercise
+  // Exercised event fields
+  choice: 'STRING',
+  consuming: 'BOOLEAN',
+  interface_id: 'STRING',
+  child_event_ids: 'LIST<STRING>',
+  exercise_result: 'JSON',
+  // Reassignment event fields
+  source_synchronizer: 'STRING',
+  target_synchronizer: 'STRING',
+  unassign_id: 'STRING',
+  submitter: 'STRING',
+  reassignment_counter: 'INT64',
 };
 
 // Column order for parquet files
@@ -89,6 +96,11 @@ export const EVENTS_COLUMNS = [
   'interface_id',
   'child_event_ids',
   'exercise_result',
+  'source_synchronizer',
+  'target_synchronizer',
+  'unassign_id',
+  'submitter',
+  'reassignment_counter',
 ];
 
 /**
@@ -173,6 +185,13 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
   const childEventIds = event.child_event_ids || event.exercised_event?.child_event_ids || [];
   const exerciseResult = event.exercise_result || event.exercised_event?.exercise_result || null;
   
+  // Extract reassignment-specific fields
+  const sourceSynchronizer = event.source || updateInfo?.source || null;
+  const targetSynchronizer = event.target || updateInfo?.target || null;
+  const unassignId = event.unassign_id || updateInfo?.unassign_id || null;
+  const submitter = event.submitter || updateInfo?.submitter || null;
+  const reassignmentCounter = event.counter ?? updateInfo?.counter ?? null;
+  
   return {
     event_id: event.event_id || `${updateId}-${contractId}`,
     update_id: updateId,
@@ -195,6 +214,12 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     interface_id: interfaceId,
     child_event_ids: childEventIds,
     exercise_result: exerciseResult ? JSON.stringify(exerciseResult) : null,
+    // Reassignment fields
+    source_synchronizer: sourceSynchronizer,
+    target_synchronizer: targetSynchronizer,
+    unassign_id: unassignId,
+    submitter: submitter,
+    reassignment_counter: reassignmentCounter,
     raw: rawEvent || event, // Store complete original event
   };
 }

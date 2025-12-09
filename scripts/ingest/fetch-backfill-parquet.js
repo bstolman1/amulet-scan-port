@@ -254,15 +254,28 @@ async function processBackfillItems(transactions, migrationId) {
       record_time: txData.record_time,
       effective_at: txData.effective_at,
       synchronizer_id: txData.synchronizer_id,
+      // Reassignment-specific fields
+      source: txData.source || null,
+      target: txData.target || null,
+      unassign_id: txData.unassign_id || null,
+      submitter: txData.submitter || null,
+      counter: txData.counter ?? null,
     };
     
     // Extract events based on type
     if (isReassignment) {
+      // Handle reassignment events - can have created_event (assign) or archived_event (unassign)
       const ce = tx.event?.created_event;
+      const ae = tx.event?.archived_event;
+      
       if (ce) {
-        // Pass complete transaction as raw event + update timing info
         const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId, tx, updateInfo);
         normalizedEvent.event_type = 'reassign_create';
+        events.push(normalizedEvent);
+      }
+      if (ae) {
+        const normalizedEvent = normalizeEvent(ae, update.update_id, migrationId, tx, updateInfo);
+        normalizedEvent.event_type = 'reassign_archive';
         events.push(normalizedEvent);
       }
     } else {

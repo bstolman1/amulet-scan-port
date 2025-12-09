@@ -6,7 +6,7 @@ package ledger;
 message Event {
   string id = 1;
   string update_id = 2;
-  string type = 3;  // 'created', 'archived', 'exercised', 'reassign_create'
+  string type = 3;  // 'created', 'archived', 'exercised', 'reassign_create', 'reassign_archive'
   string synchronizer = 4;
 
   int64 effective_at = 5;  // Unix epoch millis
@@ -31,10 +31,17 @@ message Event {
   repeated string child_event_ids = 19;
   string exercise_result_json = 20;
   
-  string raw_json = 21;  // Complete original event as JSON
+  // Reassignment event specific fields
+  string source_synchronizer = 21;
+  string target_synchronizer = 22;
+  string unassign_id = 23;
+  string submitter = 24;
+  int64 reassignment_counter = 25;
+  
+  string raw_json = 26;  // Complete original event as JSON
   
   // Deprecated/unused - kept for backwards compatibility
-  string party = 22;
+  string party = 27;
 }
 
 // Represent a single update
