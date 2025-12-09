@@ -21,7 +21,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData } from './write-parquet.js';
+
+// Use binary writer (Protobuf + ZSTD) instead of JSONL
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData, shutdown } from './write-binary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,8 +35,10 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 20; // More concurrent API requests
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 30; // AGGRESSIVE: More concurrent API requests
+const PREFETCH_MULTIPLIER = parseInt(process.env.PREFETCH_MULTIPLIER) || 10; // How deep to prefetch
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
+const SKIP_EVENTS = process.env.SKIP_EVENTS === 'true'; // Skip event extraction for faster processing
 
 // Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
@@ -235,6 +239,7 @@ function getEventTime(txOrReassign) {
 
 /**
  * Process backfill items (transactions array from API response)
+ * OPTIMIZED: Skip event extraction if SKIP_EVENTS=true for 2-3x speedup
  */
 async function processBackfillItems(transactions, migrationId) {
   const updates = [];
@@ -246,26 +251,32 @@ async function processBackfillItems(transactions, migrationId) {
     update.migration_id = migrationId;
     updates.push(update);
     
-    // Extract events based on type
-    if (isReassignment) {
-      const ce = tx.event?.created_event;
-      if (ce) {
-        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
-        normalizedEvent.event_type = 'reassign_create';
-        events.push(normalizedEvent);
-      }
-    } else {
-      const eventsById = tx.events_by_id || {};
-      for (const [eventId, ev] of Object.entries(eventsById)) {
-        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
-        normalizedEvent.event_id = eventId;
-        events.push(normalizedEvent);
+    // Skip event extraction if configured (saves ~50% processing time)
+    if (!SKIP_EVENTS) {
+      // Extract events based on type
+      if (isReassignment) {
+        const ce = tx.event?.created_event;
+        if (ce) {
+          const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
+          normalizedEvent.event_type = 'reassign_create';
+          events.push(normalizedEvent);
+        }
+      } else {
+        const eventsById = tx.events_by_id || {};
+        for (const [eventId, ev] of Object.entries(eventsById)) {
+          const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
+          normalizedEvent.event_id = eventId;
+          events.push(normalizedEvent);
+        }
       }
     }
   }
   
-  await bufferUpdates(updates);
-  await bufferEvents(events);
+  // Buffer updates immediately, don't wait
+  const updatePromise = bufferUpdates(updates);
+  const eventPromise = events.length > 0 ? bufferEvents(events) : Promise.resolve();
+  
+  await Promise.all([updatePromise, eventPromise]);
   
   return { updates: updates.length, events: events.length };
 }
@@ -383,7 +394,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     try {
       // Fetch multiple pages in parallel (deeper prefetch queue)
       const { results, reachedEnd } = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 5
+        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * PREFETCH_MULTIPLIER
       );
       
       if (results.length === 0) {
@@ -428,7 +439,13 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }, minTime, maxTime);
       
       const stats = getBufferStats();
-      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} updates, +${batchEvents} events | Total: ${totalUpdates.toLocaleString()} | ${throughput}/s | Queue: ${stats.queuedWrites}/${stats.activeWrites}`);
+      const writeSpeed = String(stats.mbPerSec ?? '0.00');
+      const compression = String(stats.compressionRatio ?? '---');
+      const queuedJobs = Number(stats.queuedJobs ?? 0);
+      const activeWorkers = Number(stats.activeWorkers ?? 0);
+      
+      // Main progress line
+      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || earliestTime <= atOrAfter) {
         console.log(`   ✅ Reached lower bound. Complete.`);
@@ -569,6 +586,7 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down... waiting for writes to complete');
   await flushAll();
   await waitForWrites();
+  await shutdown();
   console.log('✅ All writes complete');
   process.exit(0);
 });
@@ -579,5 +597,6 @@ runBackfill().catch(async err => {
   console.error(err.stack);
   await flushAll();
   await waitForWrites();
+  await shutdown();
   process.exit(1);
 });
