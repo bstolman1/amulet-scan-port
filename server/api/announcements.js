@@ -55,7 +55,8 @@ async function fetchAllTopics(groupId, maxTopics = 500) {
   
   while (allTopics.length < maxTopics) {
     pageCount++;
-    let url = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=100`;
+    // Groups.io API allows up to 100 per page, but let's try higher
+    let url = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=200`;
     if (pageToken) {
       url += `&page_token=${pageToken}`;
     }
