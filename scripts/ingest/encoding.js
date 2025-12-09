@@ -60,6 +60,12 @@ export function mapEvent(r) {
     interfaceId: String(r.interface_id ?? ''),
     childEventIds: safeStringArray(r.child_event_ids),
     exerciseResultJson: r.exercise_result_json || (r.exercise_result ? safeStringify(r.exercise_result) : ''),
+    // Reassignment event specific fields
+    sourceSynchronizer: String(r.source_synchronizer ?? ''),
+    targetSynchronizer: String(r.target_synchronizer ?? ''),
+    unassignId: String(r.unassign_id ?? ''),
+    submitter: String(r.submitter ?? ''),
+    reassignmentCounter: safeInt64(r.reassignment_counter),
     rawJson: r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
     // Deprecated
     party: String(r.party ?? ''),
