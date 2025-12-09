@@ -17,6 +17,10 @@ message Event {
   string template = 9;
 
   string payload_json = 10; // raw payload as JSON string
+  
+  repeated string signatories = 11;
+  repeated string observers = 12;
+  string package_name = 13;
 }
 
 // Represent a single update
