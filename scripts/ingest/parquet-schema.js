@@ -103,6 +103,8 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     null;
   
   const payload = event.created_event?.create_arguments ||
+    event.exercised_event?.choice_argument ||
+    event.choice_argument ||
     event.payload ||
     event.create_arguments ||
     null;
@@ -139,7 +141,7 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     recorded_at: new Date(), // When we recorded this event
     timestamp: new Date(),
     created_at_ts: effectiveAt,
-    signatories: event.signatories || event.created_event?.signatories || [],
+    signatories: event.signatories || event.created_event?.signatories || event.exercised_event?.acting_parties || event.acting_parties || [],
     observers: event.observers || event.created_event?.observers || [],
     payload: payload ? JSON.stringify(payload) : null,
     raw: rawEvent || event, // Store complete original event
