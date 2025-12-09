@@ -43,12 +43,12 @@ export function useLocalEventsByTemplate(templateFilter: string, limit = 100) {
   });
 }
 
-export function useLocalTransactions(limit = 100) {
+export function useLocalTransactions(limit = 100, offset = 0) {
   return useQuery({
-    queryKey: ["local-transactions", limit],
+    queryKey: ["local-transactions", limit, offset],
     queryFn: async () => {
-      // Fetch events that are likely transactions (Amulet-related)
-      const response = await getEventsByTemplate("Amulet", limit);
+      // Fetch all events, not just Amulet-related
+      const response = await getLatestEvents(limit, offset);
       return response.data as unknown as LocalEvent[];
     },
     staleTime: 30000,
