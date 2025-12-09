@@ -139,8 +139,9 @@ async function run() {
   // Open file handle for sequential writes
   let fd;
   try {
-    // Ensure directory exists
-    const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+    // Ensure directory exists - use path module for cross-platform support
+    const path = await import('node:path');
+    const dir = path.dirname(filePath);
     if (dir && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -248,6 +249,9 @@ async function run() {
   
   console.log(`[WORKER] Complete: ${records.length} records, ${chunksWritten} chunks, ${(compressedSize/1024).toFixed(1)}KB`);
   parentPort.postMessage(result);
+  
+  // Explicitly exit with success code
+  process.exit(0);
 }
 
 // Run with top-level error handling
