@@ -2,10 +2,13 @@
 /**
  * Binary Reader Utility
  * 
- * Decodes .pb.zst files (Protobuf + ZSTD) back to JSON for:
+ * Decodes .pb.zst files (Protobuf + ZSTD with chunked format) back to JSON for:
  * - Debugging and inspection
  * - DuckDB ingestion
  * - Data validation
+ * 
+ * File format: sequence of [4-byte length][compressed chunk]...
+ * Each chunk is a separate Protobuf batch compressed with ZSTD.
  * 
  * Usage:
  *   node read-binary.js <file.pb.zst>              # Print to stdout as JSON
@@ -16,29 +19,14 @@
 
 import fs from 'fs';
 import path from 'path';
-import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
-import zstd from '@mongodb-js/zstd';
+import { decompress } from '@mongodb-js/zstd';
 import { getEncoders } from './encoding.js';
 
 /**
- * Decompress ZSTD buffer
- */
-async function decompressZstd(compressedBuffer) {
-  return await zstd.decompress(compressedBuffer);
-}
-
-/**
- * Read and decode a single .pb.zst file
+ * Read and decode a single .pb.zst file (chunked format)
  */
 export async function readBinaryFile(filePath) {
   const { EventBatch, UpdateBatch } = await getEncoders();
-  
-  // Read compressed file
-  const compressed = fs.readFileSync(filePath);
-  
-  // Decompress
-  const buffer = await decompressZstd(compressed);
   
   // Determine type from filename
   const basename = path.basename(filePath);
@@ -52,18 +40,54 @@ export async function readBinaryFile(filePath) {
   const BatchType = isEvents ? EventBatch : UpdateBatch;
   const recordKey = isEvents ? 'events' : 'updates';
   
-  // Decode protobuf
-  const message = BatchType.decode(buffer);
-  const records = message[recordKey] || [];
+  // Read file
+  const fileBuffer = fs.readFileSync(filePath);
+  const allRecords = [];
+  let originalSize = 0;
+  let offset = 0;
+  let chunksRead = 0;
   
-  // Convert to plain objects with proper types
+  // Read chunks: [4-byte length][compressed data]...
+  while (offset < fileBuffer.length) {
+    if (offset + 4 > fileBuffer.length) {
+      console.warn(`Incomplete length header at offset ${offset}`);
+      break;
+    }
+    
+    const chunkLength = fileBuffer.readUInt32BE(offset);
+    offset += 4;
+    
+    if (offset + chunkLength > fileBuffer.length) {
+      console.warn(`Incomplete chunk at offset ${offset}, expected ${chunkLength} bytes`);
+      break;
+    }
+    
+    const compressedChunk = fileBuffer.subarray(offset, offset + chunkLength);
+    offset += chunkLength;
+    
+    // Decompress chunk
+    const decompressed = await decompress(compressedChunk);
+    originalSize += decompressed.length;
+    
+    // Decode protobuf
+    const message = BatchType.decode(decompressed);
+    const records = message[recordKey] || [];
+    
+    for (const r of records) {
+      allRecords.push(toPlainObject(r, isEvents));
+    }
+    
+    chunksRead++;
+  }
+  
   return {
     type: recordKey,
-    count: records.length,
-    originalSize: buffer.length,
-    compressedSize: compressed.length,
-    compressionRatio: ((compressed.length / buffer.length) * 100).toFixed(1) + '%',
-    records: records.map(r => toPlainObject(r, isEvents))
+    count: allRecords.length,
+    chunksRead,
+    originalSize,
+    compressedSize: fileBuffer.length,
+    compressionRatio: ((fileBuffer.length / originalSize) * 100).toFixed(1) + '%',
+    records: allRecords
   };
 }
 
@@ -121,7 +145,8 @@ export async function convertToJsonl(inputPath, outputPath) {
     input: inputPath,
     output: outputPath,
     count: result.count,
-    type: result.type
+    type: result.type,
+    chunksRead: result.chunksRead
   };
 }
 
@@ -146,7 +171,7 @@ export async function convertDirectory(dirPath, options = {}) {
         try {
           const result = await convertToJsonl(fullPath, outputPath);
           results.push(result);
-          console.log(`✅ Converted: ${entry.name} (${result.count} ${result.type})`);
+          console.log(`✅ Converted: ${entry.name} (${result.count} ${result.type}, ${result.chunksRead} chunks)`);
           
           if (deleteOriginal) {
             fs.unlinkSync(fullPath);
@@ -165,17 +190,49 @@ export async function convertDirectory(dirPath, options = {}) {
 }
 
 /**
- * Get stats for a .pb.zst file without fully decoding
+ * Get stats for a .pb.zst file without fully decoding records
  */
 export async function getFileStats(filePath) {
-  const result = await readBinaryFile(filePath);
+  const { EventBatch, UpdateBatch } = await getEncoders();
+  
+  const basename = path.basename(filePath);
+  const isEvents = basename.startsWith('events-');
+  const BatchType = isEvents ? EventBatch : UpdateBatch;
+  const recordKey = isEvents ? 'events' : 'updates';
+  
+  const fileBuffer = fs.readFileSync(filePath);
+  let offset = 0;
+  let chunksRead = 0;
+  let totalRecords = 0;
+  let originalSize = 0;
+  
+  while (offset < fileBuffer.length) {
+    if (offset + 4 > fileBuffer.length) break;
+    
+    const chunkLength = fileBuffer.readUInt32BE(offset);
+    offset += 4;
+    
+    if (offset + chunkLength > fileBuffer.length) break;
+    
+    const compressedChunk = fileBuffer.subarray(offset, offset + chunkLength);
+    offset += chunkLength;
+    
+    const decompressed = await decompress(compressedChunk);
+    originalSize += decompressed.length;
+    
+    const message = BatchType.decode(decompressed);
+    totalRecords += (message[recordKey] || []).length;
+    chunksRead++;
+  }
+  
   return {
-    file: path.basename(filePath),
-    type: result.type,
-    count: result.count,
-    originalSize: formatBytes(result.originalSize),
-    compressedSize: formatBytes(result.compressedSize),
-    compressionRatio: result.compressionRatio
+    file: basename,
+    type: recordKey,
+    count: totalRecords,
+    chunks: chunksRead,
+    originalSize: formatBytes(originalSize),
+    compressedSize: formatBytes(fileBuffer.length),
+    compressionRatio: ((fileBuffer.length / originalSize) * 100).toFixed(1) + '%'
   };
 }
 
@@ -196,12 +253,13 @@ export async function* streamRecords(filePath) {
 }
 
 // CLI interface
-if (process.argv[1] && process.argv[1].endsWith('read-binary.js')) {
+const scriptPath = process.argv[1];
+if (scriptPath && (scriptPath.endsWith('read-binary.js') || scriptPath.includes('read-binary'))) {
   const args = process.argv.slice(2);
   
   if (args.length === 0) {
     console.log(`
-Binary Reader Utility - Decode .pb.zst files
+Binary Reader Utility - Decode chunked .pb.zst files
 
 Usage:
   node read-binary.js <file.pb.zst>              Print as JSON
@@ -253,7 +311,7 @@ Usage:
           
           if (outputPath) {
             fs.writeFileSync(outputPath, output + '\n');
-            console.log(`✅ Written to ${outputPath} (${result.count} records)`);
+            console.log(`✅ Written to ${outputPath} (${result.count} records, ${result.chunksRead} chunks)`);
           } else {
             console.log(output);
           }
