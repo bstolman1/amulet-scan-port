@@ -9,6 +9,7 @@
     "rotate": "node rotate-parquet.js"
   },
   "dependencies": {
+    "@mongodb-js/zstd": "^2.0.0",
     "axios": "^1.7.0",
     "dotenv": "^16.4.0",
     "duckdb": "^1.0.0",
