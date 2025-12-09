@@ -61,15 +61,19 @@ export class BinaryWriterPool {
 
       const worker = new Worker(WORKER_SCRIPT, { workerData: job });
       this.activeWorkers.add(worker);
+      
+      // Track if job completed successfully (to ignore exit code)
+      let jobCompleted = false;
 
       const cleanup = () => {
         this.activeWorkers.delete(worker);
         this.slots++;
-        worker.terminate();
+        // Don't call terminate - let worker exit naturally
         this._pump();
       };
 
       worker.once('message', (msg) => {
+        jobCompleted = true;
         if (msg.ok) {
           this.stats.completedJobs++;
           this.stats.totalRecords += msg.count;
@@ -90,8 +94,12 @@ export class BinaryWriterPool {
       });
 
       worker.once('exit', (code) => {
-        if (code !== 0 && code !== null) {
-          console.error(`Worker exited with code ${code}`);
+        // Only log if job didn't complete successfully AND code is non-zero
+        if (!jobCompleted && code !== 0 && code !== null) {
+          console.error(`Worker exited unexpectedly with code ${code}`);
+          this.stats.failedJobs++;
+          reject(new Error(`Worker exited with code ${code}`));
+          cleanup();
         }
       });
     }
