@@ -14,23 +14,32 @@
  */
 
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
-import { createGzip } from 'zlib';
 import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { getPartitionPath } from './parquet-schema.js';
+import { init, compress } from '@bokuweb/zstd-wasm';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Configuration - AGGRESSIVE DEFAULTS for speed
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 50000; // Larger batches = fewer files
-const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 20; // More parallel writes
-const IO_BUFFER_SIZE = 1024 * 1024; // 1MB buffer for better disk throughput
-const USE_GZIP = process.env.DISABLE_GZIP !== 'true'; // Disable gzip for speed
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 50000;
+const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 20;
+const IO_BUFFER_SIZE = 1024 * 1024; // 1MB buffer
+const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 3; // 1=fastest, 3=balanced
+
+// Initialize ZSTD once at module load
+let zstdReady = false;
+async function ensureZstdReady() {
+  if (!zstdReady) {
+    await init();
+    zstdReady = true;
+  }
+}
 const MAX_ROW_SIZE_BYTES = 10 * 1024 * 1024; // 10MB max per row - skip larger ones
 const MAX_RETRIES = 2; // Fewer retries - fail fast
 
@@ -58,8 +67,7 @@ function ensureDir(dirPath) {
 function generateFileName(prefix) {
   const ts = Date.now();
   const rand = randomBytes(4).toString('hex');
-  const ext = USE_GZIP ? '.jsonl.gz' : '.jsonl';
-  return `${prefix}-${ts}-${rand}${ext}`;
+  return `${prefix}-${ts}-${rand}.jsonl.zst`;
 }
 
 /**
@@ -73,21 +81,31 @@ function* rowGenerator(rows) {
 }
 
 /**
- * Write rows to JSON-lines file using TRUE STREAMING
- * Never holds the entire file in memory - streams row by row
- * Optionally compresses with gzip for ~5-10x smaller files
+ * Write rows to JSON-lines file using ZSTD compression
+ * Batches all rows, compresses as single block, writes to disk
+ * ZSTD is ~2-3x faster than gzip with better compression
  */
 async function writeJsonLines(rows, filePath) {
-  // Create a readable stream from the generator
-  const source = Readable.from(rowGenerator(rows));
-  const dest = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
+  await ensureZstdReady();
   
-  if (USE_GZIP) {
-    const gzip = createGzip({ level: 1 }); // Level 1 = fastest compression (still ~5x smaller)
-    await pipeline(source, gzip, dest);
-  } else {
-    await pipeline(source, dest);
+  // Build full content (ZSTD works best with full data)
+  let content = '';
+  for (const row of rows) {
+    content += JSON.stringify(row) + '\n';
   }
+  
+  // Compress with ZSTD
+  const input = Buffer.from(content, 'utf8');
+  const compressed = compress(input, ZSTD_LEVEL);
+  
+  // Write compressed data
+  const dest = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
+  await new Promise((resolve, reject) => {
+    dest.write(compressed, (err) => {
+      if (err) reject(err);
+      else dest.end(resolve);
+    });
+  });
 }
 
 /**
@@ -314,13 +332,11 @@ export function createConversionScript() {
   return `
 -- DuckDB script to convert JSON-lines to Parquet
 -- Run: duckdb -c ".read convert-to-parquet.sql"
--- Supports both .jsonl and .jsonl.gz files (uses UNION for Windows compatibility)
+-- Supports .jsonl.zst (ZSTD compressed) files
 
 -- Convert updates with optimized settings
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl')
-  UNION ALL
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.gz')
+  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.zst')
 ) TO 'data/raw/updates.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
@@ -329,9 +345,7 @@ COPY (
 
 -- Convert events with optimized settings
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl')
-  UNION ALL
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.gz')
+  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.zst')
 ) TO 'data/raw/events.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,

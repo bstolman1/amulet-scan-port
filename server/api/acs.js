@@ -20,7 +20,7 @@ function findACSFiles() {
     const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
     return allFiles
       .map(f => String(f))
-      .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz'))
+      .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'))
       .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
   } catch {
     return [];
@@ -43,8 +43,9 @@ const getACSSource = () => {
   }
   
   // For large counts, use glob but only for file types that exist
-  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz'));
+  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
   const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
+  const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
   const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
   
   const parts = [];
@@ -53,6 +54,9 @@ const getACSSource = () => {
   }
   if (hasGz) {
     parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  }
+  if (hasZst) {
+    parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   }
   
   return parts.length > 0 ? `(${parts.join(' UNION ALL ')})` : `(SELECT NULL as placeholder WHERE false)`;
