@@ -16,7 +16,7 @@ function extractUrls(text) {
 
 // Fetch announcements from Groups.io
 router.get('/', async (req, res) => {
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = parseInt(req.query.limit) || 100;
   
   if (!API_KEY) {
     return res.status(500).json({ 
@@ -26,61 +26,86 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    // Try fetching messages
-    const messagesUrl = `${BASE_URL}/api/v1/getmessages?group_name=${GROUP_NAME}&limit=${limit}`;
+    // Try gettopics endpoint first (uses group_name parameter)
+    const topicsUrl = `${BASE_URL}/api/v1/gettopics?group_name=${GROUP_NAME}&limit=${limit}`;
+    console.log('Fetching topics from:', topicsUrl);
     
-    const response = await fetch(messagesUrl, {
+    const topicsResponse = await fetch(topicsUrl, {
       headers: {
         'Authorization': `Bearer ${API_KEY}`,
-        'Content-Type': 'application/json',
       },
     });
 
-    if (!response.ok) {
-      // Try topics endpoint as fallback
-      const topicsUrl = `${BASE_URL}/api/v1/gettopics?group_name=${GROUP_NAME}&limit=${limit}`;
-      const topicsResponse = await fetch(topicsUrl, {
-        headers: {
-          'Authorization': `Bearer ${API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      });
+    console.log('Topics response status:', topicsResponse.status);
 
-      if (!topicsResponse.ok) {
-        const text = await topicsResponse.text();
-        throw new Error(`Groups.io API failed: ${topicsResponse.status} - ${text}`);
-      }
-
+    if (topicsResponse.ok) {
       const topicsData = await topicsResponse.json();
-      const announcements = (topicsData.topics || topicsData.data || []).map((topic, idx) => ({
+      console.log('Topics data keys:', Object.keys(topicsData));
+      
+      const topics = topicsData.data || topicsData.topics || [];
+      console.log('Found', topics.length, 'topics');
+      
+      const announcements = topics.map((topic, idx) => ({
         id: topic.id?.toString() || `topic-${idx}`,
         subject: topic.subject || topic.title || 'Untitled',
-        date: topic.created || topic.date || new Date().toISOString(),
-        content: topic.snippet || topic.body || topic.content || '',
-        excerpt: (topic.snippet || topic.body || topic.content || '').substring(0, 500),
+        date: topic.created || topic.updated || topic.date || new Date().toISOString(),
+        content: topic.snippet || topic.body || topic.preview || '',
+        excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
         sourceUrl: topic.permalink || `${BASE_URL}/g/${GROUP_NAME}/topic/${topic.id}`,
-        linkedUrls: extractUrls(topic.body || topic.content || ''),
-        messageCount: topic.num_msgs || 1,
+        linkedUrls: extractUrls(topic.snippet || topic.body || ''),
+        messageCount: topic.num_msgs || topic.msg_count || 1,
+        hashtags: topic.hashtags || [],
       }));
 
-      return res.json({ announcements, source: 'topics' });
+      return res.json({ 
+        announcements, 
+        source: 'topics',
+        total: topicsData.total_count || topics.length 
+      });
     }
 
-    const data = await response.json();
-    const messages = data.messages || data.data || [];
+    // If topics failed, try getmessages
+    const messagesUrl = `${BASE_URL}/api/v1/getmessages?group_name=${GROUP_NAME}&limit=${limit}`;
+    console.log('Topics failed, trying messages:', messagesUrl);
     
-    const announcements = messages.map((msg, idx) => ({
-      id: msg.id?.toString() || `msg-${idx}`,
-      subject: msg.subject || 'Untitled',
-      date: msg.created || msg.date || new Date().toISOString(),
-      content: msg.body || msg.content || msg.snippet || '',
-      excerpt: (msg.body || msg.content || msg.snippet || '').substring(0, 500),
-      sourceUrl: msg.permalink || `${BASE_URL}/g/${GROUP_NAME}/message/${msg.id}`,
-      linkedUrls: extractUrls(msg.body || msg.content || ''),
-      sender: msg.sender || msg.from_name || 'Unknown',
-    }));
+    const messagesResponse = await fetch(messagesUrl, {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+      },
+    });
 
-    res.json({ announcements, source: 'messages' });
+    console.log('Messages response status:', messagesResponse.status);
+
+    if (messagesResponse.ok) {
+      const messagesData = await messagesResponse.json();
+      console.log('Messages data keys:', Object.keys(messagesData));
+      
+      const messages = messagesData.data || messagesData.messages || [];
+      console.log('Found', messages.length, 'messages');
+      
+      const announcements = messages.map((msg, idx) => ({
+        id: msg.id?.toString() || `msg-${idx}`,
+        subject: msg.subject || 'Untitled',
+        date: msg.created || msg.date || new Date().toISOString(),
+        content: msg.body || msg.snippet || msg.plain_body || '',
+        excerpt: (msg.body || msg.snippet || msg.plain_body || '').substring(0, 500),
+        sourceUrl: msg.permalink || `${BASE_URL}/g/${GROUP_NAME}/message/${msg.id}`,
+        linkedUrls: extractUrls(msg.body || msg.plain_body || ''),
+        sender: msg.sender_name || msg.from_name || msg.poster_name || 'Unknown',
+      }));
+
+      return res.json({ 
+        announcements, 
+        source: 'messages',
+        total: messagesData.total_count || messages.length 
+      });
+    }
+
+    // Both failed - return error with details
+    const topicsError = await topicsResponse.text();
+    const messagesError = await messagesResponse.text();
+    
+    throw new Error(`Topics API: ${topicsResponse.status} - ${topicsError}. Messages API: ${messagesResponse.status} - ${messagesError}`);
 
   } catch (error) {
     console.error('Error fetching announcements:', error);
