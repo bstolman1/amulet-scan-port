@@ -112,6 +112,10 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null) {
   else if (event.exercised_event) eventType = 'exercised';
   else if (event.event_type) eventType = event.event_type;
   
+  // Extract effective_at from created_at or event timing
+  const createdAt = event.created_at || event.created_event?.created_at;
+  const effectiveAt = createdAt ? new Date(createdAt) : null;
+  
   return {
     event_id: event.event_id || `${updateId}-${contractId}`,
     update_id: updateId,
@@ -120,8 +124,10 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null) {
     template_id: templateId,
     package_name: extractPackageName(templateId),
     migration_id: parseInt(migrationId) || null,
+    effective_at: effectiveAt,
+    recorded_at: new Date(), // When we recorded this event
     timestamp: new Date(),
-    created_at_ts: event.created_at ? new Date(event.created_at) : null,
+    created_at_ts: effectiveAt,
     signatories: event.signatories || event.created_event?.signatories || [],
     observers: event.observers || event.created_event?.observers || [],
     payload: payload ? JSON.stringify(payload) : null,
