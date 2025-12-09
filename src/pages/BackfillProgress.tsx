@@ -5,46 +5,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
-import { Database, Activity, Trash2, FileText, Layers, Zap, Clock, Grid3X3 } from "lucide-react";
+import { Database, Activity, Trash2, FileText, Layers, Zap, Clock } from "lucide-react";
 import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
 import { useBackfillCursors, useBackfillStats, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
-
-// Extend cursor type with shard info
-interface ShardedCursor extends BackfillCursor {
-  shard_index?: number | null;
-}
-
-/**
- * Parse shard information from synchronizer_id
- */
-function parseShardInfo(cursor: ShardedCursor): { shardIndex: number | null; isSharded: boolean } {
-  // First check if shard_index is already set from the API
-  if (cursor.shard_index !== undefined && cursor.shard_index !== null) {
-    return { shardIndex: cursor.shard_index, isSharded: true };
-  }
-  // Fallback: parse from synchronizer_id
-  const match = cursor.synchronizer_id?.match(/-shard(\d+)$/);
-  return match 
-    ? { shardIndex: parseInt(match[1], 10), isSharded: true } 
-    : { shardIndex: null, isSharded: false };
-}
-
-/**
- * Calculate progress percentage for a cursor
- */
-function calculateProgress(cursor: BackfillCursor): number {
-  if (cursor.complete) return 100;
-  if (!cursor.min_time || !cursor.max_time || !cursor.last_before) return 0;
-  
-  const minTime = new Date(cursor.min_time).getTime();
-  const maxTime = new Date(cursor.max_time).getTime();
-  const currentTime = new Date(cursor.last_before).getTime();
-  const totalRange = maxTime - minTime;
-  const progressFromMax = maxTime - currentTime;
-  
-  return Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
-}
 
 /**
  * Calculate ETA for a cursor based on throughput
@@ -113,48 +77,6 @@ const BackfillProgress = () => {
       .map(([id, cursors]) => ({ migrationId: Number(id), cursors }));
   }, [allCursors]);
 
-  // Group cursors by shard (only for sharded cursors)
-  const cursorsByShard = useMemo(() => {
-    const grouped: Record<number, ShardedCursor[]> = {};
-    let hasShards = false;
-    
-    for (const cursor of allCursors as ShardedCursor[]) {
-      const { shardIndex, isSharded } = parseShardInfo(cursor);
-      if (isSharded && shardIndex !== null) {
-        hasShards = true;
-        if (!grouped[shardIndex]) grouped[shardIndex] = [];
-        grouped[shardIndex].push(cursor);
-      }
-    }
-    
-    if (!hasShards) return null;
-    
-    return Object.entries(grouped)
-      .sort(([a], [b]) => Number(a) - Number(b))
-      .map(([shard, cursors]) => {
-        const shardIndex = Number(shard);
-        const completedCount = cursors.filter(c => c.complete).length;
-        const totalProgress = cursors.reduce((sum, c) => sum + calculateProgress(c), 0) / cursors.length;
-        const totalThroughput = cursors.reduce((sum, c) => {
-          const { throughput } = calculateETA(c);
-          return sum + (throughput || 0);
-        }, 0);
-        const totalUpdates = cursors.reduce((sum, c) => sum + (c.total_updates || 0), 0);
-        const totalEvents = cursors.reduce((sum, c) => sum + (c.total_events || 0), 0);
-        
-        return {
-          shardIndex,
-          cursors,
-          completedCount,
-          totalProgress,
-          totalThroughput,
-          totalUpdates,
-          totalEvents,
-          isComplete: completedCount === cursors.length,
-        };
-      });
-  }, [allCursors]);
-
   // Determine current active migration (first non-complete migration)
   const activeMigrationId = useMemo(() => {
     for (const { migrationId, cursors } of cursorsByMigration) {
@@ -173,7 +95,28 @@ const BackfillProgress = () => {
   // Calculate overall progress percentage
   const overallProgress = useMemo(() => {
     if (allCursors.length === 0) return 0;
-    return allCursors.reduce((sum, c) => sum + calculateProgress(c), 0) / allCursors.length;
+    
+    let totalProgress = 0;
+    let validCursors = 0;
+    
+    for (const cursor of allCursors) {
+      if (cursor.complete) {
+        totalProgress += 100;
+        validCursors++;
+      } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
+        const minTime = new Date(cursor.min_time).getTime();
+        const maxTime = new Date(cursor.max_time).getTime();
+        const currentTime = new Date(cursor.last_before).getTime();
+        const totalRange = maxTime - minTime;
+        if (totalRange > 0) {
+          const progressFromMax = maxTime - currentTime;
+          totalProgress += Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+          validCursors++;
+        }
+      }
+    }
+    
+    return validCursors > 0 ? totalProgress / validCursors : 0;
   }, [allCursors]);
 
   useEffect(() => {
@@ -388,95 +331,6 @@ const BackfillProgress = () => {
 
         </div>
 
-        {/* Shard Progress Grid - Only shown when sharding is active */}
-        {cursorsByShard && cursorsByShard.length > 0 && (
-          <Card className="bg-card/50 backdrop-blur border-primary/30">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2">
-                <Grid3X3 className="w-5 h-5 text-primary" />
-                Shard Progress
-                <Badge variant="secondary" className="ml-2">
-                  {cursorsByShard.length} shards
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {cursorsByShard.map(({ shardIndex, cursors, completedCount, totalProgress, totalThroughput, totalUpdates, totalEvents, isComplete }) => (
-                  <div 
-                    key={shardIndex}
-                    className={`p-4 rounded-lg border ${
-                      isComplete 
-                        ? 'bg-green-500/10 border-green-500/30' 
-                        : totalProgress > 0 
-                          ? 'bg-primary/10 border-primary/30' 
-                          : 'bg-muted/50 border-border/50'
-                    }`}
-                  >
-                    {/* Shard Header */}
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg font-bold">Shard {shardIndex}</span>
-                        {isComplete ? (
-                          <Badge className="bg-green-600 text-xs">✓</Badge>
-                        ) : totalThroughput > 0 ? (
-                          <Badge variant="default" className="text-xs animate-pulse">
-                            <Zap className="w-3 h-3 mr-1" />
-                            {totalThroughput.toLocaleString()}/s
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="text-xs">Idle</Badge>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {/* Progress Bar */}
-                    <div className="space-y-1 mb-2">
-                      <Progress value={totalProgress} className="h-2" />
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>{totalProgress.toFixed(1)}%</span>
-                        <span>{completedCount}/{cursors.length} cursors</span>
-                      </div>
-                    </div>
-                    
-                    {/* Stats */}
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {totalUpdates > 0 && (
-                        <span className="text-blue-400">{totalUpdates.toLocaleString()} updates</span>
-                      )}
-                      {totalEvents > 0 && (
-                        <span className="text-green-400">{totalEvents.toLocaleString()} events</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Combined Stats */}
-              <div className="mt-4 pt-4 border-t border-border/50 flex flex-wrap gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Combined Throughput:</span>
-                  <span className="font-bold text-primary">
-                    {cursorsByShard.reduce((sum, s) => sum + s.totalThroughput, 0).toLocaleString()}/s
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Total Updates:</span>
-                  <span className="font-bold text-blue-400">
-                    {cursorsByShard.reduce((sum, s) => sum + s.totalUpdates, 0).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Total Events:</span>
-                  <span className="font-bold text-green-400">
-                    {cursorsByShard.reduce((sum, s) => sum + s.totalEvents, 0).toLocaleString()}
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {/* Backfill Cursors Progress */}
         <Card className="bg-card/50 backdrop-blur">
           <CardHeader>
@@ -517,20 +371,25 @@ const BackfillProgress = () => {
                       {/* Cursors for this migration */}
                       <div className="space-y-3 pl-4 border-l-2 border-border/30">
                         {migrationCursors.map((cursor) => {
-                          const progressPercent = calculateProgress(cursor);
+                          let progressPercent = 0;
+                          if (cursor.min_time && cursor.max_time && cursor.last_before) {
+                            const minTime = new Date(cursor.min_time).getTime();
+                            const maxTime = new Date(cursor.max_time).getTime();
+                            const currentTime = new Date(cursor.last_before).getTime();
+                            const totalRange = maxTime - minTime;
+                            const progressFromMax = maxTime - currentTime;
+                            progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+                          } else if (cursor.complete) {
+                            progressPercent = 100;
+                          }
+
                           const { eta, throughput } = calculateETA(cursor);
-                          const { shardIndex, isSharded } = parseShardInfo(cursor as ShardedCursor);
 
                           return (
                             <div key={cursor.id} className="space-y-2 p-3 rounded-lg bg-muted/50">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
-                                  {isSharded && (
-                                    <Badge variant="outline" className="text-xs">
-                                      Shard {shardIndex}
-                                    </Badge>
-                                  )}
                                   <Badge variant={cursor.complete ? "default" : "secondary"} className="text-xs">
                                     {cursor.complete ? "Complete" : "In Progress"}
                                   </Badge>
