@@ -3,7 +3,7 @@ import express from 'express';
 const router = express.Router();
 
 const API_KEY = process.env.GROUPS_IO_API_KEY;
-const GROUP_NAME = 'supervalidator-announce';
+const GROUP_NAME = 'supervalidator-announce'; // The subgroup name we're looking for
 const BASE_URL = 'https://lists.sync.global';
 
 // Helper to extract ALL URLs from text
@@ -31,13 +31,13 @@ async function getGroupId() {
     // Log all group names to help debug
     subs.forEach(s => console.log('  - Group:', s.group_name, 'ID:', s.group_id));
     
+    // Look for the exact subgroup: +supervalidator-announce (not +supervalidator-ops)
     const group = subs.find(s => 
-      s.group_name === GROUP_NAME || 
-      (s.group_name || '').includes('supervalidator')
+      (s.group_name || '').endsWith('+supervalidator-announce')
     );
     
     if (group) {
-      console.log('Using group_id:', group.group_id);
+      console.log('Using group:', group.group_name, 'ID:', group.group_id);
       return group.group_id;
     }
   } else {
