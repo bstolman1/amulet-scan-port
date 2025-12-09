@@ -23,7 +23,6 @@ import {
   Hash,
   Clock,
   TrendingUp,
-  Compass,
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -55,7 +54,6 @@ const navigation = [
   { name: "ACS Snapshot", href: "/snapshot-progress", icon: Upload },
   { name: "Backfill Progress", href: "/backfill-progress", icon: Clock },
   { name: "Live Updates", href: "/live-updates", icon: TrendingUp },
-  { name: "Explorer", href: "/explorer", icon: Compass },
   { name: "Admin", href: "/admin", icon: Shield },
   { name: "Templates", href: "/templates", icon: FileText },
 ];
