@@ -21,7 +21,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData } from './write-parquet.js';
+
+// Use binary writer (Protobuf + ZSTD) instead of JSONL
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData, shutdown } from './write-binary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -569,6 +571,7 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down... waiting for writes to complete');
   await flushAll();
   await waitForWrites();
+  await shutdown();
   console.log('✅ All writes complete');
   process.exit(0);
 });
@@ -579,5 +582,6 @@ runBackfill().catch(async err => {
   console.error(err.stack);
   await flushAll();
   await waitForWrites();
+  await shutdown();
   process.exit(1);
 });
