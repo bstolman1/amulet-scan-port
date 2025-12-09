@@ -8,16 +8,20 @@
 
 export const LEDGER_UPDATES_SCHEMA = {
   update_id: 'STRING',
-  update_type: 'STRING',
+  update_type: 'STRING',  // 'transaction' or 'reassignment'
   migration_id: 'INT64',
   synchronizer_id: 'STRING',
   workflow_id: 'STRING',
+  command_id: 'STRING',
   offset: 'INT64',
   record_time: 'TIMESTAMP',
   effective_at: 'TIMESTAMP',
+  recorded_at: 'TIMESTAMP',  // When we recorded this update
   timestamp: 'TIMESTAMP',
-  kind: 'STRING',
-  update_data: 'JSON',  // Stored as JSON string
+  kind: 'STRING',  // For reassignments: 'assign' or 'unassign'
+  root_event_ids: 'LIST<STRING>',  // Root event IDs for this transaction
+  event_count: 'INT32',  // Number of events in this update
+  update_data: 'JSON',  // Full update data as JSON string
 };
 
 export const LEDGER_EVENTS_SCHEMA = {
@@ -51,11 +55,15 @@ export const UPDATES_COLUMNS = [
   'migration_id',
   'synchronizer_id',
   'workflow_id',
+  'command_id',
   'offset',
   'record_time',
   'effective_at',
+  'recorded_at',
   'timestamp',
   'kind',
+  'root_event_ids',
+  'event_count',
   'update_data',
 ];
 
@@ -67,11 +75,20 @@ export const EVENTS_COLUMNS = [
   'template_id',
   'package_name',
   'migration_id',
+  'synchronizer_id',
+  'effective_at',
+  'recorded_at',
   'timestamp',
   'created_at_ts',
   'signatories',
   'observers',
+  'acting_parties',
   'payload',
+  'choice',
+  'consuming',
+  'interface_id',
+  'child_event_ids',
+  'exercise_result',
 ];
 
 /**
@@ -80,17 +97,28 @@ export const EVENTS_COLUMNS = [
 export function normalizeUpdate(raw) {
   const update = raw.transaction || raw.reassignment || raw;
   
+  // Extract root event IDs
+  const rootEventIds = update.root_event_ids || [];
+  
+  // Count events
+  const eventsById = update.events_by_id || {};
+  const eventCount = Object.keys(eventsById).length;
+  
   return {
     update_id: update.update_id || raw.update_id,
     update_type: raw.transaction ? 'transaction' : raw.reassignment ? 'reassignment' : 'unknown',
     migration_id: parseInt(raw.migration_id) || null,
     synchronizer_id: update.synchronizer_id || null,
     workflow_id: update.workflow_id || null,
+    command_id: update.command_id || null,
     offset: parseInt(update.offset) || null,
     record_time: update.record_time ? new Date(update.record_time) : null,
     effective_at: update.effective_at ? new Date(update.effective_at) : null,
+    recorded_at: new Date(), // When we recorded this update
     timestamp: new Date(),
     kind: update.kind || null,
+    root_event_ids: rootEventIds,
+    event_count: eventCount,
     update_data: JSON.stringify(update),
   };
 }
