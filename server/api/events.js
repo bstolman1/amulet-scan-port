@@ -27,15 +27,9 @@ router.get('/latest', async (req, res) => {
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
-      
-      // Sort by timestamp descending
-      const sorted = events
-        .filter(e => e.timestamp)
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(offset, offset + limit);
-      
-      return res.json({ data: sorted, count: sorted.length, source: 'binary' });
+      // Use streaming for memory efficiency
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', { limit, offset });
+      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
     
     const sql = `
@@ -68,17 +62,16 @@ router.get('/by-type/:type', async (req, res) => {
   try {
     const { type } = req.params;
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
-      
-      const filtered = events
-        .filter(e => e.event_type === type)
-        .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
-        .slice(0, limit);
-      
-      return res.json({ data: filtered, count: filtered.length, source: 'binary' });
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        filter: (e) => e.event_type === type
+      });
+      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
     
     const sql = `
@@ -101,17 +94,16 @@ router.get('/by-template/:templateId', async (req, res) => {
   try {
     const { templateId } = req.params;
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
-      
-      const filtered = events
-        .filter(e => e.template_id?.includes(templateId))
-        .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
-        .slice(0, limit);
-      
-      return res.json({ data: filtered, count: filtered.length, source: 'binary' });
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        filter: (e) => e.template_id?.includes(templateId)
+      });
+      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
     
     const sql = `
@@ -133,25 +125,24 @@ router.get('/by-template/:templateId', async (req, res) => {
 router.get('/by-date', async (req, res) => {
   try {
     const { start, end } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 1000, 10000);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
-      
       const startDate = start ? new Date(start).getTime() : 0;
       const endDate = end ? new Date(end).getTime() : Date.now();
       
-      const filtered = events
-        .filter(e => {
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        filter: (e) => {
           if (!e.timestamp) return false;
           const ts = new Date(e.timestamp).getTime();
           return ts >= startDate && ts <= endDate;
-        })
-        .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
-        .slice(0, limit);
-      
-      return res.json({ data: filtered, count: filtered.length, source: 'binary' });
+        }
+      });
+      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
     
     let whereClause = '';
@@ -173,14 +164,16 @@ router.get('/by-date', async (req, res) => {
   }
 });
 
-// GET /api/events/count - Get total event count
+// GET /api/events/count - Get total event count (estimates for binary)
 router.get('/count', async (req, res) => {
   try {
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
-      return res.json({ count: events.length, source: 'binary' });
+      // Just count files * estimated records per file to avoid OOM
+      const files = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      const estimated = files.length * 100; // ~100 records per file estimate
+      return res.json({ count: estimated, estimated: true, fileCount: files.length, source: 'binary' });
     }
     
     const sql = `
