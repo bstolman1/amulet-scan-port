@@ -35,34 +35,61 @@ export async function getEncoders() {
 
 /**
  * Map a raw event object to protobuf-compatible format
+ * NOTE: protobufjs uses camelCase field names internally
  */
 export function mapEvent(r) {
   return {
-    id: r.id ?? '',
-    update_id: r.update_id ?? '',
-    type: r.type ?? '',
-    synchronizer: r.synchronizer ?? '',
-    effective_at: r.effective_at ? new Date(r.effective_at).getTime() : 0,
-    recorded_at: r.recorded_at ? new Date(r.recorded_at).getTime() : 0,
-    contract_id: r.contract_id ?? '',
-    party: r.party ?? '',
-    template: r.template ?? '',
-    payload_json: r.payload ? JSON.stringify(r.payload) : '',
+    id: String(r.id ?? r.event_id ?? ''),
+    updateId: String(r.update_id ?? ''),
+    type: String(r.type ?? r.event_type ?? ''),
+    synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? ''),
+    effectiveAt: safeTimestamp(r.effective_at),
+    recordedAt: safeTimestamp(r.recorded_at ?? r.timestamp),
+    contractId: String(r.contract_id ?? ''),
+    party: String(r.party ?? ''),
+    template: String(r.template ?? r.template_id ?? ''),
+    payloadJson: r.payload ? safeStringify(r.payload) : '',
   };
 }
 
 /**
  * Map a raw update object to protobuf-compatible format
+ * NOTE: protobufjs uses camelCase field names internally
  */
 export function mapUpdate(r) {
   return {
-    id: r.id ?? '',
-    synchronizer: r.synchronizer ?? '',
-    effective_at: r.effective_at ? new Date(r.effective_at).getTime() : 0,
-    recorded_at: r.recorded_at ? new Date(r.recorded_at).getTime() : 0,
-    transaction_id: r.transaction_id ?? '',
-    command_id: r.command_id ?? '',
-    workflow_id: r.workflow_id ?? '',
-    status: r.status ?? '',
+    id: String(r.id ?? r.update_id ?? ''),
+    synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? ''),
+    effectiveAt: safeTimestamp(r.effective_at),
+    recordedAt: safeTimestamp(r.recorded_at ?? r.timestamp),
+    transactionId: String(r.transaction_id ?? ''),
+    commandId: String(r.command_id ?? ''),
+    workflowId: String(r.workflow_id ?? ''),
+    status: String(r.status ?? ''),
   };
+}
+
+/**
+ * Safely convert to timestamp (int64)
+ */
+function safeTimestamp(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  try {
+    const ts = new Date(value).getTime();
+    return isNaN(ts) ? 0 : ts;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Safely stringify payload
+ */
+function safeStringify(obj) {
+  try {
+    return JSON.stringify(obj);
+  } catch {
+    return '';
+  }
 }
