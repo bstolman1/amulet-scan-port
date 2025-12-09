@@ -21,9 +21,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
-
-// Use binary writer (Protobuf + ZSTD) instead of JSONL
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData, shutdown } from './write-binary.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData } from './write-parquet.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -35,33 +33,8 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 30; // AGGRESSIVE: More concurrent API requests
-const PREFETCH_MULTIPLIER = parseInt(process.env.PREFETCH_MULTIPLIER) || 10; // How deep to prefetch
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 20; // More concurrent API requests
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
-const SKIP_EVENTS = process.env.SKIP_EVENTS === 'true'; // Skip event extraction for faster processing
-const PARALLEL_BATCH_PROCESSING = parseInt(process.env.PARALLEL_BATCH_PROCESSING) || 10; // Process N batches concurrently
-
-// Parse --shard N/M argument for parallel instances
-function parseShardArg() {
-  const shardArg = process.argv.find(arg => arg.startsWith('--shard'));
-  if (!shardArg) return null;
-  
-  const match = shardArg.match(/--shard[=\s]?(\d+)\/(\d+)/);
-  if (!match) {
-    // Try next argument
-    const idx = process.argv.indexOf('--shard');
-    if (idx >= 0 && process.argv[idx + 1]) {
-      const nextMatch = process.argv[idx + 1].match(/(\d+)\/(\d+)/);
-      if (nextMatch) {
-        return { current: parseInt(nextMatch[1]), total: parseInt(nextMatch[2]) };
-      }
-    }
-    return null;
-  }
-  return { current: parseInt(match[1]), total: parseInt(match[2]) };
-}
-
-const SHARD = parseShardArg();
 
 // Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
@@ -262,7 +235,6 @@ function getEventTime(txOrReassign) {
 
 /**
  * Process backfill items (transactions array from API response)
- * OPTIMIZED: Skip event extraction if SKIP_EVENTS=true for 2-3x speedup
  */
 async function processBackfillItems(transactions, migrationId) {
   const updates = [];
@@ -274,57 +246,46 @@ async function processBackfillItems(transactions, migrationId) {
     update.migration_id = migrationId;
     updates.push(update);
     
-    // Skip event extraction if configured (saves ~50% processing time)
-    if (!SKIP_EVENTS) {
-      // Extract events based on type
-      if (isReassignment) {
-        const ce = tx.event?.created_event;
-        if (ce) {
-          const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
-          normalizedEvent.event_type = 'reassign_create';
-          events.push(normalizedEvent);
-        }
-      } else {
-        const eventsById = tx.events_by_id || {};
-        for (const [eventId, ev] of Object.entries(eventsById)) {
-          const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
-          normalizedEvent.event_id = eventId;
-          events.push(normalizedEvent);
-        }
+    // Extract events based on type
+    if (isReassignment) {
+      const ce = tx.event?.created_event;
+      if (ce) {
+        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
+        normalizedEvent.event_type = 'reassign_create';
+        events.push(normalizedEvent);
+      }
+    } else {
+      const eventsById = tx.events_by_id || {};
+      for (const [eventId, ev] of Object.entries(eventsById)) {
+        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
+        normalizedEvent.event_id = eventId;
+        events.push(normalizedEvent);
       }
     }
   }
   
-  // Buffer updates immediately, don't wait
-  const updatePromise = bufferUpdates(updates);
-  const eventPromise = events.length > 0 ? bufferEvents(events) : Promise.resolve();
-  
-  await Promise.all([updatePromise, eventPromise]);
+  await bufferUpdates(updates);
+  await bufferEvents(events);
   
   return { updates: updates.length, events: events.length };
 }
 
 /**
  * Parallel fetch with sliding window - fetches multiple pages concurrently
- * OPTIMIZED: Uses proper cursor-based pagination to avoid duplicates
+ * Maintains full parallelism by refilling slots as requests complete
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches) {
   const results = [];
   const pending = new Map();
-  const seenCursors = new Set(); // Track by actual cursor value, not timestamp
+  const seenTimestamps = new Set(); // Prevent duplicate fetches
   let nextBefore = startBefore;
   let fetched = 0;
   let reachedEnd = false;
-  let batchCounter = 0;
   
-  // Helper to generate unique cursor key
-  const getCursorKey = (before) => `${before}`;
-  
-  // Helper to start a fetch with unique cursor
+  // Helper to start a fetch
   const startFetch = (before) => {
-    const cursorKey = getCursorKey(before);
-    if (reachedEnd || seenCursors.has(cursorKey)) return false;
-    seenCursors.add(cursorKey);
+    if (reachedEnd || seenTimestamps.has(before)) return false;
+    seenTimestamps.add(before);
     
     const fetchId = fetched++;
     pending.set(fetchId, {
@@ -336,24 +297,17 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     return true;
   };
   
-  // Fill initial parallel slots - stagger timestamps to prevent duplicates
-  for (let i = 0; i < Math.min(PARALLEL_FETCHES, maxBatches); i++) {
-    if (!startFetch(nextBefore)) break;
-    // Use larger time gaps for initial slots to ensure unique data ranges
-    const d = new Date(nextBefore);
-    d.setSeconds(d.getSeconds() - (i + 1) * 10); // 10 second gaps
-    nextBefore = d.toISOString();
-  }
+  // Fill initial parallel slots
+  startFetch(nextBefore);
   
   // Process results as they complete, keeping slots full
-  while (pending.size > 0 && !reachedEnd && batchCounter < maxBatches) {
+  while (pending.size > 0 && !reachedEnd) {
     // Wait for any fetch to complete
     const completed = await Promise.race(
       Array.from(pending.values()).map(p => p.promise)
     );
     
     pending.delete(completed.fetchId);
-    batchCounter++;
     
     if (completed.error) {
       throw completed.error;
@@ -368,7 +322,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     
     results.push({ transactions: txs, before: completed.before });
     
-    // Find earliest timestamp from this batch for next cursor
+    // Find earliest timestamp from this batch
     let earliest = null;
     for (const tx of txs) {
       const t = getEventTime(tx);
@@ -380,13 +334,18 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       break;
     }
     
-    // Use the actual earliest timestamp from results as next cursor
-    // This ensures proper pagination without gaps or duplicates
-    if (earliest) {
-      const newCursor = earliest;
-      if (!seenCursors.has(getCursorKey(newCursor))) {
-        startFetch(newCursor);
-      }
+    // Update nextBefore for future fetches
+    if (earliest && earliest < nextBefore) {
+      nextBefore = earliest;
+    }
+    
+    // Refill ALL empty slots, not just one
+    while (pending.size < PARALLEL_FETCHES && fetched < maxBatches && !reachedEnd) {
+      if (!startFetch(nextBefore)) break;
+      // Decrement slightly to avoid exact duplicates
+      const d = new Date(nextBefore);
+      d.setMilliseconds(d.getMilliseconds() - 1);
+      nextBefore = d.toISOString();
     }
   }
   
@@ -424,7 +383,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     try {
       // Fetch multiple pages in parallel (deeper prefetch queue)
       const { results, reachedEnd } = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * PREFETCH_MULTIPLIER
+        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 5
       );
       
       if (results.length === 0) {
@@ -432,30 +391,20 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         break;
       }
       
-      // Process all fetched batches IN PARALLEL (major speedup!)
+      // Process all fetched batches
       let batchUpdates = 0;
       let batchEvents = 0;
       let earliestTime = before;
       
-      // Process batches in parallel chunks
-      const chunkSize = PARALLEL_BATCH_PROCESSING;
-      for (let i = 0; i < results.length; i += chunkSize) {
-        const chunk = results.slice(i, i + chunkSize);
-        const processPromises = chunk.map(({ transactions }) => 
-          processBackfillItems(transactions, migrationId)
-        );
+      for (const { transactions } of results) {
+        const { updates, events } = await processBackfillItems(transactions, migrationId);
+        batchUpdates += updates;
+        batchEvents += events;
         
-        const chunkResults = await Promise.all(processPromises);
-        
-        for (let j = 0; j < chunk.length; j++) {
-          batchUpdates += chunkResults[j].updates;
-          batchEvents += chunkResults[j].events;
-          
-          // Track earliest timestamp
-          for (const tx of chunk[j].transactions) {
-            const t = getEventTime(tx);
-            if (t && t < earliestTime) earliestTime = t;
-          }
+        // Track earliest timestamp
+        for (const tx of transactions) {
+          const t = getEventTime(tx);
+          if (t && t < earliestTime) earliestTime = t;
         }
       }
       
@@ -479,13 +428,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }, minTime, maxTime);
       
       const stats = getBufferStats();
-      const writeSpeed = String(stats.mbPerSec ?? '0.00');
-      const compression = String(stats.compressionRatio ?? '---');
-      const queuedJobs = Number(stats.queuedJobs ?? 0);
-      const activeWorkers = Number(stats.activeWorkers ?? 0);
-      
-      // Main progress line
-      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queuedJobs}/${activeWorkers}`);
+      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} updates, +${batchEvents} events | Total: ${totalUpdates.toLocaleString()} | ${throughput}/s | Queue: ${stats.queuedWrites}/${stats.activeWrites}`);
       
       if (reachedEnd || earliestTime <= atOrAfter) {
         console.log(`   ✅ Reached lower bound. Complete.`);
@@ -542,12 +485,7 @@ async function runBackfill() {
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES, "(per synchronizer)");
-  console.log("   PARALLEL_BATCH_PROCESSING:", PARALLEL_BATCH_PROCESSING);
-  console.log("   SKIP_EVENTS:", SKIP_EVENTS);
   console.log("   PURGE_AFTER_MIGRATION:", PURGE_AFTER_MIGRATION);
-  if (SHARD) {
-    console.log(`   🔀 SHARD: ${SHARD.current}/${SHARD.total} (processing every ${SHARD.total}th synchronizer starting at ${SHARD.current})`);
-  }
   console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
@@ -588,14 +526,7 @@ async function runBackfill() {
     
     console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migrationId}`);
     
-    // Apply sharding if configured - each shard processes a subset of synchronizers
-    let filteredRanges = ranges;
-    if (SHARD) {
-      filteredRanges = ranges.filter((_, index) => (index % SHARD.total) === (SHARD.current - 1));
-      console.log(`   🔀 Shard ${SHARD.current}/${SHARD.total}: processing ${filteredRanges.length} of ${ranges.length} synchronizers`);
-    }
-    
-    for (const range of filteredRanges) {
+    for (const range of ranges) {
       const synchronizerId = range.synchronizer_id;
       const minTime = range.min;
       const maxTime = range.max;
@@ -638,7 +569,6 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down... waiting for writes to complete');
   await flushAll();
   await waitForWrites();
-  await shutdown();
   console.log('✅ All writes complete');
   process.exit(0);
 });
@@ -649,6 +579,5 @@ runBackfill().catch(async err => {
   console.error(err.stack);
   await flushAll();
   await waitForWrites();
-  await shutdown();
   process.exit(1);
 });

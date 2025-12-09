@@ -27,7 +27,7 @@ const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
 const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 4;
 const GZIP_LEVEL = parseInt(process.env.GZIP_LEVEL) || 1;
-const WORKER_POOL_SIZE = parseInt(process.env.WORKER_POOL_SIZE) || parseInt(process.env.MAX_CONCURRENT_WRITES) || 0; // 0 = auto (CPU cores - 1)
+const WORKER_POOL_SIZE = parseInt(process.env.WORKER_POOL_SIZE) || 0; // 0 = auto (CPU cores - 1)
 
 const MAX_ROW_SIZE_BYTES = 5 * 1024 * 1024; // 5MB max per row
 const MAX_RETRIES = 2;
