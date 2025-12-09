@@ -14,6 +14,38 @@ function extractUrls(text) {
   return [...new Set(matches)]; // Remove duplicates
 }
 
+// Get group ID from subscriptions
+async function getGroupId() {
+  // First try to get subscriptions to find the group_id
+  const subsUrl = `${BASE_URL}/api/v1/getsubs`;
+  console.log('Getting subscriptions to find group_id...');
+  
+  const response = await fetch(subsUrl, {
+    headers: { 'Authorization': `Bearer ${API_KEY}` },
+  });
+  
+  if (response.ok) {
+    const data = await response.json();
+    console.log('Subscriptions response:', JSON.stringify(data, null, 2).substring(0, 500));
+    
+    const subs = data.data || [];
+    const group = subs.find(s => 
+      s.group_name === GROUP_NAME || 
+      s.name === GROUP_NAME ||
+      (s.group_name || '').includes('supervalidator')
+    );
+    
+    if (group) {
+      console.log('Found group:', group.group_id || group.id);
+      return group.group_id || group.id;
+    }
+  } else {
+    console.log('Subscriptions failed:', response.status, await response.text());
+  }
+  
+  return null;
+}
+
 // Fetch announcements from Groups.io
 router.get('/', async (req, res) => {
   const limit = parseInt(req.query.limit) || 100;
@@ -26,21 +58,28 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    // Try gettopics endpoint first (uses group_name parameter)
-    const topicsUrl = `${BASE_URL}/api/v1/gettopics?group_name=${GROUP_NAME}&limit=${limit}`;
+    // First, try to get the group_id
+    const groupId = await getGroupId();
+    
+    let topicsUrl;
+    if (groupId) {
+      topicsUrl = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=${limit}`;
+    } else {
+      // Fallback to group_name
+      topicsUrl = `${BASE_URL}/api/v1/gettopics?group_name=${GROUP_NAME}&limit=${limit}`;
+    }
+    
     console.log('Fetching topics from:', topicsUrl);
     
     const topicsResponse = await fetch(topicsUrl, {
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`,
-      },
+      headers: { 'Authorization': `Bearer ${API_KEY}` },
     });
 
     console.log('Topics response status:', topicsResponse.status);
 
     if (topicsResponse.ok) {
       const topicsData = await topicsResponse.json();
-      console.log('Topics data keys:', Object.keys(topicsData));
+      console.log('Topics data:', JSON.stringify(topicsData, null, 2).substring(0, 1000));
       
       const topics = topicsData.data || topicsData.topics || [];
       console.log('Found', topics.length, 'topics');
@@ -60,52 +99,16 @@ router.get('/', async (req, res) => {
       return res.json({ 
         announcements, 
         source: 'topics',
-        total: topicsData.total_count || topics.length 
+        total: topicsData.total_count || topics.length,
+        groupId 
       });
     }
 
-    // If topics failed, try getmessages
-    const messagesUrl = `${BASE_URL}/api/v1/getmessages?group_name=${GROUP_NAME}&limit=${limit}`;
-    console.log('Topics failed, trying messages:', messagesUrl);
-    
-    const messagesResponse = await fetch(messagesUrl, {
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`,
-      },
-    });
-
-    console.log('Messages response status:', messagesResponse.status);
-
-    if (messagesResponse.ok) {
-      const messagesData = await messagesResponse.json();
-      console.log('Messages data keys:', Object.keys(messagesData));
-      
-      const messages = messagesData.data || messagesData.messages || [];
-      console.log('Found', messages.length, 'messages');
-      
-      const announcements = messages.map((msg, idx) => ({
-        id: msg.id?.toString() || `msg-${idx}`,
-        subject: msg.subject || 'Untitled',
-        date: msg.created || msg.date || new Date().toISOString(),
-        content: msg.body || msg.snippet || msg.plain_body || '',
-        excerpt: (msg.body || msg.snippet || msg.plain_body || '').substring(0, 500),
-        sourceUrl: msg.permalink || `${BASE_URL}/g/${GROUP_NAME}/message/${msg.id}`,
-        linkedUrls: extractUrls(msg.body || msg.plain_body || ''),
-        sender: msg.sender_name || msg.from_name || msg.poster_name || 'Unknown',
-      }));
-
-      return res.json({ 
-        announcements, 
-        source: 'messages',
-        total: messagesData.total_count || messages.length 
-      });
-    }
-
-    // Both failed - return error with details
+    // Topics failed - log the error
     const topicsError = await topicsResponse.text();
-    const messagesError = await messagesResponse.text();
+    console.log('Topics error:', topicsError);
     
-    throw new Error(`Topics API: ${topicsResponse.status} - ${topicsError}. Messages API: ${messagesResponse.status} - ${messagesError}`);
+    throw new Error(`Groups.io API failed: ${topicsResponse.status} - ${topicsError}`);
 
   } catch (error) {
     console.error('Error fetching announcements:', error);
