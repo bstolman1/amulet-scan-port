@@ -48,11 +48,11 @@ export function mapEvent(r) {
     contractId: String(r.contract_id ?? ''),
     party: String(r.party ?? ''),
     template: String(r.template ?? r.template_id ?? ''),
-    payloadJson: r.payload ? safeStringify(r.payload) : '',
+    payloadJson: r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
     signatories: Array.isArray(r.signatories) ? r.signatories.map(String) : [],
     observers: Array.isArray(r.observers) ? r.observers.map(String) : [],
     packageName: String(r.package_name ?? ''),
-    rawJson: r.raw ? safeStringify(r.raw) : '',
+    rawJson: r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
   };
 }
 
