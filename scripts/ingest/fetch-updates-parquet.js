@@ -12,7 +12,8 @@ dotenv.config();
 import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-parquet.js';
+// Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
 
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
@@ -201,7 +202,8 @@ async function processUpdates(items) {
     const tx = item.transaction;
     if (tx?.events) {
       for (const event of tx.events) {
-        const normalizedEvent = normalizeEvent(event, update.update_id, migrationId);
+        // Pass complete event as raw to preserve all original data
+        const normalizedEvent = normalizeEvent(event, update.update_id, migrationId, event);
         events.push(normalizedEvent);
       }
     }
