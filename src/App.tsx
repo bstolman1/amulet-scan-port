@@ -32,6 +32,7 @@ import Elections from "./pages/Elections";
 import TransferCounters from "./pages/TransferCounters";
 import ExternalPartyRules from "./pages/ExternalPartyRules";
 import AmuletRules from "./pages/AmuletRules";
+import GovernanceFlow from "./pages/GovernanceFlow";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -82,6 +83,7 @@ const App = () => (
           <Route path="/external-party-rules" element={<ExternalPartyRules />} />
           <Route path="/backfill-progress" element={<BackfillProgress />} />
           <Route path="/live-updates" element={<LiveUpdates />} />
+          <Route path="/governance-flow" element={<GovernanceFlow />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
