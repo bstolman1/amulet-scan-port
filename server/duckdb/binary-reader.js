@@ -29,6 +29,10 @@ message Event {
   string party = 8;
   string template = 9;
   string payload_json = 10;
+  repeated string signatories = 11;
+  repeated string observers = 12;
+  string package_name = 13;
+  string raw_json = 14;
 }
 
 message Update {
@@ -85,6 +89,10 @@ function toPlainObject(record, isEvent) {
       party: record.party || null,
       template_id: record.template || null,
       payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
+      signatories: record.signatories || [],
+      observers: record.observers || [],
+      package_name: record.packageName || record.package_name || null,
+      raw: record.rawJson ? tryParseJson(record.rawJson) : null, // Complete original event
     };
   }
   

@@ -89,7 +89,7 @@ export function normalizeUpdate(raw) {
 /**
  * Normalize a ledger event for parquet storage
  */
-export function normalizeEvent(event, updateId, migrationId) {
+export function normalizeEvent(event, updateId, migrationId, rawEvent = null) {
   const templateId = event.template_id || 
     event.created_event?.template_id || 
     event.archived_event?.template_id ||
@@ -125,6 +125,7 @@ export function normalizeEvent(event, updateId, migrationId) {
     signatories: event.signatories || event.created_event?.signatories || [],
     observers: event.observers || event.created_event?.observers || [],
     payload: payload ? JSON.stringify(payload) : null,
+    raw: rawEvent || event, // Store complete original event
   };
 }
 
