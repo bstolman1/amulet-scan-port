@@ -1,56 +1,60 @@
 /**
- * Parquet Writer Module - STREAMING VERSION
+ * Parquet Writer Module - WORKER THREAD VERSION
  * 
  * Handles writing ledger data to partitioned parquet files.
  * 
  * Optimizations:
- * - TRUE STREAMING writes (never holds entire file in memory)
+ * - Worker thread pool for CPU-intensive compression
+ * - Main thread stays responsive (non-blocking)
+ * - Backpressure handling to prevent memory buildup
  * - Timestamp-based filenames (no directory scans)
- * - Parallel concurrent writes (configurable)
- * - Buffer swap instead of copy
- * - Large I/O buffers (256KB)
  * - Row size limits to prevent memory explosion
- * - Retry with backoff (limited retries)
  */
 
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
-import { pipeline } from 'stream/promises';
-import { Readable, Transform } from 'stream';
+import { writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { getPartitionPath } from './parquet-schema.js';
-import { init, compress } from '@bokuweb/zstd-wasm';
+import { getWorkerPool, shutdownPool } from './worker-pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - AGGRESSIVE DEFAULTS for speed
+// Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 50000;
-const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 20;
-const IO_BUFFER_SIZE = 1024 * 1024; // 1MB buffer
-const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 3; // 1=fastest, 3=balanced
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
+const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 4;
+const GZIP_LEVEL = parseInt(process.env.GZIP_LEVEL) || 1;
+const WORKER_POOL_SIZE = parseInt(process.env.WORKER_POOL_SIZE) || 0; // 0 = auto (CPU cores - 1)
 
-// Initialize ZSTD once at module load
-let zstdReady = false;
-async function ensureZstdReady() {
-  if (!zstdReady) {
-    await init();
-    zstdReady = true;
-  }
-}
-const MAX_ROW_SIZE_BYTES = 10 * 1024 * 1024; // 10MB max per row - skip larger ones
-const MAX_RETRIES = 2; // Fewer retries - fail fast
+const MAX_ROW_SIZE_BYTES = 5 * 1024 * 1024; // 5MB max per row
+const MAX_RETRIES = 2;
 
-// In-memory buffers for batching
+// In-memory buffers
 let updatesBuffer = [];
 let eventsBuffer = [];
 let currentMigrationId = null;
 
-// Async write queue with parallel execution
+// Write queue with controlled parallel execution
 let writeQueue = [];
 let activeWrites = 0;
+let queueProcessing = false;
+
+// Worker pool instance
+let workerPool = null;
+
+/**
+ * Initialize worker pool
+ */
+async function ensureWorkerPool() {
+  if (!workerPool) {
+    workerPool = getWorkerPool(WORKER_POOL_SIZE || undefined);
+    await workerPool.init();
+  }
+  return workerPool;
+}
 
 /**
  * Ensure directory exists
@@ -62,74 +66,52 @@ function ensureDir(dirPath) {
 }
 
 /**
- * Generate unique filename using timestamp + random suffix (no directory scan needed)
+ * Generate unique filename
  */
 function generateFileName(prefix) {
   const ts = Date.now();
   const rand = randomBytes(4).toString('hex');
-  return `${prefix}-${ts}-${rand}.jsonl.zst`;
+  return `${prefix}-${ts}-${rand}.jsonl.gz`;
 }
 
 /**
- * Create a generator that yields each row as a JSON line
- * This avoids building the entire content string in memory
+ * Write compressed data using worker thread pool
+ * Compression happens off main thread!
  */
-function* rowGenerator(rows) {
-  for (const row of rows) {
-    yield JSON.stringify(row) + '\n';
-  }
+async function writeWithWorker(rows, filePath) {
+  const pool = await ensureWorkerPool();
+  
+  // Compress in worker thread (non-blocking!)
+  const { data: compressed } = await pool.compress(rows, GZIP_LEVEL);
+  
+  // Write compressed buffer to file
+  await writeFile(filePath, compressed);
 }
 
 /**
- * Write rows to JSON-lines file using ZSTD compression
- * Uses Buffer array to avoid string length limits
- * ZSTD is ~2-3x faster than gzip with better compression
- */
-async function writeJsonLines(rows, filePath) {
-  await ensureZstdReady();
-  
-  // Build content as array of Buffers (avoids string length limit)
-  const chunks = [];
-  for (const row of rows) {
-    chunks.push(Buffer.from(JSON.stringify(row) + '\n', 'utf8'));
-  }
-  
-  // Concatenate all buffers
-  const input = Buffer.concat(chunks);
-  
-  // Compress with ZSTD
-  const compressed = compress(input, ZSTD_LEVEL);
-  
-  // Write compressed data
-  const dest = createWriteStream(filePath, { highWaterMark: IO_BUFFER_SIZE });
-  await new Promise((resolve, reject) => {
-    dest.write(compressed, (err) => {
-      if (err) reject(err);
-      else dest.end(resolve);
-    });
-  });
-}
-
-/**
- * Process the async write queue with parallel execution
+ * Process the async write queue
  */
 async function processWriteQueue() {
-  // Start multiple writes concurrently up to MAX_CONCURRENT_WRITES
+  if (queueProcessing) return;
+  queueProcessing = true;
+  
   while (writeQueue.length > 0 && activeWrites < MAX_CONCURRENT_WRITES) {
     const task = writeQueue.shift();
     activeWrites++;
     
-    // Execute write without awaiting (parallel)
     executeWrite(task).finally(() => {
       activeWrites--;
-      // Trigger next batch when a write completes
-      setImmediate(() => processWriteQueue());
+      if (writeQueue.length > 0) {
+        setImmediate(() => processWriteQueue());
+      }
     });
   }
+  
+  queueProcessing = false;
 }
 
 /**
- * Execute a single write task with limited retries
+ * Execute a single write task with retries
  */
 async function executeWrite(task) {
   try {
@@ -139,13 +121,11 @@ async function executeWrite(task) {
     task.retries = (task.retries || 0) + 1;
     
     if (task.retries >= MAX_RETRIES) {
-      console.error(`❌ Write failed permanently for ${task.file} after ${MAX_RETRIES} retries:`, err.message);
-      // Drop the task - don't requeue forever
+      console.error(`❌ Write failed for ${task.file} after ${MAX_RETRIES} retries:`, err.message);
       return;
     }
     
     console.error(`⚠️ Write error for ${task.file} (retry ${task.retries}/${MAX_RETRIES}):`, err.message);
-    // Exponential backoff: 1s, 2s, 4s
     const delay = 1000 * Math.pow(2, task.retries - 1);
     await new Promise(r => setTimeout(r, delay));
     writeQueue.unshift(task);
@@ -153,7 +133,7 @@ async function executeWrite(task) {
 }
 
 /**
- * Filter out oversized rows that could cause memory issues
+ * Filter out oversized rows
  */
 function filterOversizedRows(rows, type) {
   const filtered = [];
@@ -168,28 +148,32 @@ function filterOversizedRows(rows, type) {
         filtered.push(row);
       }
     } catch {
-      // If we can't even stringify it, skip it
       skipped++;
     }
   }
   
   if (skipped > 0) {
-    console.warn(`⚠️ Skipped ${skipped} oversized ${type} (>${MAX_ROW_SIZE_BYTES / 1024 / 1024}MB each)`);
+    console.warn(`⚠️ Skipped ${skipped} oversized ${type}`);
   }
   
   return filtered;
 }
 
 /**
- * Queue a write task for async parallel processing
+ * Queue a write task with backpressure
  */
-function queueWrite(rows, filePath, type) {
-  // Filter out problematic rows before queueing
+async function queueWrite(rows, filePath, type) {
   const safeRows = filterOversizedRows(rows, type);
   
   if (safeRows.length === 0) {
-    console.log(`⚠️ No ${type} to write after filtering oversized rows`);
+    console.log(`⚠️ No ${type} to write after filtering`);
     return null;
+  }
+  
+  // BACKPRESSURE: Wait if queue is too full
+  const MAX_QUEUE_SIZE = MAX_CONCURRENT_WRITES * 2;
+  while (writeQueue.length >= MAX_QUEUE_SIZE) {
+    await new Promise(r => setTimeout(r, 50));
   }
   
   const task = {
@@ -197,12 +181,10 @@ function queueWrite(rows, filePath, type) {
     file: filePath,
     count: safeRows.length,
     retries: 0,
-    execute: () => writeJsonLines(safeRows, filePath)
+    execute: () => writeWithWorker(safeRows, filePath)
   };
   
   writeQueue.push(task);
-  
-  // Start processing queue in background (non-blocking)
   setImmediate(() => processWriteQueue());
   
   return { file: filePath, count: safeRows.length, queued: true };
@@ -233,7 +215,7 @@ export async function bufferEvents(events) {
 }
 
 /**
- * Flush updates buffer to file (async queued)
+ * Flush updates buffer to file
  */
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
@@ -245,20 +227,17 @@ export async function flushUpdates() {
   
   ensureDir(partitionDir);
   
-  // Use timestamp-based filename (no directory scan)
   const fileName = generateFileName('updates');
   const filePath = join(partitionDir, fileName);
   
-  // Swap buffer reference instead of copying (faster)
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
-  // Queue write for async parallel processing
   return queueWrite(rowsToWrite, filePath, 'updates');
 }
 
 /**
- * Flush events buffer to file (async queued)
+ * Flush events buffer to file
  */
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
@@ -270,34 +249,35 @@ export async function flushEvents() {
   
   ensureDir(partitionDir);
   
-  // Use timestamp-based filename (no directory scan)
   const fileName = generateFileName('events');
   const filePath = join(partitionDir, fileName);
   
-  // Swap buffer reference instead of copying (faster)
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
-  // Queue write for async parallel processing
   return queueWrite(rowsToWrite, filePath, 'events');
 }
 
 /**
- * Flush all buffers and wait for write queue to complete
+ * Flush all buffers and wait for writes to complete
  */
 export async function flushAll() {
   const results = [];
   
-  // Flush any remaining buffered data
   const updatesResult = await flushUpdates();
   if (updatesResult) results.push(updatesResult);
   
   const eventsResult = await flushEvents();
   if (eventsResult) results.push(eventsResult);
   
-  // Wait for all queued writes to complete
+  // Wait for all queued writes
   while (writeQueue.length > 0 || activeWrites > 0) {
     await new Promise(r => setTimeout(r, 100));
+  }
+  
+  // Also wait for worker pool to drain
+  if (workerPool) {
+    await workerPool.drain();
   }
   
   return results;
@@ -307,6 +287,8 @@ export async function flushAll() {
  * Get buffer and queue stats
  */
 export function getBufferStats() {
+  const poolStats = workerPool ? workerPool.getStats() : { totalWorkers: 0, busyWorkers: 0 };
+  
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
@@ -314,40 +296,49 @@ export function getBufferStats() {
     queuedWrites: writeQueue.length,
     activeWrites,
     maxConcurrentWrites: MAX_CONCURRENT_WRITES,
+    workerPool: poolStats
   };
 }
 
 /**
- * Wait for write queue to drain (useful before shutdown)
+ * Wait for write queue to drain
  */
 export async function waitForWrites() {
   while (writeQueue.length > 0 || activeWrites > 0) {
     await new Promise(r => setTimeout(r, 100));
   }
+  
+  if (workerPool) {
+    await workerPool.drain();
+  }
+}
+
+/**
+ * Shutdown worker pool (call before process exit)
+ */
+export async function shutdown() {
+  await waitForWrites();
+  await shutdownPool();
+  workerPool = null;
 }
 
 /**
  * Convert JSON-lines to parquet using DuckDB
- * Run this as a separate step after ingestion
  */
 export function createConversionScript() {
   return `
 -- DuckDB script to convert JSON-lines to Parquet
--- Run: duckdb -c ".read convert-to-parquet.sql"
--- Supports .jsonl.zst (ZSTD compressed) files
 
--- Convert updates with optimized settings
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.zst')
+  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.gz')
 ) TO 'data/raw/updates.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
   ROW_GROUP_SIZE 100000
 );
 
--- Convert events with optimized settings
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.zst')
+  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.gz')
 ) TO 'data/raw/events.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
@@ -357,7 +348,7 @@ COPY (
 }
 
 /**
- * Set current migration ID for partitioning
+ * Set current migration ID
  */
 export function setMigrationId(id) {
   currentMigrationId = id;
@@ -371,20 +362,17 @@ export function clearMigrationId() {
 }
 
 /**
- * Purge all data files for a specific migration
- * Call this after migration data has been processed/uploaded to free disk space
+ * Purge migration data
  */
 export function purgeMigrationData(migrationId) {
-  const migrationPrefix = `migration_id=${migrationId}`;
-  let deletedFiles = 0;
+  const migrationPrefix = `migration=${migrationId}`;
   let deletedDirs = 0;
   
   if (!existsSync(DATA_DIR)) {
-    console.log(`   ℹ️ Data directory doesn't exist, nothing to purge`);
+    console.log(`   ℹ️ Data directory doesn't exist`);
     return { deletedFiles: 0, deletedDirs: 0 };
   }
   
-  // Find and delete migration-specific partition directories
   const entries = readdirSync(DATA_DIR, { withFileTypes: true });
   
   for (const entry of entries) {
@@ -400,16 +388,16 @@ export function purgeMigrationData(migrationId) {
     }
   }
   
-  console.log(`   ✅ Purged migration ${migrationId}: ${deletedDirs} directories removed`);
-  return { deletedFiles, deletedDirs };
+  console.log(`   ✅ Purged migration ${migrationId}: ${deletedDirs} directories`);
+  return { deletedFiles: 0, deletedDirs };
 }
 
 /**
- * Purge all data in the raw directory
+ * Purge all data
  */
 export function purgeAllData() {
   if (!existsSync(DATA_DIR)) {
-    console.log(`   ℹ️ Data directory doesn't exist, nothing to purge`);
+    console.log(`   ℹ️ Data directory doesn't exist`);
     return;
   }
   
@@ -418,7 +406,7 @@ export function purgeAllData() {
     mkdirSync(DATA_DIR, { recursive: true });
     console.log(`   ✅ Purged all data from ${DATA_DIR}`);
   } catch (err) {
-    console.error(`   ❌ Failed to purge data: ${err.message}`);
+    console.error(`   ❌ Failed to purge: ${err.message}`);
   }
 }
 
@@ -430,6 +418,7 @@ export default {
   flushAll,
   getBufferStats,
   waitForWrites,
+  shutdown,
   createConversionScript,
   setMigrationId,
   clearMigrationId,
