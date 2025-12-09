@@ -16,8 +16,7 @@ function extractUrls(text) {
 
 // Get group ID from subscriptions
 async function getGroupId() {
-  // First try to get subscriptions to find the group_id
-  const subsUrl = `${BASE_URL}/api/v1/getsubs`;
+  const subsUrl = `${BASE_URL}/api/v1/getsubs?limit=100`;
   console.log('Getting subscriptions to find group_id...');
   
   const response = await fetch(subsUrl, {
@@ -26,29 +25,70 @@ async function getGroupId() {
   
   if (response.ok) {
     const data = await response.json();
-    console.log('Subscriptions response:', JSON.stringify(data, null, 2).substring(0, 500));
-    
     const subs = data.data || [];
+    console.log('Found', subs.length, 'subscriptions');
+    
+    // Log all group names to help debug
+    subs.forEach(s => console.log('  - Group:', s.group_name, 'ID:', s.group_id));
+    
     const group = subs.find(s => 
       s.group_name === GROUP_NAME || 
-      s.name === GROUP_NAME ||
       (s.group_name || '').includes('supervalidator')
     );
     
     if (group) {
-      console.log('Found group:', group.group_id || group.id);
-      return group.group_id || group.id;
+      console.log('Using group_id:', group.group_id);
+      return group.group_id;
     }
   } else {
-    console.log('Subscriptions failed:', response.status, await response.text());
+    console.log('Subscriptions failed:', response.status);
   }
   
   return null;
 }
 
+// Fetch all topics with pagination
+async function fetchAllTopics(groupId, maxTopics = 200) {
+  const allTopics = [];
+  let pageToken = null;
+  let hasMore = true;
+  
+  while (hasMore && allTopics.length < maxTopics) {
+    let url = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=100`;
+    if (pageToken) {
+      url += `&page_token=${pageToken}`;
+    }
+    
+    console.log('Fetching topics page:', url);
+    
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${API_KEY}` },
+    });
+    
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Topics API failed: ${response.status} - ${error}`);
+    }
+    
+    const data = await response.json();
+    const topics = data.data || [];
+    
+    console.log(`Got ${topics.length} topics (total so far: ${allTopics.length + topics.length}/${data.total_count || '?'})`);
+    
+    allTopics.push(...topics);
+    
+    hasMore = data.has_more === true;
+    pageToken = data.next_page_token;
+    
+    if (!hasMore || !pageToken) break;
+  }
+  
+  return allTopics;
+}
+
 // Fetch announcements from Groups.io
 router.get('/', async (req, res) => {
-  const limit = parseInt(req.query.limit) || 100;
+  const limit = parseInt(req.query.limit) || 200;
   
   if (!API_KEY) {
     return res.status(500).json({ 
@@ -58,57 +98,33 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    // First, try to get the group_id
     const groupId = await getGroupId();
     
-    let topicsUrl;
-    if (groupId) {
-      topicsUrl = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=${limit}`;
-    } else {
-      // Fallback to group_name
-      topicsUrl = `${BASE_URL}/api/v1/gettopics?group_name=${GROUP_NAME}&limit=${limit}`;
+    if (!groupId) {
+      throw new Error('Could not find group_id. Make sure your API key account is subscribed to supervalidator-announce');
     }
     
-    console.log('Fetching topics from:', topicsUrl);
+    const topics = await fetchAllTopics(groupId, limit);
+    console.log('Total topics fetched:', topics.length);
     
-    const topicsResponse = await fetch(topicsUrl, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` },
+    const announcements = topics.map((topic, idx) => ({
+      id: topic.id?.toString() || `topic-${idx}`,
+      subject: topic.subject || topic.title || 'Untitled',
+      date: topic.created || topic.updated || new Date().toISOString(),
+      content: topic.snippet || topic.body || topic.preview || '',
+      excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
+      sourceUrl: topic.permalink || `${BASE_URL}/g/${GROUP_NAME}/topic/${topic.id}`,
+      linkedUrls: extractUrls(topic.snippet || topic.body || ''),
+      messageCount: topic.num_msgs || 1,
+      hashtags: topic.hashtags || [],
+    }));
+
+    return res.json({ 
+      announcements, 
+      source: 'topics',
+      total: topics.length,
+      groupId 
     });
-
-    console.log('Topics response status:', topicsResponse.status);
-
-    if (topicsResponse.ok) {
-      const topicsData = await topicsResponse.json();
-      console.log('Topics data:', JSON.stringify(topicsData, null, 2).substring(0, 1000));
-      
-      const topics = topicsData.data || topicsData.topics || [];
-      console.log('Found', topics.length, 'topics');
-      
-      const announcements = topics.map((topic, idx) => ({
-        id: topic.id?.toString() || `topic-${idx}`,
-        subject: topic.subject || topic.title || 'Untitled',
-        date: topic.created || topic.updated || topic.date || new Date().toISOString(),
-        content: topic.snippet || topic.body || topic.preview || '',
-        excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
-        sourceUrl: topic.permalink || `${BASE_URL}/g/${GROUP_NAME}/topic/${topic.id}`,
-        linkedUrls: extractUrls(topic.snippet || topic.body || ''),
-        messageCount: topic.num_msgs || topic.msg_count || 1,
-        hashtags: topic.hashtags || [],
-      }));
-
-      return res.json({ 
-        announcements, 
-        source: 'topics',
-        total: topicsData.total_count || topics.length,
-        groupId 
-      });
-    }
-
-    // Topics failed - log the error
-    const topicsError = await topicsResponse.text();
-    console.log('Topics error:', topicsError);
-    
-    throw new Error(`Groups.io API failed: ${topicsResponse.status} - ${topicsError}`);
 
   } catch (error) {
     console.error('Error fetching announcements:', error);
