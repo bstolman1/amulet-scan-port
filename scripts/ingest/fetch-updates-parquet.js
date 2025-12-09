@@ -128,11 +128,7 @@ async function getLatestTimestampFromFile(filePath) {
  */
 async function detectLatestMigration() {
   try {
-    // The API requires a 'before' query param - use current time
-    const before = new Date().toISOString();
-    const response = await client.get('/v0/state/acs/snapshot-timestamp', {
-      params: { before }
-    });
+    const response = await client.get('/v0/state/acs/snapshot-timestamp');
     migrationId = response.data.migration_id;
     console.log(`📍 Detected migration_id: ${migrationId}`);
     // Set migration ID for partitioning
