@@ -14,8 +14,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const WORKER_SCRIPT = path.join(__dirname, 'worker-writer.js');
-const DEFAULT_MAX_WORKERS = parseInt(process.env.MAX_WORKERS) || 
-                            parseInt(process.env.MAX_CONCURRENT_WRITES) || 
+const DEFAULT_MAX_WORKERS = parseInt(process.env.MAX_CONCURRENT_WRITES) || 
                             parseInt(process.env.WORKER_POOL_SIZE) || 
                             Math.max(2, os.cpus().length - 1);
 
