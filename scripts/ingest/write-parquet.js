@@ -1,45 +1,60 @@
 /**
- * Parquet Writer Module - TRUE STREAMING VERSION
+ * Parquet Writer Module - WORKER THREAD VERSION
  * 
  * Handles writing ledger data to partitioned parquet files.
  * 
  * Optimizations:
- * - TRUE STREAMING writes with small chunk sizes
- * - Incremental compression (compress small chunks, not entire file)
+ * - Worker thread pool for CPU-intensive compression
+ * - Main thread stays responsive (non-blocking)
  * - Backpressure handling to prevent memory buildup
  * - Timestamp-based filenames (no directory scans)
  * - Row size limits to prevent memory explosion
  */
 
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
+import { writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import { createGzip } from 'zlib';
 import { getPartitionPath } from './parquet-schema.js';
+import { getWorkerPool, shutdownPool } from './worker-pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - CONSERVATIVE DEFAULTS to prevent OOM
+// Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000; // Much smaller default
-const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 4; // Much lower concurrency
-const IO_BUFFER_SIZE = parseInt(process.env.IO_BUFFER_SIZE) || 256 * 1024; // 256KB
-const GZIP_LEVEL = parseInt(process.env.GZIP_LEVEL) || 1; // 1=fastest
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
+const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 4;
+const GZIP_LEVEL = parseInt(process.env.GZIP_LEVEL) || 1;
+const WORKER_POOL_SIZE = parseInt(process.env.WORKER_POOL_SIZE) || 0; // 0 = auto (CPU cores - 1)
 
-const MAX_ROW_SIZE_BYTES = 5 * 1024 * 1024; // 5MB max per row - skip larger ones
+const MAX_ROW_SIZE_BYTES = 5 * 1024 * 1024; // 5MB max per row
 const MAX_RETRIES = 2;
 
-// In-memory buffers for batching - use smaller thresholds
+// In-memory buffers
 let updatesBuffer = [];
 let eventsBuffer = [];
 let currentMigrationId = null;
 
-// Async write queue with controlled parallel execution
+// Write queue with controlled parallel execution
 let writeQueue = [];
 let activeWrites = 0;
 let queueProcessing = false;
+
+// Worker pool instance
+let workerPool = null;
+
+/**
+ * Initialize worker pool
+ */
+async function ensureWorkerPool() {
+  if (!workerPool) {
+    workerPool = getWorkerPool(WORKER_POOL_SIZE || undefined);
+    await workerPool.init();
+  }
+  return workerPool;
+}
 
 /**
  * Ensure directory exists
@@ -51,7 +66,7 @@ function ensureDir(dirPath) {
 }
 
 /**
- * Generate unique filename using timestamp + random suffix
+ * Generate unique filename
  */
 function generateFileName(prefix) {
   const ts = Date.now();
@@ -60,63 +75,21 @@ function generateFileName(prefix) {
 }
 
 /**
- * TRUE STREAMING write - writes rows incrementally with gzip compression
- * Never holds entire file in memory - uses Node's native streaming
+ * Write compressed data using worker thread pool
+ * Compression happens off main thread!
  */
-async function writeJsonLinesStreaming(rows, filePath) {
-  return new Promise((resolve, reject) => {
-    const gzip = createGzip({ 
-      level: GZIP_LEVEL,
-      chunkSize: IO_BUFFER_SIZE 
-    });
-    
-    const output = createWriteStream(filePath, { 
-      highWaterMark: IO_BUFFER_SIZE 
-    });
-    
-    // Pipe gzip to file
-    gzip.pipe(output);
-    
-    output.on('finish', resolve);
-    output.on('error', reject);
-    gzip.on('error', reject);
-    
-    let i = 0;
-    
-    function writeNext() {
-      let ok = true;
-      
-      // Write rows until backpressure or done
-      while (i < rows.length && ok) {
-        const line = JSON.stringify(rows[i]) + '\n';
-        i++;
-        
-        if (i === rows.length) {
-          // Last row - end the stream
-          gzip.end(line);
-        } else {
-          // More rows - check for backpressure
-          ok = gzip.write(line);
-        }
-      }
-      
-      if (i < rows.length) {
-        // Backpressure - wait for drain
-        gzip.once('drain', writeNext);
-      }
-    }
-    
-    // Start writing
-    if (rows.length === 0) {
-      gzip.end();
-    } else {
-      writeNext();
-    }
-  });
+async function writeWithWorker(rows, filePath) {
+  const pool = await ensureWorkerPool();
+  
+  // Compress in worker thread (non-blocking!)
+  const { data: compressed } = await pool.compress(rows, GZIP_LEVEL);
+  
+  // Write compressed buffer to file
+  await writeFile(filePath, compressed);
 }
 
 /**
- * Process the async write queue with controlled parallel execution
+ * Process the async write queue
  */
 async function processWriteQueue() {
   if (queueProcessing) return;
@@ -126,10 +99,8 @@ async function processWriteQueue() {
     const task = writeQueue.shift();
     activeWrites++;
     
-    // Execute write (parallel but controlled)
     executeWrite(task).finally(() => {
       activeWrites--;
-      // Continue processing if more tasks
       if (writeQueue.length > 0) {
         setImmediate(() => processWriteQueue());
       }
@@ -140,7 +111,7 @@ async function processWriteQueue() {
 }
 
 /**
- * Execute a single write task with limited retries
+ * Execute a single write task with retries
  */
 async function executeWrite(task) {
   try {
@@ -162,7 +133,7 @@ async function executeWrite(task) {
 }
 
 /**
- * Filter out oversized rows to prevent memory issues
+ * Filter out oversized rows
  */
 function filterOversizedRows(rows, type) {
   const filtered = [];
@@ -182,14 +153,14 @@ function filterOversizedRows(rows, type) {
   }
   
   if (skipped > 0) {
-    console.warn(`⚠️ Skipped ${skipped} oversized ${type} (>${MAX_ROW_SIZE_BYTES / 1024 / 1024}MB each)`);
+    console.warn(`⚠️ Skipped ${skipped} oversized ${type}`);
   }
   
   return filtered;
 }
 
 /**
- * Queue a write task - blocks if queue is too full (backpressure)
+ * Queue a write task with backpressure
  */
 async function queueWrite(rows, filePath, type) {
   const safeRows = filterOversizedRows(rows, type);
@@ -210,19 +181,17 @@ async function queueWrite(rows, filePath, type) {
     file: filePath,
     count: safeRows.length,
     retries: 0,
-    execute: () => writeJsonLinesStreaming(safeRows, filePath)
+    execute: () => writeWithWorker(safeRows, filePath)
   };
   
   writeQueue.push(task);
-  
-  // Start processing (non-blocking)
   setImmediate(() => processWriteQueue());
   
   return { file: filePath, count: safeRows.length, queued: true };
 }
 
 /**
- * Add updates to buffer - flushes immediately at smaller threshold
+ * Add updates to buffer
  */
 export async function bufferUpdates(updates) {
   updatesBuffer.push(...updates);
@@ -234,7 +203,7 @@ export async function bufferUpdates(updates) {
 }
 
 /**
- * Add events to buffer - flushes immediately at smaller threshold
+ * Add events to buffer
  */
 export async function bufferEvents(events) {
   eventsBuffer.push(...events);
@@ -261,7 +230,6 @@ export async function flushUpdates() {
   const fileName = generateFileName('updates');
   const filePath = join(partitionDir, fileName);
   
-  // Swap buffer reference (faster than copy)
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
@@ -284,7 +252,6 @@ export async function flushEvents() {
   const fileName = generateFileName('events');
   const filePath = join(partitionDir, fileName);
   
-  // Swap buffer reference
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
@@ -292,7 +259,7 @@ export async function flushEvents() {
 }
 
 /**
- * Flush all buffers and wait for write queue to complete
+ * Flush all buffers and wait for writes to complete
  */
 export async function flushAll() {
   const results = [];
@@ -303,9 +270,14 @@ export async function flushAll() {
   const eventsResult = await flushEvents();
   if (eventsResult) results.push(eventsResult);
   
-  // Wait for all queued writes to complete
+  // Wait for all queued writes
   while (writeQueue.length > 0 || activeWrites > 0) {
     await new Promise(r => setTimeout(r, 100));
+  }
+  
+  // Also wait for worker pool to drain
+  if (workerPool) {
+    await workerPool.drain();
   }
   
   return results;
@@ -315,6 +287,8 @@ export async function flushAll() {
  * Get buffer and queue stats
  */
 export function getBufferStats() {
+  const poolStats = workerPool ? workerPool.getStats() : { totalWorkers: 0, busyWorkers: 0 };
+  
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
@@ -322,6 +296,7 @@ export function getBufferStats() {
     queuedWrites: writeQueue.length,
     activeWrites,
     maxConcurrentWrites: MAX_CONCURRENT_WRITES,
+    workerPool: poolStats
   };
 }
 
@@ -332,6 +307,19 @@ export async function waitForWrites() {
   while (writeQueue.length > 0 || activeWrites > 0) {
     await new Promise(r => setTimeout(r, 100));
   }
+  
+  if (workerPool) {
+    await workerPool.drain();
+  }
+}
+
+/**
+ * Shutdown worker pool (call before process exit)
+ */
+export async function shutdown() {
+  await waitForWrites();
+  await shutdownPool();
+  workerPool = null;
 }
 
 /**
@@ -340,7 +328,6 @@ export async function waitForWrites() {
 export function createConversionScript() {
   return `
 -- DuckDB script to convert JSON-lines to Parquet
--- Supports .jsonl.gz (gzip compressed) files
 
 COPY (
   SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.gz')
@@ -361,7 +348,7 @@ COPY (
 }
 
 /**
- * Set current migration ID for partitioning
+ * Set current migration ID
  */
 export function setMigrationId(id) {
   currentMigrationId = id;
@@ -375,14 +362,14 @@ export function clearMigrationId() {
 }
 
 /**
- * Purge all data files for a specific migration
+ * Purge migration data
  */
 export function purgeMigrationData(migrationId) {
   const migrationPrefix = `migration=${migrationId}`;
   let deletedDirs = 0;
   
   if (!existsSync(DATA_DIR)) {
-    console.log(`   ℹ️ Data directory doesn't exist, nothing to purge`);
+    console.log(`   ℹ️ Data directory doesn't exist`);
     return { deletedFiles: 0, deletedDirs: 0 };
   }
   
@@ -401,16 +388,16 @@ export function purgeMigrationData(migrationId) {
     }
   }
   
-  console.log(`   ✅ Purged migration ${migrationId}: ${deletedDirs} directories removed`);
+  console.log(`   ✅ Purged migration ${migrationId}: ${deletedDirs} directories`);
   return { deletedFiles: 0, deletedDirs };
 }
 
 /**
- * Purge all data in the raw directory
+ * Purge all data
  */
 export function purgeAllData() {
   if (!existsSync(DATA_DIR)) {
-    console.log(`   ℹ️ Data directory doesn't exist, nothing to purge`);
+    console.log(`   ℹ️ Data directory doesn't exist`);
     return;
   }
   
@@ -419,7 +406,7 @@ export function purgeAllData() {
     mkdirSync(DATA_DIR, { recursive: true });
     console.log(`   ✅ Purged all data from ${DATA_DIR}`);
   } catch (err) {
-    console.error(`   ❌ Failed to purge data: ${err.message}`);
+    console.error(`   ❌ Failed to purge: ${err.message}`);
   }
 }
 
@@ -431,6 +418,7 @@ export default {
   flushAll,
   getBufferStats,
   waitForWrites,
+  shutdown,
   createConversionScript,
   setMigrationId,
   clearMigrationId,
