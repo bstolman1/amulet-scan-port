@@ -107,6 +107,10 @@ function toPlainObject(record, isEvent) {
       party: record.party || null,
       template: record.template || null,
       payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
+      signatories: record.signatories || [],
+      observers: record.observers || [],
+      package_name: record.packageName || null,
+      raw_json: record.rawJson ? tryParseJson(record.rawJson) : null,
     };
   }
   
