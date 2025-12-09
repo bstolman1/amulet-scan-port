@@ -16,8 +16,7 @@ const __dirname = dirname(__filename);
 const WORKER_SCRIPT = join(__dirname, 'compression-worker.js');
 
 // Default pool size = CPU cores - 1 (leave one for main thread)
-// Can be overridden with WORKER_POOL_SIZE or MAX_CONCURRENT_WRITES env vars
-const DEFAULT_POOL_SIZE = parseInt(process.env.WORKER_POOL_SIZE) || parseInt(process.env.MAX_CONCURRENT_WRITES) || Math.max(2, os.cpus().length - 1);
+const DEFAULT_POOL_SIZE = Math.max(2, os.cpus().length - 1);
 
 class WorkerPool {
   constructor(size = DEFAULT_POOL_SIZE) {
