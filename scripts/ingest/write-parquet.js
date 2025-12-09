@@ -11,6 +11,9 @@
  * - Row size limits to prevent memory explosion
  */
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import { join, dirname, sep } from 'path';
@@ -24,6 +27,7 @@ const __dirname = dirname(__filename);
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
+console.log(`📁 DATA_DIR: ${DATA_DIR}`);
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
 const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 4;
 const GZIP_LEVEL = parseInt(process.env.GZIP_LEVEL) || 1;
