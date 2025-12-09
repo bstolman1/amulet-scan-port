@@ -41,7 +41,7 @@ const GovernanceFlow = () => {
     
     try {
       const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/announcements?limit=50`);
+      const response = await fetch(`${baseUrl}/api/announcements?limit=500`);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.status}`);
