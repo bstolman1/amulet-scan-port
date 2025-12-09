@@ -28,25 +28,17 @@ function readAllCursors() {
       const filePath = join(CURSOR_DIR, file);
       const data = JSON.parse(readFileSync(filePath, 'utf-8'));
       
-      // Parse shard info from synchronizer_id (e.g., "sync-id-shard2")
-      const shardMatch = data.synchronizer_id?.match(/-shard(\d+)$/);
-      const shardIndex = shardMatch ? parseInt(shardMatch[1], 10) : null;
-
       cursors.push({
         id: data.id || file.replace('.json', ''),
         cursor_name: data.cursor_name || `migration-${data.migration_id}-${data.synchronizer_id?.substring(0, 20)}`,
         migration_id: data.migration_id,
         synchronizer_id: data.synchronizer_id,
-        shard_index: shardIndex,
         min_time: data.min_time,
         max_time: data.max_time,
         last_before: data.last_before,
         complete: data.complete || false,
         last_processed_round: data.last_processed_round || 0,
         updated_at: data.updated_at || new Date().toISOString(),
-        started_at: data.started_at,
-        total_updates: data.total_updates || 0,
-        total_events: data.total_events || 0,
       });
     } catch (err) {
       console.error(`Error reading cursor file ${file}:`, err.message);
