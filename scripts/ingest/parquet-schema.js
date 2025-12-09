@@ -28,12 +28,20 @@ export const LEDGER_EVENTS_SCHEMA = {
   template_id: 'STRING',
   package_name: 'STRING',
   migration_id: 'INT64',
+  synchronizer_id: 'STRING',
+  effective_at: 'TIMESTAMP',
+  recorded_at: 'TIMESTAMP',
   timestamp: 'TIMESTAMP',
   created_at_ts: 'TIMESTAMP',
   signatories: 'LIST<STRING>',
   observers: 'LIST<STRING>',
-  payload: 'JSON',  // Contract payload as JSON string
+  acting_parties: 'LIST<STRING>',  // For exercised events
+  payload: 'JSON',  // Contract create_arguments or choice_argument
   choice: 'STRING', // For exercised events: the choice name
+  consuming: 'BOOLEAN', // For exercised events: whether the choice consumed the contract
+  interface_id: 'STRING', // For exercised events: interface used
+  child_event_ids: 'LIST<STRING>', // For exercised events: child event IDs
+  exercise_result: 'JSON', // For exercised events: result of the exercise
 };
 
 // Column order for parquet files
@@ -129,6 +137,14 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
   // Get synchronizer from update info
   const synchronizer = updateInfo?.synchronizer_id || null;
   
+  // Extract exercise-specific fields
+  const actingParties = event.acting_parties || event.exercised_event?.acting_parties || [];
+  const choice = event.choice || event.exercised_event?.choice || null;
+  const consuming = event.consuming ?? event.exercised_event?.consuming ?? null;
+  const interfaceId = event.interface_id || event.exercised_event?.interface_id || null;
+  const childEventIds = event.child_event_ids || event.exercised_event?.child_event_ids || [];
+  const exerciseResult = event.exercise_result || event.exercised_event?.exercise_result || null;
+  
   return {
     event_id: event.event_id || `${updateId}-${contractId}`,
     update_id: updateId,
@@ -142,10 +158,15 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     recorded_at: new Date(), // When we recorded this event
     timestamp: new Date(),
     created_at_ts: effectiveAt,
-    signatories: event.signatories || event.created_event?.signatories || event.exercised_event?.acting_parties || event.acting_parties || [],
+    signatories: event.signatories || event.created_event?.signatories || [],
     observers: event.observers || event.created_event?.observers || [],
+    acting_parties: actingParties,
     payload: payload ? JSON.stringify(payload) : null,
-    choice: event.choice || event.exercised_event?.choice || null,
+    choice: choice,
+    consuming: consuming,
+    interface_id: interfaceId,
+    child_event_ids: childEventIds,
+    exercise_result: exerciseResult ? JSON.stringify(exerciseResult) : null,
     raw: rawEvent || event, // Store complete original event
   };
 }
