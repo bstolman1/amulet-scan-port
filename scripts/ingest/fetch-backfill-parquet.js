@@ -266,7 +266,7 @@ async function processBackfillItems(transactions, migrationId) {
         events.push(normalizedEvent);
       }
     } else {
-      const eventsById = tx.events_by_id || {};
+      const eventsById = txData.events_by_id || tx.events_by_id || {};
       for (const [eventId, ev] of Object.entries(eventsById)) {
         // Pass complete event as raw + update timing info
         const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev, updateInfo);
