@@ -13,7 +13,7 @@
 
 import { createWriteStream, mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { getPartitionPath } from './parquet-schema.js';
@@ -61,7 +61,7 @@ async function ensureWorkerPool() {
  */
 function ensureDir(dirPath) {
   // Normalize path separators for cross-platform compatibility
-  const normalizedPath = dirPath.split('/').join(require('path').sep);
+  const normalizedPath = dirPath.split('/').join(sep);
   if (!existsSync(normalizedPath)) {
     mkdirSync(normalizedPath, { recursive: true });
   }
