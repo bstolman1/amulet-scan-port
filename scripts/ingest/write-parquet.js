@@ -57,23 +57,43 @@ async function ensureWorkerPool() {
 }
 
 /**
- * Ensure directory exists (Windows-safe)
+ * Ensure directory exists (Windows-safe with race condition handling)
  */
 function ensureDir(dirPath) {
   // Normalize path separators for cross-platform compatibility
   const normalizedPath = dirPath.split('/').join(sep);
-  if (!existsSync(normalizedPath)) {
-    mkdirSync(normalizedPath, { recursive: true });
+  try {
+    if (!existsSync(normalizedPath)) {
+      mkdirSync(normalizedPath, { recursive: true });
+    }
+  } catch (err) {
+    // Handle race condition where directory was created between check and mkdir
+    if (err.code !== 'EEXIST') {
+      // Try creating parent directories explicitly for Windows edge cases
+      const parts = normalizedPath.split(sep).filter(Boolean);
+      let current = parts[0].includes(':') ? parts[0] + sep : sep; // Handle Windows drive letters
+      
+      for (let i = parts[0].includes(':') ? 1 : 0; i < parts.length; i++) {
+        current = join(current, parts[i]);
+        try {
+          if (!existsSync(current)) {
+            mkdirSync(current);
+          }
+        } catch (e) {
+          if (e.code !== 'EEXIST') throw e;
+        }
+      }
+    }
   }
 }
 
 /**
- * Generate unique filename
+ * Generate unique filename (now using .zst for ZSTD compression)
  */
 function generateFileName(prefix) {
   const ts = Date.now();
   const rand = randomBytes(4).toString('hex');
-  return `${prefix}-${ts}-${rand}.jsonl.gz`;
+  return `${prefix}-${ts}-${rand}.jsonl.zst`;
 }
 
 /**
@@ -330,9 +350,10 @@ export async function shutdown() {
 export function createConversionScript() {
   return `
 -- DuckDB script to convert JSON-lines to Parquet
+-- Note: .zst files are ZSTD compressed
 
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.gz')
+  SELECT * FROM read_json_auto('data/raw/**/updates-*.jsonl.zst')
 ) TO 'data/raw/updates.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
@@ -340,7 +361,7 @@ COPY (
 );
 
 COPY (
-  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.gz')
+  SELECT * FROM read_json_auto('data/raw/**/events-*.jsonl.zst')
 ) TO 'data/raw/events.parquet' (
   FORMAT PARQUET, 
   COMPRESSION ZSTD,
