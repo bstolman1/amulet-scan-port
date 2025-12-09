@@ -111,7 +111,10 @@ function mapEventRecord(r) {
     contract_id: r.contract_id || '',
     party: r.party || '',
     template: r.template_id || r.template || '',
-    payload_json: r.payload ? JSON.stringify(r.payload) : '',
+    payload_json: r.payload ? (typeof r.payload === 'string' ? r.payload : JSON.stringify(r.payload)) : '',
+    signatories: r.signatories || [],
+    observers: r.observers || [],
+    package_name: r.package_name || '',
   };
 }
 
