@@ -89,18 +89,22 @@ export function normalizeUpdate(raw) {
 /**
  * Normalize a ledger event for parquet storage
  */
-export function normalizeEvent(event, updateId, migrationId, rawEvent = null) {
+export function normalizeEvent(event, updateId, migrationId, rawEvent = null, updateInfo = null) {
   const templateId = event.template_id || 
     event.created_event?.template_id || 
     event.archived_event?.template_id ||
+    event.exercised_event?.template_id ||
     null;
   
   const contractId = event.contract_id ||
     event.created_event?.contract_id ||
     event.archived_event?.contract_id ||
+    event.exercised_event?.contract_id ||
     null;
   
   const payload = event.created_event?.create_arguments ||
+    event.exercised_event?.choice_argument ||
+    event.choice_argument ||
     event.payload ||
     event.create_arguments ||
     null;
@@ -112,9 +116,17 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null) {
   else if (event.exercised_event) eventType = 'exercised';
   else if (event.event_type) eventType = event.event_type;
   
-  // Extract effective_at from created_at or event timing
+  // Extract effective_at from multiple sources:
+  // 1. Event's own created_at (for created events)
+  // 2. Update's record_time (transaction level)
+  // 3. Update's effective_at
   const createdAt = event.created_at || event.created_event?.created_at;
-  const effectiveAt = createdAt ? new Date(createdAt) : null;
+  const effectiveAt = createdAt 
+    ? new Date(createdAt) 
+    : (updateInfo?.record_time ? new Date(updateInfo.record_time) : null);
+  
+  // Get synchronizer from update info
+  const synchronizer = updateInfo?.synchronizer_id || null;
   
   return {
     event_id: event.event_id || `${updateId}-${contractId}`,
@@ -124,11 +136,12 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null) {
     template_id: templateId,
     package_name: extractPackageName(templateId),
     migration_id: parseInt(migrationId) || null,
+    synchronizer_id: synchronizer,
     effective_at: effectiveAt,
     recorded_at: new Date(), // When we recorded this event
     timestamp: new Date(),
     created_at_ts: effectiveAt,
-    signatories: event.signatories || event.created_event?.signatories || [],
+    signatories: event.signatories || event.created_event?.signatories || event.exercised_event?.acting_parties || event.acting_parties || [],
     observers: event.observers || event.created_event?.observers || [],
     payload: payload ? JSON.stringify(payload) : null,
     raw: rawEvent || event, // Store complete original event
