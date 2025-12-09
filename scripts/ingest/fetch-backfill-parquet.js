@@ -35,10 +35,8 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 30; // AGGRESSIVE: More concurrent API requests
-const PREFETCH_MULTIPLIER = parseInt(process.env.PREFETCH_MULTIPLIER) || 10; // How deep to prefetch
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 20; // More concurrent API requests
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
-const SKIP_EVENTS = process.env.SKIP_EVENTS === 'true'; // Skip event extraction for faster processing
 
 // Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
@@ -239,7 +237,6 @@ function getEventTime(txOrReassign) {
 
 /**
  * Process backfill items (transactions array from API response)
- * OPTIMIZED: Skip event extraction if SKIP_EVENTS=true for 2-3x speedup
  */
 async function processBackfillItems(transactions, migrationId) {
   const updates = [];
@@ -251,32 +248,26 @@ async function processBackfillItems(transactions, migrationId) {
     update.migration_id = migrationId;
     updates.push(update);
     
-    // Skip event extraction if configured (saves ~50% processing time)
-    if (!SKIP_EVENTS) {
-      // Extract events based on type
-      if (isReassignment) {
-        const ce = tx.event?.created_event;
-        if (ce) {
-          const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
-          normalizedEvent.event_type = 'reassign_create';
-          events.push(normalizedEvent);
-        }
-      } else {
-        const eventsById = tx.events_by_id || {};
-        for (const [eventId, ev] of Object.entries(eventsById)) {
-          const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
-          normalizedEvent.event_id = eventId;
-          events.push(normalizedEvent);
-        }
+    // Extract events based on type
+    if (isReassignment) {
+      const ce = tx.event?.created_event;
+      if (ce) {
+        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
+        normalizedEvent.event_type = 'reassign_create';
+        events.push(normalizedEvent);
+      }
+    } else {
+      const eventsById = tx.events_by_id || {};
+      for (const [eventId, ev] of Object.entries(eventsById)) {
+        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
+        normalizedEvent.event_id = eventId;
+        events.push(normalizedEvent);
       }
     }
   }
   
-  // Buffer updates immediately, don't wait
-  const updatePromise = bufferUpdates(updates);
-  const eventPromise = events.length > 0 ? bufferEvents(events) : Promise.resolve();
-  
-  await Promise.all([updatePromise, eventPromise]);
+  await bufferUpdates(updates);
+  await bufferEvents(events);
   
   return { updates: updates.length, events: events.length };
 }
@@ -394,7 +385,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     try {
       // Fetch multiple pages in parallel (deeper prefetch queue)
       const { results, reachedEnd } = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * PREFETCH_MULTIPLIER
+        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 5
       );
       
       if (results.length === 0) {
