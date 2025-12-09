@@ -6,18 +6,12 @@ const API_KEY = process.env.GROUPS_IO_API_KEY;
 const GROUP_NAME = 'supervalidator-announce';
 const BASE_URL = 'https://lists.sync.global';
 
-// Helper to extract URLs from text
+// Helper to extract ALL URLs from text
 function extractUrls(text) {
   if (!text) return [];
   const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/g;
   const matches = text.match(urlRegex) || [];
-  // Filter to only Canton/governance related URLs
-  return matches.filter(url => 
-    url.includes('canton') || 
-    url.includes('sync.global') || 
-    url.includes('scan.') ||
-    url.includes('github.com/digital-asset')
-  );
+  return [...new Set(matches)]; // Remove duplicates
 }
 
 // Fetch announcements from Groups.io
