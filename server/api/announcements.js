@@ -53,6 +53,8 @@ async function fetchAllTopics(groupId, maxTopics = 500) {
   let pageToken = null;
   let pageCount = 0;
   
+  console.log('Starting pagination loop, maxTopics:', maxTopics);
+  
   while (allTopics.length < maxTopics) {
     pageCount++;
     let url = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=100`;
@@ -62,32 +64,48 @@ async function fetchAllTopics(groupId, maxTopics = 500) {
     
     console.log(`Fetching topics page ${pageCount}:`, url);
     
-    const response = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` },
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${API_KEY}` },
+      });
+    } catch (fetchError) {
+      console.error('Fetch error:', fetchError);
+      break;
+    }
     
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Topics API failed: ${response.status} - ${error}`);
+      console.error('API error:', response.status, error);
+      break;
     }
     
     const data = await response.json();
     const topics = data.data || [];
     
-    console.log(`Page ${pageCount}: Got ${topics.length} topics, has_more=${data.has_more}, next_page_token=${data.next_page_token}`);
-    console.log(`Total so far: ${allTopics.length + topics.length}/${data.total_count || '?'}`);
+    console.log(`Page ${pageCount}: Got ${topics.length} topics`);
+    console.log(`  has_more: ${data.has_more}`);
+    console.log(`  next_page_token: ${data.next_page_token}`);
+    console.log(`  Total so far: ${allTopics.length + topics.length}/${data.total_count || '?'}`);
     
     allTopics.push(...topics);
     
     // Check if there are more pages
-    if (!data.has_more || !data.next_page_token) {
-      console.log('No more pages to fetch');
+    if (data.has_more !== true) {
+      console.log('Stopping: has_more is not true');
+      break;
+    }
+    
+    if (!data.next_page_token) {
+      console.log('Stopping: no next_page_token');
       break;
     }
     
     pageToken = data.next_page_token;
+    console.log(`Continuing to page ${pageCount + 1} with token: ${pageToken}`);
   }
   
+  console.log('Pagination complete. Total topics:', allTopics.length);
   return allTopics;
 }
 
