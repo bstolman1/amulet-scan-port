@@ -125,18 +125,35 @@ async function getLatestTimestampFromFile(filePath) {
 
 /**
  * Detect latest migration from the scan API
+ * Uses the updates endpoint with a minimal request to get migration_id
  */
 async function detectLatestMigration() {
   try {
-    const response = await client.get('/v0/state/acs/snapshot-timestamp');
-    migrationId = response.data.migration_id;
-    console.log(`📍 Detected migration_id: ${migrationId}`);
-    // Set migration ID for partitioning
+    // Use the updates endpoint to detect migration - it returns migration_id in response
+    const response = await client.post('/v0/updates', {
+      page_size: 1
+    });
+    
+    // The response should contain migration_id
+    if (response.data && response.data.migration_id !== undefined) {
+      migrationId = response.data.migration_id;
+      console.log(`📍 Detected migration_id: ${migrationId}`);
+      setMigrationId(migrationId);
+      return migrationId;
+    }
+    
+    // Fallback: use default migration ID 0
+    console.warn('⚠️ Could not detect migration_id from updates, using default: 0');
+    migrationId = 0;
     setMigrationId(migrationId);
     return migrationId;
   } catch (err) {
     console.error('Failed to detect migration:', err.message);
-    throw err;
+    // Fallback to migration 0 instead of crashing
+    console.warn('⚠️ Using fallback migration_id: 0');
+    migrationId = 0;
+    setMigrationId(migrationId);
+    return migrationId;
   }
 }
 
