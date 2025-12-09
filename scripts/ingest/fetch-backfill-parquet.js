@@ -252,14 +252,16 @@ async function processBackfillItems(transactions, migrationId) {
     if (isReassignment) {
       const ce = tx.event?.created_event;
       if (ce) {
-        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId);
+        // Pass complete transaction as raw event to preserve all original data
+        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId, tx);
         normalizedEvent.event_type = 'reassign_create';
         events.push(normalizedEvent);
       }
     } else {
       const eventsById = tx.events_by_id || {};
       for (const [eventId, ev] of Object.entries(eventsById)) {
-        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId);
+        // Pass complete event as raw to preserve all original data
+        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev);
         normalizedEvent.event_id = eventId;
         events.push(normalizedEvent);
       }
