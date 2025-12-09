@@ -1,14 +1,24 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
-import { Activity, Coins, TrendingUp, Users, Zap, Package } from "lucide-react";
+import { Activity, Coins, TrendingUp, Users, Zap, Package, Database, Clock } from "lucide-react";
 import { SearchBar } from "@/components/SearchBar";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfigData } from "@/lib/config-sync";
+import { useLocalOverviewStats, useLocalApiAvailable, useLocalDailyStats } from "@/hooks/use-local-stats";
+import { Badge } from "@/components/ui/badge";
+
 const Dashboard = () => {
+  // Check if local API is available
+  const { data: localApiAvailable } = useLocalApiAvailable();
+  
+  // Local DuckDB stats (from backfilled data)
+  const { data: localStats, isLoading: localStatsLoading } = useLocalOverviewStats();
+  const { data: dailyStats } = useLocalDailyStats(7);
+  
   // Fetch real data from Canton Scan API
   const { data: latestRound } = useQuery({
     queryKey: ["latestRound"],
@@ -85,6 +95,29 @@ const Dashboard = () => {
         : "Connection Failed",
     networkHealth: "99.9%",
   };
+
+  // Format local stats
+  const formatLocalStats = () => {
+    if (!localStats) return null;
+    return {
+      totalEvents: localStats.total_events?.toLocaleString() || "0",
+      uniqueContracts: localStats.unique_contracts?.toLocaleString() || "0",
+      uniqueTemplates: localStats.unique_templates?.toLocaleString() || "0",
+      earliestEvent: localStats.earliest_event 
+        ? new Date(localStats.earliest_event).toLocaleDateString() 
+        : "N/A",
+      latestEvent: localStats.latest_event 
+        ? new Date(localStats.latest_event).toLocaleDateString() 
+        : "N/A",
+      dataSource: localStats.data_source || "unknown",
+    };
+  };
+
+  const localStatsFormatted = formatLocalStats();
+
+  // Calculate week's activity from daily stats
+  const weekActivity = dailyStats?.reduce((sum, d) => sum + d.event_count, 0) || 0;
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
@@ -92,7 +125,15 @@ const Dashboard = () => {
         <div className="relative">
           <div className="absolute inset-0 gradient-primary rounded-2xl blur-3xl opacity-20" />
           <div className="relative glass-card p-8">
-            <div className="flex justify-end mb-4">
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-2">
+                {localApiAvailable && (
+                  <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+                    <Database className="h-3 w-3 mr-1" />
+                    Local Data Connected
+                  </Badge>
+                )}
+              </div>
               <TriggerACSSnapshotButton />
             </div>
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -110,25 +151,132 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <StatCard title="Total Amulet Balance" value={stats.totalBalance} icon={Coins} gradient />
-          <StatCard
-            title="Canton Coin Price (USD)"
-            value={stats.coinPrice}
-            icon={Activity}
-            trend={{
-              value: "",
-              positive: true,
-            }}
-          />
-          <StatCard title="Market Cap (USD)" value={`$${stats.marketCap}`} icon={Users} />
-          <StatCard title="Current Round" value={stats.currentRound} icon={Package} />
-          <StatCard title="Super Validators" value={stats.superValidators} icon={Zap} />
-          <StatCard title="Cumulative App Rewards" value={stats.totalRewards} icon={TrendingUp} gradient />
+        {/* Live Network Stats Grid */}
+        <div>
+          <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <Activity className="h-5 w-5 text-primary" />
+            Live Network Stats
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <StatCard title="Total Amulet Balance" value={stats.totalBalance} icon={Coins} gradient />
+            <StatCard
+              title="Canton Coin Price (USD)"
+              value={stats.coinPrice}
+              icon={Activity}
+              trend={{
+                value: "",
+                positive: true,
+              }}
+            />
+            <StatCard title="Market Cap (USD)" value={`$${stats.marketCap}`} icon={Users} />
+            <StatCard title="Current Round" value={stats.currentRound} icon={Package} />
+            <StatCard title="Super Validators" value={stats.superValidators} icon={Zap} />
+            <StatCard title="Cumulative App Rewards" value={stats.totalRewards} icon={TrendingUp} gradient />
+          </div>
         </div>
 
-        {/* Canton Coin Price */}
+        {/* Local Backfill Stats - Only shown if local API is available */}
+        {localApiAvailable && (
+          <div>
+            <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <Database className="h-5 w-5 text-primary" />
+              Local Backfill Data
+              {localStatsFormatted?.dataSource && (
+                <Badge variant="secondary" className="text-xs">
+                  Source: {localStatsFormatted.dataSource}
+                </Badge>
+              )}
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Total Events</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">{localStatsFormatted?.totalEvents || "0"}</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Unique Contracts</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">{localStatsFormatted?.uniqueContracts || "0"}</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Unique Templates</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">{localStatsFormatted?.uniqueTemplates || "0"}</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    Data Range
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <div className="text-sm">
+                      <p className="font-medium">{localStatsFormatted?.earliestEvent}</p>
+                      <p className="text-muted-foreground">to {localStatsFormatted?.latestEvent}</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+            
+            {weekActivity > 0 && (
+              <Card className="glass-card mt-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Last 7 Days Activity
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold">{weekActivity.toLocaleString()} events</p>
+                  <div className="mt-2 flex gap-1">
+                    {dailyStats?.slice(0, 7).reverse().map((day, i) => {
+                      const maxCount = Math.max(...(dailyStats?.map(d => d.event_count) || [1]));
+                      const height = Math.max(4, (day.event_count / maxCount) * 40);
+                      return (
+                        <div
+                          key={day.date}
+                          className="flex-1 bg-primary/20 rounded-t"
+                          style={{ height: `${height}px` }}
+                          title={`${day.date}: ${day.event_count} events`}
+                        />
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Canton Coin Price placeholder */}
         <Card className="glass-card"></Card>
       </div>
     </DashboardLayout>
