@@ -1,5 +1,3 @@
-import { DateTime } from "luxon";
-
 /**
  * Split a time range into N equal-duration shards
  * 
@@ -8,24 +6,24 @@ import { DateTime } from "luxon";
  *   // Returns array of { shard, min, max } objects
  */
 export function shardRange(minTime, maxTime, numShards) {
-  const start = DateTime.fromISO(minTime);
-  const end = DateTime.fromISO(maxTime);
+  const start = new Date(minTime);
+  const end = new Date(maxTime);
 
-  const totalMs = end.toMillis() - start.toMillis();
+  const totalMs = end.getTime() - start.getTime();
   const shardMs = totalMs / numShards;
 
   const shards = [];
 
   for (let i = 0; i < numShards; i++) {
-    const s = start.plus({ milliseconds: shardMs * i });
+    const s = new Date(start.getTime() + shardMs * i);
     const e = i === numShards - 1
       ? end
-      : start.plus({ milliseconds: shardMs * (i + 1) });
+      : new Date(start.getTime() + shardMs * (i + 1));
 
     shards.push({
       shard: i,
-      min: s.toISO(),
-      max: e.toISO(),
+      min: s.toISOString(),
+      max: e.toISOString(),
     });
   }
 
