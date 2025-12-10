@@ -36,9 +36,15 @@ function extractIdentifiers(text) {
   };
   
   // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123) and format as 4-digit
-  const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
-  if (cipMatch) {
-    identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
+  // Check for TBD/unassigned CIPs first
+  const tbdMatch = text.match(/CIP[#\-\s]*(TBD|00XX|XXXX|\?\?|unassigned)/i);
+  if (tbdMatch) {
+    identifiers.cipNumber = 'CIP-00XX';
+  } else {
+    const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
+    if (cipMatch) {
+      identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
+    }
   }
   
   // Extract featured app mentions
@@ -335,7 +341,15 @@ function correlateTopics(allTopics) {
   }
   
   // Sort lifecycle items by CIP number descending (highest first)
+  // CIP-00XX (TBD/unassigned) should come first
   lifecycleItems.sort((a, b) => {
+    const aIsTBD = a.primaryId?.includes('00XX');
+    const bIsTBD = b.primaryId?.includes('00XX');
+    
+    // TBD CIPs come first
+    if (aIsTBD && !bIsTBD) return -1;
+    if (!aIsTBD && bIsTBD) return 1;
+    
     const aNum = a.primaryId?.match(/CIP-?(\d+)/i)?.[1];
     const bNum = b.primaryId?.match(/CIP-?(\d+)/i)?.[1];
     if (aNum && bNum) {
