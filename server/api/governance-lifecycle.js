@@ -75,11 +75,22 @@ function extractIdentifiers(text) {
   ];
   for (const pattern of featuredAppIndicators) {
     if (pattern.test(text)) {
-      // Extract app name - look for patterns like "App: Name" or "Featured App Name"
-      const nameMatch = text.match(/(?:featured\s*app[:\s]*|app[:\s]+)([A-Za-z0-9]+)/i) ||
-                        text.match(/\[([A-Za-z0-9]+)\]/i) ||
-                        text.match(/^([A-Za-z0-9]+)\s+(?:app|featured|listing)/i);
-      identifiers.appName = nameMatch ? nameMatch[1].trim() : 'unknown-app';
+      // Extract app name more robustly
+      // Try patterns like "[AppName]", "App: AppName", "Featured App AppName", etc.
+      const namePatterns = [
+        /\[([A-Za-z][A-Za-z0-9_-]+)\]/i,  // [AppName]
+        /(?:featured\s*app|app)[:\s]+([A-Za-z][A-Za-z0-9_-]+)/i,  // Featured App: AppName
+        /^([A-Za-z][A-Za-z0-9_-]+)\s+(?:featured\s*app|app\s+listing|listing)/i,  // AppName Featured App
+        /(?:^|\s)([A-Z][a-z]+(?:[A-Z][a-z]+)+)(?:\s|$)/,  // CamelCase names like "VoteApp"
+      ];
+      for (const np of namePatterns) {
+        const m = text.match(np);
+        if (m && m[1].length > 2 && m[1].toLowerCase() !== 'app' && m[1].toLowerCase() !== 'the') {
+          identifiers.appName = m[1].trim();
+          break;
+        }
+      }
+      // If no name found, use null (don't set unknown-app, let correlation happen via subject)
       break;
     }
   }
@@ -94,10 +105,20 @@ function extractIdentifiers(text) {
   ];
   for (const pattern of validatorIndicators) {
     if (pattern.test(text)) {
-      // Extract validator name
-      const nameMatch = text.match(/(?:super\s*)?validator[:\s]*([A-Za-z0-9]+)/i) ||
-                        text.match(/\[([A-Za-z0-9]+)\]/i);
-      identifiers.validatorName = nameMatch ? nameMatch[1].trim() : 'unknown-validator';
+      // Extract validator name more robustly
+      const namePatterns = [
+        /\[([A-Za-z][A-Za-z0-9_-]+)\]/i,  // [ValidatorName]
+        /(?:super\s*)?validator[:\s]+([A-Za-z][A-Za-z0-9_-]+)/i,  // Validator: Name
+        /^([A-Za-z][A-Za-z0-9_-]+)\s+(?:super\s*)?validator/i,  // Name Validator
+      ];
+      for (const np of namePatterns) {
+        const m = text.match(np);
+        if (m && m[1].length > 2 && m[1].toLowerCase() !== 'validator' && m[1].toLowerCase() !== 'the') {
+          identifiers.validatorName = m[1].trim();
+          break;
+        }
+      }
+      // If no name found, use null (let correlation happen via subject similarity)
       break;
     }
   }
@@ -259,25 +280,40 @@ function calculateSimilarity(topic1, topic2) {
     score += 100;
   }
   
-  // App name match
+  // App name match (only if both have a real name, not null)
   if (ids1.appName && ids2.appName && 
       ids1.appName.toLowerCase() === ids2.appName.toLowerCase()) {
-    score += 80;
+    score += 100; // Exact app name match = high confidence
   }
   
-  // Validator name match
+  // Validator name match (only if both have a real name, not null)
   if (ids1.validatorName && ids2.validatorName &&
       ids1.validatorName.toLowerCase() === ids2.validatorName.toLowerCase()) {
-    score += 80;
+    score += 100; // Exact validator name match = high confidence
   }
   
-  // Subject similarity (fuzzy match)
-  const subjectWords1 = topic1.subject.toLowerCase().split(/\s+/);
-  const subjectWords2 = topic2.subject.toLowerCase().split(/\s+/);
-  const commonWords = subjectWords1.filter(w => subjectWords2.includes(w) && w.length > 3);
-  score += commonWords.length * 5;
+  // Subject similarity (fuzzy match) - critical for featured-app/validator correlation
+  // When names aren't extracted, this is the primary correlation mechanism
+  const subjectWords1 = topic1.subject.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !['the', 'and', 'for', 'this', 'that', 'with', 'from', 'featured', 'validator', 'tokenomics', 'announce', 'announcement', 'application', 'listing'].includes(w));
+  const subjectWords2 = topic2.subject.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !['the', 'and', 'for', 'this', 'that', 'with', 'from', 'featured', 'validator', 'tokenomics', 'announce', 'announcement', 'application', 'listing'].includes(w));
   
-  // Keyword overlap
+  const commonWords = subjectWords1.filter(w => subjectWords2.includes(w));
+  // Give higher weight to subject matches - each meaningful word match is significant
+  score += commonWords.length * 15;
+  
+  // Bonus for substantial subject overlap (likely the same topic)
+  const overlap = commonWords.length / Math.min(subjectWords1.length, subjectWords2.length);
+  if (overlap >= 0.5 && commonWords.length >= 2) {
+    score += 30;
+  }
+  
+  // Keyword overlap from content
   const commonKeywords = ids1.keywords.filter(k => ids2.keywords.includes(k));
   score += commonKeywords.length * 3;
   
