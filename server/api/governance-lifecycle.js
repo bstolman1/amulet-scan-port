@@ -103,13 +103,14 @@ function extractPrimaryEntityName(text) {
 
 // Extract identifiers from subject/content for correlation
 function extractIdentifiers(text) {
-  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, keywords: [] };
+  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, network: null, keywords: [] };
   
   const identifiers = {
     cipNumber: null,
     appName: null,
     validatorName: null,
     entityName: null,  // Primary entity name for correlation
+    network: null,     // 'testnet' or 'mainnet'
     keywords: [],
   };
   
@@ -123,6 +124,13 @@ function extractIdentifiers(text) {
     if (cipMatch) {
       identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
     }
+  }
+  
+  // Detect network (testnet or mainnet)
+  if (/testnet|test\s*net|tn\b/i.test(text)) {
+    identifiers.network = 'testnet';
+  } else if (/mainnet|main\s*net|mn\b/i.test(text)) {
+    identifiers.network = 'mainnet';
   }
   
   // Check if text contains featured app indicators
@@ -374,6 +382,7 @@ function correlateTopics(allTopics) {
       id: `lifecycle-${topic.id}`,
       primaryId: topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40),
       type,
+      network: topic.identifiers.network,  // 'testnet', 'mainnet', or null
       stages: {},
       topics: [],
       firstDate: topic.date,
