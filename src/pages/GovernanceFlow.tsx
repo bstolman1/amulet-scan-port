@@ -316,11 +316,16 @@ const GovernanceFlow = () => {
     
     return Object.entries(monthGroups)
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([month, topics]) => ({
-        month,
-        label: new Date(month + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
-        topics: topics.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-      }));
+      .map(([month, topics]) => {
+        // Parse month correctly - use explicit year/month to avoid timezone issues
+        const [year, monthNum] = month.split('-').map(Number);
+        const monthDate = new Date(year, monthNum - 1, 1); // month is 0-indexed
+        return {
+          month,
+          label: monthDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
+          topics: topics.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+        };
+      });
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
@@ -363,9 +368,15 @@ const GovernanceFlow = () => {
   };
 
   const renderTopicCard = (topic: Topic, showGroup = true) => (
-    <div 
+    <a 
       key={topic.id}
-      className="p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors"
+      href={topic.sourceUrl || '#'}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn(
+        "block p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors",
+        topic.sourceUrl ? "cursor-pointer hover:bg-muted/50" : "cursor-default"
+      )}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -386,11 +397,9 @@ const GovernanceFlow = () => {
           </div>
         </div>
         {topic.sourceUrl && (
-          <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
-            <a href={topic.sourceUrl} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          </Button>
+          <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </div>
         )}
       </div>
       {topic.excerpt && (
@@ -398,7 +407,7 @@ const GovernanceFlow = () => {
           {topic.excerpt}
         </p>
       )}
-    </div>
+    </a>
   );
 
   return (
