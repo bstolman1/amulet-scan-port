@@ -7,11 +7,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subYears } from "date-fns";
 import { 
   ExternalLink, 
   RefreshCw, 
   FileText, 
   Calendar,
+  CalendarIcon,
   AlertCircle,
   ChevronDown,
   ChevronUp,
@@ -25,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
+import { cn } from "@/lib/utils";
 
 interface TopicIdentifiers {
   cipNumber: string | null;
@@ -96,6 +102,9 @@ const GovernanceFlow = () => {
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline'>('lifecycle');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
+  const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
+  const [datePreset, setDatePreset] = useState<string>('all');
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -200,9 +209,61 @@ const GovernanceFlow = () => {
       }
       if (stageFilter !== 'all' && topic.stage !== stageFilter) return false;
       if (!matchesSearch(topic, searchQuery)) return false;
+      
+      // Date range filtering
+      const topicDate = new Date(topic.date);
+      if (dateFrom && topicDate < dateFrom) return false;
+      if (dateTo && topicDate > dateTo) return false;
+      
       return true;
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [data, typeFilter, stageFilter, searchQuery]);
+  }, [data, typeFilter, stageFilter, searchQuery, dateFrom, dateTo]);
+
+  // Handle date preset changes
+  const handleDatePreset = (preset: string) => {
+    setDatePreset(preset);
+    const now = new Date();
+    
+    switch (preset) {
+      case 'all':
+        setDateFrom(undefined);
+        setDateTo(undefined);
+        break;
+      case 'this-month':
+        setDateFrom(startOfMonth(now));
+        setDateTo(endOfMonth(now));
+        break;
+      case 'last-month':
+        setDateFrom(startOfMonth(subMonths(now, 1)));
+        setDateTo(endOfMonth(subMonths(now, 1)));
+        break;
+      case 'last-3-months':
+        setDateFrom(startOfMonth(subMonths(now, 2)));
+        setDateTo(now);
+        break;
+      case 'last-6-months':
+        setDateFrom(startOfMonth(subMonths(now, 5)));
+        setDateTo(now);
+        break;
+      case 'this-year':
+        setDateFrom(startOfYear(now));
+        setDateTo(endOfYear(now));
+        break;
+      case 'last-year':
+        setDateFrom(startOfYear(subYears(now, 1)));
+        setDateTo(endOfYear(subYears(now, 1)));
+        break;
+      case 'custom':
+        // Keep current dates, user will pick manually
+        break;
+    }
+  };
+
+  const clearDateFilter = () => {
+    setDateFrom(undefined);
+    setDateTo(undefined);
+    setDatePreset('all');
+  };
 
   // Timeline data - group events by month
   const timelineData = useMemo(() => {
@@ -271,7 +332,7 @@ const GovernanceFlow = () => {
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h4 className="font-medium text-sm truncate">{topic.subject}</h4>
+          <h4 className="font-medium text-sm">{topic.subject}</h4>
           <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <Calendar className="h-3 w-3" />
@@ -553,7 +614,111 @@ const GovernanceFlow = () => {
           </TabsContent>
 
           {/* Timeline View */}
-          <TabsContent value="timeline" className="mt-4">
+          <TabsContent value="timeline" className="mt-4 space-y-4">
+            {/* Date Range Filter */}
+            <Card className="bg-muted/20">
+              <CardContent className="p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">Date Range:</span>
+                  </div>
+                  
+                  {/* Preset Selector */}
+                  <Select value={datePreset} onValueChange={handleDatePreset}>
+                    <SelectTrigger className="w-[160px] h-8">
+                      <SelectValue placeholder="Select period" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Time</SelectItem>
+                      <SelectItem value="this-month">This Month</SelectItem>
+                      <SelectItem value="last-month">Last Month</SelectItem>
+                      <SelectItem value="last-3-months">Last 3 Months</SelectItem>
+                      <SelectItem value="last-6-months">Last 6 Months</SelectItem>
+                      <SelectItem value="this-year">This Year</SelectItem>
+                      <SelectItem value="last-year">Last Year</SelectItem>
+                      <SelectItem value="custom">Custom Range</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {/* Custom Date Pickers */}
+                  {datePreset === 'custom' && (
+                    <>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={cn(
+                              "h-8 justify-start text-left font-normal",
+                              !dateFrom && "text-muted-foreground"
+                            )}
+                          >
+                            <CalendarIcon className="mr-2 h-4 w-4" />
+                            {dateFrom ? format(dateFrom, "MMM d, yyyy") : "From"}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <CalendarComponent
+                            mode="single"
+                            selected={dateFrom}
+                            onSelect={setDateFrom}
+                            initialFocus
+                            className={cn("p-3 pointer-events-auto")}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <span className="text-muted-foreground">to</span>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={cn(
+                              "h-8 justify-start text-left font-normal",
+                              !dateTo && "text-muted-foreground"
+                            )}
+                          >
+                            <CalendarIcon className="mr-2 h-4 w-4" />
+                            {dateTo ? format(dateTo, "MMM d, yyyy") : "To"}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <CalendarComponent
+                            mode="single"
+                            selected={dateTo}
+                            onSelect={setDateTo}
+                            initialFocus
+                            className={cn("p-3 pointer-events-auto")}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    </>
+                  )}
+
+                  {/* Clear Button */}
+                  {(dateFrom || dateTo) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearDateFilter}
+                      className="h-8 px-2"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  )}
+
+                  {/* Show current range */}
+                  {datePreset !== 'all' && datePreset !== 'custom' && (
+                    <Badge variant="secondary" className="text-xs">
+                      {dateFrom && format(dateFrom, "MMM d, yyyy")} - {dateTo && format(dateTo, "MMM d, yyyy")}
+                    </Badge>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-32 w-full mb-4" />
@@ -563,6 +728,11 @@ const GovernanceFlow = () => {
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
                   <h3 className="text-lg font-medium">No Timeline Data</h3>
+                  {(dateFrom || dateTo) && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Try adjusting your date range filter
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             ) : (
@@ -604,7 +774,7 @@ const GovernanceFlow = () => {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                      <h4 className="font-medium text-sm truncate">{topic.subject}</h4>
+                                      <h4 className="font-medium text-sm">{topic.subject}</h4>
                                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
                                         <span>{formatDate(topic.date)}</span>
                                         <Badge variant="outline" className="text-[10px] h-5">
