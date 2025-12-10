@@ -6,15 +6,32 @@ const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
 // Define the governance groups and their lifecycle stages
-// CIP Flow: cip-discuss → cip-vote → cip-announce → supervalidator-announce (weight updates)
+// Each group maps to a specific flow and stage within that flow
+// CIP Flow: cip-discuss → cip-vote → cip-announce → sv-announce
+// Featured App Flow: tokenomics → tokenomics-announce → sv-announce
+// Validator Flow: tokenomics → sv-announce
 const GOVERNANCE_GROUPS = {
-  'cip-discuss': { stage: 'discuss', flow: 'cip', label: 'CIP Discussion' },
-  'cip-vote': { stage: 'vote', flow: 'cip', label: 'CIP Vote' },
-  'cip-announce': { stage: 'announce', flow: 'cip', label: 'CIP Announcement' },
-  'supervalidator-announce': { stage: 'weight-update', flow: 'cip', label: 'SV Weight Update' },
+  // CIP Flow groups
+  'cip-discuss': { stage: 'cip-discuss', flow: 'cip', label: 'CIP Discussion' },
+  'cip-vote': { stage: 'cip-vote', flow: 'cip', label: 'CIP Vote' },
+  'cip-announce': { stage: 'cip-announce', flow: 'cip', label: 'CIP Announcement' },
+  // Shared groups (tokenomics for featured-app and validator)
+  'tokenomics': { stage: 'tokenomics', flow: 'shared', label: 'Tokenomics Discussion' },
+  'tokenomics-announce': { stage: 'tokenomics-announce', flow: 'featured-app', label: 'Tokenomics Announcement' },
+  // Final stage for all flows
+  'supervalidator-announce': { stage: 'sv-announce', flow: 'shared', label: 'SV Announcement' },
 };
 
-const LIFECYCLE_STAGES = ['discuss', 'vote', 'announce', 'weight-update'];
+// Define type-specific workflow stages
+const WORKFLOW_STAGES = {
+  cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
+  validator: ['tokenomics', 'sv-announce'],
+  other: ['tokenomics', 'sv-announce'], // Fallback
+};
+
+// All possible stages (for correlation)
+const ALL_STAGES = [...new Set(Object.values(WORKFLOW_STAGES).flat())];
 
 // Helper to extract URLs from text
 function extractUrls(text) {
@@ -329,8 +346,9 @@ function correlateTopics(allTopics) {
       }
     }
     
-    // Determine current stage (latest stage with activity)
-    for (const stage of LIFECYCLE_STAGES.slice().reverse()) {
+    // Determine current stage (latest stage with activity) based on item type
+    const typeStages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
+    for (const stage of typeStages.slice().reverse()) {
       if (item.stages[stage] && item.stages[stage].length > 0) {
         item.currentStage = stage;
         break;
@@ -442,12 +460,9 @@ router.get('/', async (req, res) => {
         validator: lifecycleItems.filter(i => i.type === 'validator').length,
         other: lifecycleItems.filter(i => i.type === 'other').length,
       },
-      byStage: {
-        discuss: lifecycleItems.filter(i => i.currentStage === 'discuss').length,
-        vote: lifecycleItems.filter(i => i.currentStage === 'vote').length,
-        announce: lifecycleItems.filter(i => i.currentStage === 'announce').length,
-        'weight-update': lifecycleItems.filter(i => i.currentStage === 'weight-update').length,
-      },
+      byStage: Object.fromEntries(
+        ALL_STAGES.map(stage => [stage, lifecycleItems.filter(i => i.currentStage === stage).length])
+      ),
       groupCounts: Object.fromEntries(
         Object.entries(groupMap).map(([name, group]) => [
           name,
