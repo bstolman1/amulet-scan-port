@@ -318,19 +318,34 @@ function correlateTopics(allTopics) {
         continue;
       }
       
-      // For weight-update topics, ONLY correlate if they have an exact CIP number match
-      // This prevents grouping weight updates for different CIPs together
-      if (candidate.stage === 'weight-update' || topic.stage === 'weight-update') {
+      // For CIPs: ONLY correlate if they have an EXACT CIP number match
+      // This prevents grouping different CIPs together based on fuzzy matching
+      if (item.type === 'cip') {
         const candidateCip = candidate.identifiers.cipNumber;
         const topicCip = topic.identifiers.cipNumber;
-        // Only correlate if BOTH have the same CIP number
+        // Only correlate if BOTH have the exact same CIP number
         if (!candidateCip || !topicCip || candidateCip !== topicCip) {
           continue;
         }
+        // Exact CIP match - add to the lifecycle item
+        item.stages[candidate.stage] = item.stages[candidate.stage] || [];
+        item.stages[candidate.stage].push(candidate);
+        item.topics.push(candidate);
+        used.add(candidate.id);
+        
+        // Update dates
+        if (new Date(candidate.date) < new Date(item.firstDate)) {
+          item.firstDate = candidate.date;
+        }
+        if (new Date(candidate.date) > new Date(item.lastDate)) {
+          item.lastDate = candidate.date;
+        }
+        continue;
       }
       
+      // For non-CIPs (featured-app, validator, other): use similarity matching
       const similarity = calculateSimilarity(topic, candidate);
-      if (similarity >= 30) { // Threshold for correlation
+      if (similarity >= 50) { // Higher threshold for non-CIPs
         item.stages[candidate.stage] = item.stages[candidate.stage] || [];
         item.stages[candidate.stage].push(candidate);
         item.topics.push(candidate);
