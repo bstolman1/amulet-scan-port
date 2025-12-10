@@ -239,7 +239,7 @@ const GovernanceFlow = () => {
     if (!data) return [];
     return data.allTopics.filter(topic => {
       if (typeFilter !== 'all') {
-        const isOutcome = /\boutcome\b|\bvote\s*result|\bresult\s*of\s*vote|\bapproved\b|\brejected\b|\bpassed\b|\bfailed\b/i.test(topic.subject);
+        const isOutcome = /^Outcomes\s*-\s*\w+\s+\d+,?\s*\d*/i.test(topic.subject);
         const itemType = topic.identifiers.cipNumber ? 'cip' :
                         topic.identifiers.appName ? 'featured-app' :
                         topic.identifiers.validatorName ? 'validator' :
