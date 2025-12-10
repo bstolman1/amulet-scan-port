@@ -103,13 +103,14 @@ function extractPrimaryEntityName(text) {
 
 // Extract identifiers from subject/content for correlation
 function extractIdentifiers(text) {
-  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, keywords: [] };
+  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, network: null, keywords: [] };
   
   const identifiers = {
     cipNumber: null,
     appName: null,
     validatorName: null,
     entityName: null,  // Primary entity name for correlation
+    network: null,     // 'testnet' or 'mainnet'
     keywords: [],
   };
   
@@ -123,6 +124,13 @@ function extractIdentifiers(text) {
     if (cipMatch) {
       identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
     }
+  }
+  
+  // Detect network (testnet or mainnet)
+  if (/testnet|test\s*net|tn\b/i.test(text)) {
+    identifiers.network = 'testnet';
+  } else if (/mainnet|main\s*net|mn\b/i.test(text)) {
+    identifiers.network = 'mainnet';
   }
   
   // Check if text contains featured app indicators
@@ -374,6 +382,7 @@ function correlateTopics(allTopics) {
       id: `lifecycle-${topic.id}`,
       primaryId: topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40),
       type,
+      network: topic.identifiers.network,  // 'testnet', 'mainnet', or null
       stages: {},
       topics: [],
       firstDate: topic.date,
@@ -579,13 +588,21 @@ router.get('/', async (req, res) => {
     console.log(`Correlated into ${lifecycleItems.length} lifecycle items`);
     
     // Summary stats
+    // For featured-app and validator counts, deduplicate by primaryId (same app on testnet+mainnet = 1)
+    const uniqueFeaturedApps = new Set(
+      lifecycleItems.filter(i => i.type === 'featured-app').map(i => i.primaryId.toLowerCase())
+    );
+    const uniqueValidators = new Set(
+      lifecycleItems.filter(i => i.type === 'validator').map(i => i.primaryId.toLowerCase())
+    );
+    
     const stats = {
       totalTopics: allTopics.length,
       lifecycleItems: lifecycleItems.length,
       byType: {
         cip: lifecycleItems.filter(i => i.type === 'cip').length,
-        'featured-app': lifecycleItems.filter(i => i.type === 'featured-app').length,
-        validator: lifecycleItems.filter(i => i.type === 'validator').length,
+        'featured-app': uniqueFeaturedApps.size,  // Deduplicated count
+        validator: uniqueValidators.size,          // Deduplicated count
         other: lifecycleItems.filter(i => i.type === 'other').length,
       },
       byStage: Object.fromEntries(
