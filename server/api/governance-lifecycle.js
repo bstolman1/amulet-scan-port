@@ -334,6 +334,20 @@ function correlateTopics(allTopics) {
     lifecycleItems.push(item);
   }
   
+  // Sort lifecycle items by CIP number descending (highest first)
+  lifecycleItems.sort((a, b) => {
+    const aNum = a.primaryId?.match(/CIP-?(\d+)/i)?.[1];
+    const bNum = b.primaryId?.match(/CIP-?(\d+)/i)?.[1];
+    if (aNum && bNum) {
+      return parseInt(bNum) - parseInt(aNum);
+    }
+    // CIPs come before non-CIPs
+    if (aNum) return -1;
+    if (bNum) return 1;
+    // For non-CIPs, sort by date descending
+    return new Date(b.lastDate) - new Date(a.lastDate);
+  });
+  
   return lifecycleItems;
 }
 
