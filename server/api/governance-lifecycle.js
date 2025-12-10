@@ -118,10 +118,15 @@ async function getSubscribedGroups() {
   return groupMap;
 }
 
-// Fetch topics from a specific group with pagination
-async function fetchGroupTopics(groupId, groupName, maxTopics = 500) {
+// Helper to delay between requests
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Fetch topics from a specific group with pagination and retries
+async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
   const allTopics = [];
   let pageToken = null;
+  let retries = 0;
+  const maxRetries = 3;
   
   while (allTopics.length < maxTopics) {
     let url = `${BASE_URL}/api/v1/gettopics?group_id=${groupId}&limit=100`;
@@ -129,24 +134,47 @@ async function fetchGroupTopics(groupId, groupName, maxTopics = 500) {
       url += `&page_token=${pageToken}`;
     }
     
-    const response = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` },
-    });
-    
-    if (!response.ok) {
-      console.error(`Failed to fetch topics for ${groupName}: ${response.status}`);
+    try {
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${API_KEY}` },
+      });
+      
+      if (!response.ok) {
+        console.error(`Failed to fetch topics for ${groupName}: ${response.status}`);
+        if (response.status === 429 || response.status === 400) {
+          // Rate limited - wait and retry
+          if (retries < maxRetries) {
+            retries++;
+            console.log(`Rate limited, waiting 2s and retrying (${retries}/${maxRetries})...`);
+            await delay(2000);
+            continue;
+          }
+        }
+        break;
+      }
+      
+      const data = await response.json();
+      const topics = data.data || [];
+      allTopics.push(...topics);
+      retries = 0; // Reset retries on success
+      
+      if (data.has_more !== true || !data.next_page_token) {
+        break;
+      }
+      
+      pageToken = data.next_page_token;
+      // Small delay between pagination requests
+      await delay(200);
+    } catch (err) {
+      console.error(`Fetch error for ${groupName}:`, err.message);
+      if (retries < maxRetries) {
+        retries++;
+        console.log(`Connection error, waiting 2s and retrying (${retries}/${maxRetries})...`);
+        await delay(2000);
+        continue;
+      }
       break;
     }
-    
-    const data = await response.json();
-    const topics = data.data || [];
-    allTopics.push(...topics);
-    
-    if (data.has_more !== true || !data.next_page_token) {
-      break;
-    }
-    
-    pageToken = data.next_page_token;
   }
   
   return allTopics;
@@ -283,14 +311,16 @@ router.get('/', async (req, res) => {
     const groupMap = await getSubscribedGroups();
     console.log('Found governance groups:', Object.keys(groupMap));
     
-    // Fetch topics from all groups in parallel
+    // Fetch topics from groups SEQUENTIALLY to avoid rate limiting
     const allTopics = [];
-    const fetchPromises = Object.entries(groupMap).map(async ([name, group]) => {
+    const groupEntries = Object.entries(groupMap);
+    
+    for (const [name, group] of groupEntries) {
       console.log(`Fetching topics from ${name} (ID: ${group.id})...`);
-      const topics = await fetchGroupTopics(group.id, name, 500);
+      const topics = await fetchGroupTopics(group.id, name, 300);
       console.log(`Got ${topics.length} topics from ${name}`);
       
-      return topics.map(topic => ({
+      const mappedTopics = topics.map(topic => ({
         id: topic.id?.toString() || `topic-${Math.random()}`,
         subject: topic.subject || topic.title || 'Untitled',
         date: topic.created || topic.updated || new Date().toISOString(),
@@ -305,11 +335,11 @@ router.get('/', async (req, res) => {
         flow: group.flow,
         identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
       }));
-    });
-    
-    const groupResults = await Promise.all(fetchPromises);
-    for (const topics of groupResults) {
-      allTopics.push(...topics);
+      
+      allTopics.push(...mappedTopics);
+      
+      // Delay between groups to avoid rate limiting
+      await delay(500);
     }
     
     console.log(`Total topics across all groups: ${allTopics.length}`);
