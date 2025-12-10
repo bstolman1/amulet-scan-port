@@ -240,10 +240,10 @@ const GovernanceFlow = () => {
     return data.allTopics.filter(topic => {
       if (typeFilter !== 'all') {
         const isOutcome = /^Outcomes/i.test(topic.subject.trim());
-        const itemType = topic.identifiers.cipNumber ? 'cip' :
+        const itemType = isOutcome ? 'outcome' :
+                        topic.identifiers.cipNumber ? 'cip' :
                         topic.identifiers.appName ? 'featured-app' :
-                        topic.identifiers.validatorName ? 'validator' :
-                        isOutcome ? 'outcome' : 'other';
+                        topic.identifiers.validatorName ? 'validator' : 'other';
         if (itemType !== typeFilter) return false;
       }
       if (stageFilter !== 'all' && topic.stage !== stageFilter) return false;

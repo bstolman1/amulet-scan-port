@@ -419,18 +419,24 @@ function correlateTopics(allTopics) {
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
     // Type determination: require entity name for featured-app/validator classification
-    // Check if this is an outcome (matches "Outcomes - Dec 8, 2025" or just starts with "Outcomes")
-    const isOutcome = /^Outcomes/i.test(topic.subject.trim());
+    // Check if this is an outcome (matches subjects starting with "Outcomes")
+    const subjectTrimmed = topic.subject.trim();
+    const isOutcome = subjectTrimmed.toLowerCase().startsWith('outcomes');
+    
+    // Debug log for outcome detection
+    if (subjectTrimmed.toLowerCase().includes('outcome')) {
+      console.log(`OUTCOME CHECK: subject="${subjectTrimmed.slice(0, 80)}", isOutcome=${isOutcome}`);
+    }
     
     let type;
-    if (hasCip) {
+    if (isOutcome) {
+      type = 'outcome';  // Outcomes takes priority - check first
+    } else if (hasCip) {
       type = 'cip';
     } else if (hasAppIndicator && topicEntityName) {
       type = 'featured-app';
     } else if (hasValidatorIndicator && topicEntityName) {
       type = 'validator';
-    } else if (isOutcome) {
-      type = 'outcome';
     } else {
       type = 'other';
     }
