@@ -1,4 +1,11 @@
 import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CACHE_DIR = path.resolve(__dirname, '../../data/cache');
+const CACHE_FILE = path.join(CACHE_DIR, 'governance-lifecycle.json');
 
 const router = express.Router();
 
@@ -592,8 +599,131 @@ function correlateTopics(allTopics) {
   return lifecycleItems;
 }
 
-// Main endpoint
+// Helper to read cached data
+function readCache() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
+      return data;
+    }
+  } catch (err) {
+    console.error('Error reading cache:', err.message);
+  }
+  return null;
+}
+
+// Helper to write cache
+function writeCache(data) {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(data, null, 2));
+    console.log(`✅ Cached governance data to ${CACHE_FILE}`);
+  } catch (err) {
+    console.error('Error writing cache:', err.message);
+  }
+}
+
+// Fetch fresh data from groups.io
+async function fetchFreshData() {
+  console.log('Fetching fresh governance lifecycle data from groups.io...');
+  
+  // Get all subscribed governance groups
+  const groupMap = await getSubscribedGroups();
+  console.log('Found governance groups:', Object.keys(groupMap));
+  
+  // Fetch topics from groups SEQUENTIALLY to avoid rate limiting
+  const allTopics = [];
+  const groupEntries = Object.entries(groupMap);
+  
+  for (const [name, group] of groupEntries) {
+    console.log(`Fetching topics from ${name} (ID: ${group.id})...`);
+    const topics = await fetchGroupTopics(group.id, name, 300);
+    console.log(`Got ${topics.length} topics from ${name}`);
+    
+    const mappedTopics = topics.map(topic => {
+      const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
+      
+      return {
+        id: topic.id?.toString() || `topic-${Math.random()}`,
+        subject: topic.subject || topic.title || 'Untitled',
+        date: topic.created || topic.updated || new Date().toISOString(),
+        content: topic.snippet || topic.body || topic.preview || '',
+        excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
+        sourceUrl,
+        linkedUrls: extractUrls(topic.snippet || topic.body || ''),
+        messageCount: topic.num_msgs || 1,
+        groupName: name,
+        groupLabel: group.label,
+        stage: group.stage,
+        flow: group.flow,
+        identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
+      };
+    });
+    
+    allTopics.push(...mappedTopics);
+    await delay(500);
+  }
+  
+  console.log(`Total topics across all groups: ${allTopics.length}`);
+  
+  // Correlate topics into lifecycle items
+  const lifecycleItems = correlateTopics(allTopics);
+  console.log(`Correlated into ${lifecycleItems.length} lifecycle items`);
+  
+  // Summary stats
+  const uniqueFeaturedApps = new Set(
+    lifecycleItems.filter(i => i.type === 'featured-app').map(i => i.primaryId.toLowerCase())
+  );
+  const uniqueValidators = new Set(
+    lifecycleItems.filter(i => i.type === 'validator').map(i => i.primaryId.toLowerCase())
+  );
+  
+  const stats = {
+    totalTopics: allTopics.length,
+    lifecycleItems: lifecycleItems.length,
+    byType: {
+      cip: lifecycleItems.filter(i => i.type === 'cip').length,
+      'featured-app': uniqueFeaturedApps.size,
+      validator: uniqueValidators.size,
+      outcome: lifecycleItems.filter(i => i.type === 'outcome').length,
+      other: lifecycleItems.filter(i => i.type === 'other').length,
+    },
+    byStage: Object.fromEntries(
+      ALL_STAGES.map(stage => [stage, lifecycleItems.filter(i => i.currentStage === stage).length])
+    ),
+    groupCounts: Object.fromEntries(
+      Object.entries(groupMap).map(([name, group]) => [
+        name,
+        allTopics.filter(t => t.groupName === name).length
+      ])
+    ),
+  };
+  
+  return {
+    lifecycleItems,
+    allTopics,
+    groups: groupMap,
+    stats,
+    cachedAt: new Date().toISOString(),
+  };
+}
+
+// Main endpoint - reads from cache first
 router.get('/', async (req, res) => {
+  const forceRefresh = req.query.refresh === 'true';
+  
+  // Try to read from cache first (unless force refresh)
+  if (!forceRefresh) {
+    const cached = readCache();
+    if (cached) {
+      console.log(`Serving cached governance data from ${cached.cachedAt}`);
+      return res.json(cached);
+    }
+  }
+  
+  // No cache or force refresh - fetch fresh data
   if (!API_KEY) {
     return res.status(500).json({ 
       error: 'GROUPS_IO_API_KEY not configured',
@@ -603,106 +733,55 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    console.log('Fetching governance lifecycle data...');
-    
-    // Get all subscribed governance groups
-    const groupMap = await getSubscribedGroups();
-    console.log('Found governance groups:', Object.keys(groupMap));
-    
-    // Fetch topics from groups SEQUENTIALLY to avoid rate limiting
-    const allTopics = [];
-    const groupEntries = Object.entries(groupMap);
-    
-    for (const [name, group] of groupEntries) {
-      console.log(`Fetching topics from ${name} (ID: ${group.id})...`);
-      const topics = await fetchGroupTopics(group.id, name, 300);
-      console.log(`Got ${topics.length} topics from ${name}`);
-      
-      // Log a sample topic to debug URL structure
-      if (topics.length > 0) {
-        console.log(`Sample topic keys: ${Object.keys(topics[0]).join(', ')}`);
-        console.log(`Sample permalink: ${topics[0].permalink || 'none'}`);
-        console.log(`Sample group_name: ${topics[0].group_name || 'none'}`);
-      }
-      
-      const mappedTopics = topics.map(topic => {
-        // Use the group's urlName for the proper URL path
-        // Format: /g/{urlName}/topic/{id}
-        const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
-        
-        return {
-          id: topic.id?.toString() || `topic-${Math.random()}`,
-          subject: topic.subject || topic.title || 'Untitled',
-          date: topic.created || topic.updated || new Date().toISOString(),
-          content: topic.snippet || topic.body || topic.preview || '',
-          excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
-          sourceUrl,
-          linkedUrls: extractUrls(topic.snippet || topic.body || ''),
-          messageCount: topic.num_msgs || 1,
-          groupName: name,
-          groupLabel: group.label,
-          stage: group.stage,
-          flow: group.flow,
-          identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
-        };
-      });
-      
-      allTopics.push(...mappedTopics);
-      
-      // Delay between groups to avoid rate limiting
-      await delay(500);
-    }
-    
-    console.log(`Total topics across all groups: ${allTopics.length}`);
-    
-    // Correlate topics into lifecycle items
-    const lifecycleItems = correlateTopics(allTopics);
-    console.log(`Correlated into ${lifecycleItems.length} lifecycle items`);
-    
-    // Summary stats
-    // For featured-app and validator counts, deduplicate by primaryId (same app on testnet+mainnet = 1)
-    const uniqueFeaturedApps = new Set(
-      lifecycleItems.filter(i => i.type === 'featured-app').map(i => i.primaryId.toLowerCase())
-    );
-    const uniqueValidators = new Set(
-      lifecycleItems.filter(i => i.type === 'validator').map(i => i.primaryId.toLowerCase())
-    );
-    
-    const stats = {
-      totalTopics: allTopics.length,
-      lifecycleItems: lifecycleItems.length,
-      byType: {
-        cip: lifecycleItems.filter(i => i.type === 'cip').length,
-        'featured-app': uniqueFeaturedApps.size,  // Deduplicated count
-        validator: uniqueValidators.size,          // Deduplicated count
-        outcome: lifecycleItems.filter(i => i.type === 'outcome').length,
-        other: lifecycleItems.filter(i => i.type === 'other').length,
-      },
-      byStage: Object.fromEntries(
-        ALL_STAGES.map(stage => [stage, lifecycleItems.filter(i => i.currentStage === stage).length])
-      ),
-      groupCounts: Object.fromEntries(
-        Object.entries(groupMap).map(([name, group]) => [
-          name,
-          allTopics.filter(t => t.groupName === name).length
-        ])
-      ),
-    };
-    
-    return res.json({
-      lifecycleItems,
-      allTopics,
-      groups: groupMap,
-      stats,
-    });
+    const data = await fetchFreshData();
+    writeCache(data);
+    return res.json(data);
 
   } catch (error) {
     console.error('Error fetching governance lifecycle:', error);
+    
+    // On error, try to serve stale cache
+    const cached = readCache();
+    if (cached) {
+      console.log('Serving stale cache due to fetch error');
+      return res.json({ ...cached, stale: true, error: error.message });
+    }
+    
     res.status(500).json({ 
       error: error.message,
       lifecycleItems: [],
       groups: {},
     });
+  }
+});
+
+// Refresh endpoint - explicitly fetches fresh data
+router.post('/refresh', async (req, res) => {
+  if (!API_KEY) {
+    return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured' });
+  }
+
+  try {
+    const data = await fetchFreshData();
+    writeCache(data);
+    return res.json({ success: true, stats: data.stats, cachedAt: data.cachedAt });
+  } catch (error) {
+    console.error('Error refreshing governance lifecycle:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cache info endpoint
+router.get('/cache-info', (req, res) => {
+  const cached = readCache();
+  if (cached) {
+    res.json({
+      hasCachedData: true,
+      cachedAt: cached.cachedAt,
+      stats: cached.stats,
+    });
+  } else {
+    res.json({ hasCachedData: false });
   }
 });
 
