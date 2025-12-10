@@ -27,6 +27,7 @@ const WORKFLOW_STAGES = {
   cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
   'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
   validator: ['tokenomics', 'sv-announce'],
+  outcome: ['sv-announce'],
   other: ['tokenomics', 'sv-announce'], // Fallback
 };
 
@@ -418,6 +419,9 @@ function correlateTopics(allTopics) {
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
     // Type determination: require entity name for featured-app/validator classification
+    // Check if this is an outcome (vote result, outcome announcement, etc.)
+    const isOutcome = /\boutcome\b|\bvote\s*result|\bresult\s*of\s*vote|\bapproved\b|\brejected\b|\bpassed\b|\bfailed\b/i.test(topic.subject);
+    
     let type;
     if (hasCip) {
       type = 'cip';
@@ -425,6 +429,8 @@ function correlateTopics(allTopics) {
       type = 'featured-app';
     } else if (hasValidatorIndicator && topicEntityName) {
       type = 'validator';
+    } else if (isOutcome) {
+      type = 'outcome';
     } else {
       type = 'other';
     }
@@ -663,6 +669,7 @@ router.get('/', async (req, res) => {
         cip: lifecycleItems.filter(i => i.type === 'cip').length,
         'featured-app': uniqueFeaturedApps.size,  // Deduplicated count
         validator: uniqueValidators.size,          // Deduplicated count
+        outcome: lifecycleItems.filter(i => i.type === 'outcome').length,
         other: lifecycleItems.filter(i => i.type === 'other').length,
       },
       byStage: Object.fromEntries(
