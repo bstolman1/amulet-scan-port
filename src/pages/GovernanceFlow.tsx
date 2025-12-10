@@ -200,6 +200,17 @@ const GovernanceFlow = () => {
     }
   };
 
+  // Check if lifecycle item falls within date range
+  const matchesDateRange = (item: LifecycleItem) => {
+    if (!dateFrom && !dateTo) return true;
+    const itemFirstDate = new Date(item.firstDate);
+    const itemLastDate = new Date(item.lastDate);
+    // Item matches if any part of its date range overlaps with the filter range
+    if (dateFrom && itemLastDate < dateFrom) return false;
+    if (dateTo && itemFirstDate > dateTo) return false;
+    return true;
+  };
+
   // Separate CIP-00XX items from regular items
   const { tbdItems, regularItems } = useMemo(() => {
     if (!data) return { tbdItems: [], regularItems: [] };
@@ -207,6 +218,7 @@ const GovernanceFlow = () => {
       if (typeFilter !== 'all' && item.type !== typeFilter) return false;
       if (stageFilter !== 'all' && item.currentStage !== stageFilter) return false;
       if (!matchesSearch(item, searchQuery)) return false;
+      if (!matchesDateRange(item)) return false;
       return true;
     });
     
@@ -214,7 +226,7 @@ const GovernanceFlow = () => {
       tbdItems: allFiltered.filter(item => item.primaryId?.includes('00XX')),
       regularItems: allFiltered.filter(item => !item.primaryId?.includes('00XX')),
     };
-  }, [data, typeFilter, stageFilter, searchQuery]);
+  }, [data, typeFilter, stageFilter, searchQuery, dateFrom, dateTo]);
 
   const filteredItems = useMemo(() => {
     return [...tbdItems, ...regularItems];
@@ -547,6 +559,106 @@ const GovernanceFlow = () => {
           </div>
         </div>
 
+        {/* Date Range Filter - applies to all views */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Date Range:</span>
+          </div>
+          
+          {/* Preset Selector */}
+          <Select value={datePreset} onValueChange={handleDatePreset}>
+            <SelectTrigger className="w-[160px] h-8">
+              <SelectValue placeholder="Select period" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Time</SelectItem>
+              <SelectItem value="this-month">This Month</SelectItem>
+              <SelectItem value="last-month">Last Month</SelectItem>
+              <SelectItem value="last-3-months">Last 3 Months</SelectItem>
+              <SelectItem value="last-6-months">Last 6 Months</SelectItem>
+              <SelectItem value="this-year">This Year</SelectItem>
+              <SelectItem value="last-year">Last Year</SelectItem>
+              <SelectItem value="custom">Custom Range</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Custom Date Pickers */}
+          {datePreset === 'custom' && (
+            <>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "h-8 justify-start text-left font-normal",
+                      !dateFrom && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateFrom ? format(dateFrom, "MMM d, yyyy") : "From"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <CalendarComponent
+                    mode="single"
+                    selected={dateFrom}
+                    onSelect={setDateFrom}
+                    initialFocus
+                    className={cn("p-3 pointer-events-auto")}
+                  />
+                </PopoverContent>
+              </Popover>
+              <span className="text-muted-foreground">to</span>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "h-8 justify-start text-left font-normal",
+                      !dateTo && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateTo ? format(dateTo, "MMM d, yyyy") : "To"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <CalendarComponent
+                    mode="single"
+                    selected={dateTo}
+                    onSelect={setDateTo}
+                    initialFocus
+                    className={cn("p-3 pointer-events-auto")}
+                  />
+                </PopoverContent>
+              </Popover>
+            </>
+          )}
+
+          {/* Clear Button */}
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearDateFilter}
+              className="h-8 px-2"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear
+            </Button>
+          )}
+
+          {/* Show current range */}
+          {datePreset !== 'all' && datePreset !== 'custom' && (
+            <Badge variant="secondary" className="text-xs">
+              {dateFrom && format(dateFrom, "MMM d, yyyy")} - {dateTo && format(dateTo, "MMM d, yyyy")}
+            </Badge>
+          )}
+        </div>
+
         {/* View Toggle */}
         <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline')}>
           <TabsList>
@@ -755,110 +867,6 @@ const GovernanceFlow = () => {
 
           {/* Timeline View */}
           <TabsContent value="timeline" className="mt-4 space-y-4">
-            {/* Date Range Filter */}
-            <Card className="bg-muted/20">
-              <CardContent className="p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <CalendarIcon className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">Date Range:</span>
-                  </div>
-                  
-                  {/* Preset Selector */}
-                  <Select value={datePreset} onValueChange={handleDatePreset}>
-                    <SelectTrigger className="w-[160px] h-8">
-                      <SelectValue placeholder="Select period" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Time</SelectItem>
-                      <SelectItem value="this-month">This Month</SelectItem>
-                      <SelectItem value="last-month">Last Month</SelectItem>
-                      <SelectItem value="last-3-months">Last 3 Months</SelectItem>
-                      <SelectItem value="last-6-months">Last 6 Months</SelectItem>
-                      <SelectItem value="this-year">This Year</SelectItem>
-                      <SelectItem value="last-year">Last Year</SelectItem>
-                      <SelectItem value="custom">Custom Range</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {/* Custom Date Pickers */}
-                  {datePreset === 'custom' && (
-                    <>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn(
-                              "h-8 justify-start text-left font-normal",
-                              !dateFrom && "text-muted-foreground"
-                            )}
-                          >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
-                            {dateFrom ? format(dateFrom, "MMM d, yyyy") : "From"}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <CalendarComponent
-                            mode="single"
-                            selected={dateFrom}
-                            onSelect={setDateFrom}
-                            initialFocus
-                            className={cn("p-3 pointer-events-auto")}
-                          />
-                        </PopoverContent>
-                      </Popover>
-                      <span className="text-muted-foreground">to</span>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn(
-                              "h-8 justify-start text-left font-normal",
-                              !dateTo && "text-muted-foreground"
-                            )}
-                          >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
-                            {dateTo ? format(dateTo, "MMM d, yyyy") : "To"}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <CalendarComponent
-                            mode="single"
-                            selected={dateTo}
-                            onSelect={setDateTo}
-                            initialFocus
-                            className={cn("p-3 pointer-events-auto")}
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </>
-                  )}
-
-                  {/* Clear Button */}
-                  {(dateFrom || dateTo) && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={clearDateFilter}
-                      className="h-8 px-2"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  )}
-
-                  {/* Show current range */}
-                  {datePreset !== 'all' && datePreset !== 'custom' && (
-                    <Badge variant="secondary" className="text-xs">
-                      {dateFrom && format(dateFrom, "MMM d, yyyy")} - {dateTo && format(dateTo, "MMM d, yyyy")}
-                    </Badge>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-32 w-full mb-4" />
