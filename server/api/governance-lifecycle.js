@@ -419,8 +419,8 @@ function correlateTopics(allTopics) {
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
     // Type determination: require entity name for featured-app/validator classification
-    // Check if this is an outcome (vote result, outcome announcement, etc.)
-    const isOutcome = /\boutcome\b|\bvote\s*result|\bresult\s*of\s*vote|\bapproved\b|\brejected\b|\bpassed\b|\bfailed\b/i.test(topic.subject);
+    // Check if this is an outcome (matches "Outcomes - Dec 8, 2025" pattern)
+    const isOutcome = /^Outcomes\s*-\s*\w+\s+\d+,?\s*\d*/i.test(topic.subject);
     
     let type;
     if (hasCip) {
