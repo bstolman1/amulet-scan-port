@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 import { 
   ExternalLink, 
   RefreshCw, 
@@ -20,6 +21,8 @@ import {
   Vote,
   ArrowRight,
   Filter,
+  Search,
+  X,
 } from "lucide-react";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 
@@ -91,7 +94,8 @@ const GovernanceFlow = () => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [stageFilter, setStageFilter] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'lifecycle' | 'all'>('lifecycle');
+  const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline'>('lifecycle');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -147,14 +151,43 @@ const GovernanceFlow = () => {
     }
   };
 
+  // Search matching function
+  const matchesSearch = (item: LifecycleItem | Topic, query: string) => {
+    if (!query.trim()) return true;
+    const q = query.toLowerCase();
+    
+    if ('primaryId' in item) {
+      // LifecycleItem
+      const li = item as LifecycleItem;
+      return (
+        li.primaryId.toLowerCase().includes(q) ||
+        li.topics.some(t => t.subject.toLowerCase().includes(q)) ||
+        li.topics.some(t => t.identifiers.cipNumber?.toLowerCase().includes(q)) ||
+        li.topics.some(t => t.identifiers.appName?.toLowerCase().includes(q)) ||
+        li.topics.some(t => t.identifiers.validatorName?.toLowerCase().includes(q))
+      );
+    } else {
+      // Topic
+      const topic = item as Topic;
+      return (
+        topic.subject.toLowerCase().includes(q) ||
+        topic.identifiers.cipNumber?.toLowerCase().includes(q) ||
+        topic.identifiers.appName?.toLowerCase().includes(q) ||
+        topic.identifiers.validatorName?.toLowerCase().includes(q) ||
+        topic.excerpt?.toLowerCase().includes(q)
+      );
+    }
+  };
+
   const filteredItems = useMemo(() => {
     if (!data) return [];
     return data.lifecycleItems.filter(item => {
       if (typeFilter !== 'all' && item.type !== typeFilter) return false;
       if (stageFilter !== 'all' && item.currentStage !== stageFilter) return false;
+      if (!matchesSearch(item, searchQuery)) return false;
       return true;
     });
-  }, [data, typeFilter, stageFilter]);
+  }, [data, typeFilter, stageFilter, searchQuery]);
 
   const filteredTopics = useMemo(() => {
     if (!data) return [];
@@ -166,9 +199,33 @@ const GovernanceFlow = () => {
         if (itemType !== typeFilter) return false;
       }
       if (stageFilter !== 'all' && topic.stage !== stageFilter) return false;
+      if (!matchesSearch(topic, searchQuery)) return false;
       return true;
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [data, typeFilter, stageFilter]);
+  }, [data, typeFilter, stageFilter, searchQuery]);
+
+  // Timeline data - group events by month
+  const timelineData = useMemo(() => {
+    if (!filteredTopics.length) return [];
+    
+    const monthGroups: Record<string, Topic[]> = {};
+    filteredTopics.forEach(topic => {
+      const date = new Date(topic.date);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!monthGroups[monthKey]) {
+        monthGroups[monthKey] = [];
+      }
+      monthGroups[monthKey].push(topic);
+    });
+    
+    return Object.entries(monthGroups)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([month, topics]) => ({
+        month,
+        label: new Date(month + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
+        topics: topics.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+      }));
+  }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
     const stages = ['proposal', 'review', 'vote', 'result'];
@@ -337,6 +394,27 @@ const GovernanceFlow = () => {
           </Card>
         )}
 
+        {/* Search Bar */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by subject, CIP number, app name, or validator..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 pr-10"
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
@@ -375,9 +453,10 @@ const GovernanceFlow = () => {
         </div>
 
         {/* View Toggle */}
-        <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all')}>
+        <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline')}>
           <TabsList>
             <TabsTrigger value="lifecycle">Lifecycle View ({filteredItems.length})</TabsTrigger>
+            <TabsTrigger value="timeline">Timeline ({timelineData.length} months)</TabsTrigger>
             <TabsTrigger value="all">All Topics ({filteredTopics.length})</TabsTrigger>
           </TabsList>
 
@@ -470,6 +549,95 @@ const GovernanceFlow = () => {
                   </Card>
                 );
               })
+            )}
+          </TabsContent>
+
+          {/* Timeline View */}
+          <TabsContent value="timeline" className="mt-4">
+            {isLoading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-32 w-full mb-4" />
+              ))
+            ) : timelineData.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <Calendar className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-medium">No Timeline Data</h3>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="relative">
+                {/* Timeline line */}
+                <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-border" />
+                
+                <div className="space-y-6">
+                  {timelineData.map((monthData) => (
+                    <div key={monthData.month} className="relative pl-10">
+                      {/* Month marker */}
+                      <div className="absolute left-0 top-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center">
+                        <Calendar className="h-4 w-4 text-primary-foreground" />
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <h3 className="text-lg font-semibold sticky top-0 bg-background py-2 z-10">
+                          {monthData.label}
+                          <Badge variant="secondary" className="ml-2 text-xs">
+                            {monthData.topics.length} topics
+                          </Badge>
+                        </h3>
+                        
+                        <div className="space-y-2">
+                          {monthData.topics.map((topic) => {
+                            const stageConfig = STAGE_CONFIG[topic.stage as keyof typeof STAGE_CONFIG];
+                            const StageIcon = stageConfig?.icon || FileText;
+                            
+                            return (
+                              <div 
+                                key={topic.id}
+                                className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors"
+                              >
+                                {/* Stage indicator */}
+                                <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${stageConfig?.color || 'bg-muted'}`}>
+                                  <StageIcon className="h-4 w-4" />
+                                </div>
+                                
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <h4 className="font-medium text-sm truncate">{topic.subject}</h4>
+                                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
+                                        <span>{formatDate(topic.date)}</span>
+                                        <Badge variant="outline" className="text-[10px] h-5">
+                                          {topic.groupLabel}
+                                        </Badge>
+                                        <Badge className={`text-[10px] h-5 ${stageConfig?.color || ''}`}>
+                                          {stageConfig?.label || topic.stage}
+                                        </Badge>
+                                      </div>
+                                    </div>
+                                    {topic.sourceUrl && (
+                                      <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
+                                        <a href={topic.sourceUrl} target="_blank" rel="noopener noreferrer">
+                                          <ExternalLink className="h-3.5 w-3.5" />
+                                        </a>
+                                      </Button>
+                                    )}
+                                  </div>
+                                  {topic.excerpt && (
+                                    <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                                      {topic.excerpt}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </TabsContent>
 
