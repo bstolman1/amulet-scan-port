@@ -301,16 +301,29 @@ const GovernanceFlow = () => {
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
-    // Use item's expected stages if available, otherwise fall back to type-based lookup
-    const stages = item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other'];
-    const currentIdx = stages.indexOf(item.currentStage);
+    // Only show stages that this item actually has data for (plus the expected next ones)
+    const expectedStages = item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other'];
+    // Get stages with activity
+    const activeStages = expectedStages.filter(stage => item.stages[stage] && item.stages[stage].length > 0);
+    // Find the current stage index in expected stages
+    const currentIdx = expectedStages.indexOf(item.currentStage);
+    // Show: all active stages + one pending stage after current (if any)
+    const nextStageIdx = currentIdx + 1;
+    const nextStage = nextStageIdx < expectedStages.length ? expectedStages[nextStageIdx] : null;
+    
+    // Build the stages to display: active ones + optionally the next pending one
+    const stagesToDisplay = [...activeStages];
+    if (nextStage && !stagesToDisplay.includes(nextStage)) {
+      stagesToDisplay.push(nextStage);
+    }
+    // Keep them in expected order
+    const orderedStages = expectedStages.filter(s => stagesToDisplay.includes(s));
     
     return (
       <div className="flex items-center gap-1 flex-wrap">
-        {stages.map((stage, idx) => {
+        {orderedStages.map((stage, idx) => {
           const hasStage = item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
-          const isPast = idx < currentIdx;
           const config = STAGE_CONFIG[stage];
           
           if (!config) return null;
@@ -325,14 +338,14 @@ const GovernanceFlow = () => {
                     ? config.color + ' border'
                     : 'bg-muted/30 text-muted-foreground/50 border border-transparent'
                 } ${isCurrent ? 'ring-1 ring-offset-1 ring-offset-background ring-primary/50' : ''}`}
-                title={`${config.label}: ${hasStage ? item.stages[stage].length + ' topics' : 'No activity'}`}
+                title={`${config.label}: ${hasStage ? item.stages[stage].length + ' topics' : 'Pending'}`}
               >
                 <Icon className="h-3 w-3" />
                 <span className="hidden sm:inline">{config.label}</span>
                 {hasStage && <span className="text-[10px] opacity-70">({item.stages[stage].length})</span>}
               </div>
-              {idx < stages.length - 1 && (
-                <ArrowRight className={`h-3 w-3 mx-0.5 ${isPast || isCurrent ? 'text-primary/50' : 'text-muted-foreground/30'}`} />
+              {idx < orderedStages.length - 1 && (
+                <ArrowRight className={`h-3 w-3 mx-0.5 ${hasStage || isCurrent ? 'text-primary/50' : 'text-muted-foreground/30'}`} />
               )}
             </div>
           );
@@ -622,27 +635,33 @@ const GovernanceFlow = () => {
                     
                     {isExpanded && (
                       <CardContent className="space-y-4 border-t pt-4">
-                        {(item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other']).map((stage) => {
-                          const config = STAGE_CONFIG[stage];
-                          if (!config) return null;
-                          
-                          const stageTopics = item.stages[stage];
-                          if (!stageTopics || stageTopics.length === 0) return null;
-                          
-                          const Icon = config.icon;
-                          
-                          return (
-                            <div key={stage} className="space-y-2">
-                              <h4 className="text-sm font-medium flex items-center gap-2">
-                                <Icon className="h-4 w-4" />
-                                {config.label} ({stageTopics.length})
-                              </h4>
-                              <div className="space-y-2 pl-6">
-                                {stageTopics.map(topic => renderTopicCard(topic))}
+                        {/* Only show stages that have topics */}
+                        {Object.keys(item.stages)
+                          .filter(stage => item.stages[stage] && item.stages[stage].length > 0)
+                          .sort((a, b) => {
+                            // Sort by expected stage order
+                            const expectedOrder = item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || [];
+                            return expectedOrder.indexOf(a) - expectedOrder.indexOf(b);
+                          })
+                          .map((stage) => {
+                            const config = STAGE_CONFIG[stage];
+                            if (!config) return null;
+                            
+                            const stageTopics = item.stages[stage];
+                            const Icon = config.icon;
+                            
+                            return (
+                              <div key={stage} className="space-y-2">
+                                <h4 className="text-sm font-medium flex items-center gap-2">
+                                  <Icon className="h-4 w-4" />
+                                  {config.label} ({stageTopics.length})
+                                </h4>
+                                <div className="space-y-2 pl-6">
+                                  {stageTopics.map(topic => renderTopicCard(topic))}
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
                       </CardContent>
                     )}
                   </Card>
