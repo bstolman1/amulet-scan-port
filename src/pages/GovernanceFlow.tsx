@@ -63,6 +63,7 @@ interface LifecycleItem {
   firstDate: string;
   lastDate: string;
   currentStage: string;
+  expectedStages?: string[];
 }
 
 interface GovernanceData {
@@ -78,11 +79,23 @@ interface GovernanceData {
   };
 }
 
-const STAGE_CONFIG = {
+const STAGE_CONFIG: Record<string, { label: string; icon: typeof FileText; color: string }> = {
   discuss: { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
   vote: { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
   announce: { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  tokenomics: { label: 'Tokenomics', icon: Vote, color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' },
+  'tokenomics-announce': { label: 'Tokenomics Announce', icon: CheckCircle2, color: 'bg-teal-500/20 text-teal-400 border-teal-500/30' },
+  'sv-vote': { label: 'SV Vote', icon: Vote, color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
+  'sv-announce': { label: 'SV Announce', icon: CheckCircle2, color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' },
   'weight-update': { label: 'Weight Update', icon: Clock, color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+};
+
+// Different lifecycle stages for different entity types
+const LIFECYCLE_STAGES_BY_TYPE: Record<string, string[]> = {
+  'cip': ['discuss', 'vote', 'announce', 'sv-vote', 'sv-announce', 'weight-update'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
+  'validator': ['tokenomics', 'tokenomics-announce'],
+  'other': ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce'],
 };
 
 const TYPE_CONFIG = {
@@ -288,16 +301,20 @@ const GovernanceFlow = () => {
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
-    const stages = ['discuss', 'vote', 'announce', 'weight-update'];
+    // Use item's expected stages if available, otherwise fall back to type-based lookup
+    const stages = item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other'];
     const currentIdx = stages.indexOf(item.currentStage);
     
     return (
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap">
         {stages.map((stage, idx) => {
           const hasStage = item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
           const isPast = idx < currentIdx;
-          const config = STAGE_CONFIG[stage as keyof typeof STAGE_CONFIG];
+          const config = STAGE_CONFIG[stage];
+          
+          if (!config) return null;
+          
           const Icon = config.icon;
           
           return (
