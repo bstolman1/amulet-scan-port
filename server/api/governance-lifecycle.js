@@ -36,21 +36,9 @@ function extractIdentifiers(text) {
   };
   
   // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123)
-  // Handle CIP-00XX pattern (draft CIPs) and normalize CIP-0000 to CIP-00XX
-  const cipXXMatch = text.match(/CIP[#\-\s]?00XX/i);
-  if (cipXXMatch) {
-    identifiers.cipNumber = 'CIP-00XX';
-  } else {
-    const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
-    if (cipMatch) {
-      const num = parseInt(cipMatch[1]);
-      // Treat CIP-0000 as CIP-00XX (draft/placeholder)
-      if (num === 0) {
-        identifiers.cipNumber = 'CIP-00XX';
-      } else {
-        identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
-      }
-    }
+  const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
+  if (cipMatch) {
+    identifiers.cipNumber = `CIP-${cipMatch[1]}`;
   }
   
   // Extract featured app mentions
