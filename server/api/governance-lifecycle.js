@@ -35,10 +35,10 @@ function extractIdentifiers(text) {
     keywords: [],
   };
   
-  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123)
+  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123) and format as 4-digit
   const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
   if (cipMatch) {
-    identifiers.cipNumber = `CIP-${cipMatch[1]}`;
+    identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
   }
   
   // Extract featured app mentions
