@@ -95,10 +95,18 @@ async function getGroupDetails(groupId) {
     });
     if (response.ok) {
       const data = await response.json();
-      console.log(`Group ${groupId} details: name=${data.name}, full_name=${data.full_name}`);
-      return data;
+      const group = data.group || data;
+      // Log all relevant fields to understand URL structure
+      console.log(`Group ${groupId}:`, {
+        name: group.name,
+        nice_group_name: group.nice_group_name,
+        alias: group.alias,
+        parent_group_id: group.parent_group_id,
+      });
+      return group;
     } else {
-      console.error(`Failed to get group ${groupId}: ${response.status}`);
+      const text = await response.text();
+      console.error(`Failed to get group ${groupId}: ${response.status} - ${text}`);
     }
   } catch (err) {
     console.error(`Failed to get group details for ${groupId}:`, err.message);
@@ -132,19 +140,32 @@ async function getSubscribedGroups() {
       if (GOVERNANCE_GROUPS[subgroupName]) {
         // Get the group details to find the proper URL path
         const groupDetails = await getGroupDetails(sub.group_id);
-        // The 'name' field in group details is the URL-friendly name
-        const urlName = groupDetails?.name || groupName;
-        console.log(`Group ${subgroupName}: urlName=${urlName}, full_name=${groupDetails?.full_name || 'none'}`);
+        
+        // Build URL name from group details
+        // For subgroups: nice_group_name often contains the full path
+        // Or we can construct from parent + name
+        let urlName;
+        if (groupDetails?.nice_group_name) {
+          urlName = groupDetails.nice_group_name;
+        } else if (groupDetails?.name) {
+          // The name field should be URL-friendly
+          urlName = groupDetails.name;
+        } else {
+          // Fallback to converting group_name
+          urlName = groupName.replace(/\+/g, '/');
+        }
+        
+        console.log(`Group ${subgroupName} URL: ${BASE_URL}/g/${urlName}`);
         
         groupMap[subgroupName] = {
           id: sub.group_id,
           fullName: groupName,
-          urlName: urlName, // This is the URL-friendly path
+          urlName: urlName,
           ...GOVERNANCE_GROUPS[subgroupName],
         };
         
         // Small delay to avoid rate limiting
-        await delay(100);
+        await delay(200);
       }
     }
   }
