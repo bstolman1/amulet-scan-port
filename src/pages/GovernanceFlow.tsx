@@ -332,7 +332,7 @@ const GovernanceFlow = () => {
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h4 className="font-medium text-sm truncate">{topic.subject}</h4>
+          <h4 className="font-medium text-sm">{topic.subject}</h4>
           <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
             <span className="flex items-center gap-1">
               <Calendar className="h-3 w-3" />
@@ -774,7 +774,7 @@ const GovernanceFlow = () => {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                      <h4 className="font-medium text-sm truncate">{topic.subject}</h4>
+                                      <h4 className="font-medium text-sm">{topic.subject}</h4>
                                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
                                         <span>{formatDate(topic.date)}</span>
                                         <Badge variant="outline" className="text-[10px] h-5">
