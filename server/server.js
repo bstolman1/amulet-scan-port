@@ -8,6 +8,7 @@ import searchRouter from './api/search.js';
 import backfillRouter from './api/backfill.js';
 import acsRouter from './api/acs.js';
 import announcementsRouter from './api/announcements.js';
+import governanceLifecycleRouter from './api/governance-lifecycle.js';
 import db, { initializeViews } from './duckdb/connection.js';
 
 const app = express();
@@ -60,6 +61,7 @@ app.use('/api/search', searchRouter);
 app.use('/api/backfill', backfillRouter);
 app.use('/api/acs', acsRouter);
 app.use('/api/announcements', announcementsRouter);
+app.use('/api/governance-lifecycle', governanceLifecycleRouter);
 
 app.listen(PORT, () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
