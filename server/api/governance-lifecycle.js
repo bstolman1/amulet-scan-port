@@ -95,10 +95,18 @@ async function getGroupDetails(groupId) {
     });
     if (response.ok) {
       const data = await response.json();
-      console.log(`Group ${groupId} details: name=${data.name}, full_name=${data.full_name}`);
-      return data;
+      const group = data.group || data;
+      // Log all relevant fields to understand URL structure
+      console.log(`Group ${groupId}:`, {
+        name: group.name,
+        nice_group_name: group.nice_group_name,
+        alias: group.alias,
+        parent_group_id: group.parent_group_id,
+      });
+      return group;
     } else {
-      console.error(`Failed to get group ${groupId}: ${response.status}`);
+      const text = await response.text();
+      console.error(`Failed to get group ${groupId}: ${response.status} - ${text}`);
     }
   } catch (err) {
     console.error(`Failed to get group details for ${groupId}:`, err.message);
@@ -130,21 +138,18 @@ async function getSubscribedGroups() {
     if (match) {
       const subgroupName = match[1];
       if (GOVERNANCE_GROUPS[subgroupName]) {
-        // Get the group details to find the proper URL path
-        const groupDetails = await getGroupDetails(sub.group_id);
-        // The 'name' field in group details is the URL-friendly name
-        const urlName = groupDetails?.name || groupName;
-        console.log(`Group ${subgroupName}: urlName=${urlName}, full_name=${groupDetails?.full_name || 'none'}`);
+        // URL format is simply /g/{subgroup-name}/topic/{id}
+        // The subgroup name (after the +) is the URL path
+        const urlName = subgroupName;
+        
+        console.log(`Group ${subgroupName} URL: ${BASE_URL}/g/${urlName}`);
         
         groupMap[subgroupName] = {
           id: sub.group_id,
           fullName: groupName,
-          urlName: urlName, // This is the URL-friendly path
+          urlName: urlName,
           ...GOVERNANCE_GROUPS[subgroupName],
         };
-        
-        // Small delay to avoid rate limiting
-        await delay(100);
       }
     }
   }
