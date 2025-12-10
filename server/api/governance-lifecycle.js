@@ -419,9 +419,9 @@ function correlateTopics(allTopics) {
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
     // Type determination: require entity name for featured-app/validator classification
-    // Check if this is an outcome (matches subjects starting with "Outcomes")
+    // Check if this is an outcome (matches "Outcomes -" pattern anywhere in subject)
     const subjectTrimmed = topic.subject.trim();
-    const isOutcome = subjectTrimmed.toLowerCase().startsWith('outcomes');
+    const isOutcome = /\bOutcomes\s*-/i.test(subjectTrimmed);
     
     // Debug log for outcome detection
     if (subjectTrimmed.toLowerCase().includes('outcome')) {
