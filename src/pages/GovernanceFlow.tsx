@@ -57,7 +57,7 @@ interface Topic {
 interface LifecycleItem {
   id: string;
   primaryId: string;
-  type: 'cip' | 'featured-app' | 'validator' | 'other';
+  type: 'cip' | 'featured-app' | 'validator' | 'outcome' | 'other';
   network?: 'testnet' | 'mainnet' | null;
   stages: Record<string, Topic[]>;
   topics: Topic[];
@@ -84,6 +84,7 @@ const WORKFLOW_STAGES = {
   cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
   'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
   validator: ['tokenomics', 'sv-announce'],
+  outcome: ['sv-announce'],
   other: ['tokenomics', 'sv-announce'],
 };
 
@@ -103,6 +104,7 @@ const TYPE_CONFIG = {
   cip: { label: 'CIP', color: 'bg-primary/20 text-primary' },
   'featured-app': { label: 'Featured App', color: 'bg-emerald-500/20 text-emerald-400' },
   validator: { label: 'Validator', color: 'bg-orange-500/20 text-orange-400' },
+  outcome: { label: 'Outcome', color: 'bg-amber-500/20 text-amber-400' },
   other: { label: 'Other', color: 'bg-muted text-muted-foreground' },
 };
 
@@ -237,9 +239,11 @@ const GovernanceFlow = () => {
     if (!data) return [];
     return data.allTopics.filter(topic => {
       if (typeFilter !== 'all') {
+        const isOutcome = /\boutcome\b|\bvote\s*result|\bresult\s*of\s*vote|\bapproved\b|\brejected\b|\bpassed\b|\bfailed\b/i.test(topic.subject);
         const itemType = topic.identifiers.cipNumber ? 'cip' :
                         topic.identifiers.appName ? 'featured-app' :
-                        topic.identifiers.validatorName ? 'validator' : 'other';
+                        topic.identifiers.validatorName ? 'validator' :
+                        isOutcome ? 'outcome' : 'other';
         if (itemType !== typeFilter) return false;
       }
       if (stageFilter !== 'all' && topic.stage !== stageFilter) return false;
@@ -528,7 +532,7 @@ const GovernanceFlow = () => {
             <Filter className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Type:</span>
             <div className="flex gap-1">
-              {['all', 'cip', 'featured-app', 'validator', 'other'].map(type => (
+              {['all', 'cip', 'featured-app', 'validator', 'outcome', 'other'].map(type => (
                 <Button
                   key={type}
                   variant={typeFilter === type ? 'default' : 'outline'}
@@ -1007,16 +1011,6 @@ const GovernanceFlow = () => {
           </TabsContent>
         </Tabs>
 
-        {/* Info Card */}
-        <Card className="bg-muted/30 border-dashed">
-          <CardContent className="py-4">
-            <p className="text-sm text-muted-foreground">
-              <strong>Governance Lifecycle:</strong> Tracks items through Proposal → Review → Vote → Result stages 
-              across multiple Groups.io mailing lists. Items are correlated by CIP numbers, app/validator names, 
-              subject similarity, and date proximity.
-            </p>
-          </CardContent>
-        </Card>
       </div>
     </DashboardLayout>
   );
