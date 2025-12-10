@@ -6,21 +6,15 @@ const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
 // Define the governance groups and their lifecycle stages
+// CIP Flow: cip-discuss → cip-vote → cip-announce → supervalidator-announce (weight updates)
 const GOVERNANCE_GROUPS = {
-  // CIP Flow: cip-discuss → cip-announce → supervalidator-announce
-  'cip-discuss': { stage: 'proposal', flow: 'cip', label: 'CIP Discussion' },
-  'cip-announce': { stage: 'review', flow: 'cip', label: 'CIP Announcement' },
-  
-  // Tokenomics Flow: tokenomics → tokenomics-announce → cip-votes → supervalidator-announce
-  'tokenomics': { stage: 'proposal', flow: 'tokenomics', label: 'TC Discussion' },
-  'tokenomics-announce': { stage: 'review', flow: 'tokenomics', label: 'TC Announcement' },
-  'cip-votes': { stage: 'committee-vote', flow: 'tokenomics', label: 'TC Committee Vote' },
-  
-  // Final stage for both flows
-  'supervalidator-announce': { stage: 'vote', flow: 'all', label: 'SV Announcement' },
+  'cip-discuss': { stage: 'discuss', flow: 'cip', label: 'CIP Discussion' },
+  'cip-vote': { stage: 'vote', flow: 'cip', label: 'CIP Vote' },
+  'cip-announce': { stage: 'announce', flow: 'cip', label: 'CIP Announcement' },
+  'supervalidator-announce': { stage: 'weight-update', flow: 'cip', label: 'SV Weight Update' },
 };
 
-const LIFECYCLE_STAGES = ['proposal', 'review', 'committee-vote', 'vote', 'result'];
+const LIFECYCLE_STAGES = ['discuss', 'vote', 'announce', 'weight-update'];
 
 // Helper to extract URLs from text
 function extractUrls(text) {
@@ -410,10 +404,10 @@ router.get('/', async (req, res) => {
         other: lifecycleItems.filter(i => i.type === 'other').length,
       },
       byStage: {
-        proposal: lifecycleItems.filter(i => i.currentStage === 'proposal').length,
-        review: lifecycleItems.filter(i => i.currentStage === 'review').length,
+        discuss: lifecycleItems.filter(i => i.currentStage === 'discuss').length,
         vote: lifecycleItems.filter(i => i.currentStage === 'vote').length,
-        result: lifecycleItems.filter(i => i.currentStage === 'result').length,
+        announce: lifecycleItems.filter(i => i.currentStage === 'announce').length,
+        'weight-update': lifecycleItems.filter(i => i.currentStage === 'weight-update').length,
       },
       groupCounts: Object.fromEntries(
         Object.entries(groupMap).map(([name, group]) => [
