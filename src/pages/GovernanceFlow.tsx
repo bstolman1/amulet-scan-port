@@ -63,6 +63,7 @@ interface LifecycleItem {
   firstDate: string;
   lastDate: string;
   currentStage: string;
+  expectedStages?: string[];
 }
 
 interface GovernanceData {
@@ -78,11 +79,23 @@ interface GovernanceData {
   };
 }
 
-const STAGE_CONFIG = {
+const STAGE_CONFIG: Record<string, { label: string; icon: typeof FileText; color: string }> = {
   discuss: { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
   vote: { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
   announce: { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  tokenomics: { label: 'Tokenomics', icon: Vote, color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' },
+  'tokenomics-announce': { label: 'Tokenomics Announce', icon: CheckCircle2, color: 'bg-teal-500/20 text-teal-400 border-teal-500/30' },
+  'sv-vote': { label: 'SV Vote', icon: Vote, color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
+  'sv-announce': { label: 'SV Announce', icon: CheckCircle2, color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' },
   'weight-update': { label: 'Weight Update', icon: Clock, color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+};
+
+// Different lifecycle stages for different entity types
+const LIFECYCLE_STAGES_BY_TYPE: Record<string, string[]> = {
+  'cip': ['discuss', 'vote', 'announce', 'sv-vote', 'sv-announce', 'weight-update'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
+  'validator': ['tokenomics', 'tokenomics-announce'],
+  'other': ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce'],
 };
 
 const TYPE_CONFIG = {
@@ -288,16 +301,20 @@ const GovernanceFlow = () => {
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
-    const stages = ['discuss', 'vote', 'announce', 'weight-update'];
+    // Use item's expected stages if available, otherwise fall back to type-based lookup
+    const stages = item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other'];
     const currentIdx = stages.indexOf(item.currentStage);
     
     return (
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap">
         {stages.map((stage, idx) => {
           const hasStage = item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
           const isPast = idx < currentIdx;
-          const config = STAGE_CONFIG[stage as keyof typeof STAGE_CONFIG];
+          const config = STAGE_CONFIG[stage];
+          
+          if (!config) return null;
+          
           const Icon = config.icon;
           
           return (
@@ -486,7 +503,16 @@ const GovernanceFlow = () => {
                   key={type}
                   variant={typeFilter === type ? 'default' : 'outline'}
                   size="sm"
-                  onClick={() => setTypeFilter(type)}
+                  onClick={() => {
+                    setTypeFilter(type);
+                    // Reset stage filter if switching types and current stage doesn't apply
+                    if (type !== 'all' && stageFilter !== 'all') {
+                      const validStages = LIFECYCLE_STAGES_BY_TYPE[type] || [];
+                      if (!validStages.includes(stageFilter)) {
+                        setStageFilter('all');
+                      }
+                    }
+                  }}
                   className="h-7 text-xs"
                 >
                   {type === 'all' ? 'All' : TYPE_CONFIG[type as keyof typeof TYPE_CONFIG]?.label || type}
@@ -496,18 +522,33 @@ const GovernanceFlow = () => {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Stage:</span>
-            <div className="flex gap-1">
-              {['all', 'discuss', 'vote', 'announce', 'weight-update'].map(stage => (
-                <Button
-                  key={stage}
-                  variant={stageFilter === stage ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setStageFilter(stage)}
-                  className="h-7 text-xs"
-                >
-                  {stage === 'all' ? 'All' : STAGE_CONFIG[stage as keyof typeof STAGE_CONFIG]?.label || stage}
-                </Button>
-              ))}
+            <div className="flex gap-1 flex-wrap">
+              <Button
+                variant={stageFilter === 'all' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setStageFilter('all')}
+                className="h-7 text-xs"
+              >
+                All
+              </Button>
+              {(typeFilter === 'all' 
+                ? ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce', 'weight-update']
+                : LIFECYCLE_STAGES_BY_TYPE[typeFilter] || []
+              ).map(stage => {
+                const config = STAGE_CONFIG[stage];
+                if (!config) return null;
+                return (
+                  <Button
+                    key={stage}
+                    variant={stageFilter === stage ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setStageFilter(stage)}
+                    className="h-7 text-xs"
+                  >
+                    {config.label}
+                  </Button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -586,14 +627,19 @@ const GovernanceFlow = () => {
                     
                     {isExpanded && (
                       <CardContent className="space-y-4 border-t pt-4">
-                        {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
+                        {(item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other']).map((stage) => {
+                          const config = STAGE_CONFIG[stage];
+                          if (!config) return null;
+                          
                           const stageTopics = item.stages[stage];
                           if (!stageTopics || stageTopics.length === 0) return null;
+                          
+                          const Icon = config.icon;
                           
                           return (
                             <div key={stage} className="space-y-2">
                               <h4 className="text-sm font-medium flex items-center gap-2">
-                                <config.icon className="h-4 w-4" />
+                                <Icon className="h-4 w-4" />
                                 {config.label} ({stageTopics.length})
                               </h4>
                               <div className="space-y-2 pl-6">
