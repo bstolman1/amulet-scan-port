@@ -235,15 +235,65 @@ const GovernanceFlow = () => {
     return [...tbdItems, ...regularItems];
   }, [tbdItems, regularItems]);
 
+  // Group regularItems by primaryId (combine testnet/mainnet entries)
+  interface GroupedItem {
+    primaryId: string;
+    type: LifecycleItem['type'];
+    items: LifecycleItem[];
+    hasMultipleNetworks: boolean;
+    firstDate: string;
+    lastDate: string;
+    totalTopics: number;
+  }
+
+  const groupedRegularItems = useMemo(() => {
+    const groups = new Map<string, LifecycleItem[]>();
+    
+    regularItems.forEach(item => {
+      const key = item.primaryId.toLowerCase();
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key)!.push(item);
+    });
+
+    const result: GroupedItem[] = [];
+    groups.forEach((items, key) => {
+      // Sort items: mainnet first, then testnet
+      items.sort((a, b) => {
+        if (a.network === 'mainnet' && b.network !== 'mainnet') return -1;
+        if (a.network !== 'mainnet' && b.network === 'mainnet') return 1;
+        return 0;
+      });
+
+      const allDates = items.flatMap(i => [new Date(i.firstDate), new Date(i.lastDate)]);
+      const firstDate = new Date(Math.min(...allDates.map(d => d.getTime()))).toISOString();
+      const lastDate = new Date(Math.max(...allDates.map(d => d.getTime()))).toISOString();
+      
+      result.push({
+        primaryId: items[0].primaryId, // Use original casing from first item
+        type: items[0].type,
+        items,
+        hasMultipleNetworks: items.length > 1 && items.some(i => i.network === 'testnet') && items.some(i => i.network === 'mainnet'),
+        firstDate,
+        lastDate,
+        totalTopics: items.reduce((sum, i) => sum + i.topics.length, 0),
+      });
+    });
+
+    // Sort by lastDate descending
+    return result.sort((a, b) => new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime());
+  }, [regularItems]);
+
   const filteredTopics = useMemo(() => {
     if (!data) return [];
     return data.allTopics.filter(topic => {
       if (typeFilter !== 'all') {
         const isOutcome = /^Outcomes/i.test(topic.subject.trim());
-        const itemType = topic.identifiers.cipNumber ? 'cip' :
+        const itemType = isOutcome ? 'outcome' :
+                        topic.identifiers.cipNumber ? 'cip' :
                         topic.identifiers.appName ? 'featured-app' :
-                        topic.identifiers.validatorName ? 'validator' :
-                        isOutcome ? 'outcome' : 'other';
+                        topic.identifiers.validatorName ? 'validator' : 'other';
         if (itemType !== typeFilter) return false;
       }
       if (stageFilter !== 'all' && topic.stage !== stageFilter) return false;
@@ -808,13 +858,14 @@ const GovernanceFlow = () => {
                   );
                 })()}
 
-                {/* Regular CIPs */}
-                {regularItems.map((item) => {
-                  const isExpanded = expandedIds.has(item.id);
-                  const typeConfig = TYPE_CONFIG[item.type];
+                {/* Grouped Items (testnet/mainnet combined) */}
+                {groupedRegularItems.map((group) => {
+                  const groupId = `group-${group.primaryId.toLowerCase()}`;
+                  const isExpanded = expandedIds.has(groupId);
+                  const typeConfig = TYPE_CONFIG[group.type];
                   
                   return (
-                    <Card key={item.id} className="hover:border-primary/30 transition-colors">
+                    <Card key={groupId} className="hover:border-primary/30 transition-colors">
                       <CardHeader className="pb-3">
                         <div className="flex items-start justify-between gap-4">
                           <div className="space-y-2 flex-1">
@@ -822,69 +873,139 @@ const GovernanceFlow = () => {
                               <Badge className={typeConfig.color}>
                                 {typeConfig.label}
                               </Badge>
-                              {item.network && (
+                              {group.hasMultipleNetworks ? (
+                                <Badge variant="outline" className="text-[10px] h-5 border-blue-500/50 text-blue-400 bg-blue-500/10">
+                                  Testnet + Mainnet
+                                </Badge>
+                              ) : group.items[0]?.network && (
                                 <Badge 
                                   variant="outline" 
                                   className={cn(
                                     "text-[10px] h-5",
-                                    item.network === 'mainnet' 
+                                    group.items[0].network === 'mainnet' 
                                       ? 'border-green-500/50 text-green-400 bg-green-500/10' 
                                       : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
                                   )}
                                 >
-                                  {item.network}
+                                  {group.items[0].network}
                                 </Badge>
                               )}
                             </div>
                             <CardTitle className="text-lg leading-tight break-words">
-                              {item.primaryId}
+                              {group.primaryId}
                             </CardTitle>
                             <div className="flex items-center gap-3 text-sm text-muted-foreground">
                               <span className="flex items-center gap-1">
                                 <Calendar className="h-3.5 w-3.5" />
-                                {formatDate(item.firstDate)} → {formatDate(item.lastDate)}
+                                {formatDate(group.firstDate)} → {formatDate(group.lastDate)}
                               </span>
-                              <span>{item.topics.length} topics</span>
+                              <span>{group.totalTopics} topics</span>
                             </div>
                           </div>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => toggleExpand(item.id)}
+                            onClick={() => toggleExpand(groupId)}
                             className="shrink-0"
                           >
                             {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                           </Button>
                         </div>
                         
-                        {/* Lifecycle Progress */}
+                        {/* Lifecycle Progress - show combined progress for multi-network */}
                         <div className="pt-2">
-                          {renderLifecycleProgress(item)}
+                          {group.hasMultipleNetworks ? (
+                            <div className="space-y-2">
+                              {group.items.map((item) => (
+                                <div key={item.id} className="flex items-center gap-2">
+                                  <Badge 
+                                    variant="outline" 
+                                    className={cn(
+                                      "text-[10px] h-5 w-16 justify-center",
+                                      item.network === 'mainnet' 
+                                        ? 'border-green-500/50 text-green-400 bg-green-500/10' 
+                                        : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
+                                    )}
+                                  >
+                                    {item.network}
+                                  </Badge>
+                                  <div className="flex-1">
+                                    {renderLifecycleProgress(item)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            renderLifecycleProgress(group.items[0])
+                          )}
                         </div>
                       </CardHeader>
                       
                       {isExpanded && (
                         <CardContent className="space-y-4 border-t pt-4">
-                          {/* Use type-specific stages for expanded content */}
-                          {(WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
-                            const config = STAGE_CONFIG[stage];
-                            if (!config) return null;
-                            const stageTopics = item.stages[stage];
-                            if (!stageTopics || stageTopics.length === 0) return null;
-                            const Icon = config.icon;
-                            
-                            return (
-                              <div key={stage} className="space-y-2">
-                                <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <Icon className="h-4 w-4" />
-                                  {config.label} ({stageTopics.length})
-                                </h4>
-                                <div className="space-y-2 pl-6">
-                                  {stageTopics.map(topic => renderTopicCard(topic))}
+                          {group.hasMultipleNetworks ? (
+                            /* Multi-network view with sections */
+                            group.items.map((item) => (
+                              <div key={item.id} className="space-y-3">
+                                <div className="flex items-center gap-2 pb-2 border-b border-border/50">
+                                  <Badge 
+                                    variant="outline" 
+                                    className={cn(
+                                      "text-xs",
+                                      item.network === 'mainnet' 
+                                        ? 'border-green-500/50 text-green-400 bg-green-500/10' 
+                                        : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
+                                    )}
+                                  >
+                                    {item.network}
+                                  </Badge>
+                                  <span className="text-sm text-muted-foreground">
+                                    {item.topics.length} topics • {formatDate(item.firstDate)} → {formatDate(item.lastDate)}
+                                  </span>
                                 </div>
+                                {(WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
+                                  const config = STAGE_CONFIG[stage];
+                                  if (!config) return null;
+                                  const stageTopics = item.stages[stage];
+                                  if (!stageTopics || stageTopics.length === 0) return null;
+                                  const Icon = config.icon;
+                                  
+                                  return (
+                                    <div key={stage} className="space-y-2 pl-4">
+                                      <h4 className="text-sm font-medium flex items-center gap-2">
+                                        <Icon className="h-4 w-4" />
+                                        {config.label} ({stageTopics.length})
+                                      </h4>
+                                      <div className="space-y-2 pl-6">
+                                        {stageTopics.map(topic => renderTopicCard(topic))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
-                            );
-                          })}
+                            ))
+                          ) : (
+                            /* Single network view */
+                            (WORKFLOW_STAGES[group.items[0].type] || WORKFLOW_STAGES.other).map(stage => {
+                              const config = STAGE_CONFIG[stage];
+                              if (!config) return null;
+                              const stageTopics = group.items[0].stages[stage];
+                              if (!stageTopics || stageTopics.length === 0) return null;
+                              const Icon = config.icon;
+                              
+                              return (
+                                <div key={stage} className="space-y-2">
+                                  <h4 className="text-sm font-medium flex items-center gap-2">
+                                    <Icon className="h-4 w-4" />
+                                    {config.label} ({stageTopics.length})
+                                  </h4>
+                                  <div className="space-y-2 pl-6">
+                                    {stageTopics.map(topic => renderTopicCard(topic))}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
                         </CardContent>
                       )}
                     </Card>
