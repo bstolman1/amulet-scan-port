@@ -187,7 +187,7 @@ const GovernanceFlow = () => {
     }
   };
 
-  // Separate CIP-00XX items from regular items
+  // Separate CIP-00XX items from regular items (includes items with 00XX or Canton X Layer Zero)
   const { tbdItems, regularItems } = useMemo(() => {
     if (!data) return { tbdItems: [], regularItems: [] };
     const allFiltered = data.lifecycleItems.filter(item => {
@@ -197,9 +197,18 @@ const GovernanceFlow = () => {
       return true;
     });
     
+    const isTbdItem = (item: LifecycleItem) => {
+      // Check if item has 00XX in primaryId or is Canton X Layer Zero
+      if (item.primaryId?.includes('00XX')) return true;
+      if (item.primaryId?.toLowerCase().includes('canton x layer zero')) return true;
+      // Also check topic subjects for Canton X Layer Zero
+      if (item.topics.some(t => t.subject?.toLowerCase().includes('canton x layer zero'))) return true;
+      return false;
+    };
+    
     return {
-      tbdItems: allFiltered.filter(item => item.primaryId?.includes('00XX')),
-      regularItems: allFiltered.filter(item => !item.primaryId?.includes('00XX')),
+      tbdItems: allFiltered.filter(isTbdItem),
+      regularItems: allFiltered.filter(item => !isTbdItem(item)),
     };
   }, [data, typeFilter, stageFilter, searchQuery]);
 
@@ -559,86 +568,103 @@ const GovernanceFlow = () => {
                 {/* CIP-00XX Section - TBD/Unassigned CIPs */}
                 {tbdItems.length > 0 && (
                   <Card className="border-amber-500/30 bg-amber-500/5">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          CIP-00XX
-                        </Badge>
-                        <CardTitle className="text-base">
-                          Pending CIP Number Assignment ({tbdItems.length})
-                        </CardTitle>
+                    <CardHeader 
+                      className="pb-3 cursor-pointer hover:bg-amber-500/5 transition-colors"
+                      onClick={() => toggleExpand('cip-00xx-section')}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                            CIP-00XX
+                          </Badge>
+                          <CardTitle className="text-base">
+                            Pending CIP Number Assignment ({tbdItems.length})
+                          </CardTitle>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 h-7 w-7 p-0"
+                        >
+                          {expandedIds.has('cip-00xx-section') ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </Button>
                       </div>
                       <p className="text-sm text-muted-foreground">
                         CIPs awaiting official number assignment
                       </p>
                     </CardHeader>
-                    <CardContent className="space-y-3">
-                      {tbdItems.map((item) => {
-                        const isExpanded = expandedIds.has(item.id);
-                        // Get the first topic's subject for a more descriptive title
-                        const firstTopic = item.topics[0];
-                        const displayTitle = firstTopic?.subject || item.primaryId;
-                        
-                        return (
-                          <div 
-                            key={item.id} 
-                            className="p-4 rounded-lg bg-background/50 border border-amber-500/20 hover:border-amber-500/40 transition-colors"
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="space-y-1.5 flex-1 min-w-0">
-                                <h4 className="font-medium text-sm leading-tight break-words">
-                                  {displayTitle}
-                                </h4>
-                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                  <span className="flex items-center gap-1">
-                                    <Calendar className="h-3 w-3" />
-                                    {formatDate(item.firstDate)}
-                                  </span>
-                                  <span>{item.topics.length} topics</span>
-                                  <Badge variant="outline" className="text-[10px] h-5 bg-amber-500/10 text-amber-400 border-amber-500/30">
-                                    TBD
-                                  </Badge>
+                    {expandedIds.has('cip-00xx-section') && (
+                      <CardContent className="space-y-3">
+                        {tbdItems.map((item) => {
+                          const isExpanded = expandedIds.has(item.id);
+                          // Get the first topic's subject for a more descriptive title
+                          const firstTopic = item.topics[0];
+                          const displayTitle = firstTopic?.subject || item.primaryId;
+                          
+                          return (
+                            <div 
+                              key={item.id} 
+                              className="p-4 rounded-lg bg-background/50 border border-amber-500/20 hover:border-amber-500/40 transition-colors"
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="space-y-1.5 flex-1 min-w-0">
+                                  <h4 className="font-medium text-sm leading-tight break-words">
+                                    {displayTitle}
+                                  </h4>
+                                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                    <span className="flex items-center gap-1">
+                                      <Calendar className="h-3 w-3" />
+                                      {formatDate(item.firstDate)}
+                                    </span>
+                                    <span>{item.topics.length} topics</span>
+                                    <Badge variant="outline" className="text-[10px] h-5 bg-amber-500/10 text-amber-400 border-amber-500/30">
+                                      TBD
+                                    </Badge>
+                                  </div>
                                 </div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleExpand(item.id);
+                                  }}
+                                  className="shrink-0 h-7 w-7 p-0"
+                                >
+                                  {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                </Button>
                               </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => toggleExpand(item.id)}
-                                className="shrink-0 h-7 w-7 p-0"
-                              >
-                                {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                              </Button>
-                            </div>
-                            
-                            {/* Lifecycle Progress */}
-                            <div className="pt-2">
-                              {renderLifecycleProgress(item)}
-                            </div>
-                            
-                            {isExpanded && (
-                              <div className="mt-4 pt-4 border-t border-amber-500/20 space-y-3">
-                                {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
-                                  const stageTopics = item.stages[stage];
-                                  if (!stageTopics || stageTopics.length === 0) return null;
-                                  
-                                  return (
-                                    <div key={stage} className="space-y-2">
-                                      <h5 className="text-xs font-medium flex items-center gap-2">
-                                        <config.icon className="h-3.5 w-3.5" />
-                                        {config.label} ({stageTopics.length})
-                                      </h5>
-                                      <div className="space-y-2 pl-5">
-                                        {stageTopics.map(topic => renderTopicCard(topic))}
+                              
+                              {/* Lifecycle Progress */}
+                              <div className="pt-2">
+                                {renderLifecycleProgress(item)}
+                              </div>
+                              
+                              {isExpanded && (
+                                <div className="mt-4 pt-4 border-t border-amber-500/20 space-y-3">
+                                  {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
+                                    const stageTopics = item.stages[stage];
+                                    if (!stageTopics || stageTopics.length === 0) return null;
+                                    
+                                    return (
+                                      <div key={stage} className="space-y-2">
+                                        <h5 className="text-xs font-medium flex items-center gap-2">
+                                          <config.icon className="h-3.5 w-3.5" />
+                                          {config.label} ({stageTopics.length})
+                                        </h5>
+                                        <div className="space-y-2 pl-5">
+                                          {stageTopics.map(topic => renderTopicCard(topic))}
+                                        </div>
                                       </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </CardContent>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </CardContent>
+                    )}
                   </Card>
                 )}
 
