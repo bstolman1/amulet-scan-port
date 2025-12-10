@@ -6,15 +6,29 @@ const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
 // Define the governance groups and their lifecycle stages
-// CIP Flow: cip-discuss → cip-vote → cip-announce → supervalidator-announce (weight updates)
+// CIP Flow: cip-discuss → cip-vote → cip-announce → supervalidator → supervalidator-announce (weight updates)
+// Featured App Flow: tokenomics → tokenomics-announce → supervalidator-announce
+// Validator Flow: tokenomics (batch) → tokenomics-announce
 const GOVERNANCE_GROUPS = {
   'cip-discuss': { stage: 'discuss', flow: 'cip', label: 'CIP Discussion' },
   'cip-vote': { stage: 'vote', flow: 'cip', label: 'CIP Vote' },
   'cip-announce': { stage: 'announce', flow: 'cip', label: 'CIP Announcement' },
-  'supervalidator-announce': { stage: 'weight-update', flow: 'cip', label: 'SV Weight Update' },
+  'supervalidator': { stage: 'sv-vote', flow: 'cip', label: 'SV Vote' },
+  'supervalidator-announce': { stage: 'sv-announce', flow: 'cip', label: 'SV Announcement' },
+  'tokenomics': { stage: 'tokenomics', flow: 'tokenomics', label: 'Tokenomics Committee' },
+  'tokenomics-announce': { stage: 'tokenomics-announce', flow: 'tokenomics', label: 'Tokenomics Announcement' },
 };
 
-const LIFECYCLE_STAGES = ['discuss', 'vote', 'announce', 'weight-update'];
+// Different lifecycle stages for different entity types
+const LIFECYCLE_STAGES_BY_TYPE = {
+  'cip': ['discuss', 'vote', 'announce', 'sv-vote', 'sv-announce', 'weight-update'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
+  'validator': ['tokenomics', 'tokenomics-announce'],
+  'other': ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce'],
+};
+
+// All possible stages (for backwards compat)
+const LIFECYCLE_STAGES = ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce', 'weight-update'];
 
 // Helper to extract URLs from text
 function extractUrls(text) {
@@ -26,19 +40,40 @@ function extractUrls(text) {
 
 // Extract identifiers from subject/content for correlation
 function extractIdentifiers(text) {
-  if (!text) return { cipNumber: null, appName: null, validatorName: null, keywords: [] };
+  if (!text) return { cipNumber: null, cipNumbers: [], appName: null, validatorName: null, keywords: [] };
   
   const identifiers = {
     cipNumber: null,
+    cipNumbers: [], // Array to hold ALL CIP numbers (for batch announcements)
     appName: null,
     validatorName: null,
     keywords: [],
   };
   
-  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123)
-  const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
-  if (cipMatch) {
-    identifiers.cipNumber = `CIP-${cipMatch[1]}`;
+  // Extract ALL CIP numbers (e.g., CIP-123, CIP 123, CIP#123, or lists like "CIP 32, 33, 34")
+  const cipMatches = text.matchAll(/CIP[#\-\s]?0*(\d+)/gi);
+  for (const match of cipMatches) {
+    const cipNum = `CIP-${match[1]}`;
+    if (!identifiers.cipNumbers.includes(cipNum)) {
+      identifiers.cipNumbers.push(cipNum);
+    }
+  }
+  
+  // Also look for comma-separated numbers after "CIP" (e.g., "CIP 32, 33, 34, 36")
+  const batchMatch = text.match(/CIP[#\-\s]?0*(\d+)[\s,]+(\d+(?:[\s,]+\d+)*)/i);
+  if (batchMatch) {
+    const nums = batchMatch[0].match(/\d+/g) || [];
+    for (const num of nums) {
+      const cipNum = `CIP-${parseInt(num)}`;
+      if (!identifiers.cipNumbers.includes(cipNum)) {
+        identifiers.cipNumbers.push(cipNum);
+      }
+    }
+  }
+  
+  // Set primary CIP number (first one found)
+  if (identifiers.cipNumbers.length > 0) {
+    identifiers.cipNumber = identifiers.cipNumbers[0];
   }
   
   // Extract featured app mentions
@@ -219,8 +254,11 @@ function calculateSimilarity(topic1, topic2) {
   
   let score = 0;
   
-  // Exact CIP match = high confidence
-  if (ids1.cipNumber && ids1.cipNumber === ids2.cipNumber) {
+  // Exact CIP match = high confidence (check all CIP numbers in both topics)
+  const cips1 = ids1.cipNumbers || (ids1.cipNumber ? [ids1.cipNumber] : []);
+  const cips2 = ids2.cipNumbers || (ids2.cipNumber ? [ids2.cipNumber] : []);
+  const commonCips = cips1.filter(c => cips2.includes(c));
+  if (commonCips.length > 0) {
     score += 100;
   }
   
@@ -297,11 +335,13 @@ function correlateTopics(allTopics) {
       
       // For weight-update topics, ONLY correlate if they have an exact CIP number match
       // This prevents grouping weight updates for different CIPs together
+      // Check both cipNumber and cipNumbers array for batch announcements
       if (candidate.stage === 'weight-update' || topic.stage === 'weight-update') {
-        const candidateCip = candidate.identifiers.cipNumber;
-        const topicCip = topic.identifiers.cipNumber;
-        // Only correlate if BOTH have the same CIP number
-        if (!candidateCip || !topicCip || candidateCip !== topicCip) {
+        const candidateCips = candidate.identifiers.cipNumbers || (candidate.identifiers.cipNumber ? [candidate.identifiers.cipNumber] : []);
+        const topicCips = topic.identifiers.cipNumbers || (topic.identifiers.cipNumber ? [topic.identifiers.cipNumber] : []);
+        // Only correlate if there's at least one matching CIP number
+        const hasCommonCip = candidateCips.some(c => topicCips.includes(c));
+        if (!hasCommonCip || candidateCips.length === 0 || topicCips.length === 0) {
           continue;
         }
       }
@@ -323,13 +363,17 @@ function correlateTopics(allTopics) {
       }
     }
     
-    // Determine current stage (latest stage with activity)
-    for (const stage of LIFECYCLE_STAGES.slice().reverse()) {
+    // Determine current stage (latest stage with activity for this entity type)
+    const stagesForType = LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES;
+    for (const stage of stagesForType.slice().reverse()) {
       if (item.stages[stage] && item.stages[stage].length > 0) {
         item.currentStage = stage;
         break;
       }
     }
+    
+    // Add the expected stages for this item type
+    item.expectedStages = stagesForType;
     
     lifecycleItems.push(item);
   }
@@ -388,21 +432,30 @@ router.get('/', async (req, res) => {
         // Use the group's urlName for the proper URL path
         // Format: /g/{urlName}/topic/{id}
         const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
+        const subject = topic.subject || topic.title || 'Untitled';
+        const content = topic.snippet || topic.body || topic.preview || '';
+        const combinedText = subject + ' ' + content;
+        
+        // Determine stage - check for weight-update pattern in sv-announce topics
+        let stage = group.stage;
+        if (group.stage === 'sv-announce' && /weight\s*(update|change)/i.test(combinedText)) {
+          stage = 'weight-update';
+        }
         
         return {
           id: topic.id?.toString() || `topic-${Math.random()}`,
-          subject: topic.subject || topic.title || 'Untitled',
+          subject,
           date: topic.created || topic.updated || new Date().toISOString(),
-          content: topic.snippet || topic.body || topic.preview || '',
-          excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
+          content,
+          excerpt: content.substring(0, 500),
           sourceUrl,
-          linkedUrls: extractUrls(topic.snippet || topic.body || ''),
+          linkedUrls: extractUrls(content),
           messageCount: topic.num_msgs || 1,
           groupName: name,
           groupLabel: group.label,
-          stage: group.stage,
+          stage,
           flow: group.flow,
-          identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
+          identifiers: extractIdentifiers(combinedText),
         };
       });
       
@@ -432,6 +485,10 @@ router.get('/', async (req, res) => {
         discuss: lifecycleItems.filter(i => i.currentStage === 'discuss').length,
         vote: lifecycleItems.filter(i => i.currentStage === 'vote').length,
         announce: lifecycleItems.filter(i => i.currentStage === 'announce').length,
+        tokenomics: lifecycleItems.filter(i => i.currentStage === 'tokenomics').length,
+        'tokenomics-announce': lifecycleItems.filter(i => i.currentStage === 'tokenomics-announce').length,
+        'sv-vote': lifecycleItems.filter(i => i.currentStage === 'sv-vote').length,
+        'sv-announce': lifecycleItems.filter(i => i.currentStage === 'sv-announce').length,
         'weight-update': lifecycleItems.filter(i => i.currentStage === 'weight-update').length,
       },
       groupCounts: Object.fromEntries(
