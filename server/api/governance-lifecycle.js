@@ -82,16 +82,23 @@ function extractIdentifiers(text) {
   return identifiers;
 }
 
+// Helper to delay between requests (moved up to be available)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Fetch group details to get the proper URL path
 async function getGroupDetails(groupId) {
   const url = `${BASE_URL}/api/v1/getgroup?group_id=${groupId}`;
+  console.log(`Fetching group details for ID ${groupId}...`);
   try {
     const response = await fetch(url, {
       headers: { 'Authorization': `Bearer ${API_KEY}` },
     });
     if (response.ok) {
       const data = await response.json();
+      console.log(`Group ${groupId} details: name=${data.name}, full_name=${data.full_name}`);
       return data;
+    } else {
+      console.error(`Failed to get group ${groupId}: ${response.status}`);
     }
   } catch (err) {
     console.error(`Failed to get group details for ${groupId}:`, err.message);
@@ -145,8 +152,6 @@ async function getSubscribedGroups() {
   return groupMap;
 }
 
-// Helper to delay between requests
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Fetch topics from a specific group with pagination and retries
 async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
