@@ -603,14 +603,19 @@ const GovernanceFlow = () => {
                     
                     {isExpanded && (
                       <CardContent className="space-y-4 border-t pt-4">
-                        {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
+                        {(item.expectedStages || LIFECYCLE_STAGES_BY_TYPE[item.type] || LIFECYCLE_STAGES_BY_TYPE['other']).map((stage) => {
+                          const config = STAGE_CONFIG[stage];
+                          if (!config) return null;
+                          
                           const stageTopics = item.stages[stage];
                           if (!stageTopics || stageTopics.length === 0) return null;
+                          
+                          const Icon = config.icon;
                           
                           return (
                             <div key={stage} className="space-y-2">
                               <h4 className="text-sm font-medium flex items-center gap-2">
-                                <config.icon className="h-4 w-4" />
+                                <Icon className="h-4 w-4" />
                                 {config.label} ({stageTopics.length})
                               </h4>
                               <div className="space-y-2 pl-6">
