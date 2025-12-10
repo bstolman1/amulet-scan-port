@@ -64,40 +64,28 @@ function extractIdentifiers(text) {
     }
   }
   
-  // Check if text contains featured app indicators (simpler detection)
-  const featuredAppIndicators = [
-    /featured\s*app/i,
-    /app\s+application/i,
-    /tokenomics.*app/i,
-    /app.*tokenomics/i,
-    /listing\s+request/i,
-    /app\s+listing/i,
+  // Extract featured app mentions
+  const appPatterns = [
+    /featured\s+app[:\s]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s+for|\s*$)/i,
+    /app[:\s]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s+application|\s*$)/i,
   ];
-  for (const pattern of featuredAppIndicators) {
-    if (pattern.test(text)) {
-      // Extract app name - look for patterns like "App: Name" or "Featured App Name"
-      const nameMatch = text.match(/(?:featured\s*app[:\s]*|app[:\s]+)([A-Za-z0-9]+)/i) ||
-                        text.match(/\[([A-Za-z0-9]+)\]/i) ||
-                        text.match(/^([A-Za-z0-9]+)\s+(?:app|featured|listing)/i);
-      identifiers.appName = nameMatch ? nameMatch[1].trim() : 'unknown-app';
+  for (const pattern of appPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      identifiers.appName = match[1].trim();
       break;
     }
   }
   
-  // Check if text contains validator indicators (simpler detection)
-  const validatorIndicators = [
-    /super\s*validator/i,
-    /validator\s+(?:application|onboarding|license)/i,
-    /sv\s+(?:application|onboarding)/i,
-    /new\s+validator/i,
-    /validator\s+candidate/i,
+  // Extract validator mentions
+  const validatorPatterns = [
+    /validator[:\s]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s+application|\s*$)/i,
+    /super\s*validator[:\s]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s*$)/i,
   ];
-  for (const pattern of validatorIndicators) {
-    if (pattern.test(text)) {
-      // Extract validator name
-      const nameMatch = text.match(/(?:super\s*)?validator[:\s]*([A-Za-z0-9]+)/i) ||
-                        text.match(/\[([A-Za-z0-9]+)\]/i);
-      identifiers.validatorName = nameMatch ? nameMatch[1].trim() : 'unknown-validator';
+  for (const pattern of validatorPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      identifiers.validatorName = match[1].trim();
       break;
     }
   }
