@@ -503,7 +503,16 @@ const GovernanceFlow = () => {
                   key={type}
                   variant={typeFilter === type ? 'default' : 'outline'}
                   size="sm"
-                  onClick={() => setTypeFilter(type)}
+                  onClick={() => {
+                    setTypeFilter(type);
+                    // Reset stage filter if switching types and current stage doesn't apply
+                    if (type !== 'all' && stageFilter !== 'all') {
+                      const validStages = LIFECYCLE_STAGES_BY_TYPE[type] || [];
+                      if (!validStages.includes(stageFilter)) {
+                        setStageFilter('all');
+                      }
+                    }
+                  }}
                   className="h-7 text-xs"
                 >
                   {type === 'all' ? 'All' : TYPE_CONFIG[type as keyof typeof TYPE_CONFIG]?.label || type}
@@ -513,18 +522,33 @@ const GovernanceFlow = () => {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Stage:</span>
-            <div className="flex gap-1">
-              {['all', 'discuss', 'vote', 'announce', 'weight-update'].map(stage => (
-                <Button
-                  key={stage}
-                  variant={stageFilter === stage ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setStageFilter(stage)}
-                  className="h-7 text-xs"
-                >
-                  {stage === 'all' ? 'All' : STAGE_CONFIG[stage as keyof typeof STAGE_CONFIG]?.label || stage}
-                </Button>
-              ))}
+            <div className="flex gap-1 flex-wrap">
+              <Button
+                variant={stageFilter === 'all' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setStageFilter('all')}
+                className="h-7 text-xs"
+              >
+                All
+              </Button>
+              {(typeFilter === 'all' 
+                ? ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce', 'weight-update']
+                : LIFECYCLE_STAGES_BY_TYPE[typeFilter] || []
+              ).map(stage => {
+                const config = STAGE_CONFIG[stage];
+                if (!config) return null;
+                return (
+                  <Button
+                    key={stage}
+                    variant={stageFilter === stage ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setStageFilter(stage)}
+                    className="h-7 text-xs"
+                  >
+                    {config.label}
+                  </Button>
+                );
+              })}
             </div>
           </div>
         </div>
