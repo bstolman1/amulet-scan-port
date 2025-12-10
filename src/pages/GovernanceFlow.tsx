@@ -22,9 +22,7 @@ import {
   ChevronUp,
   CheckCircle2,
   Clock,
-  FileCheck,
   Vote,
-  Users,
   ArrowRight,
   Filter,
   Search,
@@ -81,11 +79,9 @@ interface GovernanceData {
 }
 
 const STAGE_CONFIG = {
-  proposal: { label: 'Proposal', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  review: { label: 'Review', icon: FileCheck, color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-  'committee-vote': { label: 'TC Vote', icon: Users, color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' },
-  vote: { label: 'SV Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
-  result: { label: 'Result', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  discuss: { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+  vote: { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
+  announce: { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
 };
 
 const TYPE_CONFIG = {
@@ -291,7 +287,7 @@ const GovernanceFlow = () => {
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
-    const stages = ['proposal', 'review', 'committee-vote', 'vote', 'result'];
+    const stages = ['discuss', 'vote', 'announce'];
     const currentIdx = stages.indexOf(item.currentStage);
     
     return (
@@ -500,7 +496,7 @@ const GovernanceFlow = () => {
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Stage:</span>
             <div className="flex gap-1">
-              {['all', 'proposal', 'review', 'committee-vote', 'vote', 'result'].map(stage => (
+              {['all', 'discuss', 'vote', 'announce'].map(stage => (
                 <Button
                   key={stage}
                   variant={stageFilter === stage ? 'default' : 'outline'}
