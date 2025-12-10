@@ -320,24 +320,42 @@ router.get('/', async (req, res) => {
       const topics = await fetchGroupTopics(group.id, name, 300);
       console.log(`Got ${topics.length} topics from ${name}`);
       
-      // Convert group full name to URL-friendly format (replace + with /)
-      const groupUrlPath = group.fullName.replace(/\+/g, '/');
+      // Log a sample topic to debug URL structure
+      if (topics.length > 0) {
+        console.log(`Sample topic keys: ${Object.keys(topics[0]).join(', ')}`);
+        console.log(`Sample permalink: ${topics[0].permalink || 'none'}`);
+        console.log(`Sample group_name: ${topics[0].group_name || 'none'}`);
+      }
       
-      const mappedTopics = topics.map(topic => ({
-        id: topic.id?.toString() || `topic-${Math.random()}`,
-        subject: topic.subject || topic.title || 'Untitled',
-        date: topic.created || topic.updated || new Date().toISOString(),
-        content: topic.snippet || topic.body || topic.preview || '',
-        excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
-        sourceUrl: topic.permalink || `${BASE_URL}/g/${groupUrlPath}/topic/${topic.id}`,
-        linkedUrls: extractUrls(topic.snippet || topic.body || ''),
-        messageCount: topic.num_msgs || 1,
-        groupName: name,
-        groupLabel: group.label,
-        stage: group.stage,
-        flow: group.flow,
-        identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
-      }));
+      const mappedTopics = topics.map(topic => {
+        // Prefer the API's permalink, or construct from topic's group_name if available
+        let sourceUrl = topic.permalink;
+        
+        if (!sourceUrl) {
+          // Use the topic's own group_name if available, otherwise fall back to our group info
+          const topicGroupName = topic.group_name || group.fullName;
+          // Groups.io subgroup URLs: /g/parentgroup/subgroup/topic/ID
+          // The group_name format is typically "parentgroup+subgroup"
+          const urlPath = topicGroupName.replace(/\+/g, '/');
+          sourceUrl = `${BASE_URL}/g/${urlPath}/topic/${topic.id}`;
+        }
+        
+        return {
+          id: topic.id?.toString() || `topic-${Math.random()}`,
+          subject: topic.subject || topic.title || 'Untitled',
+          date: topic.created || topic.updated || new Date().toISOString(),
+          content: topic.snippet || topic.body || topic.preview || '',
+          excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
+          sourceUrl,
+          linkedUrls: extractUrls(topic.snippet || topic.body || ''),
+          messageCount: topic.num_msgs || 1,
+          groupName: name,
+          groupLabel: group.label,
+          stage: group.stage,
+          flow: group.flow,
+          identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
+        };
+      });
       
       allTopics.push(...mappedTopics);
       
