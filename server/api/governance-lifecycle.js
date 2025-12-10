@@ -588,13 +588,21 @@ router.get('/', async (req, res) => {
     console.log(`Correlated into ${lifecycleItems.length} lifecycle items`);
     
     // Summary stats
+    // For featured-app and validator counts, deduplicate by primaryId (same app on testnet+mainnet = 1)
+    const uniqueFeaturedApps = new Set(
+      lifecycleItems.filter(i => i.type === 'featured-app').map(i => i.primaryId.toLowerCase())
+    );
+    const uniqueValidators = new Set(
+      lifecycleItems.filter(i => i.type === 'validator').map(i => i.primaryId.toLowerCase())
+    );
+    
     const stats = {
       totalTopics: allTopics.length,
       lifecycleItems: lifecycleItems.length,
       byType: {
         cip: lifecycleItems.filter(i => i.type === 'cip').length,
-        'featured-app': lifecycleItems.filter(i => i.type === 'featured-app').length,
-        validator: lifecycleItems.filter(i => i.type === 'validator').length,
+        'featured-app': uniqueFeaturedApps.size,  // Deduplicated count
+        validator: uniqueValidators.size,          // Deduplicated count
         other: lifecycleItems.filter(i => i.type === 'other').length,
       },
       byStage: Object.fromEntries(
