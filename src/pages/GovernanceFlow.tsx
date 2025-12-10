@@ -78,11 +78,24 @@ interface GovernanceData {
   };
 }
 
-const STAGE_CONFIG = {
-  discuss: { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  vote: { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
-  announce: { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
-  'weight-update': { label: 'Weight Update', icon: Clock, color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+// Type-specific workflow stages
+const WORKFLOW_STAGES = {
+  cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
+  validator: ['tokenomics', 'sv-announce'],
+  other: ['tokenomics', 'sv-announce'],
+};
+
+// All possible stages with their display config
+const STAGE_CONFIG: Record<string, { label: string; icon: typeof FileText; color: string }> = {
+  // CIP stages
+  'cip-discuss': { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+  'cip-vote': { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
+  'cip-announce': { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  // Shared stages
+  'tokenomics': { label: 'Tokenomics', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+  'tokenomics-announce': { label: 'Announced', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  'sv-announce': { label: 'SV Announce', icon: Clock, color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
 };
 
 const TYPE_CONFIG = {
@@ -187,6 +200,17 @@ const GovernanceFlow = () => {
     }
   };
 
+  // Check if lifecycle item falls within date range
+  const matchesDateRange = (item: LifecycleItem) => {
+    if (!dateFrom && !dateTo) return true;
+    const itemFirstDate = new Date(item.firstDate);
+    const itemLastDate = new Date(item.lastDate);
+    // Item matches if any part of its date range overlaps with the filter range
+    if (dateFrom && itemLastDate < dateFrom) return false;
+    if (dateTo && itemFirstDate > dateTo) return false;
+    return true;
+  };
+
   // Separate CIP-00XX items from regular items
   const { tbdItems, regularItems } = useMemo(() => {
     if (!data) return { tbdItems: [], regularItems: [] };
@@ -194,6 +218,7 @@ const GovernanceFlow = () => {
       if (typeFilter !== 'all' && item.type !== typeFilter) return false;
       if (stageFilter !== 'all' && item.currentStage !== stageFilter) return false;
       if (!matchesSearch(item, searchQuery)) return false;
+      if (!matchesDateRange(item)) return false;
       return true;
     });
     
@@ -201,7 +226,7 @@ const GovernanceFlow = () => {
       tbdItems: allFiltered.filter(item => item.primaryId?.includes('00XX')),
       regularItems: allFiltered.filter(item => !item.primaryId?.includes('00XX')),
     };
-  }, [data, typeFilter, stageFilter, searchQuery]);
+  }, [data, typeFilter, stageFilter, searchQuery, dateFrom, dateTo]);
 
   const filteredItems = useMemo(() => {
     return [...tbdItems, ...regularItems];
@@ -298,7 +323,8 @@ const GovernanceFlow = () => {
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
-    const stages = ['discuss', 'vote', 'announce', 'weight-update'];
+    // Get the stages specific to this item's type
+    const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
     const currentIdx = stages.indexOf(item.currentStage);
     
     return (
@@ -307,7 +333,8 @@ const GovernanceFlow = () => {
           const hasStage = item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
           const isPast = idx < currentIdx;
-          const config = STAGE_CONFIG[stage as keyof typeof STAGE_CONFIG];
+          const config = STAGE_CONFIG[stage];
+          if (!config) return null;
           const Icon = config.icon;
           
           return (
@@ -496,7 +523,11 @@ const GovernanceFlow = () => {
                   key={type}
                   variant={typeFilter === type ? 'default' : 'outline'}
                   size="sm"
-                  onClick={() => setTypeFilter(type)}
+                  onClick={() => {
+                    setTypeFilter(type);
+                    // Reset stage filter when changing type (stages differ per type)
+                    setStageFilter('all');
+                  }}
                   className="h-7 text-xs"
                 >
                   {type === 'all' ? 'All' : TYPE_CONFIG[type as keyof typeof TYPE_CONFIG]?.label || type}
@@ -507,19 +538,125 @@ const GovernanceFlow = () => {
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Stage:</span>
             <div className="flex gap-1">
-              {['all', 'discuss', 'vote', 'announce', 'weight-update'].map(stage => (
-                <Button
-                  key={stage}
-                  variant={stageFilter === stage ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setStageFilter(stage)}
-                  className="h-7 text-xs"
-                >
-                  {stage === 'all' ? 'All' : STAGE_CONFIG[stage as keyof typeof STAGE_CONFIG]?.label || stage}
-                </Button>
-              ))}
+              {/* Show only stages relevant to the selected type */}
+              {(() => {
+                const stagesToShow = typeFilter === 'all' 
+                  ? [...new Set(Object.values(WORKFLOW_STAGES).flat())]
+                  : WORKFLOW_STAGES[typeFilter as keyof typeof WORKFLOW_STAGES] || [];
+                return ['all', ...stagesToShow].map(stage => (
+                  <Button
+                    key={stage}
+                    variant={stageFilter === stage ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setStageFilter(stage)}
+                    className="h-7 text-xs"
+                  >
+                    {stage === 'all' ? 'All' : STAGE_CONFIG[stage]?.label || stage}
+                  </Button>
+                ));
+              })()}
             </div>
           </div>
+        </div>
+
+        {/* Date Range Filter - applies to all views */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Date Range:</span>
+          </div>
+          
+          {/* Preset Selector */}
+          <Select value={datePreset} onValueChange={handleDatePreset}>
+            <SelectTrigger className="w-[160px] h-8">
+              <SelectValue placeholder="Select period" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Time</SelectItem>
+              <SelectItem value="this-month">This Month</SelectItem>
+              <SelectItem value="last-month">Last Month</SelectItem>
+              <SelectItem value="last-3-months">Last 3 Months</SelectItem>
+              <SelectItem value="last-6-months">Last 6 Months</SelectItem>
+              <SelectItem value="this-year">This Year</SelectItem>
+              <SelectItem value="last-year">Last Year</SelectItem>
+              <SelectItem value="custom">Custom Range</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Custom Date Pickers */}
+          {datePreset === 'custom' && (
+            <>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "h-8 justify-start text-left font-normal",
+                      !dateFrom && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateFrom ? format(dateFrom, "MMM d, yyyy") : "From"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <CalendarComponent
+                    mode="single"
+                    selected={dateFrom}
+                    onSelect={setDateFrom}
+                    initialFocus
+                    className={cn("p-3 pointer-events-auto")}
+                  />
+                </PopoverContent>
+              </Popover>
+              <span className="text-muted-foreground">to</span>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "h-8 justify-start text-left font-normal",
+                      !dateTo && "text-muted-foreground"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateTo ? format(dateTo, "MMM d, yyyy") : "To"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <CalendarComponent
+                    mode="single"
+                    selected={dateTo}
+                    onSelect={setDateTo}
+                    initialFocus
+                    className={cn("p-3 pointer-events-auto")}
+                  />
+                </PopoverContent>
+              </Popover>
+            </>
+          )}
+
+          {/* Clear Button */}
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearDateFilter}
+              className="h-8 px-2"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear
+            </Button>
+          )}
+
+          {/* Show current range */}
+          {datePreset !== 'all' && datePreset !== 'custom' && (
+            <Badge variant="secondary" className="text-xs">
+              {dateFrom && format(dateFrom, "MMM d, yyyy")} - {dateTo && format(dateTo, "MMM d, yyyy")}
+            </Badge>
+          )}
         </div>
 
         {/* View Toggle */}
@@ -560,9 +697,10 @@ const GovernanceFlow = () => {
                 {tbdItems.length > 0 && (() => {
                   // Aggregate all topics from all TBD items, grouped by stage
                   const allTbdTopics = tbdItems.flatMap(item => item.topics);
+                  const cipStages = WORKFLOW_STAGES.cip;
                   const tbdStages: Record<string, typeof allTbdTopics> = {};
                   
-                  Object.keys(STAGE_CONFIG).forEach(stage => {
+                  cipStages.forEach(stage => {
                     const stageTopics = tbdItems.flatMap(item => item.stages[stage] || []);
                     if (stageTopics.length > 0) {
                       tbdStages[stage] = stageTopics;
@@ -596,12 +734,15 @@ const GovernanceFlow = () => {
                           </Button>
                         </div>
                         
-                        {/* Lifecycle Progress - show aggregate */}
+                        {/* Lifecycle Progress - show CIP-specific stages */}
                         <div className="pt-2">
                           <div className="flex items-center gap-1">
-                            {Object.entries(STAGE_CONFIG).map(([stage, config], index) => {
+                            {cipStages.map((stage, index) => {
+                              const config = STAGE_CONFIG[stage];
+                              if (!config) return null;
                               const count = tbdStages[stage]?.length || 0;
                               const isActive = count > 0;
+                              const Icon = config.icon;
                               
                               return (
                                 <React.Fragment key={stage}>
@@ -611,12 +752,12 @@ const GovernanceFlow = () => {
                                         isActive ? config.color : 'bg-muted/30 text-muted-foreground'
                                       }`}
                                     >
-                                      <config.icon className="h-3 w-3" />
+                                      <Icon className="h-3 w-3" />
                                       <span className="hidden sm:inline">{config.label}</span>
                                       {isActive && <span className="font-medium">({count})</span>}
                                     </div>
                                   </div>
-                                  {index < Object.entries(STAGE_CONFIG).length - 1 && (
+                                  {index < cipStages.length - 1 && (
                                     <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
                                   )}
                                 </React.Fragment>
@@ -628,14 +769,17 @@ const GovernanceFlow = () => {
                       
                       {tbdIsExpanded && (
                         <CardContent className="pt-0 space-y-4">
-                          {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
+                          {cipStages.map(stage => {
+                            const config = STAGE_CONFIG[stage];
+                            if (!config) return null;
                             const stageTopics = tbdStages[stage];
                             if (!stageTopics || stageTopics.length === 0) return null;
+                            const Icon = config.icon;
                             
                             return (
                               <div key={stage} className="space-y-2">
                                 <h5 className="text-sm font-medium flex items-center gap-2">
-                                  <config.icon className="h-4 w-4" />
+                                  <Icon className="h-4 w-4" />
                                   {config.label} ({stageTopics.length})
                                 </h5>
                                 <div className="space-y-2 pl-6">
@@ -692,14 +836,18 @@ const GovernanceFlow = () => {
                       
                       {isExpanded && (
                         <CardContent className="space-y-4 border-t pt-4">
-                          {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
+                          {/* Use type-specific stages for expanded content */}
+                          {(WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
+                            const config = STAGE_CONFIG[stage];
+                            if (!config) return null;
                             const stageTopics = item.stages[stage];
                             if (!stageTopics || stageTopics.length === 0) return null;
+                            const Icon = config.icon;
                             
                             return (
                               <div key={stage} className="space-y-2">
                                 <h4 className="text-sm font-medium flex items-center gap-2">
-                                  <config.icon className="h-4 w-4" />
+                                  <Icon className="h-4 w-4" />
                                   {config.label} ({stageTopics.length})
                                 </h4>
                                 <div className="space-y-2 pl-6">
@@ -719,110 +867,6 @@ const GovernanceFlow = () => {
 
           {/* Timeline View */}
           <TabsContent value="timeline" className="mt-4 space-y-4">
-            {/* Date Range Filter */}
-            <Card className="bg-muted/20">
-              <CardContent className="p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <CalendarIcon className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">Date Range:</span>
-                  </div>
-                  
-                  {/* Preset Selector */}
-                  <Select value={datePreset} onValueChange={handleDatePreset}>
-                    <SelectTrigger className="w-[160px] h-8">
-                      <SelectValue placeholder="Select period" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Time</SelectItem>
-                      <SelectItem value="this-month">This Month</SelectItem>
-                      <SelectItem value="last-month">Last Month</SelectItem>
-                      <SelectItem value="last-3-months">Last 3 Months</SelectItem>
-                      <SelectItem value="last-6-months">Last 6 Months</SelectItem>
-                      <SelectItem value="this-year">This Year</SelectItem>
-                      <SelectItem value="last-year">Last Year</SelectItem>
-                      <SelectItem value="custom">Custom Range</SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {/* Custom Date Pickers */}
-                  {datePreset === 'custom' && (
-                    <>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn(
-                              "h-8 justify-start text-left font-normal",
-                              !dateFrom && "text-muted-foreground"
-                            )}
-                          >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
-                            {dateFrom ? format(dateFrom, "MMM d, yyyy") : "From"}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <CalendarComponent
-                            mode="single"
-                            selected={dateFrom}
-                            onSelect={setDateFrom}
-                            initialFocus
-                            className={cn("p-3 pointer-events-auto")}
-                          />
-                        </PopoverContent>
-                      </Popover>
-                      <span className="text-muted-foreground">to</span>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className={cn(
-                              "h-8 justify-start text-left font-normal",
-                              !dateTo && "text-muted-foreground"
-                            )}
-                          >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
-                            {dateTo ? format(dateTo, "MMM d, yyyy") : "To"}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <CalendarComponent
-                            mode="single"
-                            selected={dateTo}
-                            onSelect={setDateTo}
-                            initialFocus
-                            className={cn("p-3 pointer-events-auto")}
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </>
-                  )}
-
-                  {/* Clear Button */}
-                  {(dateFrom || dateTo) && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={clearDateFilter}
-                      className="h-8 px-2"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  )}
-
-                  {/* Show current range */}
-                  {datePreset !== 'all' && datePreset !== 'custom' && (
-                    <Badge variant="secondary" className="text-xs">
-                      {dateFrom && format(dateFrom, "MMM d, yyyy")} - {dateTo && format(dateTo, "MMM d, yyyy")}
-                    </Badge>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <Skeleton key={i} className="h-32 w-full mb-4" />
