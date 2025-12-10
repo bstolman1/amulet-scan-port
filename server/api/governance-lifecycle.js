@@ -138,22 +138,9 @@ async function getSubscribedGroups() {
     if (match) {
       const subgroupName = match[1];
       if (GOVERNANCE_GROUPS[subgroupName]) {
-        // Get the group details to find the proper URL path
-        const groupDetails = await getGroupDetails(sub.group_id);
-        
-        // Build URL name from group details
-        // For subgroups: nice_group_name often contains the full path
-        // Or we can construct from parent + name
-        let urlName;
-        if (groupDetails?.nice_group_name) {
-          urlName = groupDetails.nice_group_name;
-        } else if (groupDetails?.name) {
-          // The name field should be URL-friendly
-          urlName = groupDetails.name;
-        } else {
-          // Fallback to converting group_name
-          urlName = groupName.replace(/\+/g, '/');
-        }
+        // URL format is simply /g/{subgroup-name}/topic/{id}
+        // The subgroup name (after the +) is the URL path
+        const urlName = subgroupName;
         
         console.log(`Group ${subgroupName} URL: ${BASE_URL}/g/${urlName}`);
         
@@ -163,9 +150,6 @@ async function getSubscribedGroups() {
           urlName: urlName,
           ...GOVERNANCE_GROUPS[subgroupName],
         };
-        
-        // Small delay to avoid rate limiting
-        await delay(200);
       }
     }
   }
