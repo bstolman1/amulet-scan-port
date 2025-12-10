@@ -46,40 +46,59 @@ function extractUrls(text) {
 function extractPrimaryEntityName(text) {
   if (!text) return null;
   
-  // Common patterns for app/validator names in subjects:
-  // "New Featured App Request: Node Fortress"
-  // "Node Fortress Featured App Tokenomics"
-  // "[Node Fortress] Featured App Request"
-  // "Featured App Vote Proposal - Node Fortress"
-  // "Supervalidator Onboarding: CompanyName"
-  
-  // Remove common prefixes/suffixes and extract the unique name
-  const cleanText = text
-    .replace(/^(re:|fwd:|fw:)\s*/i, '')  // Remove email prefixes
-    .replace(/\s*-\s*vote\s*(proposal)?\s*$/i, '')  // Remove "- Vote Proposal" suffix
-    .replace(/\s*vote\s*(proposal)?\s*$/i, '')  // Remove "Vote Proposal" suffix
+  // Remove common prefixes/suffixes first
+  let cleanText = text
+    .replace(/^(re:|fwd:|fw:)\s*/i, '')
+    .replace(/\s*-\s*vote\s*(proposal)?\s*$/i, '')
+    .replace(/\s*vote\s*(proposal)?\s*$/i, '')
     .trim();
   
-  // Pattern 1: "Something: EntityName" or "Something - EntityName"
-  const colonMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement)[:\s-]+(.+?)(?:\s*[-–]\s*(?:vote|proposal|announcement))?$/i);
-  if (colonMatch) {
-    const name = colonMatch[1].trim();
+  // Pattern 0: "MainNet: AppName by Company" or "TestNet: AppName by Company"
+  // Extract just the app name (before "by") - this handles "MainNet: Akascan by Akasec"
+  const networkAppMatch = cleanText.match(/(?:mainnet|testnet|main\s*net|test\s*net)[:\s]+([^:]+?)(?:\s+by\s+.+)?$/i);
+  if (networkAppMatch) {
+    let name = networkAppMatch[1].trim();
+    // Remove trailing "by Company" if still present
+    name = name.replace(/\s+by\s+.*$/i, '').trim();
+    if (name.length > 2) {
+      return name;
+    }
+  }
+  
+  // Pattern 1: "Featured App Vote Proposal: AppName" or "Request: AppName"
+  const requestMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement|vote\s*proposal)[:\s-]+(.+?)$/i);
+  if (requestMatch) {
+    let name = requestMatch[1].trim();
+    // Remove network prefix if present
+    name = name.replace(/^(?:mainnet|testnet|main\s*net|test\s*net)[:\s]+/i, '').trim();
+    // Remove "by Company" suffix
+    name = name.replace(/\s+by\s+.*$/i, '').trim();
     if (name.length > 2 && !/^(the|this|new|our)$/i.test(name)) {
       return name;
     }
   }
   
-  // Pattern 2: "EntityName Featured App/Validator Something"
+  // Pattern 2: "New Featured App Request: AppName"
+  const newRequestMatch = cleanText.match(/new\s+featured\s*app\s+request[:\s-]+(.+?)$/i);
+  if (newRequestMatch) {
+    let name = newRequestMatch[1].trim();
+    name = name.replace(/^(?:mainnet|testnet)[:\s]+/i, '').trim();
+    name = name.replace(/\s+by\s+.*$/i, '').trim();
+    if (name.length > 2) {
+      return name;
+    }
+  }
+  
+  // Pattern 3: "AppName Featured App Tokenomics" (name at start)
   const prefixMatch = cleanText.match(/^([A-Za-z][A-Za-z0-9\s]{2,30}?)\s+(?:featured\s*app|super\s*validator|validator|tokenomics|onboarding)/i);
   if (prefixMatch) {
     const name = prefixMatch[1].trim();
-    // Filter out generic words
     if (name.length > 2 && !/^(new|the|this|our|featured|app|vote|proposal)$/i.test(name)) {
       return name;
     }
   }
   
-  // Pattern 3: "[EntityName]" anywhere in text
+  // Pattern 4: "[AppName]" in brackets
   const bracketMatch = cleanText.match(/\[([^\]]+)\]/);
   if (bracketMatch) {
     const name = bracketMatch[1].trim();
@@ -88,12 +107,11 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 4: Look for a capitalized multi-word name (like "Node Fortress")
+  // Pattern 5: Look for capitalized multi-word name
   const capitalizedMatch = cleanText.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
   if (capitalizedMatch) {
     const name = capitalizedMatch[1].trim();
-    // Filter out common phrases
-    if (!/^(Featured App|Super Validator|Vote Proposal|New Request|Token Economics)$/i.test(name)) {
+    if (!/^(Featured App|Super Validator|Vote Proposal|New Request|Token Economics|Main Net|Test Net)$/i.test(name)) {
       return name;
     }
   }
@@ -372,10 +390,24 @@ function correlateTopics(allTopics) {
     if (used.has(topic.id)) continue;
     
     // Determine the type and primary ID based on identifiers
+    // IMPORTANT: Only classify as featured-app/validator if we have a valid entity name
+    // This prevents generic "Featured App Approved" type topics from grouping everything
     const topicEntityName = topic.identifiers.entityName;
-    const type = topic.identifiers.cipNumber ? 'cip' : 
-          topic.identifiers.appName ? 'featured-app' :
-          topic.identifiers.validatorName ? 'validator' : 'other';
+    const hasCip = !!topic.identifiers.cipNumber;
+    const hasAppIndicator = !!topic.identifiers.appName;
+    const hasValidatorIndicator = !!topic.identifiers.validatorName;
+    
+    // Type determination: require entity name for featured-app/validator classification
+    let type;
+    if (hasCip) {
+      type = 'cip';
+    } else if (hasAppIndicator && topicEntityName) {
+      type = 'featured-app';
+    } else if (hasValidatorIndicator && topicEntityName) {
+      type = 'validator';
+    } else {
+      type = 'other';
+    }
     
     // Create a new lifecycle item
     const item = {
@@ -391,18 +423,26 @@ function correlateTopics(allTopics) {
     };
     
     // Log for debugging
-    console.log(`Processing topic: "${topic.subject.slice(0, 60)}..." -> type=${type}, entity="${topicEntityName || 'none'}"`);
+    console.log(`Processing topic: "${topic.subject.slice(0, 60)}..." -> type=${type}, entity="${topicEntityName || 'none'}", network=${topic.identifiers.network || 'none'}`);
+    
+    // Add the starting topic first
+    item.stages[topic.stage] = item.stages[topic.stage] || [];
+    item.stages[topic.stage].push(topic);
+    item.topics.push(topic);
+    used.add(topic.id);
+    
+    // For types that require entity names, skip correlation if no entity found
+    // Each topic without an entity will be its own separate item
+    if ((type === 'featured-app' || type === 'validator') && !topicEntityName) {
+      console.log(`  -> No entity name found, creating standalone item`);
+      lifecycleItems.push(item);
+      continue;
+    }
     
     // Find related topics
     for (const candidate of sortedTopics) {
       if (used.has(candidate.id)) continue;
-      if (candidate.id === topic.id) {
-        item.stages[topic.stage] = item.stages[topic.stage] || [];
-        item.stages[topic.stage].push(topic);
-        item.topics.push(topic);
-        used.add(topic.id);
-        continue;
-      }
+      if (candidate.id === topic.id) continue; // Already added above
       
       // For CIPs: ONLY correlate if they have an EXACT CIP number match
       if (item.type === 'cip') {
