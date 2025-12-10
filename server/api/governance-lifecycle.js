@@ -26,19 +26,40 @@ function extractUrls(text) {
 
 // Extract identifiers from subject/content for correlation
 function extractIdentifiers(text) {
-  if (!text) return { cipNumber: null, appName: null, validatorName: null, keywords: [] };
+  if (!text) return { cipNumber: null, cipNumbers: [], appName: null, validatorName: null, keywords: [] };
   
   const identifiers = {
     cipNumber: null,
+    cipNumbers: [], // Array to hold ALL CIP numbers (for batch announcements)
     appName: null,
     validatorName: null,
     keywords: [],
   };
   
-  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123)
-  const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
-  if (cipMatch) {
-    identifiers.cipNumber = `CIP-${cipMatch[1]}`;
+  // Extract ALL CIP numbers (e.g., CIP-123, CIP 123, CIP#123, or lists like "CIP 32, 33, 34")
+  const cipMatches = text.matchAll(/CIP[#\-\s]?0*(\d+)/gi);
+  for (const match of cipMatches) {
+    const cipNum = `CIP-${match[1]}`;
+    if (!identifiers.cipNumbers.includes(cipNum)) {
+      identifiers.cipNumbers.push(cipNum);
+    }
+  }
+  
+  // Also look for comma-separated numbers after "CIP" (e.g., "CIP 32, 33, 34, 36")
+  const batchMatch = text.match(/CIP[#\-\s]?0*(\d+)[\s,]+(\d+(?:[\s,]+\d+)*)/i);
+  if (batchMatch) {
+    const nums = batchMatch[0].match(/\d+/g) || [];
+    for (const num of nums) {
+      const cipNum = `CIP-${parseInt(num)}`;
+      if (!identifiers.cipNumbers.includes(cipNum)) {
+        identifiers.cipNumbers.push(cipNum);
+      }
+    }
+  }
+  
+  // Set primary CIP number (first one found)
+  if (identifiers.cipNumbers.length > 0) {
+    identifiers.cipNumber = identifiers.cipNumbers[0];
   }
   
   // Extract featured app mentions
@@ -219,8 +240,11 @@ function calculateSimilarity(topic1, topic2) {
   
   let score = 0;
   
-  // Exact CIP match = high confidence
-  if (ids1.cipNumber && ids1.cipNumber === ids2.cipNumber) {
+  // Exact CIP match = high confidence (check all CIP numbers in both topics)
+  const cips1 = ids1.cipNumbers || (ids1.cipNumber ? [ids1.cipNumber] : []);
+  const cips2 = ids2.cipNumbers || (ids2.cipNumber ? [ids2.cipNumber] : []);
+  const commonCips = cips1.filter(c => cips2.includes(c));
+  if (commonCips.length > 0) {
     score += 100;
   }
   
@@ -297,11 +321,13 @@ function correlateTopics(allTopics) {
       
       // For weight-update topics, ONLY correlate if they have an exact CIP number match
       // This prevents grouping weight updates for different CIPs together
+      // Check both cipNumber and cipNumbers array for batch announcements
       if (candidate.stage === 'weight-update' || topic.stage === 'weight-update') {
-        const candidateCip = candidate.identifiers.cipNumber;
-        const topicCip = topic.identifiers.cipNumber;
-        // Only correlate if BOTH have the same CIP number
-        if (!candidateCip || !topicCip || candidateCip !== topicCip) {
+        const candidateCips = candidate.identifiers.cipNumbers || (candidate.identifiers.cipNumber ? [candidate.identifiers.cipNumber] : []);
+        const topicCips = topic.identifiers.cipNumbers || (topic.identifiers.cipNumber ? [topic.identifiers.cipNumber] : []);
+        // Only correlate if there's at least one matching CIP number
+        const hasCommonCip = candidateCips.some(c => topicCips.includes(c));
+        if (!hasCommonCip || candidateCips.length === 0 || topicCips.length === 0) {
           continue;
         }
       }
