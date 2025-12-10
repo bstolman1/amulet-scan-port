@@ -76,40 +76,16 @@ function extractIdentifiers(text) {
     identifiers.cipNumber = identifiers.cipNumbers[0];
   }
   
-// Extract featured app mentions - improved patterns
+  // Extract featured app mentions
   const appPatterns = [
-    // "Featured App: AppName" or "Featured App - AppName"
-    /featured\s+app[:\s\-–]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s+for|\s+application|\s*$)/i,
-    // "App Name Featured App Application"
-    /([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)\s+featured\s+app/i,
-    // "New Featured App: Name" or just look for known app name patterns
-    /(?:new\s+)?featured\s+app[:\s]+([A-Za-z0-9\s]+?)(?:\s*[-–]|\s+for|\s+application|\s*$)/i,
-    // AppName in tokenomics context (e.g., "Nillion Featured App Application")
-    /([A-Za-z0-9]+)\s+featured\s+app\s+application/i,
-    // Look for app names before "application" in tokenomics
-    /^([A-Za-z0-9]+(?:\s+[A-Za-z0-9]+)?)\s+(?:featured\s+)?app(?:lication)?/i,
+    /featured\s+app[:\s]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s+for|\s*$)/i,
+    /app[:\s]+([A-Za-z0-9\s]+?)(?:\s+[-–]|\s+application|\s*$)/i,
   ];
   for (const pattern of appPatterns) {
     const match = text.match(pattern);
     if (match) {
-      const appName = match[1].trim();
-      // Filter out common false positives
-      if (appName && !['The', 'New', 'A', 'An', 'Featured', 'App'].includes(appName)) {
-        identifiers.appName = appName;
-        break;
-      }
-    }
-  }
-  
-  // Also check if this is from tokenomics group and looks like an app announcement
-  // Pattern: "AppName Featured App Application" or similar
-  if (!identifiers.appName && !identifiers.cipNumber) {
-    const appMatch = text.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+/);
-    if (appMatch && /featured|app|application/i.test(text)) {
-      const potentialApp = appMatch[1].trim();
-      if (potentialApp && potentialApp.length > 2 && !/^(New|The|Re|Draft|CIP)$/i.test(potentialApp)) {
-        identifiers.appName = potentialApp;
-      }
+      identifiers.appName = match[1].trim();
+      break;
     }
   }
   
@@ -402,8 +378,17 @@ function correlateTopics(allTopics) {
     lifecycleItems.push(item);
   }
   
-  // Sort lifecycle items by most recent date first (for all types)
+  // Sort lifecycle items by CIP number descending (highest first)
   lifecycleItems.sort((a, b) => {
+    const aNum = a.primaryId?.match(/CIP-?(\d+)/i)?.[1];
+    const bNum = b.primaryId?.match(/CIP-?(\d+)/i)?.[1];
+    if (aNum && bNum) {
+      return parseInt(bNum) - parseInt(aNum);
+    }
+    // CIPs come before non-CIPs
+    if (aNum) return -1;
+    if (bNum) return 1;
+    // For non-CIPs, sort by date descending
     return new Date(b.lastDate) - new Date(a.lastDate);
   });
   
