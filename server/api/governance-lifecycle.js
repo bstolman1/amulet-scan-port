@@ -41,14 +41,75 @@ function extractUrls(text) {
   return [...new Set(matches)];
 }
 
+// Extract the primary entity name from a subject line
+// This extracts the key identifier that makes each proposal unique
+function extractPrimaryEntityName(text) {
+  if (!text) return null;
+  
+  // Common patterns for app/validator names in subjects:
+  // "New Featured App Request: Node Fortress"
+  // "Node Fortress Featured App Tokenomics"
+  // "[Node Fortress] Featured App Request"
+  // "Featured App Vote Proposal - Node Fortress"
+  // "Supervalidator Onboarding: CompanyName"
+  
+  // Remove common prefixes/suffixes and extract the unique name
+  const cleanText = text
+    .replace(/^(re:|fwd:|fw:)\s*/i, '')  // Remove email prefixes
+    .replace(/\s*-\s*vote\s*(proposal)?\s*$/i, '')  // Remove "- Vote Proposal" suffix
+    .replace(/\s*vote\s*(proposal)?\s*$/i, '')  // Remove "Vote Proposal" suffix
+    .trim();
+  
+  // Pattern 1: "Something: EntityName" or "Something - EntityName"
+  const colonMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement)[:\s-]+(.+?)(?:\s*[-–]\s*(?:vote|proposal|announcement))?$/i);
+  if (colonMatch) {
+    const name = colonMatch[1].trim();
+    if (name.length > 2 && !/^(the|this|new|our)$/i.test(name)) {
+      return name;
+    }
+  }
+  
+  // Pattern 2: "EntityName Featured App/Validator Something"
+  const prefixMatch = cleanText.match(/^([A-Za-z][A-Za-z0-9\s]{2,30}?)\s+(?:featured\s*app|super\s*validator|validator|tokenomics|onboarding)/i);
+  if (prefixMatch) {
+    const name = prefixMatch[1].trim();
+    // Filter out generic words
+    if (name.length > 2 && !/^(new|the|this|our|featured|app|vote|proposal)$/i.test(name)) {
+      return name;
+    }
+  }
+  
+  // Pattern 3: "[EntityName]" anywhere in text
+  const bracketMatch = cleanText.match(/\[([^\]]+)\]/);
+  if (bracketMatch) {
+    const name = bracketMatch[1].trim();
+    if (name.length > 2) {
+      return name;
+    }
+  }
+  
+  // Pattern 4: Look for a capitalized multi-word name (like "Node Fortress")
+  const capitalizedMatch = cleanText.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
+  if (capitalizedMatch) {
+    const name = capitalizedMatch[1].trim();
+    // Filter out common phrases
+    if (!/^(Featured App|Super Validator|Vote Proposal|New Request|Token Economics)$/i.test(name)) {
+      return name;
+    }
+  }
+  
+  return null;
+}
+
 // Extract identifiers from subject/content for correlation
 function extractIdentifiers(text) {
-  if (!text) return { cipNumber: null, appName: null, validatorName: null, keywords: [] };
+  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, keywords: [] };
   
   const identifiers = {
     cipNumber: null,
     appName: null,
     validatorName: null,
+    entityName: null,  // Primary entity name for correlation
     keywords: [],
   };
   
@@ -64,70 +125,29 @@ function extractIdentifiers(text) {
     }
   }
   
-  // Check if text contains featured app indicators (simpler detection)
-  const featuredAppIndicators = [
-    /featured\s*app/i,
-    /app\s+application/i,
-    /tokenomics.*app/i,
-    /app.*tokenomics/i,
-    /listing\s+request/i,
-    /app\s+listing/i,
-  ];
-  for (const pattern of featuredAppIndicators) {
-    if (pattern.test(text)) {
-      // Extract app name more robustly
-      // Try patterns like "[AppName]", "App: AppName", "Featured App AppName", etc.
-      const namePatterns = [
-        /\[([A-Za-z][A-Za-z0-9_-]+)\]/i,  // [AppName]
-        /(?:featured\s*app|app)[:\s]+([A-Za-z][A-Za-z0-9_-]+)/i,  // Featured App: AppName
-        /^([A-Za-z][A-Za-z0-9_-]+)\s+(?:featured\s*app|app\s+listing|listing)/i,  // AppName Featured App
-        /(?:^|\s)([A-Z][a-z]+(?:[A-Z][a-z]+)+)(?:\s|$)/,  // CamelCase names like "VoteApp"
-      ];
-      for (const np of namePatterns) {
-        const m = text.match(np);
-        if (m && m[1].length > 2 && m[1].toLowerCase() !== 'app' && m[1].toLowerCase() !== 'the') {
-          identifiers.appName = m[1].trim();
-          break;
-        }
-      }
-      // If no name found, use null (don't set unknown-app, let correlation happen via subject)
-      break;
-    }
+  // Check if text contains featured app indicators
+  const isFeaturedApp = /featured\s*app|app\s+(?:application|listing|request|tokenomics|vote)/i.test(text);
+  
+  // Check if text contains validator indicators
+  const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate)|sv\s+(?:application|onboarding)/i.test(text);
+  
+  // Extract the primary entity name
+  const entityName = extractPrimaryEntityName(text);
+  identifiers.entityName = entityName;
+  
+  if (isFeaturedApp && entityName) {
+    identifiers.appName = entityName;
   }
   
-  // Check if text contains validator indicators (simpler detection)
-  const validatorIndicators = [
-    /super\s*validator/i,
-    /validator\s+(?:application|onboarding|license)/i,
-    /sv\s+(?:application|onboarding)/i,
-    /new\s+validator/i,
-    /validator\s+candidate/i,
-  ];
-  for (const pattern of validatorIndicators) {
-    if (pattern.test(text)) {
-      // Extract validator name more robustly
-      const namePatterns = [
-        /\[([A-Za-z][A-Za-z0-9_-]+)\]/i,  // [ValidatorName]
-        /(?:super\s*)?validator[:\s]+([A-Za-z][A-Za-z0-9_-]+)/i,  // Validator: Name
-        /^([A-Za-z][A-Za-z0-9_-]+)\s+(?:super\s*)?validator/i,  // Name Validator
-      ];
-      for (const np of namePatterns) {
-        const m = text.match(np);
-        if (m && m[1].length > 2 && m[1].toLowerCase() !== 'validator' && m[1].toLowerCase() !== 'the') {
-          identifiers.validatorName = m[1].trim();
-          break;
-        }
-      }
-      // If no name found, use null (let correlation happen via subject similarity)
-      break;
-    }
+  if (isValidator && entityName) {
+    identifiers.validatorName = entityName;
   }
   
-  // Extract key words for fuzzy matching
+  // Extract key words for fuzzy matching (fallback)
   const words = text.toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter(w => w.length > 3 && !['the', 'and', 'for', 'this', 'that', 'with', 'from'].includes(w));
+    .filter(w => w.length > 3 && !['the', 'and', 'for', 'this', 'that', 'with', 'from', 'featured', 'validator', 'tokenomics', 'announcement', 'announce', 'proposal', 'vote', 'request', 'application', 'listing', 'onboarding', 'supervalidator'].includes(w));
   identifiers.keywords = [...new Set(words)].slice(0, 10);
   
   return identifiers;
@@ -269,6 +289,13 @@ async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
 }
 
 // Calculate similarity between two topics for correlation
+// Normalize entity name for comparison (case-insensitive, whitespace-normalized)
+function normalizeEntityName(name) {
+  if (!name) return null;
+  return name.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Calculate similarity between two topics for correlation
 function calculateSimilarity(topic1, topic2) {
   const ids1 = topic1.identifiers;
   const ids2 = topic2.identifiers;
@@ -280,50 +307,45 @@ function calculateSimilarity(topic1, topic2) {
     score += 100;
   }
   
-  // App name match (only if both have a real name, not null)
-  if (ids1.appName && ids2.appName && 
-      ids1.appName.toLowerCase() === ids2.appName.toLowerCase()) {
-    score += 100; // Exact app name match = high confidence
+  // Entity name match - this is the PRIMARY correlation for featured-app and validator
+  const entity1 = normalizeEntityName(ids1.entityName);
+  const entity2 = normalizeEntityName(ids2.entityName);
+  
+  if (entity1 && entity2) {
+    if (entity1 === entity2) {
+      // Exact entity name match = definite correlation
+      score += 100;
+    } else if (entity1.includes(entity2) || entity2.includes(entity1)) {
+      // Partial entity name match (e.g., "Node Fortress" and "Node Fortress App")
+      score += 80;
+    }
   }
   
-  // Validator name match (only if both have a real name, not null)
-  if (ids1.validatorName && ids2.validatorName &&
-      ids1.validatorName.toLowerCase() === ids2.validatorName.toLowerCase()) {
-    score += 100; // Exact validator name match = high confidence
+  // App name match (legacy, may be redundant with entityName)
+  if (ids1.appName && ids2.appName) {
+    const app1 = normalizeEntityName(ids1.appName);
+    const app2 = normalizeEntityName(ids2.appName);
+    if (app1 === app2) {
+      score += 50; // Add some points but don't double-count if entityName already matched
+    }
   }
   
-  // Subject similarity (fuzzy match) - critical for featured-app/validator correlation
-  // When names aren't extracted, this is the primary correlation mechanism
-  const subjectWords1 = topic1.subject.toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 3 && !['the', 'and', 'for', 'this', 'that', 'with', 'from', 'featured', 'validator', 'tokenomics', 'announce', 'announcement', 'application', 'listing'].includes(w));
-  const subjectWords2 = topic2.subject.toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 3 && !['the', 'and', 'for', 'this', 'that', 'with', 'from', 'featured', 'validator', 'tokenomics', 'announce', 'announcement', 'application', 'listing'].includes(w));
-  
-  const commonWords = subjectWords1.filter(w => subjectWords2.includes(w));
-  // Give higher weight to subject matches - each meaningful word match is significant
-  score += commonWords.length * 15;
-  
-  // Bonus for substantial subject overlap (likely the same topic)
-  const overlap = commonWords.length / Math.min(subjectWords1.length, subjectWords2.length);
-  if (overlap >= 0.5 && commonWords.length >= 2) {
-    score += 30;
+  // Validator name match (legacy)
+  if (ids1.validatorName && ids2.validatorName) {
+    const val1 = normalizeEntityName(ids1.validatorName);
+    const val2 = normalizeEntityName(ids2.validatorName);
+    if (val1 === val2) {
+      score += 50;
+    }
   }
   
-  // Keyword overlap from content
-  const commonKeywords = ids1.keywords.filter(k => ids2.keywords.includes(k));
-  score += commonKeywords.length * 3;
-  
-  // Date proximity (within 30 days = bonus)
+  // Date proximity (within 90 days = small bonus, but not enough to correlate on its own)
   const date1 = new Date(topic1.date);
   const date2 = new Date(topic2.date);
   const daysDiff = Math.abs((date1 - date2) / (1000 * 60 * 60 * 24));
-  if (daysDiff <= 7) score += 20;
-  else if (daysDiff <= 30) score += 10;
-  else if (daysDiff <= 90) score += 5;
+  if (daysDiff <= 7) score += 10;
+  else if (daysDiff <= 30) score += 5;
+  else if (daysDiff <= 90) score += 2;
   
   return score;
 }
@@ -341,19 +363,26 @@ function correlateTopics(allTopics) {
   for (const topic of sortedTopics) {
     if (used.has(topic.id)) continue;
     
+    // Determine the type and primary ID based on identifiers
+    const topicEntityName = topic.identifiers.entityName;
+    const type = topic.identifiers.cipNumber ? 'cip' : 
+          topic.identifiers.appName ? 'featured-app' :
+          topic.identifiers.validatorName ? 'validator' : 'other';
+    
     // Create a new lifecycle item
     const item = {
       id: `lifecycle-${topic.id}`,
-      primaryId: topic.identifiers.cipNumber || topic.identifiers.appName || topic.identifiers.validatorName || topic.subject.slice(0, 30),
-      type: topic.identifiers.cipNumber ? 'cip' : 
-            topic.identifiers.appName ? 'featured-app' :
-            topic.identifiers.validatorName ? 'validator' : 'other',
+      primaryId: topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40),
+      type,
       stages: {},
       topics: [],
       firstDate: topic.date,
       lastDate: topic.date,
       currentStage: topic.stage,
     };
+    
+    // Log for debugging
+    console.log(`Processing topic: "${topic.subject.slice(0, 60)}..." -> type=${type}, entity="${topicEntityName || 'none'}"`);
     
     // Find related topics
     for (const candidate of sortedTopics) {
@@ -367,7 +396,6 @@ function correlateTopics(allTopics) {
       }
       
       // For CIPs: ONLY correlate if they have an EXACT CIP number match
-      // This prevents grouping different CIPs together based on fuzzy matching
       if (item.type === 'cip') {
         const candidateCip = candidate.identifiers.cipNumber;
         const topicCip = topic.identifiers.cipNumber;
@@ -391,9 +419,46 @@ function correlateTopics(allTopics) {
         continue;
       }
       
-      // For non-CIPs (featured-app, validator, other): use similarity matching
+      // For Featured Apps and Validators: REQUIRE entity name match
+      // This is the key change - each app/validator gets its own lifecycle
+      if (item.type === 'featured-app' || item.type === 'validator') {
+        const topicEntity = normalizeEntityName(topicEntityName);
+        const candidateEntity = normalizeEntityName(candidate.identifiers.entityName);
+        
+        // Only correlate if BOTH have an entity name and they match
+        if (!topicEntity || !candidateEntity) {
+          continue;
+        }
+        
+        // Check for exact match or substring match (e.g., "Node Fortress" matches "Node Fortress App")
+        const matches = topicEntity === candidateEntity || 
+                       topicEntity.includes(candidateEntity) || 
+                       candidateEntity.includes(topicEntity);
+        
+        if (!matches) {
+          continue;
+        }
+        
+        // Entity name matches - add to the lifecycle item
+        console.log(`  -> Correlating with: "${candidate.subject.slice(0, 60)}..." (entity="${candidateEntity}")`);
+        item.stages[candidate.stage] = item.stages[candidate.stage] || [];
+        item.stages[candidate.stage].push(candidate);
+        item.topics.push(candidate);
+        used.add(candidate.id);
+        
+        // Update dates
+        if (new Date(candidate.date) < new Date(item.firstDate)) {
+          item.firstDate = candidate.date;
+        }
+        if (new Date(candidate.date) > new Date(item.lastDate)) {
+          item.lastDate = candidate.date;
+        }
+        continue;
+      }
+      
+      // For "other" type: use similarity matching (fallback behavior)
       const similarity = calculateSimilarity(topic, candidate);
-      if (similarity >= 50) { // Higher threshold for non-CIPs
+      if (similarity >= 70) { // Higher threshold for others
         item.stages[candidate.stage] = item.stages[candidate.stage] || [];
         item.stages[candidate.stage].push(candidate);
         item.topics.push(candidate);
