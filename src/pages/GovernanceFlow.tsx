@@ -505,13 +505,7 @@ const GovernanceFlow = () => {
                   size="sm"
                   onClick={() => {
                     setTypeFilter(type);
-                    // Reset stage filter if switching types and current stage doesn't apply
-                    if (type !== 'all' && stageFilter !== 'all') {
-                      const validStages = LIFECYCLE_STAGES_BY_TYPE[type] || [];
-                      if (!validStages.includes(stageFilter)) {
-                        setStageFilter('all');
-                      }
-                    }
+                    setStageFilter('all'); // Reset stage when type changes
                   }}
                   className="h-7 text-xs"
                 >
@@ -520,37 +514,38 @@ const GovernanceFlow = () => {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Stage:</span>
-            <div className="flex gap-1 flex-wrap">
-              <Button
-                variant={stageFilter === 'all' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setStageFilter('all')}
-                className="h-7 text-xs"
-              >
-                All
-              </Button>
-              {(typeFilter === 'all' 
-                ? ['discuss', 'vote', 'announce', 'tokenomics', 'tokenomics-announce', 'sv-vote', 'sv-announce', 'weight-update']
-                : LIFECYCLE_STAGES_BY_TYPE[typeFilter] || []
-              ).map(stage => {
-                const config = STAGE_CONFIG[stage];
-                if (!config) return null;
-                return (
-                  <Button
-                    key={stage}
-                    variant={stageFilter === stage ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setStageFilter(stage)}
-                    className="h-7 text-xs"
-                  >
-                    {config.label}
-                  </Button>
-                );
-              })}
+          
+          {/* Only show stage filters for specific types (cip, featured-app, validator) */}
+          {typeFilter !== 'all' && typeFilter !== 'other' && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Stage:</span>
+              <div className="flex gap-1 flex-wrap">
+                <Button
+                  variant={stageFilter === 'all' ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setStageFilter('all')}
+                  className="h-7 text-xs"
+                >
+                  All
+                </Button>
+                {(LIFECYCLE_STAGES_BY_TYPE[typeFilter] || []).map(stage => {
+                  const config = STAGE_CONFIG[stage];
+                  if (!config) return null;
+                  return (
+                    <Button
+                      key={stage}
+                      variant={stageFilter === stage ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setStageFilter(stage)}
+                      className="h-7 text-xs"
+                    >
+                      {config.label}
+                    </Button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* View Toggle */}
