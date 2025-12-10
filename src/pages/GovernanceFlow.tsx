@@ -554,15 +554,13 @@ const GovernanceFlow = () => {
                   <Card key={item.id} className="hover:border-primary/30 transition-colors">
                     <CardHeader className="pb-3">
                       <div className="flex items-start justify-between gap-4">
-                        <div className="space-y-2 flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Badge className={typeConfig.color}>
-                              {typeConfig.label}
-                            </Badge>
-                            <CardTitle className="text-lg leading-tight">
-                              {item.primaryId}
-                            </CardTitle>
-                          </div>
+                        <div className="space-y-2 flex-1">
+                          <Badge className={typeConfig.color}>
+                            {typeConfig.label}
+                          </Badge>
+                          <CardTitle className="text-lg leading-tight break-words">
+                            {item.primaryId}
+                          </CardTitle>
                           <div className="flex items-center gap-3 text-sm text-muted-foreground">
                             <span className="flex items-center gap-1">
                               <Calendar className="h-3.5 w-3.5" />
