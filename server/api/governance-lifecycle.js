@@ -320,13 +320,16 @@ router.get('/', async (req, res) => {
       const topics = await fetchGroupTopics(group.id, name, 300);
       console.log(`Got ${topics.length} topics from ${name}`);
       
+      // Convert group full name to URL-friendly format (replace + with /)
+      const groupUrlPath = group.fullName.replace(/\+/g, '/');
+      
       const mappedTopics = topics.map(topic => ({
         id: topic.id?.toString() || `topic-${Math.random()}`,
         subject: topic.subject || topic.title || 'Untitled',
         date: topic.created || topic.updated || new Date().toISOString(),
         content: topic.snippet || topic.body || topic.preview || '',
         excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
-        sourceUrl: topic.permalink || `${BASE_URL}/g/${group.fullName}/topic/${topic.id}`,
+        sourceUrl: topic.permalink || `${BASE_URL}/g/${groupUrlPath}/topic/${topic.id}`,
         linkedUrls: extractUrls(topic.snippet || topic.body || ''),
         messageCount: topic.num_msgs || 1,
         groupName: name,
