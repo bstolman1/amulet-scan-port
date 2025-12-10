@@ -104,7 +104,7 @@ const TYPE_CONFIG = {
   cip: { label: 'CIP', color: 'bg-primary/20 text-primary' },
   'featured-app': { label: 'Featured App', color: 'bg-emerald-500/20 text-emerald-400' },
   validator: { label: 'Validator', color: 'bg-orange-500/20 text-orange-400' },
-  outcome: { label: 'Outcome', color: 'bg-amber-500/20 text-amber-400' },
+  outcome: { label: 'Tokenomics Outcomes', color: 'bg-amber-500/20 text-amber-400' },
   other: { label: 'Other', color: 'bg-muted text-muted-foreground' },
 };
 
@@ -239,7 +239,7 @@ const GovernanceFlow = () => {
     if (!data) return [];
     return data.allTopics.filter(topic => {
       if (typeFilter !== 'all') {
-        const isOutcome = /^Outcomes\s*-\s*\w+\s+\d+,?\s*\d*/i.test(topic.subject);
+        const isOutcome = /^Outcomes/i.test(topic.subject.trim());
         const itemType = topic.identifiers.cipNumber ? 'cip' :
                         topic.identifiers.appName ? 'featured-app' :
                         topic.identifiers.validatorName ? 'validator' :
