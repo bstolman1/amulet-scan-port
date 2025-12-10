@@ -82,6 +82,23 @@ function extractIdentifiers(text) {
   return identifiers;
 }
 
+// Fetch group details to get the proper URL path
+async function getGroupDetails(groupId) {
+  const url = `${BASE_URL}/api/v1/getgroup?group_id=${groupId}`;
+  try {
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${API_KEY}` },
+    });
+    if (response.ok) {
+      const data = await response.json();
+      return data;
+    }
+  } catch (err) {
+    console.error(`Failed to get group details for ${groupId}:`, err.message);
+  }
+  return null;
+}
+
 // Get all subscribed groups
 async function getSubscribedGroups() {
   const subsUrl = `${BASE_URL}/api/v1/getsubs?limit=100`;
@@ -106,11 +123,21 @@ async function getSubscribedGroups() {
     if (match) {
       const subgroupName = match[1];
       if (GOVERNANCE_GROUPS[subgroupName]) {
+        // Get the group details to find the proper URL path
+        const groupDetails = await getGroupDetails(sub.group_id);
+        // The 'name' field in group details is the URL-friendly name
+        const urlName = groupDetails?.name || groupName;
+        console.log(`Group ${subgroupName}: urlName=${urlName}, full_name=${groupDetails?.full_name || 'none'}`);
+        
         groupMap[subgroupName] = {
           id: sub.group_id,
           fullName: groupName,
+          urlName: urlName, // This is the URL-friendly path
           ...GOVERNANCE_GROUPS[subgroupName],
         };
+        
+        // Small delay to avoid rate limiting
+        await delay(100);
       }
     }
   }
@@ -328,17 +355,9 @@ router.get('/', async (req, res) => {
       }
       
       const mappedTopics = topics.map(topic => {
-        // Prefer the API's permalink, or construct from topic's group_name if available
-        let sourceUrl = topic.permalink;
-        
-        if (!sourceUrl) {
-          // Use the topic's own group_name if available, otherwise fall back to our group info
-          const topicGroupName = topic.group_name || group.fullName;
-          // Groups.io subgroup URLs: /g/parentgroup/subgroup/topic/ID
-          // The group_name format is typically "parentgroup+subgroup"
-          const urlPath = topicGroupName.replace(/\+/g, '/');
-          sourceUrl = `${BASE_URL}/g/${urlPath}/topic/${topic.id}`;
-        }
+        // Use the group's urlName for the proper URL path
+        // Format: /g/{urlName}/topic/{id}
+        const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
         
         return {
           id: topic.id?.toString() || `topic-${Math.random()}`,
