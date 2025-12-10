@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -556,91 +556,99 @@ const GovernanceFlow = () => {
               </Card>
             ) : (
               <>
-                {/* CIP-00XX Section - TBD/Unassigned CIPs */}
-                {tbdItems.length > 0 && (
-                  <Card className="border-amber-500/30 bg-amber-500/5">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          CIP-00XX
-                        </Badge>
-                        <CardTitle className="text-base">
-                          Pending CIP Number Assignment ({tbdItems.length})
-                        </CardTitle>
-                      </div>
-                      <p className="text-sm text-muted-foreground">
-                        CIPs awaiting official number assignment
-                      </p>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      {tbdItems.map((item) => {
-                        const isExpanded = expandedIds.has(item.id);
-                        // Get the first topic's subject for a more descriptive title
-                        const firstTopic = item.topics[0];
-                        const displayTitle = firstTopic?.subject || item.primaryId;
-                        
-                        return (
-                          <div 
-                            key={item.id} 
-                            className="p-4 rounded-lg bg-background/50 border border-amber-500/20 hover:border-amber-500/40 transition-colors"
+                {/* CIP-00XX Section - TBD/Unassigned CIPs - Flattened view */}
+                {tbdItems.length > 0 && (() => {
+                  // Aggregate all topics from all TBD items, grouped by stage
+                  const allTbdTopics = tbdItems.flatMap(item => item.topics);
+                  const tbdStages: Record<string, typeof allTbdTopics> = {};
+                  
+                  Object.keys(STAGE_CONFIG).forEach(stage => {
+                    const stageTopics = tbdItems.flatMap(item => item.stages[stage] || []);
+                    if (stageTopics.length > 0) {
+                      tbdStages[stage] = stageTopics;
+                    }
+                  });
+                  
+                  const tbdIsExpanded = expandedIds.has('cip-00xx-section');
+                  
+                  return (
+                    <Card className="border-amber-500/30 bg-amber-500/5">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-2 flex-1">
+                            <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                              CIP-00XX
+                            </Badge>
+                            <CardTitle className="text-base">
+                              Pending CIP Number Assignment ({allTbdTopics.length} topics)
+                            </CardTitle>
+                            <p className="text-sm text-muted-foreground">
+                              CIPs awaiting official number assignment
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleExpand('cip-00xx-section')}
+                            className="shrink-0"
                           >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="space-y-1.5 flex-1 min-w-0">
-                                <h4 className="font-medium text-sm leading-tight break-words">
-                                  {displayTitle}
-                                </h4>
-                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                  <span className="flex items-center gap-1">
-                                    <Calendar className="h-3 w-3" />
-                                    {formatDate(item.firstDate)}
-                                  </span>
-                                  <span>{item.topics.length} topics</span>
-                                  <Badge variant="outline" className="text-[10px] h-5 bg-amber-500/10 text-amber-400 border-amber-500/30">
-                                    TBD
-                                  </Badge>
+                            {tbdIsExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                        
+                        {/* Lifecycle Progress - show aggregate */}
+                        <div className="pt-2">
+                          <div className="flex items-center gap-1">
+                            {Object.entries(STAGE_CONFIG).map(([stage, config], index) => {
+                              const count = tbdStages[stage]?.length || 0;
+                              const isActive = count > 0;
+                              
+                              return (
+                                <React.Fragment key={stage}>
+                                  <div className="flex items-center gap-1">
+                                    <div 
+                                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs ${
+                                        isActive ? config.color : 'bg-muted/30 text-muted-foreground'
+                                      }`}
+                                    >
+                                      <config.icon className="h-3 w-3" />
+                                      <span className="hidden sm:inline">{config.label}</span>
+                                      {isActive && <span className="font-medium">({count})</span>}
+                                    </div>
+                                  </div>
+                                  {index < Object.entries(STAGE_CONFIG).length - 1 && (
+                                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </CardHeader>
+                      
+                      {tbdIsExpanded && (
+                        <CardContent className="pt-0 space-y-4">
+                          {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
+                            const stageTopics = tbdStages[stage];
+                            if (!stageTopics || stageTopics.length === 0) return null;
+                            
+                            return (
+                              <div key={stage} className="space-y-2">
+                                <h5 className="text-sm font-medium flex items-center gap-2">
+                                  <config.icon className="h-4 w-4" />
+                                  {config.label} ({stageTopics.length})
+                                </h5>
+                                <div className="space-y-2 pl-6">
+                                  {stageTopics.map(topic => renderTopicCard(topic))}
                                 </div>
                               </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => toggleExpand(item.id)}
-                                className="shrink-0 h-7 w-7 p-0"
-                              >
-                                {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                              </Button>
-                            </div>
-                            
-                            {/* Lifecycle Progress */}
-                            <div className="pt-2">
-                              {renderLifecycleProgress(item)}
-                            </div>
-                            
-                            {isExpanded && (
-                              <div className="mt-4 pt-4 border-t border-amber-500/20 space-y-3">
-                                {Object.entries(STAGE_CONFIG).map(([stage, config]) => {
-                                  const stageTopics = item.stages[stage];
-                                  if (!stageTopics || stageTopics.length === 0) return null;
-                                  
-                                  return (
-                                    <div key={stage} className="space-y-2">
-                                      <h5 className="text-xs font-medium flex items-center gap-2">
-                                        <config.icon className="h-3.5 w-3.5" />
-                                        {config.label} ({stageTopics.length})
-                                      </h5>
-                                      <div className="space-y-2 pl-5">
-                                        {stageTopics.map(topic => renderTopicCard(topic))}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </CardContent>
-                  </Card>
-                )}
+                            );
+                          })}
+                        </CardContent>
+                      )}
+                    </Card>
+                  );
+                })()}
 
                 {/* Regular CIPs */}
                 {regularItems.map((item) => {
