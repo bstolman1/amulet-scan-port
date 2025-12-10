@@ -11,15 +11,16 @@ const GOVERNANCE_GROUPS = {
   'cip-discuss': { stage: 'proposal', flow: 'cip', label: 'CIP Discussion' },
   'cip-announce': { stage: 'review', flow: 'cip', label: 'CIP Announcement' },
   
-  // Tokenomics Flow: tokenomics → tokenomics-announce → supervalidator-announce
+  // Tokenomics Flow: tokenomics → tokenomics-announce → cip-votes → supervalidator-announce
   'tokenomics': { stage: 'proposal', flow: 'tokenomics', label: 'TC Discussion' },
   'tokenomics-announce': { stage: 'review', flow: 'tokenomics', label: 'TC Announcement' },
+  'cip-votes': { stage: 'committee-vote', flow: 'tokenomics', label: 'TC Committee Vote' },
   
   // Final stage for both flows
   'supervalidator-announce': { stage: 'vote', flow: 'all', label: 'SV Announcement' },
 };
 
-const LIFECYCLE_STAGES = ['proposal', 'review', 'vote', 'result'];
+const LIFECYCLE_STAGES = ['proposal', 'review', 'committee-vote', 'vote', 'result'];
 
 // Helper to extract URLs from text
 function extractUrls(text) {
