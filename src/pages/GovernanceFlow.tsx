@@ -58,6 +58,7 @@ interface LifecycleItem {
   id: string;
   primaryId: string;
   type: 'cip' | 'featured-app' | 'validator' | 'other';
+  network?: 'testnet' | 'mainnet' | null;
   stages: Record<string, Topic[]>;
   topics: Topic[];
   firstDate: string;
@@ -804,9 +805,24 @@ const GovernanceFlow = () => {
                       <CardHeader className="pb-3">
                         <div className="flex items-start justify-between gap-4">
                           <div className="space-y-2 flex-1">
-                            <Badge className={typeConfig.color}>
-                              {typeConfig.label}
-                            </Badge>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge className={typeConfig.color}>
+                                {typeConfig.label}
+                              </Badge>
+                              {item.network && (
+                                <Badge 
+                                  variant="outline" 
+                                  className={cn(
+                                    "text-[10px] h-5",
+                                    item.network === 'mainnet' 
+                                      ? 'border-green-500/50 text-green-400 bg-green-500/10' 
+                                      : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
+                                  )}
+                                >
+                                  {item.network}
+                                </Badge>
+                              )}
+                            </div>
                             <CardTitle className="text-lg leading-tight break-words">
                               {item.primaryId}
                             </CardTitle>
