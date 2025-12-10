@@ -82,6 +82,7 @@ const STAGE_CONFIG = {
   discuss: { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
   vote: { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
   announce: { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  'weight-update': { label: 'Weight Update', icon: Clock, color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
 };
 
 const TYPE_CONFIG = {
@@ -287,7 +288,7 @@ const GovernanceFlow = () => {
   }, [filteredTopics]);
 
   const renderLifecycleProgress = (item: LifecycleItem) => {
-    const stages = ['discuss', 'vote', 'announce'];
+    const stages = ['discuss', 'vote', 'announce', 'weight-update'];
     const currentIdx = stages.indexOf(item.currentStage);
     
     return (
@@ -496,7 +497,7 @@ const GovernanceFlow = () => {
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Stage:</span>
             <div className="flex gap-1">
-              {['all', 'discuss', 'vote', 'announce'].map(stage => (
+              {['all', 'discuss', 'vote', 'announce', 'weight-update'].map(stage => (
                 <Button
                   key={stage}
                   variant={stageFilter === stage ? 'default' : 'outline'}

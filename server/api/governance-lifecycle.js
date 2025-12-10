@@ -6,14 +6,15 @@ const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
 // Define the governance groups and their lifecycle stages
-// CIP Flow: cip-discuss → cip-vote → cip-announce
+// CIP Flow: cip-discuss → cip-vote → cip-announce → supervalidator-announce (weight updates)
 const GOVERNANCE_GROUPS = {
   'cip-discuss': { stage: 'discuss', flow: 'cip', label: 'CIP Discussion' },
   'cip-vote': { stage: 'vote', flow: 'cip', label: 'CIP Vote' },
   'cip-announce': { stage: 'announce', flow: 'cip', label: 'CIP Announcement' },
+  'supervalidator-announce': { stage: 'weight-update', flow: 'cip', label: 'SV Weight Update' },
 };
 
-const LIFECYCLE_STAGES = ['discuss', 'vote', 'announce'];
+const LIFECYCLE_STAGES = ['discuss', 'vote', 'announce', 'weight-update'];
 
 // Helper to extract URLs from text
 function extractUrls(text) {
@@ -406,6 +407,7 @@ router.get('/', async (req, res) => {
         discuss: lifecycleItems.filter(i => i.currentStage === 'discuss').length,
         vote: lifecycleItems.filter(i => i.currentStage === 'vote').length,
         announce: lifecycleItems.filter(i => i.currentStage === 'announce').length,
+        'weight-update': lifecycleItems.filter(i => i.currentStage === 'weight-update').length,
       },
       groupCounts: Object.fromEntries(
         Object.entries(groupMap).map(([name, group]) => [
