@@ -833,7 +833,8 @@ const GovernanceFlow = () => {
                               )}
                             </div>
                             <CardTitle className="text-lg leading-tight break-words">
-                              {item.primaryId}
+                              {/* Show clean primary ID - strip any trailing -ID suffix that was added for uniqueness */}
+                              {item.primaryId.replace(/-\d+$/, '').replace(/-topic-.*$/, '')}
                             </CardTitle>
                             <div className="flex items-center gap-3 text-sm text-muted-foreground">
                               <span className="flex items-center gap-1">
