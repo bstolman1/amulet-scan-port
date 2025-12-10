@@ -295,6 +295,17 @@ function correlateTopics(allTopics) {
         continue;
       }
       
+      // For weight-update topics, ONLY correlate if they have an exact CIP number match
+      // This prevents grouping weight updates for different CIPs together
+      if (candidate.stage === 'weight-update' || topic.stage === 'weight-update') {
+        const candidateCip = candidate.identifiers.cipNumber;
+        const topicCip = topic.identifiers.cipNumber;
+        // Only correlate if BOTH have the same CIP number
+        if (!candidateCip || !topicCip || candidateCip !== topicCip) {
+          continue;
+        }
+      }
+      
       const similarity = calculateSimilarity(topic, candidate);
       if (similarity >= 30) { // Threshold for correlation
         item.stages[candidate.stage] = item.stages[candidate.stage] || [];
