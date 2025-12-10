@@ -53,7 +53,18 @@ function extractPrimaryEntityName(text) {
     .replace(/\s*vote\s*(proposal)?\s*$/i, '')
     .trim();
   
-  // Pattern 0: "MainNet: AppName by Company" or "TestNet: AppName by Company"
+  // Pattern 0: "to implement/apply Featured Application status for AppName"
+  // "for Featured Application status for AppName"
+  // "for featured app rights for AppName"
+  const forAppMatch = cleanText.match(/(?:to\s+)?(?:implement|apply|for)\s+featured\s*(?:app(?:lication)?|application)\s+(?:status|rights)\s+for\s+([A-Za-z0-9][\w\s-]*?)$/i);
+  if (forAppMatch) {
+    let name = forAppMatch[1].trim();
+    if (name.length > 1) {
+      return name;
+    }
+  }
+  
+  // Pattern 1: "MainNet: AppName by Company" or "TestNet: AppName by Company"
   // Extract just the app name (before "by") - this handles "MainNet: Akascan by Akasec"
   const networkAppMatch = cleanText.match(/(?:mainnet|testnet|main\s*net|test\s*net)[:\s]+([^:]+?)(?:\s+by\s+.+)?$/i);
   if (networkAppMatch) {
@@ -65,7 +76,7 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 1: "Featured App Vote Proposal: AppName" or "Request: AppName"
+  // Pattern 2: "Featured App Vote Proposal: AppName" or "Request: AppName"
   const requestMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement|vote\s*proposal)[:\s-]+(.+?)$/i);
   if (requestMatch) {
     let name = requestMatch[1].trim();
@@ -78,7 +89,7 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 2: "New Featured App Request: AppName"
+  // Pattern 3: "New Featured App Request: AppName"
   const newRequestMatch = cleanText.match(/new\s+featured\s*app\s+request[:\s-]+(.+?)$/i);
   if (newRequestMatch) {
     let name = newRequestMatch[1].trim();
@@ -89,16 +100,16 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 3: "AppName Featured App Tokenomics" (name at start)
-  const prefixMatch = cleanText.match(/^([A-Za-z][A-Za-z0-9\s]{2,30}?)\s+(?:featured\s*app|super\s*validator|validator|tokenomics|onboarding)/i);
+  // Pattern 4: "AppName Featured App Tokenomics" (name at start)
+  const prefixMatch = cleanText.match(/^([A-Za-z][A-Za-z0-9\s-]{1,30}?)\s+(?:featured\s*app|super\s*validator|validator|tokenomics|onboarding)/i);
   if (prefixMatch) {
     const name = prefixMatch[1].trim();
-    if (name.length > 2 && !/^(new|the|this|our|featured|app|vote|proposal)$/i.test(name)) {
+    if (name.length > 1 && !/^(new|the|this|our|featured|app|vote|proposal|to)$/i.test(name)) {
       return name;
     }
   }
   
-  // Pattern 4: "[AppName]" in brackets
+  // Pattern 5: "[AppName]" in brackets
   const bracketMatch = cleanText.match(/\[([^\]]+)\]/);
   if (bracketMatch) {
     const name = bracketMatch[1].trim();
@@ -107,11 +118,20 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 5: Look for capitalized multi-word name
+  // Pattern 6: Look for capitalized multi-word name
   const capitalizedMatch = cleanText.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
   if (capitalizedMatch) {
     const name = capitalizedMatch[1].trim();
     if (!/^(Featured App|Super Validator|Vote Proposal|New Request|Token Economics|Main Net|Test Net)$/i.test(name)) {
+      return name;
+    }
+  }
+  
+  // Pattern 7: Single capitalized word at end after "for" (e.g., "for MEXC", "for Kraken")
+  const forSingleMatch = cleanText.match(/for\s+([A-Z][A-Za-z0-9-]+)$/);
+  if (forSingleMatch) {
+    const name = forSingleMatch[1].trim();
+    if (name.length > 1 && !/^(the|this|that|it)$/i.test(name)) {
       return name;
     }
   }
@@ -152,7 +172,7 @@ function extractIdentifiers(text) {
   }
   
   // Check if text contains featured app indicators
-  const isFeaturedApp = /featured\s*app|app\s+(?:application|listing|request|tokenomics|vote)/i.test(text);
+  const isFeaturedApp = /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote)|application\s+status\s+for/i.test(text);
   
   // Check if text contains validator indicators
   const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate)|sv\s+(?:application|onboarding)/i.test(text);
