@@ -4,19 +4,31 @@ import binaryReader from '../duckdb/binary-reader.js';
 
 const router = Router();
 
-// Helper to get the correct read function for JSONL files (supports .jsonl, .jsonl.gz, .jsonl.zst)
-const getUpdatesSource = () => `(
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)
-  UNION ALL
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  UNION ALL
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)
-)`;
+// Helper to get the correct read function for Parquet files (primary) or JSONL files (fallback)
+const getEventsSource = () => {
+  const hasParquet = db.hasFileType('events', '.parquet');
+  if (hasParquet) {
+    return `read_parquet('${db.DATA_PATH}/**/events-*.parquet', union_by_name=true)`;
+  }
+  // Fallback to JSONL
+  return `(
+    SELECT * FROM read_json_auto('${db.DATA_PATH}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)
+    UNION ALL
+    SELECT * FROM read_json_auto('${db.DATA_PATH}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)
+    UNION ALL
+    SELECT * FROM read_json_auto('${db.DATA_PATH}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)
+  )`;
+};
 
 // Check what data sources are available
 function getDataSources() {
   const hasBinaryEvents = binaryReader.hasBinaryFiles(db.DATA_PATH, 'events');
-  return { hasBinaryEvents, primarySource: hasBinaryEvents ? 'binary' : 'jsonl' };
+  const hasParquetEvents = db.hasFileType('events', '.parquet');
+  return { 
+    hasBinaryEvents, 
+    hasParquetEvents,
+    primarySource: hasBinaryEvents ? 'binary' : hasParquetEvents ? 'parquet' : 'jsonl' 
+  };
 }
 
 // GET /api/events/latest - Get latest events
@@ -43,14 +55,14 @@ router.get('/latest', async (req, res) => {
         signatories,
         observers,
         payload
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       ORDER BY timestamp DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length });
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
   } catch (err) {
     console.error('Error fetching latest events:', err);
     res.status(500).json({ error: err.message });
@@ -76,14 +88,14 @@ router.get('/by-type/:type', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE event_type = '${type}'
       ORDER BY timestamp DESC
       LIMIT ${limit}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length });
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -108,14 +120,14 @@ router.get('/by-template/:templateId', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE template_id LIKE '%${templateId}%'
       ORDER BY timestamp DESC
       LIMIT ${limit}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length });
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -151,14 +163,14 @@ router.get('/by-date', async (req, res) => {
     
     const sql = `
       SELECT *
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE 1=1 ${whereClause}
       ORDER BY timestamp DESC
       LIMIT ${limit}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length });
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -178,11 +190,11 @@ router.get('/count', async (req, res) => {
     
     const sql = `
       SELECT COUNT(*) as total
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ count: rows[0]?.total || 0 });
+    res.json({ count: rows[0]?.total || 0, source: sources.primarySource });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
