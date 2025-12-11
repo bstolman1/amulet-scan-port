@@ -30,55 +30,137 @@ const client = axios.create({
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import readline from 'readline';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, '../../data');
 
 // Track state
-let lastOffset = null;
 let lastTimestamp = null;
+let lastMigrationId = null;
 let migrationId = null;
 let isRunning = true;
 
+// Cursor directory (same as backfill script)
+const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
+
 /**
- * Find the latest timestamp from existing data files (backfill or previous runs)
+ * Find the latest timestamp from backfill cursor files
+ * This is the authoritative source for where backfill stopped
  */
 async function findLatestTimestamp() {
-  const eventsDir = path.join(DATA_DIR, 'events');
+  // First, check cursor files from backfill (most reliable)
+  const cursorResult = findLatestFromCursors();
+  if (cursorResult) {
+    return cursorResult;
+  }
   
-  if (!fs.existsSync(eventsDir)) {
-    console.log('📁 No existing data directory found, starting fresh');
+  // Fallback: check raw data directory for binary files
+  const rawDir = path.join(DATA_DIR, 'raw');
+  if (fs.existsSync(rawDir)) {
+    const result = await findLatestFromRawData(rawDir);
+    if (result) return result;
+  }
+  
+  console.log('📁 No existing backfill data found, starting fresh');
+  return null;
+}
+
+/**
+ * Find latest timestamp from backfill cursor files
+ */
+function findLatestFromCursors() {
+  if (!fs.existsSync(CURSOR_DIR)) {
+    console.log('📁 No cursor directory found');
     return null;
   }
   
-  // Get all date directories, sorted descending
-  const dateDirs = fs.readdirSync(eventsDir)
-    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+  const cursorFiles = fs.readdirSync(CURSOR_DIR)
+    .filter(f => f.startsWith('cursor-') && f.endsWith('.json'));
+  
+  if (cursorFiles.length === 0) {
+    console.log('📁 No cursor files found');
+    return null;
+  }
+  
+  console.log(`📁 Found ${cursorFiles.length} cursor file(s)`);
+  
+  // Find the cursor with the latest timestamp (min_time is the earliest point reached)
+  // We want to continue from min_time (where backfill stopped going backward)
+  let latestMinTime = null;
+  let latestMigration = null;
+  let selectedCursor = null;
+  
+  for (const file of cursorFiles) {
+    try {
+      const cursorPath = path.join(CURSOR_DIR, file);
+      const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
+      
+      // min_time is where the backfill reached (going backward)
+      // We want to start v2/updates from this point forward
+      const minTime = cursor.min_time || cursor.last_before;
+      const migration = cursor.migration_id;
+      
+      if (minTime) {
+        // Prefer cursors from higher migrations, then earlier min_time
+        if (!latestMinTime || 
+            (migration > latestMigration) ||
+            (migration === latestMigration && minTime < latestMinTime)) {
+          latestMinTime = minTime;
+          latestMigration = migration;
+          selectedCursor = cursor;
+        }
+      }
+      
+      console.log(`   • ${file}: migration=${migration}, min_time=${minTime}, total=${cursor.total_updates || 0}`);
+    } catch (err) {
+      console.warn(`   ⚠️ Failed to read cursor ${file}: ${err.message}`);
+    }
+  }
+  
+  if (latestMinTime && selectedCursor) {
+    console.log(`📍 Resuming from backfill cursor: migration=${latestMigration}, timestamp=${latestMinTime}`);
+    lastMigrationId = latestMigration;
+    return latestMinTime;
+  }
+  
+  return null;
+}
+
+/**
+ * Fallback: Find latest timestamp from raw binary data files
+ */
+async function findLatestFromRawData(rawDir) {
+  // Check events subdirectory
+  const eventsDir = path.join(rawDir, 'events');
+  if (!fs.existsSync(eventsDir)) {
+    return null;
+  }
+  
+  // Get migration directories
+  const migrationDirs = fs.readdirSync(eventsDir)
+    .filter(d => d.startsWith('migration-'))
     .sort()
     .reverse();
   
-  if (dateDirs.length === 0) {
-    console.log('📁 No existing data files found, starting fresh');
+  if (migrationDirs.length === 0) {
     return null;
   }
   
-  // Check most recent directories for latest timestamp
-  for (const dateDir of dateDirs.slice(0, 3)) {
-    const dirPath = path.join(eventsDir, dateDir);
-    const files = fs.readdirSync(dirPath)
-      .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz'))
+  // Check most recent migration for date directories
+  for (const migDir of migrationDirs.slice(0, 2)) {
+    const migPath = path.join(eventsDir, migDir);
+    const dateDirs = fs.readdirSync(migPath)
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
       .sort()
       .reverse();
     
-    for (const file of files.slice(0, 3)) {
-      const filePath = path.join(dirPath, file);
-      const latest = await getLatestTimestampFromFile(filePath);
-      if (latest) {
-        console.log(`📍 Found latest timestamp: ${latest} from ${dateDir}/${file}`);
-        return latest;
-      }
+    if (dateDirs.length > 0) {
+      // Use the earliest date directory as the resume point
+      const earliestDate = dateDirs[dateDirs.length - 1];
+      const timestamp = `${earliestDate}T00:00:00Z`;
+      console.log(`📍 Found data in ${migDir}/${earliestDate}, resuming from ${timestamp}`);
+      return timestamp;
     }
   }
   
@@ -86,101 +168,79 @@ async function findLatestTimestamp() {
 }
 
 /**
- * Read the last few lines of a JSONL file to find latest timestamp
- */
-async function getLatestTimestampFromFile(filePath) {
-  return new Promise((resolve) => {
-    const lines = [];
-    const rl = readline.createInterface({
-      input: fs.createReadStream(filePath),
-      crlfDelay: Infinity
-    });
-    
-    rl.on('line', (line) => {
-      if (line.trim()) {
-        lines.push(line);
-        if (lines.length > 100) lines.shift(); // Keep last 100 lines
-      }
-    });
-    
-    rl.on('close', () => {
-      // Find latest timestamp from last lines
-      let latest = null;
-      for (const line of lines.reverse()) {
-        try {
-          const obj = JSON.parse(line);
-          const ts = obj.timestamp || obj.record_time;
-          if (ts && (!latest || ts > latest)) {
-            latest = ts;
-          }
-        } catch (e) {
-          // Skip invalid JSON
-        }
-      }
-      resolve(latest);
-    });
-    
-    rl.on('error', () => resolve(null));
-  });
-}
-
-/**
  * Detect latest migration from the scan API
- * Uses the updates endpoint with a minimal request to get migration_id
+ * Uses backfill cursor if available, otherwise queries API
  */
 async function detectLatestMigration() {
+  // If we found a migration from backfill cursor, use it
+  if (lastMigrationId !== null) {
+    migrationId = lastMigrationId;
+    console.log(`📍 Using migration_id from backfill cursor: ${migrationId}`);
+    setMigrationId(migrationId);
+    return migrationId;
+  }
+  
   try {
-    // Use the updates endpoint to detect migration - it returns migration_id in response
-    const response = await client.post('/v0/updates', {
+    // Query the API to detect current migration
+    const response = await client.post('/v2/updates', {
       page_size: 1
     });
     
-    // The response should contain migration_id
-    if (response.data && response.data.migration_id !== undefined) {
-      migrationId = response.data.migration_id;
-      console.log(`📍 Detected migration_id: ${migrationId}`);
+    // v2/updates response contains transactions array with migration_id
+    const transactions = response.data?.transactions || [];
+    if (transactions.length > 0 && transactions[0].migration_id !== undefined) {
+      migrationId = transactions[0].migration_id;
+      console.log(`📍 Detected migration_id from API: ${migrationId}`);
       setMigrationId(migrationId);
       return migrationId;
     }
     
-    // Fallback: use default migration ID 0
-    console.warn('⚠️ Could not detect migration_id from updates, using default: 0');
-    migrationId = 0;
+    // Fallback: use default migration ID 1
+    console.warn('⚠️ Could not detect migration_id, using default: 1');
+    migrationId = 1;
     setMigrationId(migrationId);
     return migrationId;
   } catch (err) {
     console.error('Failed to detect migration:', err.message);
-    // Fallback to migration 0 instead of crashing
-    console.warn('⚠️ Using fallback migration_id: 0');
-    migrationId = 0;
+    console.warn('⚠️ Using fallback migration_id: 1');
+    migrationId = 1;
     setMigrationId(migrationId);
     return migrationId;
   }
 }
 
 /**
- * Fetch updates from the scan API
- * Can use either offset-based or timestamp-based pagination
+ * Fetch updates from the scan API using v2/updates
+ * Uses proper pagination with after.after_migration_id and after.after_record_time
  */
-async function fetchUpdates(afterOffset = null, afterTimestamp = null) {
+async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
   try {
     const payload = {
-      migration_id: migrationId,
       page_size: BATCH_SIZE,
+      daml_value_encoding: 'compact_json',
     };
     
-    if (afterOffset) {
-      payload.after = afterOffset;
-    } else if (afterTimestamp) {
-      // Use begin_exclusive for timestamp-based fetching (after backfill)
-      payload.begin_exclusive = afterTimestamp;
+    // Use the "after" object for proper pagination (v2 API format)
+    if (afterMigrationId !== null && afterRecordTime) {
+      payload.after = {
+        after_migration_id: afterMigrationId,
+        after_record_time: afterRecordTime
+      };
     }
     
     const response = await client.post('/v2/updates', payload);
-    return response.data;
+    
+    // v2/updates returns { transactions: [...] }
+    const transactions = response.data?.transactions || [];
+    return { 
+      items: transactions,
+      // Track the last item for next pagination
+      lastMigrationId: transactions.length > 0 ? transactions[transactions.length - 1].migration_id : null,
+      lastRecordTime: transactions.length > 0 ? transactions[transactions.length - 1].record_time : null
+    };
   } catch (err) {
     if (err.response?.status === 404) {
-      return { items: [] };
+      return { items: [], lastMigrationId: null, lastRecordTime: null };
     }
     throw err;
   }
@@ -207,10 +267,6 @@ async function processUpdates(items) {
         events.push(normalizedEvent);
       }
     }
-    
-    // Track offset
-    const offset = tx?.offset || item.reassignment?.offset;
-    if (offset) lastOffset = offset;
   }
   
   // Buffer for batch writing (async)
@@ -224,31 +280,33 @@ async function processUpdates(items) {
  * Main ingestion loop
  */
 async function runIngestion() {
-  console.log('🚀 Starting Canton ledger ingestion (Parquet mode)\n');
+  console.log('🚀 Starting Canton ledger ingestion (v2/updates mode)\n');
   
-  // Detect migration
-  await detectLatestMigration();
-  
-  // Check for existing data from backfill
+  // Check for existing data from backfill first (sets lastMigrationId if found)
   lastTimestamp = await findLatestTimestamp();
   
-  if (lastTimestamp) {
-    console.log(`📍 Resuming from backfill timestamp: ${lastTimestamp}`);
+  // Then detect/confirm migration
+  await detectLatestMigration();
+  
+  // Track pagination state for v2/updates
+  let afterMigrationId = lastMigrationId || migrationId;
+  let afterRecordTime = lastTimestamp;
+  
+  if (afterRecordTime) {
+    console.log(`📍 Resuming from: migration=${afterMigrationId}, record_time=${afterRecordTime}`);
   } else {
     console.log('📍 Starting fresh (no existing data found)');
+    afterMigrationId = null; // Start from beginning
   }
   
   let totalUpdates = 0;
   let totalEvents = 0;
   let emptyPolls = 0;
-  let usingTimestamp = !!lastTimestamp; // Start with timestamp if we have backfill data
   
   while (isRunning) {
     try {
-      // Use timestamp-based fetching until we get an offset, then switch to offset-based
-      const data = usingTimestamp && !lastOffset
-        ? await fetchUpdates(null, lastTimestamp)
-        : await fetchUpdates(lastOffset, null);
+      // Fetch using v2/updates with proper (migration_id, record_time) pagination
+      const data = await fetchUpdates(afterMigrationId, afterRecordTime);
       
       if (!data.items || data.items.length === 0) {
         emptyPolls++;
@@ -277,14 +335,16 @@ async function runIngestion() {
       totalUpdates += updates;
       totalEvents += events;
       
-      // Once we have an offset, we're caught up and can use offset-based pagination
-      if (lastOffset && usingTimestamp) {
-        console.log(`✅ Caught up with live updates, switching to offset-based pagination`);
-        usingTimestamp = false;
+      // Update pagination cursor from response
+      if (data.lastMigrationId !== null) {
+        afterMigrationId = data.lastMigrationId;
+      }
+      if (data.lastRecordTime) {
+        afterRecordTime = data.lastRecordTime;
       }
       
       const stats = getBufferStats();
-      console.log(`📦 Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Buffer: ${stats.updates}/${stats.events}`);
+      console.log(`📦 Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Cursor: m${afterMigrationId}@${afterRecordTime?.substring(0, 19) || 'start'}`);
       
     } catch (err) {
       console.error('❌ Error during ingestion:', err.message);
