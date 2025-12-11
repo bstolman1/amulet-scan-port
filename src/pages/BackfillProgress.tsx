@@ -408,17 +408,29 @@ const BackfillProgress = () => {
                               </div>
                               {cursor.min_time && cursor.max_time && (
                                 <div className="space-y-1">
+                                  {/* Progress direction indicator: going from max_time → min_time */}
                                   <div className="flex items-center justify-between text-xs">
-                                    <span className="text-muted-foreground">Start: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
-                                    <span className="text-muted-foreground">End: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
+                                    <span className="text-green-400 font-medium">← Target: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
+                                    <span className="text-muted-foreground">Start: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")} →</span>
                                   </div>
                                   {cursor.last_before && (
                                     <div className="flex items-center justify-between text-xs">
-                                      <span className="text-primary font-semibold">Current: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}</span>
+                                      <span className="text-primary font-semibold">
+                                        Position: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}
+                                      </span>
                                       <span className="text-primary font-semibold">{progressPercent.toFixed(1)}%</span>
                                     </div>
                                   )}
-                                  <Progress value={progressPercent} className="h-2" />
+                                  <div className="relative">
+                                    <Progress value={progressPercent} className="h-2" />
+                                    {/* Direction arrow indicator */}
+                                    <div className="absolute inset-0 flex items-center pointer-events-none">
+                                      <div 
+                                        className="w-0 h-0 border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent border-r-[6px] border-r-primary transition-all duration-300"
+                                        style={{ marginLeft: `calc(${Math.min(progressPercent, 98)}% - 3px)` }}
+                                      />
+                                    </div>
+                                  </div>
                                   {eta && (
                                     <div className="flex items-center gap-1 text-xs text-amber-400">
                                       <Clock className="w-3 h-3" />
