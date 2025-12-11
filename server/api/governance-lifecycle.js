@@ -61,6 +61,15 @@ function extractPrimaryEntityName(text) {
     .replace(/\s*vote\s*(proposal)?\s*$/i, '')
     .trim();
   
+  // Pattern 0a: "Featured App Approved: AppName" - MUST come first for these specific announcements
+  const featuredApprovedMatch = cleanText.match(/featured\s*app\s*approved[:\s-]+(.+?)$/i);
+  if (featuredApprovedMatch) {
+    let name = featuredApprovedMatch[1].trim();
+    if (name.length > 1) {
+      return name;
+    }
+  }
+  
   // Pattern 0: "to implement/apply Featured Application status for AppName"
   // "for Featured Application status for AppName"
   // "for featured app rights for AppName"
@@ -84,8 +93,8 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 2: "Featured App Vote Proposal: AppName" or "Request: AppName"
-  const requestMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement|vote\s*proposal)[:\s-]+(.+?)$/i);
+  // Pattern 2: "Featured App Vote Proposal: AppName" or "Request: AppName" or "Approved: AppName"
+  const requestMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement|approved|vote\s*proposal)[:\s-]+(.+?)$/i);
   if (requestMatch) {
     let name = requestMatch[1].trim();
     // Remove network prefix if present
@@ -180,7 +189,7 @@ function extractIdentifiers(text) {
   }
   
   // Check if text contains featured app indicators
-  const isFeaturedApp = /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote)|application\s+status\s+for/i.test(text);
+  const isFeaturedApp = /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text);
   
   // Check if text contains validator indicators
   const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate)|sv\s+(?:application|onboarding)/i.test(text);
