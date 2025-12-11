@@ -58,18 +58,49 @@ const Supply = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  // Fetch Amulet contracts for supply calculations
+  // Check if local ACS server is available
+  const { data: localServerAvailable } = useQuery({
+    queryKey: ["localServerCheck"],
+    queryFn: async () => {
+      try {
+        const response = await fetch("http://localhost:3001/api/health");
+        return response.ok;
+      } catch {
+        return false;
+      }
+    },
+    staleTime: 30_000,
+  });
+
+  // Use server-side aggregation for supply totals (bypasses 10k limit)
+  const { data: supplyData, isLoading: supplyLoading, error: supplyError } = useQuery({
+    queryKey: ["serverSupplyTotals"],
+    queryFn: async () => {
+      const response = await fetch("http://localhost:3001/api/acs/rich-list?limit=1");
+      if (!response.ok) throw new Error("Failed to fetch supply data");
+      const data = await response.json();
+      return {
+        totalSupply: data.totalSupply || 0,
+        unlockedSupply: data.unlockedSupply || 0,
+        lockedSupply: data.lockedSupply || 0,
+        holderCount: data.holderCount || 0,
+      };
+    },
+    enabled: !!localServerAvailable,
+    staleTime: 30_000,
+  });
+
+  // Fallback to client-side calculation if server unavailable
   const { data: amuletData, isLoading: amuletLoading } = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:Amulet:Amulet",
-    !!latestSnapshot,
+    !!latestSnapshot && !localServerAvailable,
   );
 
-  // Fetch LockedAmulet contracts
   const { data: lockedData, isLoading: lockedLoading } = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:Amulet:LockedAmulet",
-    !!latestSnapshot,
+    !!latestSnapshot && !localServerAvailable,
   );
 
   // Fetch allocations
@@ -104,6 +135,7 @@ const Supply = () => {
   );
 
   const isLoading =
+    supplyLoading ||
     amuletLoading ||
     lockedLoading ||
     allocationsQuery.isLoading ||
@@ -112,18 +144,18 @@ const Supply = () => {
     closedLoading ||
     latestRoundLoading;
 
-  // Calculate supply metrics
-  const totalUnlocked = (amuletData?.data || []).reduce((sum: number, amulet: any) => {
+  // Use server-side totals if available, otherwise fallback to client calculation
+  const totalUnlocked = supplyData?.unlockedSupply ?? (amuletData?.data || []).reduce((sum: number, amulet: any) => {
     const amount = toCC(amulet.amount?.initialAmount || "0");
     return sum + amount;
   }, 0);
 
-  const totalLocked = (lockedData?.data || []).reduce((sum: number, locked: any) => {
+  const totalLocked = supplyData?.lockedSupply ?? (lockedData?.data || []).reduce((sum: number, locked: any) => {
     const amount = toCC(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
     return sum + amount;
   }, 0);
 
-  const totalSupply = totalUnlocked + totalLocked;
+  const totalSupply = supplyData?.totalSupply ?? (totalUnlocked + totalLocked);
   const circulatingSupply = totalUnlocked;
 
   // Process allocations
