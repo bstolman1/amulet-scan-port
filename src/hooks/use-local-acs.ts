@@ -20,18 +20,20 @@ export function useLocalACSAvailable() {
     queryKey: ["localACSAvailable"],
     queryFn: async () => {
       try {
+        // First check if API is reachable at all
         const available = await isApiAvailable();
         if (!available) return false;
         
-        // Also check if ACS data exists
+        // Then verify ACS data actually exists
         const stats = await getACSStats();
-        return stats.data.total_contracts > 0;
+        return stats?.data?.total_contracts > 0;
       } catch {
         return false;
       }
     },
     staleTime: 60_000,
     retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
