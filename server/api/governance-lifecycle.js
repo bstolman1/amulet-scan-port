@@ -182,6 +182,9 @@ function extractIdentifiers(text) {
     }
   }
   
+  // Check if this is a CIP discussion (even without a number) - e.g., "CIP Discuss-"
+  const isCipDiscussion = /\bCIP\s*(?:Discuss|Discussion|Vote|Announce)/i.test(text);
+  
   // Detect network (testnet or mainnet)
   if (/testnet|test\s*net|tn\b/i.test(text)) {
     identifiers.network = 'testnet';
@@ -189,8 +192,8 @@ function extractIdentifiers(text) {
     identifiers.network = 'mainnet';
   }
   
-  // Check if text contains featured app indicators
-  const isFeaturedApp = /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text);
+  // Check if text contains featured app indicators - BUT NOT if it's a CIP discussion about featured apps
+  const isFeaturedApp = !isCipDiscussion && /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text);
   
   // Check if text contains validator indicators
   const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate)|sv\s+(?:application|onboarding)/i.test(text);
@@ -199,12 +202,16 @@ function extractIdentifiers(text) {
   const entityName = extractPrimaryEntityName(text);
   identifiers.entityName = entityName;
   
+  // Add CIP discussion flag to identifiers
+  identifiers.isCipDiscussion = isCipDiscussion;
+  
   // Debug log for featured app detection
   if (text.toLowerCase().includes('featured app approved')) {
     console.log(`IDENTIFIERS: isFeaturedApp=${isFeaturedApp}, entityName="${entityName}", text="${text.slice(0, 60)}"`);
   }
   
-  if (isFeaturedApp && entityName) {
+  // Don't set appName if this is a CIP discussion (even if it mentions featured apps)
+  if (isFeaturedApp && entityName && !isCipDiscussion) {
     identifiers.appName = entityName;
   }
   
@@ -437,6 +444,7 @@ function correlateTopics(allTopics) {
     // This prevents generic "Featured App Approved" type topics from grouping everything
     const topicEntityName = topic.identifiers.entityName;
     const hasCip = !!topic.identifiers.cipNumber;
+    const isCipDiscussion = !!topic.identifiers.isCipDiscussion;  // CIP Discuss without a number
     const hasAppIndicator = !!topic.identifiers.appName;
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
@@ -453,8 +461,8 @@ function correlateTopics(allTopics) {
     let type;
     if (isOutcome) {
       type = 'outcome';  // Outcomes takes priority - check first
-    } else if (hasCip) {
-      type = 'cip';
+    } else if (hasCip || isCipDiscussion) {
+      type = 'cip';  // CIP number OR "CIP Discuss" pattern
     } else if (hasAppIndicator && topicEntityName) {
       type = 'featured-app';
     } else if (hasValidatorIndicator && topicEntityName) {
