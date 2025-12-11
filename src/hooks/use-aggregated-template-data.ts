@@ -133,19 +133,21 @@ export function useAggregatedTemplateData(
       // Try DuckDB first if configured and available
       if (useDuckDB && await isDuckDBAvailable()) {
         try {
-          console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}`);
+          // Extract entity name from templateSuffix (e.g., "Splice:Amulet:Amulet" -> "Amulet")
+          // Also extract module for more precise matching (e.g., "Amulet" vs "Ans")
+          const parts = templateSuffix.split(':');
+          const entityName = parts[parts.length - 1];  // Last part is entity name
+          const moduleName = parts.length >= 2 ? parts[parts.length - 2] : null;  // Second to last is module
           
-          // Pass the FULL template suffix for matching (e.g., "Splice:Amulet:Amulet")
-          // The API will match template_id LIKE '%Splice:Amulet:Amulet'
+          console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}, entity: ${entityName}, module: ${moduleName}`);
+          
+          // Use entity parameter which matches entity_name column directly
           const response = await getLocalACSContracts({ 
-            template: templateSuffix,  // Use template param for LIKE matching, not entity
+            entity: entityName,
             limit: 10000 
           });
           
-          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts for ${templateSuffix}`);
-          if (response.data?.length > 0) {
-            console.log(`[useAggregatedTemplateData] First contract keys:`, Object.keys(response.data[0]));
-          }
+          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts for entity=${entityName}`);
           
           return {
             data: response.data || [],
