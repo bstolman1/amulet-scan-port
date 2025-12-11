@@ -10,6 +10,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { toCC } from "@/lib/amount-utils";
 
 interface HolderBalance {
   owner: string;
@@ -47,7 +48,7 @@ const RichList = () => {
     // Process regular amulets from all packages
     (amuletData?.data || []).forEach((amulet: any) => {
       const owner = amulet.owner;
-      const amount = parseFloat(amulet.amount?.initialAmount || "0");
+      const amount = toCC(amulet.amount?.initialAmount || "0");
 
       if (!balanceMap.has(owner)) {
         balanceMap.set(owner, { owner, amount: 0, locked: 0, total: 0 });
@@ -60,7 +61,7 @@ const RichList = () => {
     // Process locked amulets from all packages
     (lockedData?.data || []).forEach((locked: any) => {
       const owner = locked.amulet?.owner || locked.owner;
-      const amount = parseFloat(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
+      const amount = toCC(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
 
       if (!balanceMap.has(owner)) {
         balanceMap.set(owner, { owner, amount: 0, locked: 0, total: 0 });

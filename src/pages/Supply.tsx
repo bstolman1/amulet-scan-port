@@ -27,6 +27,7 @@ import { PaginationControls } from "@/components/PaginationControls";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { toCC } from "@/lib/amount-utils";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -113,12 +114,12 @@ const Supply = () => {
 
   // Calculate supply metrics
   const totalUnlocked = (amuletData?.data || []).reduce((sum: number, amulet: any) => {
-    const amount = parseFloat(amulet.amount?.initialAmount || "0");
+    const amount = toCC(amulet.amount?.initialAmount || "0");
     return sum + amount;
   }, 0);
 
   const totalLocked = (lockedData?.data || []).reduce((sum: number, locked: any) => {
-    const amount = parseFloat(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
+    const amount = toCC(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
     return sum + amount;
   }, 0);
 
@@ -169,7 +170,7 @@ const Supply = () => {
   const totalAllocationsPages = Math.ceil(filteredAllocations.length / itemsPerPage);
 
   const totalAllocationAmount = filteredAllocations.reduce((sum: number, allocation: any) => {
-    const amount = parseFloat(getField(allocation, ["amount", "allocation.transferLeg.amount"]) || "0");
+    const amount = toCC(getField(allocation, ["amount", "allocation.transferLeg.amount"]) || "0");
     return sum + amount;
   }, 0);
 
