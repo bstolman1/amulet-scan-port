@@ -28,6 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { toCC } from "@/lib/amount-utils";
+import { getACSRichList } from "@/lib/duckdb-api-client";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -58,19 +59,12 @@ const Supply = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  // Fetch Amulet contracts for supply calculations
-  const { data: amuletData, isLoading: amuletLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Amulet:Amulet",
-    !!latestSnapshot,
-  );
-
-  // Fetch LockedAmulet contracts
-  const { data: lockedData, isLoading: lockedLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Amulet:LockedAmulet",
-    !!latestSnapshot,
-  );
+  // Fetch supply stats from server-side aggregation (uses same endpoint as rich-list)
+  const { data: supplyStats, isLoading: supplyLoading } = useQuery({
+    queryKey: ["supply-stats"],
+    queryFn: () => getACSRichList({ limit: 1 }), // We only need the stats, not the holder list
+    staleTime: 30000,
+  });
 
   // Fetch allocations
   const allocationsQuery = useAggregatedTemplateData(
@@ -104,26 +98,17 @@ const Supply = () => {
   );
 
   const isLoading =
-    amuletLoading ||
-    lockedLoading ||
+    supplyLoading ||
     allocationsQuery.isLoading ||
     openLoading ||
     issuingLoading ||
     closedLoading ||
     latestRoundLoading;
 
-  // Calculate supply metrics
-  const totalUnlocked = (amuletData?.data || []).reduce((sum: number, amulet: any) => {
-    const amount = toCC(amulet.amount?.initialAmount || "0");
-    return sum + amount;
-  }, 0);
-
-  const totalLocked = (lockedData?.data || []).reduce((sum: number, locked: any) => {
-    const amount = toCC(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
-    return sum + amount;
-  }, 0);
-
-  const totalSupply = totalUnlocked + totalLocked;
+  // Use server-side aggregated supply metrics
+  const totalUnlocked = supplyStats?.unlockedSupply || 0;
+  const totalLocked = supplyStats?.lockedSupply || 0;
+  const totalSupply = supplyStats?.totalSupply || 0;
   const circulatingSupply = totalUnlocked;
 
   // Process allocations
