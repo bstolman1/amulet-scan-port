@@ -265,12 +265,15 @@ router.get('/templates', async (req, res) => {
 router.get('/contracts', async (req, res) => {
   try {
     if (!hasACSData()) {
+      console.log('[ACS] No ACS data available');
       return res.json({ data: [] });
     }
 
     const { template, entity } = req.query;
     const limit = Math.min(parseInt(req.query.limit) || 100, 10000);
     const offset = parseInt(req.query.offset) || 0;
+
+    console.log(`[ACS] Contracts request: template=${template}, entity=${entity}, limit=${limit}`);
 
     let whereClause = '1=1';
     if (template) {
@@ -279,6 +282,8 @@ router.get('/contracts', async (req, res) => {
       // Match by entity_name OR template_id containing the entity name
       whereClause = `(entity_name = '${entity}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
     }
+
+    console.log(`[ACS] WHERE clause: ${whereClause}`);
 
     const sql = `
       WITH latest_snapshot AS (
@@ -303,6 +308,7 @@ router.get('/contracts', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
+    console.log(`[ACS] Found ${rows.length} contracts for entity=${entity}`);
     
     // Parse payload JSON and flatten for frontend consumption
     const parsedRows = rows.map(row => {
@@ -386,6 +392,56 @@ router.get('/stats', async (req, res) => {
     res.json(serializeBigInt({ data: rows[0] || {} }));
   } catch (err) {
     console.error('ACS stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/acs/debug - Debug endpoint to show entity names and template IDs
+router.get('/debug', async (req, res) => {
+  try {
+    if (!hasACSData()) {
+      return res.json({ data: null, message: 'No ACS data available' });
+    }
+
+    // Get distinct entity_names
+    const entitySql = `
+      SELECT DISTINCT entity_name, COUNT(*) as count
+      FROM ${getACSSource()}
+      GROUP BY entity_name
+      ORDER BY count DESC
+      LIMIT 100
+    `;
+
+    // Get sample template_ids
+    const templateSql = `
+      SELECT DISTINCT template_id, COUNT(*) as count
+      FROM ${getACSSource()}
+      GROUP BY template_id
+      ORDER BY count DESC
+      LIMIT 100
+    `;
+
+    // Get sample of columns
+    const columnsSql = `
+      SELECT * FROM ${getACSSource()} LIMIT 1
+    `;
+
+    const [entities, templates, sample] = await Promise.all([
+      db.safeQuery(entitySql),
+      db.safeQuery(templateSql),
+      db.safeQuery(columnsSql),
+    ]);
+
+    res.json(serializeBigInt({
+      data: {
+        entity_names: entities,
+        template_ids: templates,
+        sample_columns: sample.length > 0 ? Object.keys(sample[0]) : [],
+        sample_record: sample[0] || null,
+      }
+    }));
+  } catch (err) {
+    console.error('ACS debug error:', err);
     res.status(500).json({ error: err.message });
   }
 });
