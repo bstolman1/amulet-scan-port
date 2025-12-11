@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cron from 'node-cron';
 import eventsRouter from './api/events.js';
 import partyRouter from './api/party.js';
 import contractsRouter from './api/contracts.js';
@@ -8,7 +9,7 @@ import searchRouter from './api/search.js';
 import backfillRouter from './api/backfill.js';
 import acsRouter from './api/acs.js';
 import announcementsRouter from './api/announcements.js';
-import governanceLifecycleRouter from './api/governance-lifecycle.js';
+import governanceLifecycleRouter, { fetchFreshData, writeCache } from './api/governance-lifecycle.js';
 import db, { initializeViews } from './duckdb/connection.js';
 
 const app = express();
@@ -63,7 +64,20 @@ app.use('/api/acs', acsRouter);
 app.use('/api/announcements', announcementsRouter);
 app.use('/api/governance-lifecycle', governanceLifecycleRouter);
 
+// Schedule governance data refresh every 4 hours
+cron.schedule('0 */4 * * *', async () => {
+  console.log('⏰ Scheduled governance data refresh starting...');
+  try {
+    const data = await fetchFreshData();
+    writeCache(data);
+    console.log(`✅ Scheduled refresh complete. ${data.stats?.totalTopics || 0} topics cached.`);
+  } catch (err) {
+    console.error('❌ Scheduled governance refresh failed:', err.message);
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
+  console.log(`⏰ Governance data refresh scheduled every 4 hours`);
 });

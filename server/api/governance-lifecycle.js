@@ -785,4 +785,5 @@ router.get('/cache-info', (req, res) => {
   }
 });
 
+export { fetchFreshData, writeCache, readCache };
 export default router;
