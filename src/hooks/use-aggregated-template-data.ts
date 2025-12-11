@@ -133,18 +133,18 @@ export function useAggregatedTemplateData(
       // Try DuckDB first if configured and available
       if (useDuckDB && await isDuckDBAvailable()) {
         try {
-          const entityName = templateSuffix.split(':').pop() || templateSuffix;
-          console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}, entity: ${entityName}`);
+          console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}`);
           
-          // For local ACS, we use the entity name pattern (e.g., "Splice:Amulet:Amulet")
+          // Pass the FULL template suffix for matching (e.g., "Splice:Amulet:Amulet")
+          // The API will match template_id LIKE '%Splice:Amulet:Amulet'
           const response = await getLocalACSContracts({ 
-            entity: entityName,
+            template: templateSuffix,  // Use template param for LIKE matching, not entity
             limit: 10000 
           });
           
-          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts for ${entityName}`);
+          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts for ${templateSuffix}`);
           if (response.data?.length > 0) {
-            console.log(`[useAggregatedTemplateData] First contract sample:`, JSON.stringify(response.data[0]).substring(0, 500));
+            console.log(`[useAggregatedTemplateData] First contract keys:`, Object.keys(response.data[0]));
           }
           
           return {
