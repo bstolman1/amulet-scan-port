@@ -77,6 +77,8 @@ interface GovernanceData {
     byStage: Record<string, number>;
     groupCounts: Record<string, number>;
   };
+  cachedAt?: string;
+  stale?: boolean;
 }
 
 // Type-specific workflow stages
@@ -111,6 +113,7 @@ const TYPE_CONFIG = {
 const GovernanceFlow = () => {
   const [data, setData] = useState<GovernanceData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -120,14 +123,22 @@ const GovernanceFlow = () => {
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [datePreset, setDatePreset] = useState<string>('all');
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
 
-  const fetchData = async () => {
-    setIsLoading(true);
+  const fetchData = async (forceRefresh = false) => {
+    if (forceRefresh) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
     setError(null);
     
     try {
       const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle`);
+      const url = forceRefresh 
+        ? `${baseUrl}/api/governance-lifecycle?refresh=true`
+        : `${baseUrl}/api/governance-lifecycle`;
+      const response = await fetch(url);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.status}`);
@@ -135,15 +146,17 @@ const GovernanceFlow = () => {
       
       const result = await response.json();
       
-      if (result.error) {
+      if (result.error && !result.lifecycleItems) {
         throw new Error(result.error);
       }
       
       setData(result);
+      setCachedAt(result.cachedAt || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch governance data');
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -474,15 +487,31 @@ const GovernanceFlow = () => {
             <p className="text-muted-foreground mt-1">
               Track CIPs, Featured Apps, and Validators through the governance process
             </p>
+            {cachedAt && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Last updated: {new Date(cachedAt).toLocaleString()}
+              </p>
+            )}
           </div>
-          <Button 
-            onClick={fetchData} 
-            disabled={isLoading}
-            className="gap-2 shrink-0"
-          >
-            <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <div className="flex gap-2 shrink-0">
+            <Button 
+              onClick={() => fetchData(false)} 
+              disabled={isLoading || isRefreshing}
+              variant="outline"
+              className="gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+              Load Cached
+            </Button>
+            <Button 
+              onClick={() => fetchData(true)} 
+              disabled={isLoading || isRefreshing}
+              className="gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              Refresh from Groups.io
+            </Button>
+          </div>
         </div>
 
         {/* Stats Overview */}
@@ -541,6 +570,16 @@ const GovernanceFlow = () => {
                   </Badge>
                 ))}
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Stale Cache Warning */}
+        {data?.stale && (
+          <Card className="border-yellow-500/50 bg-yellow-500/10">
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
+              <span className="text-yellow-500">Showing cached data (refresh failed). Click "Refresh from Groups.io" to try again.</span>
             </CardContent>
           </Card>
         )}
@@ -985,26 +1024,56 @@ const GovernanceFlow = () => {
                               </div>
                             ))
                           ) : (
-                            /* Single network view */
-                            (WORKFLOW_STAGES[group.items[0].type] || WORKFLOW_STAGES.other).map(stage => {
-                              const config = STAGE_CONFIG[stage];
-                              if (!config) return null;
-                              const stageTopics = group.items[0].stages[stage];
-                              if (!stageTopics || stageTopics.length === 0) return null;
-                              const Icon = config.icon;
+                            /* Single network view - show stages or fallback to all topics */
+                            (() => {
+                              const item = group.items[0];
                               
-                              return (
-                                <div key={stage} className="space-y-2">
-                                  <h4 className="text-sm font-medium flex items-center gap-2">
-                                    <Icon className="h-4 w-4" />
-                                    {config.label} ({stageTopics.length})
-                                  </h4>
-                                  <div className="space-y-2 pl-6">
-                                    {stageTopics.map(topic => renderTopicCard(topic))}
+                              // For outcomes, always show topics directly since they don't follow multi-stage workflow
+                              if (item.type === 'outcome' && item.topics.length > 0) {
+                                return (
+                                  <div className="space-y-2">
+                                    <h4 className="text-sm font-medium">Topics ({item.topics.length})</h4>
+                                    <div className="space-y-2 pl-6">
+                                      {item.topics.map(topic => renderTopicCard(topic, true))}
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })
+                                );
+                              }
+                              
+                              const stageElements = (WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
+                                const config = STAGE_CONFIG[stage];
+                                if (!config) return null;
+                                const stageTopics = item.stages[stage];
+                                if (!stageTopics || stageTopics.length === 0) return null;
+                                const Icon = config.icon;
+                                
+                                return (
+                                  <div key={stage} className="space-y-2">
+                                    <h4 className="text-sm font-medium flex items-center gap-2">
+                                      <Icon className="h-4 w-4" />
+                                      {config.label} ({stageTopics.length})
+                                    </h4>
+                                    <div className="space-y-2 pl-6">
+                                      {stageTopics.map(topic => renderTopicCard(topic))}
+                                    </div>
+                                  </div>
+                                );
+                              }).filter(Boolean);
+                              
+                              // Fallback: if no stage-based content, show all topics directly
+                              if (stageElements.length === 0 && item.topics.length > 0) {
+                                return (
+                                  <div className="space-y-2">
+                                    <h4 className="text-sm font-medium">Topics ({item.topics.length})</h4>
+                                    <div className="space-y-2 pl-6">
+                                      {item.topics.map(topic => renderTopicCard(topic, true))}
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              
+                              return stageElements;
+                            })()
                           )}
                         </CardContent>
                       )}
