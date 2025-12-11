@@ -348,38 +348,37 @@ router.get('/rich-list', async (req, res) => {
 
     console.log(`[ACS] Rich list request: limit=${limit}, search=${search}`);
 
-    // Calculate holder balances aggregated by owner in SQL using DuckDB json_extract_string
+    // Calculate holder balances aggregated by owner across ALL migration files in the ACS data
+    // (no snapshot_time filter - aggregate everything in the current ACS data)
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      amulet_balances AS (
+      WITH amulet_balances AS (
         SELECT 
-          json_extract_string(payload, '$.owner') as owner,
+          payload->>'owner' as owner,
           CAST(COALESCE(
-            json_extract_string(payload, '$.amount.initialAmount'),
+            payload->>'$.amount.initialAmount',
+            payload->'amount'->>'initialAmount',
             '0'
           ) AS DOUBLE) / 10000000000.0 as amount
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
-          AND json_extract_string(payload, '$.owner') IS NOT NULL
+        WHERE (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+          AND payload->>'owner' IS NOT NULL
       ),
       locked_balances AS (
         SELECT 
           COALESCE(
-            json_extract_string(payload, '$.amulet.owner'),
-            json_extract_string(payload, '$.owner')
+            payload->'amulet'->>'owner',
+            payload->>'owner'
           ) as owner,
           CAST(COALESCE(
-            json_extract_string(payload, '$.amulet.amount.initialAmount'),
-            json_extract_string(payload, '$.amount.initialAmount'),
+            payload->>'$.amulet.amount.initialAmount',
+            payload->'amulet'->'amount'->>'initialAmount',
+            payload->>'$.amount.initialAmount',
+            payload->'amount'->>'initialAmount',
             '0'
           ) AS DOUBLE) / 10000000000.0 as amount
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
-          AND (json_extract_string(payload, '$.amulet.owner') IS NOT NULL OR json_extract_string(payload, '$.owner') IS NOT NULL)
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
+          AND (payload->'amulet'->>'owner' IS NOT NULL OR payload->>'owner' IS NOT NULL)
       ),
       combined AS (
         SELECT owner, amount, 0.0 as locked FROM amulet_balances
@@ -405,44 +404,41 @@ router.get('/rich-list', async (req, res) => {
     const rows = await db.safeQuery(sql);
     console.log(`[ACS] Rich list returned ${rows.length} holders`);
 
-    // Get total supply and holder count
+    // Get total supply and holder count - aggregate across ALL migration files
     const statsSql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      amulet_total AS (
+      WITH amulet_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
-            json_extract_string(payload, '$.amount.initialAmount'),
+            payload->>'$.amount.initialAmount',
+            payload->'amount'->>'initialAmount',
             '0'
           ) AS DOUBLE) / 10000000000.0
         ), 0) as total
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%')
+        WHERE (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
       ),
       locked_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
-            json_extract_string(payload, '$.amulet.amount.initialAmount'),
-            json_extract_string(payload, '$.amount.initialAmount'),
+            payload->>'$.amulet.amount.initialAmount',
+            payload->'amulet'->'amount'->>'initialAmount',
             '0'
           ) AS DOUBLE) / 10000000000.0
         ), 0) as total
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
       ),
       holder_count AS (
         SELECT COUNT(DISTINCT COALESCE(
-          json_extract_string(payload, '$.amulet.owner'),
-          json_extract_string(payload, '$.owner')
+          payload->'amulet'->>'owner',
+          payload->>'owner'
         )) as count
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name IN ('Amulet', 'LockedAmulet') 
-               OR template_id LIKE '%:Amulet:%' 
-               OR template_id LIKE '%:LockedAmulet:%')
+        WHERE (entity_name IN ('Amulet', 'LockedAmulet') 
+             OR template_id LIKE '%:Amulet:%' 
+             OR template_id LIKE '%:LockedAmulet:%'
+             OR template_id LIKE '%:Amulet'
+             OR template_id LIKE '%:LockedAmulet')
       )
       SELECT 
         amulet_total.total + locked_total.total as total_supply,
@@ -536,208 +532,6 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// GET /api/acs/supply-stats - Get aggregated supply statistics (server-side calculation)
-router.get('/supply-stats', async (req, res) => {
-  try {
-    if (!hasACSData()) {
-      return res.json({ 
-        totalSupply: 0, 
-        unlockedSupply: 0, 
-        lockedSupply: 0,
-        amuletCount: 0,
-        lockedCount: 0,
-      });
-    }
-
-    console.log('[ACS] Supply stats request');
-
-    // Calculate supply totals in SQL
-    const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      amulet_stats AS (
-        SELECT 
-          COUNT(*) as count,
-          COALESCE(SUM(
-            CAST(COALESCE(
-              json_extract_string(payload, '$.amount.initialAmount'),
-              '0'
-            ) AS DOUBLE) / 10000000000.0
-          ), 0) as total
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
-      ),
-      locked_stats AS (
-        SELECT 
-          COUNT(*) as count,
-          COALESCE(SUM(
-            CAST(COALESCE(
-              json_extract_string(payload, '$.amulet.amount.initialAmount'),
-              json_extract_string(payload, '$.amount.initialAmount'),
-              '0'
-            ) AS DOUBLE) / 10000000000.0
-          ), 0) as total
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
-      )
-      SELECT 
-        amulet_stats.total + locked_stats.total as total_supply,
-        amulet_stats.total as unlocked_supply,
-        locked_stats.total as locked_supply,
-        amulet_stats.count as amulet_count,
-        locked_stats.count as locked_count
-      FROM amulet_stats, locked_stats
-    `;
-
-    const rows = await db.safeQuery(sql);
-    const result = rows[0] || {};
-    
-    console.log(`[ACS] Supply stats: total=${result.total_supply}, unlocked=${result.unlocked_supply}, locked=${result.locked_supply}`);
-
-    res.json(serializeBigInt({
-      totalSupply: result.total_supply || 0,
-      unlockedSupply: result.unlocked_supply || 0,
-      lockedSupply: result.locked_supply || 0,
-      amuletCount: result.amulet_count || 0,
-      lockedCount: result.locked_count || 0,
-    }));
-  } catch (err) {
-    console.error('ACS supply-stats error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/acs/validator-stats - Get aggregated validator license statistics
-router.get('/validator-stats', async (req, res) => {
-  try {
-    if (!hasACSData()) {
-      return res.json({ 
-        licenseCount: 0, 
-        couponCount: 0, 
-        livenessCount: 0,
-        rightsCount: 0,
-        uniqueValidators: 0,
-      });
-    }
-
-    console.log('[ACS] Validator stats request');
-
-    const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      licenses AS (
-        SELECT COUNT(*) as count
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'ValidatorLicense' OR template_id LIKE '%:ValidatorLicense:%' OR template_id LIKE '%ValidatorLicense:ValidatorLicense')
-      ),
-      coupons AS (
-        SELECT COUNT(*) as count
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'ValidatorFaucetCoupon' OR template_id LIKE '%:ValidatorFaucetCoupon:%' OR template_id LIKE '%ValidatorFaucetCoupon')
-      ),
-      liveness AS (
-        SELECT COUNT(*) as count
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'ValidatorLivenessActivityRecord' OR template_id LIKE '%:ValidatorLivenessActivityRecord:%' OR template_id LIKE '%ValidatorLivenessActivityRecord')
-      ),
-      rights AS (
-        SELECT COUNT(*) as count
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'ValidatorRight' OR template_id LIKE '%:ValidatorRight:%' OR template_id LIKE '%:ValidatorRight')
-      ),
-      unique_validators AS (
-        SELECT COUNT(DISTINCT json_extract_string(payload, '$.validator')) as count
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'ValidatorLicense' OR template_id LIKE '%:ValidatorLicense:%' OR template_id LIKE '%ValidatorLicense:ValidatorLicense')
-      )
-      SELECT 
-        licenses.count as license_count,
-        coupons.count as coupon_count,
-        liveness.count as liveness_count,
-        rights.count as rights_count,
-        unique_validators.count as unique_validators
-      FROM licenses, coupons, liveness, rights, unique_validators
-    `;
-
-    const rows = await db.safeQuery(sql);
-    const result = rows[0] || {};
-    
-    console.log(`[ACS] Validator stats: licenses=${result.license_count}, coupons=${result.coupon_count}`);
-
-    res.json(serializeBigInt({
-      licenseCount: result.license_count || 0,
-      couponCount: result.coupon_count || 0,
-      livenessCount: result.liveness_count || 0,
-      rightsCount: result.rights_count || 0,
-      uniqueValidators: result.unique_validators || 0,
-    }));
-  } catch (err) {
-    console.error('ACS validator-stats error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/acs/traffic-stats - Get aggregated member traffic statistics
-router.get('/traffic-stats', async (req, res) => {
-  try {
-    if (!hasACSData()) {
-      return res.json({ 
-        totalRecords: 0, 
-        uniqueMembers: 0, 
-        totalTrafficBytes: 0,
-      });
-    }
-
-    console.log('[ACS] Traffic stats request');
-
-    const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      traffic_data AS (
-        SELECT 
-          json_extract_string(payload, '$.member') as member,
-          CAST(COALESCE(
-            json_extract_string(payload, '$.totalTrafficBytes'),
-            json_extract_string(payload, '$.totalPurchased'),
-            '0'
-          ) AS BIGINT) as traffic_bytes
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'MemberTraffic' OR template_id LIKE '%:MemberTraffic:%' OR template_id LIKE '%:MemberTraffic')
-      )
-      SELECT 
-        COUNT(*) as total_records,
-        COUNT(DISTINCT member) as unique_members,
-        COALESCE(SUM(traffic_bytes), 0) as total_traffic_bytes
-      FROM traffic_data
-    `;
-
-    const rows = await db.safeQuery(sql);
-    const result = rows[0] || {};
-    
-    console.log(`[ACS] Traffic stats: records=${result.total_records}, members=${result.unique_members}, bytes=${result.total_traffic_bytes}`);
-
-    res.json(serializeBigInt({
-      totalRecords: result.total_records || 0,
-      uniqueMembers: result.unique_members || 0,
-      totalTrafficBytes: result.total_traffic_bytes || 0,
-    }));
-  } catch (err) {
-    console.error('ACS traffic-stats error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // GET /api/acs/debug - Debug endpoint to show entity names and template IDs
 router.get('/debug', async (req, res) => {
   try {
@@ -768,19 +562,10 @@ router.get('/debug', async (req, res) => {
       SELECT * FROM ${getACSSource()} LIMIT 1
     `;
 
-    // Get sample Amulet payload for debugging amount extraction
-    const amuletSampleSql = `
-      SELECT payload
-      FROM ${getACSSource()}
-      WHERE entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%'
-      LIMIT 3
-    `;
-
-    const [entities, templates, sample, amuletSamples] = await Promise.all([
+    const [entities, templates, sample] = await Promise.all([
       db.safeQuery(entitySql),
       db.safeQuery(templateSql),
       db.safeQuery(columnsSql),
-      db.safeQuery(amuletSampleSql),
     ]);
 
     res.json(serializeBigInt({
@@ -789,13 +574,6 @@ router.get('/debug', async (req, res) => {
         template_ids: templates,
         sample_columns: sample.length > 0 ? Object.keys(sample[0]) : [],
         sample_record: sample[0] || null,
-        amulet_payloads: amuletSamples.map(s => {
-          try {
-            return typeof s.payload === 'string' ? JSON.parse(s.payload) : s.payload;
-          } catch {
-            return s.payload;
-          }
-        }),
       }
     }));
   } catch (err) {
