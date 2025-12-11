@@ -1027,6 +1027,19 @@ const GovernanceFlow = () => {
                             /* Single network view - show stages or fallback to all topics */
                             (() => {
                               const item = group.items[0];
+                              
+                              // For outcomes, always show topics directly since they don't follow multi-stage workflow
+                              if (item.type === 'outcome' && item.topics.length > 0) {
+                                return (
+                                  <div className="space-y-2">
+                                    <h4 className="text-sm font-medium">Topics ({item.topics.length})</h4>
+                                    <div className="space-y-2 pl-6">
+                                      {item.topics.map(topic => renderTopicCard(topic, true))}
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              
                               const stageElements = (WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
                                 const config = STAGE_CONFIG[stage];
                                 if (!config) return null;
