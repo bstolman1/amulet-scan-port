@@ -120,14 +120,15 @@ router.get('/snapshots', async (req, res) => {
   }
 });
 
-// GET /api/acs/latest - Get latest snapshot summary
+// GET /api/acs/latest - Get latest snapshot summary with supply metrics
 router.get('/latest', async (req, res) => {
   try {
     if (!hasACSData()) {
       return res.json({ data: null, message: 'No ACS data available' });
     }
 
-    const sql = `
+    // Get basic snapshot info
+    const basicSql = `
       SELECT 
         snapshot_time,
         migration_id,
@@ -140,13 +141,71 @@ router.get('/latest', async (req, res) => {
       LIMIT 1
     `;
 
-    const rows = await db.safeQuery(sql);
+    const basicRows = await db.safeQuery(basicSql);
     
-    if (rows.length === 0) {
+    if (basicRows.length === 0) {
       return res.json({ data: null });
     }
 
-    const row = rows[0];
+    const row = basicRows[0];
+    const snapshotTime = row.snapshot_time;
+
+    // Calculate supply metrics from Amulet and LockedAmulet contracts
+    const supplySql = `
+      WITH latest_contracts AS (
+        SELECT template_id, entity_name, payload
+        FROM ${getACSSource()}
+        WHERE snapshot_time = '${snapshotTime}'
+      ),
+      amulet_totals AS (
+        SELECT 
+          COALESCE(SUM(
+            CAST(
+              COALESCE(
+                payload->>'$.amount.initialAmount',
+                payload->'amount'->>'initialAmount',
+                '0'
+              ) AS DOUBLE
+            )
+          ), 0) as amulet_total
+        FROM latest_contracts
+        WHERE entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%'
+      ),
+      locked_totals AS (
+        SELECT 
+          COALESCE(SUM(
+            CAST(
+              COALESCE(
+                payload->>'$.amulet.amount.initialAmount',
+                payload->'amulet'->'amount'->>'initialAmount',
+                '0'
+              ) AS DOUBLE
+            )
+          ), 0) as locked_total
+        FROM latest_contracts
+        WHERE entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%'
+      )
+      SELECT 
+        amulet_totals.amulet_total,
+        locked_totals.locked_total
+      FROM amulet_totals, locked_totals
+    `;
+
+    let amuletTotal = 0;
+    let lockedTotal = 0;
+    
+    try {
+      const supplyRows = await db.safeQuery(supplySql);
+      if (supplyRows.length > 0) {
+        amuletTotal = supplyRows[0].amulet_total || 0;
+        lockedTotal = supplyRows[0].locked_total || 0;
+      }
+    } catch (supplyErr) {
+      console.warn('Could not calculate supply metrics:', supplyErr.message);
+    }
+
+    const circulatingSupply = amuletTotal - lockedTotal;
+
     res.json(serializeBigInt({
       data: {
         id: 'local-latest',
@@ -155,6 +214,9 @@ router.get('/latest', async (req, res) => {
         record_time: row.record_time,
         entry_count: row.contract_count,
         template_count: row.template_count,
+        amulet_total: amuletTotal,
+        locked_total: lockedTotal,
+        circulating_supply: circulatingSupply,
         status: 'completed',
         source: 'local',
       }
@@ -199,7 +261,7 @@ router.get('/templates', async (req, res) => {
   }
 });
 
-// GET /api/acs/contracts - Get contracts by template
+// GET /api/acs/contracts - Get contracts by template with parsed payload
 router.get('/contracts', async (req, res) => {
   try {
     if (!hasACSData()) {
@@ -207,14 +269,15 @@ router.get('/contracts', async (req, res) => {
     }
 
     const { template, entity } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 10000);
     const offset = parseInt(req.query.offset) || 0;
 
     let whereClause = '1=1';
     if (template) {
       whereClause = `template_id LIKE '%${template}%'`;
     } else if (entity) {
-      whereClause = `entity_name = '${entity}'`;
+      // Match by entity_name OR template_id containing the entity name
+      whereClause = `(entity_name = '${entity}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
     }
 
     const sql = `
@@ -240,7 +303,27 @@ router.get('/contracts', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json(serializeBigInt({ data: rows }));
+    
+    // Parse payload JSON and flatten for frontend consumption
+    const parsedRows = rows.map(row => {
+      let parsedPayload = row.payload;
+      if (typeof row.payload === 'string') {
+        try {
+          parsedPayload = JSON.parse(row.payload);
+        } catch {
+          // Keep as string if parsing fails
+        }
+      }
+      
+      // Return the parsed payload fields at the top level for frontend compatibility
+      return {
+        ...row,
+        ...parsedPayload, // Spread payload fields (owner, amount, amulet, etc.)
+        payload: parsedPayload, // Keep original payload too
+      };
+    });
+    
+    res.json(serializeBigInt({ data: parsedRows }));
   } catch (err) {
     console.error('ACS contracts error:', err);
     res.status(500).json({ error: err.message });
