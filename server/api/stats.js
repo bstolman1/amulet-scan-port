@@ -4,26 +4,47 @@ import binaryReader from '../duckdb/binary-reader.js';
 
 const router = Router();
 
-// Helper to get the correct read function for JSONL files (supports .jsonl, .jsonl.gz, .jsonl.zst)
-const getUpdatesSource = () => `(
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)
-  UNION ALL
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  UNION ALL
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)
-)`;
+// Helper to get the correct read function for events data
+const getEventsSource = () => {
+  const hasParquet = db.hasFileType('events', '.parquet');
+  if (hasParquet) {
+    return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/events-*.parquet', union_by_name=true)`;
+  }
+  
+  // Check if any JSONL files exist before trying to read
+  const hasJsonl = db.hasFileType('events', '.jsonl');
+  const hasGzip = db.hasFileType('events', '.jsonl.gz');
+  const hasZstd = db.hasFileType('events', '.jsonl.zst');
+  
+  if (!hasJsonl && !hasGzip && !hasZstd) {
+    // Return empty table if no files exist
+    return `(SELECT NULL::VARCHAR as event_id, NULL::VARCHAR as event_type, NULL::VARCHAR as contract_id, 
+             NULL::VARCHAR as template_id, NULL::VARCHAR as package_name, NULL::TIMESTAMP as timestamp,
+             NULL::VARCHAR[] as signatories, NULL::VARCHAR[] as observers, NULL::JSON as payload WHERE false)`;
+  }
+  
+  const basePath = db.DATA_PATH.replace(/\\/g, '/');
+  const queries = [];
+  if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)`);
+  if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+  
+  return `(${queries.join(' UNION ALL ')})`;
+};
 
 // Check what data sources are available
 function getDataSources() {
   const hasBinaryEvents = binaryReader.hasBinaryFiles(db.DATA_PATH, 'events');
   const hasBinaryUpdates = binaryReader.hasBinaryFiles(db.DATA_PATH, 'updates');
+  const hasParquet = db.hasFileType ? db.hasFileType('events', '.parquet') : false;
   const hasJsonl = db.hasFileType ? db.hasFileType('events', '.jsonl') : false;
   
   return {
     hasBinaryEvents,
     hasBinaryUpdates,
+    hasParquet,
     hasJsonl,
-    primarySource: hasBinaryEvents ? 'binary' : (hasJsonl ? 'jsonl' : 'none')
+    primarySource: hasBinaryEvents ? 'binary' : (hasParquet ? 'parquet' : (hasJsonl ? 'jsonl' : 'none'))
   };
 }
 
@@ -79,7 +100,7 @@ router.get('/overview', async (req, res) => {
         COUNT(DISTINCT template_id) as unique_templates,
         MIN(timestamp) as earliest_event,
         MAX(timestamp) as latest_event
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
     `;
     
     const rows = await db.safeQuery(sql);
@@ -131,7 +152,7 @@ router.get('/daily', async (req, res) => {
         DATE_TRUNC('day', timestamp) as date,
         COUNT(*) as event_count,
         COUNT(DISTINCT contract_id) as contract_count
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE timestamp >= NOW() - INTERVAL '${days} days'
       GROUP BY DATE_TRUNC('day', timestamp)
       ORDER BY date DESC
@@ -169,7 +190,7 @@ router.get('/by-type', async (req, res) => {
       SELECT 
         event_type,
         COUNT(*) as count
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       GROUP BY event_type
       ORDER BY count DESC
     `;
@@ -235,7 +256,7 @@ router.get('/by-template', async (req, res) => {
         COUNT(DISTINCT contract_id) as contract_count,
         MIN(timestamp) as first_seen,
         MAX(timestamp) as last_seen
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE template_id IS NOT NULL
       GROUP BY template_id
       ORDER BY event_count DESC
@@ -279,7 +300,7 @@ router.get('/hourly', async (req, res) => {
       SELECT 
         DATE_TRUNC('hour', timestamp) as hour,
         COUNT(*) as event_count
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE timestamp >= NOW() - INTERVAL '24 hours'
       GROUP BY DATE_TRUNC('hour', timestamp)
       ORDER BY hour DESC
@@ -322,7 +343,7 @@ router.get('/burn', async (req, res) => {
       SELECT 
         DATE_TRUNC('day', timestamp) as date,
         SUM(CAST(json_extract(payload, '$.amount.amount') AS DOUBLE)) as burn_amount
-      FROM ${getUpdatesSource()}
+      FROM ${getEventsSource()}
       WHERE template_id LIKE '%BurnMintSummary%'
       GROUP BY DATE_TRUNC('day', timestamp)
       ORDER BY date DESC
