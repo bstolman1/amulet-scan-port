@@ -605,6 +605,38 @@ async function runBackfill() {
   console.log(`   Total time: ${grandTotalTime}s`);
   console.log(`   Average throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s`);
   console.log(`${"═".repeat(80)}\n`);
+  
+  return { success: true, totalUpdates: grandTotalUpdates, totalEvents: grandTotalEvents };
+}
+
+/**
+ * Start live updates ingestion after backfill completes
+ */
+async function startLiveUpdates() {
+  const { spawn } = await import('child_process');
+  const liveUpdatesScript = join(__dirname, 'fetch-updates-parquet.js');
+  
+  console.log(`\n${"═".repeat(80)}`);
+  console.log(`🔄 Starting live updates ingestion...`);
+  console.log(`   Script: ${liveUpdatesScript}`);
+  console.log(`${"═".repeat(80)}\n`);
+  
+  // Spawn the live updates process, inheriting stdio so logs are visible
+  const child = spawn('node', [liveUpdatesScript], {
+    stdio: 'inherit',
+    cwd: __dirname,
+    env: process.env
+  });
+  
+  child.on('error', (err) => {
+    console.error('❌ Failed to start live updates:', err.message);
+    process.exit(1);
+  });
+  
+  child.on('exit', (code) => {
+    console.log(`Live updates process exited with code ${code}`);
+    process.exit(code || 0);
+  });
 }
 
 // Graceful shutdown
@@ -617,12 +649,20 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Run
-runBackfill().catch(async err => {
-  console.error('\n❌ FATAL:', err.message);
-  console.error(err.stack);
-  await flushAll();
-  await waitForWrites();
-  await shutdown();
-  process.exit(1);
-});
+// Run backfill, then start live updates
+runBackfill()
+  .then(async (result) => {
+    if (result?.success) {
+      // Small delay to ensure all file handles are released
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await startLiveUpdates();
+    }
+  })
+  .catch(async err => {
+    console.error('\n❌ FATAL:', err.message);
+    console.error(err.stack);
+    await flushAll();
+    await waitForWrites();
+    await shutdown();
+    process.exit(1);
+  });
