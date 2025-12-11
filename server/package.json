@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node --max-old-space-size=4096 --env-file=../scripts/ingest/.env server.js",
-    "dev": "node --max-old-space-size=4096 --env-file=../scripts/ingest/.env --watch server.js"
+    "start": "node --max-old-space-size=8192 --env-file=../scripts/ingest/.env server.js",
+    "dev": "node --max-old-space-size=8192 --env-file=../scripts/ingest/.env --watch server.js"
   },
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0",
