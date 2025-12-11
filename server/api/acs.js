@@ -276,7 +276,8 @@ router.get('/contracts', async (req, res) => {
     if (template) {
       whereClause = `template_id LIKE '%${template}%'`;
     } else if (entity) {
-      whereClause = `entity_name = '${entity}'`;
+      // Match by entity_name OR template_id containing the entity name
+      whereClause = `(entity_name = '${entity}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
     }
 
     const sql = `
