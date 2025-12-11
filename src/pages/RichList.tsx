@@ -3,84 +3,34 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Wallet, Coins, Database } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
-import { toCC } from "@/lib/amount-utils";
-
-interface HolderBalance {
-  owner: string;
-  amount: number;
-  locked: number;
-  total: number;
-}
+import { useQuery } from "@tanstack/react-query";
+import { getACSRichList, isApiAvailable } from "@/lib/duckdb-api-client";
 
 const RichList = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const { data: localAcsAvailable } = useLocalACSAvailable();
 
-  const { data: snapshot } = useLatestACSSnapshot();
-
-  // Fetch Amulet contracts - aggregated across ALL packages
-  const { data: amuletData, isLoading: amuletLoading } = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:Amulet:Amulet",
-    !!snapshot,
-  );
-
-  // Fetch LockedAmulet contracts - aggregated across ALL packages
-  const { data: lockedData, isLoading: lockedLoading } = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:Amulet:LockedAmulet",
-    !!snapshot,
-  );
-
-  const isLoading = amuletLoading || lockedLoading;
-
-  // Aggregate balances by owner
-  const holderBalances: HolderBalance[] = (() => {
-    const balanceMap = new Map<string, HolderBalance>();
-
-    // Process regular amulets from all packages
-    (amuletData?.data || []).forEach((amulet: any) => {
-      const owner = amulet.owner;
-      const amount = toCC(amulet.amount?.initialAmount || "0");
-
-      if (!balanceMap.has(owner)) {
-        balanceMap.set(owner, { owner, amount: 0, locked: 0, total: 0 });
+  // Use server-side aggregated rich list endpoint
+  const { data: richListData, isLoading, error } = useQuery({
+    queryKey: ["acs-rich-list", searchTerm],
+    queryFn: async () => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("DuckDB API not available");
       }
-      const holder = balanceMap.get(owner)!;
-      holder.amount += amount;
-      holder.total += amount;
-    });
+      return getACSRichList({ limit: 100, search: searchTerm || undefined });
+    },
+    staleTime: 60_000,
+    enabled: true,
+  });
 
-    // Process locked amulets from all packages
-    (lockedData?.data || []).forEach((locked: any) => {
-      const owner = locked.amulet?.owner || locked.owner;
-      const amount = toCC(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
-
-      if (!balanceMap.has(owner)) {
-        balanceMap.set(owner, { owner, amount: 0, locked: 0, total: 0 });
-      }
-      const holder = balanceMap.get(owner)!;
-      holder.locked += amount;
-      holder.total += amount;
-    });
-
-    return Array.from(balanceMap.values())
-      .sort((a, b) => b.total - a.total)
-      .filter((h) => {
-        if (!searchTerm) return true;
-        return h.owner.toLowerCase().includes(searchTerm.toLowerCase());
-      });
-  })();
-
-  const topHolders = holderBalances.slice(0, 100);
-  const totalSupply = holderBalances.reduce((sum, h) => sum + h.total, 0);
+  const topHolders = richListData?.data || [];
+  const totalSupply = richListData?.totalSupply || 0;
+  const holderCount = richListData?.holderCount || 0;
 
   const formatAmount = (amount: number) => {
     return amount.toLocaleString(undefined, {
@@ -122,7 +72,7 @@ const RichList = () => {
               <Skeleton className="h-10 w-full" />
             ) : (
               <>
-                <p className="text-3xl font-bold text-primary mb-1">{holderBalances.length.toLocaleString()}</p>
+                <p className="text-3xl font-bold text-primary mb-1">{holderCount.toLocaleString()}</p>
                 <p className="text-xs text-muted-foreground">Unique holders</p>
               </>
             )}
@@ -153,6 +103,18 @@ const RichList = () => {
             className="max-w-md"
           />
         </div>
+
+        {/* Error State */}
+        {error && (
+          <Card className="glass-card p-6 border-destructive/50">
+            <p className="text-destructive">
+              {error instanceof Error ? error.message : "Failed to load rich list data"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-2">
+              Make sure the local DuckDB server is running at localhost:3001
+            </p>
+          </Card>
+        )}
 
         {/* Top Holders Table */}
         <Card className="glass-card">
@@ -201,7 +163,9 @@ const RichList = () => {
                       
                       <div className="p-3 rounded-lg bg-muted/30">
                         <p className="text-xs text-muted-foreground mb-1">% of Total Supply</p>
-                        <p className="text-lg font-bold">{((holder.total / totalSupply) * 100).toFixed(4)}%</p>
+                        <p className="text-lg font-bold">
+                          {totalSupply > 0 ? ((holder.total / totalSupply) * 100).toFixed(4) : 0}%
+                        </p>
                       </div>
                     </div>
 
@@ -209,11 +173,15 @@ const RichList = () => {
                       <div className="grid grid-cols-2 gap-2 text-xs">
                         <div>
                           <span className="text-muted-foreground">Unlocked %:</span>
-                          <span className="ml-2 font-semibold">{holder.total > 0 ? ((holder.amount / holder.total) * 100).toFixed(1) : 0}%</span>
+                          <span className="ml-2 font-semibold">
+                            {holder.total > 0 ? ((holder.amount / holder.total) * 100).toFixed(1) : 0}%
+                          </span>
                         </div>
                         <div>
                           <span className="text-muted-foreground">Locked %:</span>
-                          <span className="ml-2 font-semibold">{holder.total > 0 ? ((holder.locked / holder.total) * 100).toFixed(1) : 0}%</span>
+                          <span className="ml-2 font-semibold">
+                            {holder.total > 0 ? ((holder.locked / holder.total) * 100).toFixed(1) : 0}%
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -225,7 +193,7 @@ const RichList = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={snapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={["Splice:Amulet:Amulet", "Splice:Amulet:LockedAmulet"]}
           isProcessing={false}
         />

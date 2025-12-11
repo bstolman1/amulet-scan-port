@@ -336,6 +336,150 @@ router.get('/contracts', async (req, res) => {
   }
 });
 
+// GET /api/acs/rich-list - Get aggregated holder balances (server-side calculation)
+router.get('/rich-list', async (req, res) => {
+  try {
+    if (!hasACSData()) {
+      return res.json({ data: [], totalSupply: 0, holderCount: 0 });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const search = req.query.search || '';
+
+    console.log(`[ACS] Rich list request: limit=${limit}, search=${search}`);
+
+    // Calculate holder balances aggregated by owner in SQL
+    const sql = `
+      WITH latest_snapshot AS (
+        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
+      ),
+      amulet_balances AS (
+        SELECT 
+          payload->>'owner' as owner,
+          CAST(COALESCE(
+            payload->>'$.amount.initialAmount',
+            payload->'amount'->>'initialAmount',
+            '0'
+          ) AS DOUBLE) / 10000000000.0 as amount
+        FROM ${getACSSource()} acs
+        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+          AND payload->>'owner' IS NOT NULL
+      ),
+      locked_balances AS (
+        SELECT 
+          COALESCE(
+            payload->'amulet'->>'owner',
+            payload->>'owner'
+          ) as owner,
+          CAST(COALESCE(
+            payload->>'$.amulet.amount.initialAmount',
+            payload->'amulet'->'amount'->>'initialAmount',
+            payload->>'$.amount.initialAmount',
+            payload->'amount'->>'initialAmount',
+            '0'
+          ) AS DOUBLE) / 10000000000.0 as amount
+        FROM ${getACSSource()} acs
+        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
+          AND (payload->'amulet'->>'owner' IS NOT NULL OR payload->>'owner' IS NOT NULL)
+      ),
+      combined AS (
+        SELECT owner, amount, 0.0 as locked FROM amulet_balances
+        UNION ALL
+        SELECT owner, 0.0 as amount, amount as locked FROM locked_balances
+      ),
+      aggregated AS (
+        SELECT 
+          owner,
+          SUM(amount) as unlocked_balance,
+          SUM(locked) as locked_balance,
+          SUM(amount) + SUM(locked) as total_balance
+        FROM combined
+        WHERE owner IS NOT NULL AND owner != ''
+        GROUP BY owner
+      )
+      SELECT * FROM aggregated
+      ${search ? `WHERE owner ILIKE '%${search.replace(/'/g, "''")}%'` : ''}
+      ORDER BY total_balance DESC
+      LIMIT ${limit}
+    `;
+
+    const rows = await db.safeQuery(sql);
+    console.log(`[ACS] Rich list returned ${rows.length} holders`);
+
+    // Get total supply and holder count
+    const statsSql = `
+      WITH latest_snapshot AS (
+        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
+      ),
+      amulet_total AS (
+        SELECT COALESCE(SUM(
+          CAST(COALESCE(
+            payload->>'$.amount.initialAmount',
+            payload->'amount'->>'initialAmount',
+            '0'
+          ) AS DOUBLE) / 10000000000.0
+        ), 0) as total
+        FROM ${getACSSource()} acs
+        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%')
+      ),
+      locked_total AS (
+        SELECT COALESCE(SUM(
+          CAST(COALESCE(
+            payload->>'$.amulet.amount.initialAmount',
+            payload->'amulet'->'amount'->>'initialAmount',
+            '0'
+          ) AS DOUBLE) / 10000000000.0
+        ), 0) as total
+        FROM ${getACSSource()} acs
+        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+      ),
+      holder_count AS (
+        SELECT COUNT(DISTINCT COALESCE(
+          payload->'amulet'->>'owner',
+          payload->>'owner'
+        )) as count
+        FROM ${getACSSource()} acs
+        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+          AND (entity_name IN ('Amulet', 'LockedAmulet') 
+               OR template_id LIKE '%:Amulet:%' 
+               OR template_id LIKE '%:LockedAmulet:%')
+      )
+      SELECT 
+        amulet_total.total + locked_total.total as total_supply,
+        amulet_total.total as unlocked_supply,
+        locked_total.total as locked_supply,
+        holder_count.count as holder_count
+      FROM amulet_total, locked_total, holder_count
+    `;
+
+    const stats = await db.safeQuery(statsSql);
+    const totalSupply = stats[0]?.total_supply || 0;
+    const unlockedSupply = stats[0]?.unlocked_supply || 0;
+    const lockedSupply = stats[0]?.locked_supply || 0;
+    const holderCount = stats[0]?.holder_count || 0;
+
+    res.json(serializeBigInt({
+      data: rows.map(row => ({
+        owner: row.owner,
+        amount: row.unlocked_balance,
+        locked: row.locked_balance,
+        total: row.total_balance,
+      })),
+      totalSupply,
+      unlockedSupply,
+      lockedSupply,
+      holderCount,
+    }));
+  } catch (err) {
+    console.error('ACS rich-list error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/acs/supply - Get supply statistics (Amulet contracts)
 router.get('/supply', async (req, res) => {
   try {
