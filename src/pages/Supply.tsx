@@ -28,6 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { toCC } from "@/lib/amount-utils";
+import { getACSSupplyStats, isApiAvailable } from "@/lib/duckdb-api-client";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -58,21 +59,26 @@ const Supply = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  // Fetch Amulet contracts for supply calculations
-  const { data: amuletData, isLoading: amuletLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Amulet:Amulet",
-    !!latestSnapshot,
-  );
+  // Use server-side aggregation for supply stats
+  const { data: supplyStats, isLoading: supplyStatsLoading } = useQuery({
+    queryKey: ["acs-supply-stats"],
+    queryFn: async () => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("DuckDB API not available");
+      }
+      return getACSSupplyStats();
+    },
+    staleTime: 60_000,
+  });
 
-  // Fetch LockedAmulet contracts
-  const { data: lockedData, isLoading: lockedLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Amulet:LockedAmulet",
-    !!latestSnapshot,
-  );
+  // Use server-side stats when available, otherwise fall back to client-side
+  const totalSupply = supplyStats?.totalSupply ?? 0;
+  const totalUnlocked = supplyStats?.unlockedSupply ?? 0;
+  const totalLocked = supplyStats?.lockedSupply ?? 0;
+  const circulatingSupply = totalUnlocked;
 
-  // Fetch allocations
+  // Fetch allocations (still client-side, typically not large)
   const allocationsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:AmuletAllocation:AmuletAllocation",
@@ -104,27 +110,12 @@ const Supply = () => {
   );
 
   const isLoading =
-    amuletLoading ||
-    lockedLoading ||
+    supplyStatsLoading ||
     allocationsQuery.isLoading ||
     openLoading ||
     issuingLoading ||
     closedLoading ||
     latestRoundLoading;
-
-  // Calculate supply metrics
-  const totalUnlocked = (amuletData?.data || []).reduce((sum: number, amulet: any) => {
-    const amount = toCC(amulet.amount?.initialAmount || "0");
-    return sum + amount;
-  }, 0);
-
-  const totalLocked = (lockedData?.data || []).reduce((sum: number, locked: any) => {
-    const amount = toCC(locked.amulet?.amount?.initialAmount || locked.amount?.initialAmount || "0");
-    return sum + amount;
-  }, 0);
-
-  const totalSupply = totalUnlocked + totalLocked;
-  const circulatingSupply = totalUnlocked;
 
   // Process allocations
   const getField = (obj: any, fieldNames: string[]) => {
