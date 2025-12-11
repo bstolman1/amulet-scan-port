@@ -193,10 +193,15 @@ function extractIdentifiers(text) {
   }
   
   // Check if text contains featured app indicators - BUT NOT if it's a CIP discussion about featured apps
-  const isFeaturedApp = !isCipDiscussion && /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text);
+  // Also detect "Vote Proposal on MainNet/TestNet:" patterns as featured app related
+  const isFeaturedApp = !isCipDiscussion && (
+    /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text) ||
+    /vote\s+proposal\s+(?:on|for)\s+(?:mainnet|testnet|main\s*net|test\s*net)/i.test(text) ||
+    /featured\s+app\s+rights/i.test(text)
+  );
   
-  // Check if text contains validator indicators
-  const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate)|sv\s+(?:application|onboarding)/i.test(text);
+  // Check if text contains validator indicators - including "validator operator approved"
+  const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
   
   // Extract the primary entity name
   const entityName = extractPrimaryEntityName(text);
