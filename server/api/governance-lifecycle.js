@@ -457,21 +457,20 @@ function correlateTopics(allTopics) {
     // Check if this is an outcome - matches "Tokenomics Outcomes" with or without a date suffix
     const subjectTrimmed = topic.subject.trim();
     const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
+    const isValidatorOperations = /\bValidator\s+Operations\b/i.test(subjectTrimmed);
     
     // Debug log for outcome detection
     if (subjectTrimmed.toLowerCase().includes('outcome')) {
-      console.log(`OUTCOME CHECK: subject="${subjectTrimmed.slice(0, 80)}", isOutcome=${isOutcome}`);
+      console.log(`[Outcome check] Subject: "${topic.subject}" -> isOutcome: ${isOutcome}`);
     }
     
     let type;
     if (isOutcome) {
-      type = 'outcome';  // Outcomes takes priority - check first
-    } else if (hasCip || isCipDiscussion) {
-      type = 'cip';  // CIP number OR "CIP Discuss" pattern
-    } else if (hasAppIndicator && topicEntityName) {
-      type = 'featured-app';
-    } else if (hasValidatorIndicator && topicEntityName) {
+      type = 'outcome';
+    } else if (isValidatorOperations || hasValidatorIndicator) {
       type = 'validator';
+    } else if (hasFeaturedAppIndicator) {
+      type = 'featured-app';
     } else {
       type = 'other';
     }
