@@ -74,6 +74,17 @@ router.get('/snapshots', async (req, res) => {
       return res.json({ data: [], message: 'No ACS data available' });
     }
 
+    // First, get distinct migration_ids to understand what's available
+    const migrationSql = `
+      SELECT DISTINCT migration_id, COUNT(*) as count
+      FROM ${getACSSource()}
+      GROUP BY migration_id
+      ORDER BY migration_id DESC
+    `;
+    
+    const migrations = await db.safeQuery(migrationSql);
+    console.log('Available migrations:', migrations.map(m => `migration_id=${m.migration_id} (${m.count} contracts)`).join(', '));
+
     const sql = `
       SELECT 
         snapshot_time,
@@ -83,15 +94,15 @@ router.get('/snapshots', async (req, res) => {
         MIN(record_time) as record_time
       FROM ${getACSSource()}
       GROUP BY snapshot_time, migration_id
-      ORDER BY snapshot_time DESC
-      LIMIT 20
+      ORDER BY migration_id DESC, snapshot_time DESC
+      LIMIT 50
     `;
 
     const rows = await db.safeQuery(sql);
     
     // Transform to match the UI's expected format
     const snapshots = rows.map((row, index) => ({
-      id: `local-${index}`,
+      id: `local-${row.migration_id}-${index}`,
       timestamp: row.snapshot_time,
       migration_id: row.migration_id,
       record_time: row.record_time,
@@ -101,6 +112,7 @@ router.get('/snapshots', async (req, res) => {
       source: 'local',
     }));
 
+    console.log(`Returning ${snapshots.length} snapshots:`, snapshots.map(s => `M${s.migration_id}`).join(', '));
     res.json(serializeBigInt({ data: snapshots }));
   } catch (err) {
     console.error('ACS snapshots error:', err);

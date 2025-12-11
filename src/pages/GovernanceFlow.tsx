@@ -294,8 +294,17 @@ const GovernanceFlow = () => {
       });
     });
 
-    // Sort by lastDate descending
-    return result.sort((a, b) => new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime());
+    // Sort: CIPs by CIP number descending, others by lastDate descending
+    return result.sort((a, b) => {
+      // CIPs sorted by CIP number (descending)
+      if (a.type === 'cip' && b.type === 'cip') {
+        const aNum = parseInt(a.primaryId.match(/CIP-?(\d+)/i)?.[1] || '0', 10);
+        const bNum = parseInt(b.primaryId.match(/CIP-?(\d+)/i)?.[1] || '0', 10);
+        return bNum - aNum;
+      }
+      // Everything else by lastDate descending
+      return new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime();
+    });
   }, [regularItems]);
 
   const filteredTopics = useMemo(() => {
@@ -930,7 +939,7 @@ const GovernanceFlow = () => {
                                 </Badge>
                               )}
                             </div>
-                            <CardTitle className="text-lg leading-tight break-words">
+                            <CardTitle className="text-lg leading-tight break-words whitespace-normal">
                               {group.primaryId}
                             </CardTitle>
                             <div className="flex items-center gap-3 text-sm text-muted-foreground">
