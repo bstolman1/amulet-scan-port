@@ -471,10 +471,28 @@ function correlateTopics(allTopics) {
       type = 'other';
     }
     
+    // For outcomes, extract the date from subject to make each date a separate card
+    // e.g., "Tokenomics Outcomes - Dec 8, 2025" -> "Outcomes - Dec 8, 2025"
+    let primaryId;
+    if (type === 'outcome') {
+      // Extract date from subject like "Tokenomics Outcomes - Dec 8, 2025"
+      const dateMatch = topic.subject.match(/Outcomes\s*[-–]\s*(.+)/i);
+      if (dateMatch) {
+        primaryId = `Outcomes - ${dateMatch[1].trim()}`;
+      } else {
+        // Fall back to using the topic date formatted
+        const topicDate = new Date(topic.date);
+        const formattedDate = topicDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        primaryId = `Outcomes - ${formattedDate}`;
+      }
+    } else {
+      primaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40);
+    }
+    
     // Create a new lifecycle item
     const item = {
       id: `lifecycle-${topic.id}`,
-      primaryId: topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40),
+      primaryId,
       type,
       network: topic.identifiers.network,  // 'testnet', 'mainnet', or null
       stages: {},
@@ -485,8 +503,7 @@ function correlateTopics(allTopics) {
     };
     
     // Log for debugging - show the primaryId being assigned
-    const assignedPrimaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40);
-    console.log(`NEW LIFECYCLE: "${topic.subject.slice(0, 60)}..." -> type=${type}, primaryId="${assignedPrimaryId}", entity="${topicEntityName || 'none'}"`);
+    console.log(`NEW LIFECYCLE: "${topic.subject.slice(0, 60)}..." -> type=${type}, primaryId="${primaryId}", entity="${topicEntityName || 'none'}"`);
     
     // Add the starting topic first
     item.stages[topic.stage] = item.stages[topic.stage] || [];
@@ -498,6 +515,13 @@ function correlateTopics(allTopics) {
     // Each topic without an entity will be its own separate item
     if ((type === 'featured-app' || type === 'validator') && !topicEntityName) {
       console.log(`  -> No entity name found, creating standalone item`);
+      lifecycleItems.push(item);
+      continue;
+    }
+    
+    // For outcomes, each one is standalone - don't correlate
+    if (type === 'outcome') {
+      console.log(`  -> Outcome type - creating standalone item`);
       lifecycleItems.push(item);
       continue;
     }
