@@ -61,7 +61,17 @@ function extractPrimaryEntityName(text) {
     .replace(/\s*vote\s*(proposal)?\s*$/i, '')
     .trim();
   
-  // Pattern 0a: "Featured App Approved: AppName" - MUST come first for these specific announcements
+  // Pattern 0a: "Validator Approved: EntityName" - extract entity name from validator approval announcements
+  const validatorApprovedMatch = cleanText.match(/validator\s*(?:approved|operator\s+approved)[:\s-]+(.+?)$/i);
+  if (validatorApprovedMatch) {
+    let name = validatorApprovedMatch[1].trim();
+    console.log(`EXTRACT: "Validator Approved" pattern matched, extracted: "${name}" from "${cleanText.slice(0, 60)}"`);
+    if (name.length > 1) {
+      return name;
+    }
+  }
+  
+  // Pattern 0b: "Featured App Approved: AppName" - MUST come first for these specific announcements
   const featuredApprovedMatch = cleanText.match(/featured\s*app\s*approved[:\s-]+(.+?)$/i);
   if (featuredApprovedMatch) {
     let name = featuredApprovedMatch[1].trim();
@@ -200,8 +210,8 @@ function extractIdentifiers(text) {
     /featured\s+app\s+rights/i.test(text)
   );
   
-  // Check if text contains validator indicators - including "validator operator approved"
-  const isValidator = /super\s*validator|validator\s+(?:application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
+  // Check if text contains validator indicators - including "validator approved" and "validator operator approved"
+  const isValidator = /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
   
   // Extract the primary entity name
   const entityName = extractPrimaryEntityName(text);
@@ -213,6 +223,11 @@ function extractIdentifiers(text) {
   // Debug log for featured app detection
   if (text.toLowerCase().includes('featured app approved')) {
     console.log(`IDENTIFIERS: isFeaturedApp=${isFeaturedApp}, entityName="${entityName}", text="${text.slice(0, 60)}"`);
+  }
+  
+  // Debug log for validator detection
+  if (text.toLowerCase().includes('validator approved')) {
+    console.log(`IDENTIFIERS: isValidator=${isValidator}, entityName="${entityName}", text="${text.slice(0, 60)}"`);
   }
   
   // Don't set appName if this is a CIP discussion (even if it mentions featured apps)
