@@ -355,34 +355,32 @@ router.get('/rich-list', async (req, res) => {
       ),
       amulet_balances AS (
         SELECT 
-          payload->>'owner' as owner,
+          json_extract_string(payload, '$.owner') as owner,
           CAST(COALESCE(
-            payload->>'$.amount.initialAmount',
-            payload->'amount'->>'initialAmount',
+            json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) / 10000000000.0 as amount
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
-          AND payload->>'owner' IS NOT NULL
+          AND json_extract_string(payload, '$.owner') IS NOT NULL
       ),
       locked_balances AS (
         SELECT 
           COALESCE(
-            payload->'amulet'->>'owner',
-            payload->>'owner'
+            json_extract_string(payload, '$.amulet.owner'),
+            json_extract_string(payload, '$.owner')
           ) as owner,
           CAST(COALESCE(
-            payload->>'$.amulet.amount.initialAmount',
-            payload->'amulet'->'amount'->>'initialAmount',
-            payload->>'$.amount.initialAmount',
-            payload->'amount'->>'initialAmount',
+            json_extract_string(payload, '$.amulet.amount.initialAmount'),
+            json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) / 10000000000.0 as amount
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
-          AND (payload->'amulet'->>'owner' IS NOT NULL OR payload->>'owner' IS NOT NULL)
+          AND (json_extract_string(payload, '$.amulet.owner') IS NOT NULL 
+               OR json_extract_string(payload, '$.owner') IS NOT NULL)
       ),
       combined AS (
         SELECT owner, amount, 0.0 as locked FROM amulet_balances
@@ -416,8 +414,7 @@ router.get('/rich-list', async (req, res) => {
       amulet_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
-            payload->>'$.amount.initialAmount',
-            payload->'amount'->>'initialAmount',
+            json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) / 10000000000.0
         ), 0) as total
@@ -428,8 +425,8 @@ router.get('/rich-list', async (req, res) => {
       locked_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
-            payload->>'$.amulet.amount.initialAmount',
-            payload->'amulet'->'amount'->>'initialAmount',
+            json_extract_string(payload, '$.amulet.amount.initialAmount'),
+            json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) / 10000000000.0
         ), 0) as total
@@ -439,8 +436,8 @@ router.get('/rich-list', async (req, res) => {
       ),
       holder_count AS (
         SELECT COUNT(DISTINCT COALESCE(
-          payload->'amulet'->>'owner',
-          payload->>'owner'
+          json_extract_string(payload, '$.amulet.owner'),
+          json_extract_string(payload, '$.owner')
         )) as count
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
