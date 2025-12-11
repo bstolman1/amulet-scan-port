@@ -28,7 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { toCC } from "@/lib/amount-utils";
-import { getACSRichList } from "@/lib/duckdb-api-client";
+import { getACSRichList, getACSAllocations, getACSMiningRounds } from "@/lib/duckdb-api-client";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -66,44 +66,31 @@ const Supply = () => {
     staleTime: 30000,
   });
 
-  // Fetch allocations
-  const allocationsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:AmuletAllocation:AmuletAllocation",
-    !!latestSnapshot,
-  );
+  // Fetch allocations from server-side
+  const { data: allocationsData, isLoading: allocationsLoading } = useQuery({
+    queryKey: ["allocations", searchTerm, currentPage],
+    queryFn: () => getACSAllocations({ 
+      limit: itemsPerPage, 
+      offset: (currentPage - 1) * itemsPerPage,
+      search: searchTerm || undefined 
+    }),
+    staleTime: 30000,
+  });
 
-  // Fetch mining rounds
+  // Fetch mining rounds from server-side
+  const { data: miningRoundsData, isLoading: miningRoundsLoading } = useQuery({
+    queryKey: ["mining-rounds"],
+    queryFn: () => getACSMiningRounds({ closedLimit: 20 }),
+    staleTime: 30000,
+  });
+
+  // Fetch latest round from scan API
   const { data: latestRound, isLoading: latestRoundLoading } = useQuery({
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
   });
 
-  const { data: openRoundsData, isLoading: openLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Round:OpenMiningRound",
-    !!latestSnapshot,
-  );
-
-  const { data: issuingRoundsData, isLoading: issuingLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Round:IssuingMiningRound",
-    !!latestSnapshot,
-  );
-
-  const { data: closedRoundsData, isLoading: closedLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Round:ClosedMiningRound",
-    !!latestSnapshot,
-  );
-
-  const isLoading =
-    supplyLoading ||
-    allocationsQuery.isLoading ||
-    openLoading ||
-    issuingLoading ||
-    closedLoading ||
-    latestRoundLoading;
+  const isLoading = supplyLoading || allocationsLoading || miningRoundsLoading || latestRoundLoading;
 
   // Use server-side aggregated supply metrics
   const totalUnlocked = supplyStats?.unlockedSupply || 0;
@@ -111,58 +98,16 @@ const Supply = () => {
   const totalSupply = supplyStats?.totalSupply || 0;
   const circulatingSupply = totalUnlocked;
 
-  // Process allocations
-  const getField = (obj: any, fieldNames: string[]) => {
-    for (const name of fieldNames) {
-      if (obj?.[name] !== undefined && obj?.[name] !== null) return obj[name];
-      if (name.includes(".")) {
-        const parts = name.split(".");
-        let current = obj;
-        for (const part of parts) {
-          if (current?.[part] !== undefined && current?.[part] !== null) {
-            current = current[part];
-          } else {
-            current = null;
-            break;
-          }
-        }
-        if (current !== null) return current;
-      }
-      if (obj?.payload?.[name] !== undefined && obj?.payload?.[name] !== null) return obj.payload[name];
-    }
-    return null;
-  };
+  // Server-side allocations data
+  const allocations = allocationsData?.data || [];
+  const totalAllocationsCount = allocationsData?.totalCount || 0;
+  const totalAllocationAmount = allocationsData?.totalAmount || 0;
+  const uniqueExecutors = allocationsData?.uniqueExecutors || 0;
 
-  const allocations = allocationsQuery.data?.data || [];
-  const filteredAllocations = allocations.filter((allocation: any) => {
-    if (!searchTerm) return true;
-    const search = searchTerm.toLowerCase();
-    const executor = getField(allocation, ["executor", "allocation.settlement.executor"]) || "";
-    const sender = getField(allocation, ["sender", "allocation.transferLeg.sender"]) || "";
-    const receiver = getField(allocation, ["receiver", "allocation.transferLeg.receiver"]) || "";
-    const amount = getField(allocation, ["amount", "allocation.transferLeg.amount"]) || "";
-
-    return (
-      executor.toLowerCase().includes(search) ||
-      sender.toLowerCase().includes(search) ||
-      receiver.toLowerCase().includes(search) ||
-      amount.toString().includes(search)
-    );
-  });
-
-  const paginatedAllocations = filteredAllocations.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-  const totalAllocationsPages = Math.ceil(filteredAllocations.length / itemsPerPage);
-
-  const totalAllocationAmount = filteredAllocations.reduce((sum: number, allocation: any) => {
-    const amount = toCC(getField(allocation, ["amount", "allocation.transferLeg.amount"]) || "0");
-    return sum + amount;
-  }, 0);
-
-  // Process mining rounds
-  const openRounds = openRoundsData?.data || [];
-  const issuingRounds = issuingRoundsData?.data || [];
-  const closedRounds = (closedRoundsData?.data || []).slice(0, 20);
+  // Server-side mining rounds data
+  const openRounds = miningRoundsData?.openRounds || [];
+  const issuingRounds = miningRoundsData?.issuingRounds || [];
+  const closedRounds = miningRoundsData?.closedRounds || [];
 
   const formatAmount = (amount: number) => {
     return amount.toLocaleString(undefined, {
@@ -278,7 +223,7 @@ const Supply = () => {
               {isLoading ? (
                 <Skeleton className="h-10 w-full" />
               ) : (
-                <p className="text-3xl font-bold text-primary">{allocations.length.toLocaleString()}</p>
+                <p className="text-3xl font-bold text-primary">{totalAllocationsCount.toLocaleString()}</p>
               )}
             </Card>
 
@@ -304,12 +249,7 @@ const Supply = () => {
               {isLoading ? (
                 <Skeleton className="h-10 w-full" />
               ) : (
-                <p className="text-3xl font-bold text-primary">
-                  {
-                    new Set(allocations.map((a: any) => getField(a, ["executor", "allocation.settlement.executor"])))
-                      .size
-                  }
-                </p>
+                <p className="text-3xl font-bold text-primary">{uniqueExecutors}</p>
               )}
             </Card>
           </div>
@@ -328,17 +268,11 @@ const Supply = () => {
             </div>
           ) : (
             <div className="space-y-4">
-              {paginatedAllocations.map((allocation: any, index: number) => {
+              {allocations.map((allocation: any, index: number) => {
                 const itemKey = (currentPage - 1) * itemsPerPage + index;
-                const executor = getField(allocation, ["executor", "allocation.settlement.executor"]);
-                const sender = getField(allocation, ["sender", "allocation.transferLeg.sender"]);
-                const receiver = getField(allocation, ["receiver", "allocation.transferLeg.receiver"]);
-                const amount = getField(allocation, ["amount", "allocation.transferLeg.amount"]);
-                const requestedAt = getField(allocation, ["requestedAt", "allocation.settlement.requestedAt"]);
-                const transferLegId = getField(allocation, ["transferLegId", "allocation.transferLegId"]);
 
                 return (
-                  <Card key={index}>
+                  <Card key={allocation.contract_id || index}>
                     <Collapsible
                       open={openItems[itemKey] || false}
                       onOpenChange={(isOpen) => setOpenItems((prev) => ({ ...prev, [itemKey]: isOpen }))}
@@ -355,31 +289,31 @@ const Supply = () => {
                               Allocation {(currentPage - 1) * itemsPerPage + index + 1}
                             </CardTitle>
                           </div>
-                          <Badge variant="secondary">{amount ? `${parseFloat(amount).toFixed(4)} CC` : "N/A"}</Badge>
+                          <Badge variant="secondary">{allocation.amount ? `${allocation.amount.toFixed(4)} CC` : "N/A"}</Badge>
                         </CardHeader>
                       </CollapsibleTrigger>
                       <CardContent>
                         <div className="grid gap-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Executor:</span>
-                            <span className="font-mono text-xs">{executor || "N/A"}</span>
+                            <span className="font-mono text-xs">{allocation.executor || "N/A"}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Sender:</span>
-                            <span className="font-mono text-xs">{sender || "N/A"}</span>
+                            <span className="font-mono text-xs">{allocation.sender || "N/A"}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Receiver:</span>
-                            <span className="font-mono text-xs">{receiver || "N/A"}</span>
+                            <span className="font-mono text-xs">{allocation.receiver || "N/A"}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Transfer Leg ID:</span>
-                            <span className="font-mono text-xs">{transferLegId || "N/A"}</span>
+                            <span className="font-mono text-xs">{allocation.transfer_leg_id || "N/A"}</span>
                           </div>
-                          {requestedAt && (
+                          {allocation.requested_at && (
                             <div className="flex justify-between">
                               <span className="text-muted-foreground">Requested At:</span>
-                              <span className="text-xs">{new Date(requestedAt).toLocaleString()}</span>
+                              <span className="text-xs">{new Date(allocation.requested_at).toLocaleString()}</span>
                             </div>
                           )}
                         </div>
@@ -399,7 +333,7 @@ const Supply = () => {
 
           <PaginationControls
             currentPage={currentPage}
-            totalItems={filteredAllocations.length}
+            totalItems={totalAllocationsCount}
             pageSize={itemsPerPage}
             onPageChange={setCurrentPage}
           />
@@ -453,16 +387,16 @@ const Supply = () => {
             ) : (
               <div className="space-y-4">
                 {openRounds.map((round: any) => (
-                  <Card key={round.id} className="glass-card">
+                  <Card key={round.contract_id} className="glass-card">
                     <div className="p-6">
                       <div className="flex items-start justify-between mb-4">
                         <div>
-                          <h4 className="text-xl font-bold mb-1">Round {round.roundNumber}</h4>
+                          <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
                           <p className="text-sm text-muted-foreground">
-                            Opens: {new Date(round.opensAt).toLocaleString()}
+                            Opens: {round.opens_at ? new Date(round.opens_at).toLocaleString() : 'N/A'}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            Target Close: {new Date(round.targetClosesAt).toLocaleString()}
+                            Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
                           </p>
                         </div>
                         <Badge className="bg-warning/10 text-warning border-warning/20">
@@ -473,7 +407,7 @@ const Supply = () => {
 
                       <div className="p-4 rounded-lg bg-muted/30">
                         <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                        <p className="font-mono text-xs truncate">{round.contractId}</p>
+                        <p className="font-mono text-xs truncate">{round.contract_id}</p>
                       </div>
                     </div>
                   </Card>
@@ -497,13 +431,13 @@ const Supply = () => {
             ) : (
               <div className="space-y-4">
                 {issuingRounds.map((round: any) => (
-                  <Card key={round.id} className="glass-card">
+                  <Card key={round.contract_id} className="glass-card">
                     <div className="p-6">
                       <div className="flex items-start justify-between mb-4">
                         <div>
-                          <h4 className="text-xl font-bold mb-1">Round {round.roundNumber}</h4>
+                          <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
                           <p className="text-sm text-muted-foreground">
-                            Opens: {new Date(round.opensAt).toLocaleString()}
+                            Opens: {round.opens_at ? new Date(round.opens_at).toLocaleString() : 'N/A'}
                           </p>
                         </div>
                         <Badge className="bg-primary/10 text-primary border-primary/20">
@@ -514,7 +448,7 @@ const Supply = () => {
 
                       <div className="p-4 rounded-lg bg-muted/30">
                         <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                        <p className="font-mono text-xs truncate">{round.contractId}</p>
+                        <p className="font-mono text-xs truncate">{round.contract_id}</p>
                       </div>
                     </div>
                   </Card>
@@ -538,13 +472,13 @@ const Supply = () => {
             ) : (
               <div className="space-y-4">
                 {closedRounds.map((round: any) => (
-                  <Card key={round.contractId} className="glass-card">
+                  <Card key={round.contract_id} className="glass-card">
                     <div className="p-6">
                       <div className="flex items-start justify-between mb-4">
                         <div>
-                          <h4 className="text-xl font-bold mb-1">Round {round.roundNumber}</h4>
+                          <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
                           <p className="text-sm text-muted-foreground">
-                            Closed: {new Date(round.createdAt).toLocaleString()}
+                            Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
                           </p>
                         </div>
                         <Badge className="bg-success/10 text-success border-success/20">
@@ -555,7 +489,7 @@ const Supply = () => {
 
                       <div className="p-4 rounded-lg bg-muted/30">
                         <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                        <p className="font-mono text-xs truncate">{round.contractId}</p>
+                        <p className="font-mono text-xs truncate">{round.contract_id}</p>
                       </div>
                     </div>
                   </Card>
