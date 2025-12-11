@@ -454,9 +454,9 @@ function correlateTopics(allTopics) {
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
     // Type determination: require entity name for featured-app/validator classification
-    // Check if this is an outcome (matches "Outcomes -" pattern anywhere in subject)
+    // Check if this is an outcome - matches "Tokenomics Outcomes" with or without a date suffix
     const subjectTrimmed = topic.subject.trim();
-    const isOutcome = /\bOutcomes\s*-/i.test(subjectTrimmed);
+    const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
     
     // Debug log for outcome detection
     if (subjectTrimmed.toLowerCase().includes('outcome')) {
@@ -476,20 +476,15 @@ function correlateTopics(allTopics) {
       type = 'other';
     }
     
-    // For outcomes, extract the date from subject to make each date a separate card
-    // e.g., "Tokenomics Outcomes - Dec 8, 2025" -> "Outcomes - Dec 8, 2025"
+    // For outcomes, each topic gets its own card based on the topic date
+    // This ensures "Tokenomics Outcomes" from different dates are separate cards
     let primaryId;
     if (type === 'outcome') {
-      // Extract date from subject like "Tokenomics Outcomes - Dec 8, 2025"
-      const dateMatch = topic.subject.match(/Outcomes\s*[-–]\s*(.+)/i);
-      if (dateMatch) {
-        primaryId = `Outcomes - ${dateMatch[1].trim()}`;
-      } else {
-        // Fall back to using the topic date formatted
-        const topicDate = new Date(topic.date);
-        const formattedDate = topicDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        primaryId = `Outcomes - ${formattedDate}`;
-      }
+      // Always use the topic's actual date for the primaryId
+      // This ensures each outcome topic is a separate card
+      const topicDate = new Date(topic.date);
+      const formattedDate = topicDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      primaryId = `Outcomes - ${formattedDate}`;
     } else {
       primaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40);
     }
