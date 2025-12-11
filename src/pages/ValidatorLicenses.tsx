@@ -5,18 +5,20 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Search, Award, Ticket, Code, Clock, Activity } from "lucide-react";
+import { Search, Award, Ticket, Code, Clock, Activity, Database } from "lucide-react";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const ValidatorLicenses = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 100;
+  const { data: localAcsAvailable } = useLocalACSAvailable();
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
@@ -96,10 +98,16 @@ const ValidatorLicenses = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-2">
             <Award className="h-8 w-8 text-primary" />
-            Validator Licenses & Coupons
-          </h1>
+            <h1 className="text-3xl font-bold">Validator Licenses & Coupons</h1>
+            {localAcsAvailable && (
+              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+                <Database className="h-3 w-3 mr-1" />
+                Local ACS
+              </Badge>
+            )}
+          </div>
           <p className="text-muted-foreground">View active validator licenses and faucet coupons on the network.</p>
         </div>
 

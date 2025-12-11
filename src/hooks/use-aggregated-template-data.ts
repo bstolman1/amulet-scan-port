@@ -1,5 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
+import { getACSContracts as getLocalACSContracts } from "@/lib/duckdb-api-client";
+
+// Cached DuckDB availability check
+let duckDBAvailable: boolean | null = null;
+let duckDBCheckTime = 0;
+async function isDuckDBAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (duckDBAvailable !== null && now - duckDBCheckTime < 30_000) {
+    return duckDBAvailable;
+  }
+  duckDBAvailable = await checkDuckDBConnection();
+  duckDBCheckTime = now;
+  return duckDBAvailable;
+}
 
 interface ChunkManifest {
   templateId: string;
@@ -106,11 +121,40 @@ export function useAggregatedTemplateData(
   templateSuffix: string,
   enabled: boolean = true,
 ) {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["aggregated-template-data", snapshotId, templateSuffix],
+    queryKey: ["aggregated-template-data", snapshotId, templateSuffix, useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
-      if (!snapshotId || !templateSuffix) {
-        throw new Error("Missing snapshotId or templateSuffix");
+      if (!templateSuffix) {
+        throw new Error("Missing templateSuffix");
+      }
+
+      // Try DuckDB first if configured and available
+      if (useDuckDB && await isDuckDBAvailable()) {
+        try {
+          console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}`);
+          // For local ACS, we use the entity name pattern (e.g., "Splice:Amulet:Amulet")
+          const response = await getLocalACSContracts({ 
+            entity: templateSuffix.split(':').pop(), // Get entity name like "Amulet"
+            limit: 10000 
+          });
+          
+          return {
+            data: response.data,
+            templateCount: 1,
+            totalContracts: response.data.length,
+            templateIds: [templateSuffix],
+            source: "duckdb",
+          };
+        } catch (error) {
+          console.warn("DuckDB aggregated data fetch failed, falling back to Supabase:", error);
+        }
+      }
+
+      // Supabase fallback
+      if (!snapshotId) {
+        throw new Error("Missing snapshotId for Supabase query");
       }
 
       // Support both legacy and new template id separators in module path (":" vs ".")
