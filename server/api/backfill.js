@@ -39,6 +39,9 @@ function readAllCursors() {
         complete: data.complete || false,
         last_processed_round: data.last_processed_round || 0,
         updated_at: data.updated_at || new Date().toISOString(),
+        started_at: data.started_at || data.updated_at || new Date().toISOString(),
+        total_updates: data.total_updates || 0,
+        total_events: data.total_events || 0,
       });
     } catch (err) {
       console.error(`Error reading cursor file ${file}:`, err.message);
