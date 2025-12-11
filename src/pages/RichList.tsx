@@ -1,7 +1,7 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, Coins } from "lucide-react";
+import { Wallet, Coins, Database } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
@@ -9,6 +9,7 @@ import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 interface HolderBalance {
   owner: string;
@@ -19,6 +20,7 @@ interface HolderBalance {
 
 const RichList = () => {
   const [searchTerm, setSearchTerm] = useState("");
+  const { data: localAcsAvailable } = useLocalACSAvailable();
 
   const { data: snapshot } = useLatestACSSnapshot();
 
@@ -96,7 +98,15 @@ const RichList = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h2 className="text-3xl font-bold mb-2">Rich List</h2>
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-3xl font-bold">Rich List</h2>
+            {localAcsAvailable && (
+              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+                <Database className="h-3 w-3 mr-1" />
+                Local ACS
+              </Badge>
+            )}
+          </div>
           <p className="text-muted-foreground">Top CC holders and balance distribution</p>
         </div>
 

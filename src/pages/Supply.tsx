@@ -15,6 +15,7 @@ import {
   Clock,
   ChevronDown,
   ChevronRight,
+  Database,
 } from "lucide-react";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
@@ -25,6 +26,7 @@ import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { PaginationControls } from "@/components/PaginationControls";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { scanApi } from "@/lib/api-client";
+import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -33,6 +35,9 @@ const Supply = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
   const itemsPerPage = 20;
+
+  // Check if local ACS data is available
+  const { data: localAcsAvailable } = useLocalACSAvailable();
 
   const handleForceRefresh = async () => {
     try {
@@ -185,7 +190,15 @@ const Supply = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-3xl font-bold mb-2">Supply & Tokenomics</h2>
+            <div className="flex items-center gap-2 mb-2">
+              <h2 className="text-3xl font-bold">Supply & Tokenomics</h2>
+              {localAcsAvailable && (
+                <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+                  <Database className="h-3 w-3 mr-1" />
+                  Local ACS
+                </Badge>
+              )}
+            </div>
             <p className="text-muted-foreground">Track supply, allocations, and mining rounds from ACS snapshots</p>
           </div>
           <Button onClick={handleForceRefresh} variant="outline" size="sm" className="gap-2" disabled={isRefreshing}>

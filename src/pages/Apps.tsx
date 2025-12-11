@@ -1,15 +1,17 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Package, Star, Code } from "lucide-react";
+import { Package, Star, Code, Database } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const Apps = () => {
+  const { data: localAcsAvailable } = useLocalACSAvailable();
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
   const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight", !!latestSnapshot);
@@ -45,10 +47,16 @@ const Apps = () => {
     <DashboardLayout>
       <div className="space-y-8">
         <div>
-          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-2">
             <Package className="h-8 w-8 text-primary" />
-            Canton Network Apps
-          </h1>
+            <h1 className="text-3xl font-bold">Canton Network Apps</h1>
+            {localAcsAvailable && (
+              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+                <Database className="h-3 w-3 mr-1" />
+                Local ACS
+              </Badge>
+            )}
+          </div>
           <p className="text-muted-foreground">Featured applications on the Canton Network</p>
         </div>
 

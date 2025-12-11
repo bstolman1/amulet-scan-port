@@ -8,9 +8,11 @@ import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import { getPagesThatUseTemplate } from "@/lib/template-page-map";
+import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const Templates = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const { data: localAcsAvailable } = useLocalACSAvailable();
 
   // Fetch latest completed snapshot
   const { data: latestSnapshot, isLoading: snapshotLoading, error: snapshotError } = useLatestACSSnapshot();
@@ -143,7 +145,15 @@ const Templates = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h2 className="text-3xl font-bold mb-2">Template Data Explorer</h2>
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-3xl font-bold">Template Data Explorer</h2>
+            {localAcsAvailable && (
+              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+                <Database className="h-3 w-3 mr-1" />
+                Local ACS
+              </Badge>
+            )}
+          </div>
           <p className="text-muted-foreground mb-2">
             Explore available templates and their data structures from the latest ACS snapshot
           </p>
