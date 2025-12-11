@@ -84,8 +84,8 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 2: "Featured App Vote Proposal: AppName" or "Request: AppName"
-  const requestMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement|vote\s*proposal)[:\s-]+(.+?)$/i);
+  // Pattern 2: "Featured App Vote Proposal: AppName" or "Request: AppName" or "Approved: AppName"
+  const requestMatch = cleanText.match(/(?:request|proposal|onboarding|tokenomics|announce|announcement|approved|vote\s*proposal)[:\s-]+(.+?)$/i);
   if (requestMatch) {
     let name = requestMatch[1].trim();
     // Remove network prefix if present
