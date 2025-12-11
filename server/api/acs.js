@@ -261,7 +261,7 @@ router.get('/templates', async (req, res) => {
   }
 });
 
-// GET /api/acs/contracts - Get contracts by template
+// GET /api/acs/contracts - Get contracts by template with parsed payload
 router.get('/contracts', async (req, res) => {
   try {
     if (!hasACSData()) {
@@ -269,7 +269,7 @@ router.get('/contracts', async (req, res) => {
     }
 
     const { template, entity } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 10000);
     const offset = parseInt(req.query.offset) || 0;
 
     let whereClause = '1=1';
@@ -302,7 +302,27 @@ router.get('/contracts', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json(serializeBigInt({ data: rows }));
+    
+    // Parse payload JSON and flatten for frontend consumption
+    const parsedRows = rows.map(row => {
+      let parsedPayload = row.payload;
+      if (typeof row.payload === 'string') {
+        try {
+          parsedPayload = JSON.parse(row.payload);
+        } catch {
+          // Keep as string if parsing fails
+        }
+      }
+      
+      // Return the parsed payload fields at the top level for frontend compatibility
+      return {
+        ...row,
+        ...parsedPayload, // Spread payload fields (owner, amount, amulet, etc.)
+        payload: parsedPayload, // Keep original payload too
+      };
+    });
+    
+    res.json(serializeBigInt({ data: parsedRows }));
   } catch (err) {
     console.error('ACS contracts error:', err);
     res.status(500).json({ error: err.message });
