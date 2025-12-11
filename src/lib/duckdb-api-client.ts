@@ -324,6 +324,62 @@ export async function getACSRichList(params: { limit?: number; search?: string }
   return apiFetch(`/api/acs/rich-list?${queryParams}`);
 }
 
+// Allocations
+export interface AllocationData {
+  contract_id: string;
+  executor: string;
+  sender: string;
+  receiver: string;
+  amount: number;
+  requested_at: string;
+  transfer_leg_id: string;
+  payload: any;
+}
+
+export interface AllocationsResponse {
+  data: AllocationData[];
+  totalCount: number;
+  totalAmount: number;
+  uniqueExecutors: number;
+}
+
+export async function getACSAllocations(params: { limit?: number; offset?: number; search?: string } = {}): Promise<AllocationsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.limit) queryParams.set('limit', params.limit.toString());
+  if (params.offset) queryParams.set('offset', params.offset.toString());
+  if (params.search) queryParams.set('search', params.search);
+  return apiFetch(`/api/acs/allocations?${queryParams}`);
+}
+
+// Mining Rounds
+export interface MiningRound {
+  contract_id: string;
+  round_number: string;
+  opens_at: string;
+  target_closes_at: string;
+  amulet_price?: string;
+  issuance_per_sv_reward?: string;
+  issuance_per_validator_reward?: string;
+  payload: any;
+}
+
+export interface MiningRoundsResponse {
+  openRounds: MiningRound[];
+  issuingRounds: MiningRound[];
+  closedRounds: MiningRound[];
+  counts: {
+    open: number;
+    issuing: number;
+    closed: number;
+  };
+}
+
+export async function getACSMiningRounds(params: { closedLimit?: number } = {}): Promise<MiningRoundsResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.closedLimit) queryParams.set('closedLimit', params.closedLimit.toString());
+  return apiFetch(`/api/acs/mining-rounds?${queryParams}`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
