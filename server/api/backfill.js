@@ -78,32 +78,62 @@ router.get('/cursors', (req, res) => {
 // GET /api/backfill/stats - Get backfill statistics from data files
 router.get('/stats', async (req, res) => {
   try {
-    // Find actual files (avoids Windows glob pattern issues)
-    const updateFiles = db.findDataFiles('updates');
-    const eventFiles = db.findDataFiles('events');
-
-    // Count updates and events from JSONL files
-    const [updatesResult, eventsResult] = await Promise.all([
-      updateFiles.length > 0 
-        ? db.safeQuery(`SELECT COUNT(*) as count FROM ${db.readJsonlFiles(updateFiles)}`).catch(() => [{ count: 0 }])
-        : Promise.resolve([{ count: 0 }]),
-      eventFiles.length > 0
-        ? db.safeQuery(`SELECT COUNT(*) as count FROM ${db.readJsonlFiles(eventFiles)}`).catch(() => [{ count: 0 }])
-        : Promise.resolve([{ count: 0 }]),
-    ]);
-
-    // Get unique migrations
+    const basePath = db.DATA_PATH.replace(/\\/g, '/');
+    
+    // Check if parquet files exist using hasFileType
+    const hasParquetUpdates = db.hasFileType('updates', '.parquet');
+    const hasParquetEvents = db.hasFileType('events', '.parquet');
+    
+    // Also check for JSONL files as fallback
+    const hasJsonlUpdates = db.hasDataFiles('updates');
+    const hasJsonlEvents = db.hasDataFiles('events');
+    
+    let updatesCount = 0;
+    let eventsCount = 0;
     let activeMigrations = 0;
-    if (updateFiles.length > 0) {
+
+    // Try Parquet first, then JSONL
+    if (hasParquetUpdates) {
       try {
+        const result = await db.safeQuery(`
+          SELECT COUNT(*) as count FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
+        `);
+        updatesCount = Number(result[0]?.count || 0);
+        
+        // Get unique migrations from parquet
         const migrationsResult = await db.safeQuery(`
           SELECT COUNT(DISTINCT migration_id) as count 
-          FROM ${db.readJsonlFiles(updateFiles)}
+          FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
           WHERE migration_id IS NOT NULL
-        `);
+        `).catch(() => [{ count: 0 }]);
         activeMigrations = Number(migrationsResult[0]?.count || 0);
       } catch (e) {
-        // Data might not have migration_id column
+        console.warn('Parquet updates query failed:', e.message);
+      }
+    } else if (hasJsonlUpdates) {
+      try {
+        const result = await db.safeQuery(`SELECT COUNT(*) as count FROM ${db.readJsonlGlob('updates')}`);
+        updatesCount = Number(result[0]?.count || 0);
+      } catch (e) {
+        console.warn('JSONL updates query failed:', e.message);
+      }
+    }
+
+    if (hasParquetEvents) {
+      try {
+        const result = await db.safeQuery(`
+          SELECT COUNT(*) as count FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+        `);
+        eventsCount = Number(result[0]?.count || 0);
+      } catch (e) {
+        console.warn('Parquet events query failed:', e.message);
+      }
+    } else if (hasJsonlEvents) {
+      try {
+        const result = await db.safeQuery(`SELECT COUNT(*) as count FROM ${db.readJsonlGlob('events')}`);
+        eventsCount = Number(result[0]?.count || 0);
+      } catch (e) {
+        console.warn('JSONL events query failed:', e.message);
       }
     }
 
@@ -113,8 +143,8 @@ router.get('/stats', async (req, res) => {
     const completedCursors = cursors.filter(c => c.complete).length;
 
     res.json({
-      totalUpdates: Number(updatesResult[0]?.count || 0),
-      totalEvents: Number(eventsResult[0]?.count || 0),
+      totalUpdates: updatesCount,
+      totalEvents: eventsCount,
       activeMigrations,
       totalCursors,
       completedCursors,
