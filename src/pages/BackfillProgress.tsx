@@ -408,10 +408,13 @@ const BackfillProgress = () => {
                               </div>
                               {cursor.min_time && cursor.max_time && (
                                 <div className="space-y-1">
-                                  {/* Progress direction indicator: going from max_time → min_time */}
+                                  {/* Direction explanation */}
+                                  <div className="text-xs text-muted-foreground mb-1">
+                                    Processing backwards: {format(new Date(cursor.max_time), "MMM d, yyyy")} → {format(new Date(cursor.min_time), "MMM d, yyyy")}
+                                  </div>
                                   <div className="flex items-center justify-between text-xs">
-                                    <span className="text-green-400 font-medium">← Target: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
-                                    <span className="text-muted-foreground">Start: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")} →</span>
+                                    <span className="text-green-400 font-medium">Oldest: {format(new Date(cursor.min_time), "MMM d, yyyy HH:mm")}</span>
+                                    <span className="text-muted-foreground">Newest: {format(new Date(cursor.max_time), "MMM d, yyyy HH:mm")}</span>
                                   </div>
                                   {cursor.last_before && (
                                     <div className="flex items-center justify-between text-xs">
