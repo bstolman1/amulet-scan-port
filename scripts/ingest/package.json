@@ -4,9 +4,9 @@
   "type": "module",
   "description": "Canton ledger ingestion scripts for Parquet/DuckDB",
   "scripts": {
-    "backfill": "node fetch-backfill-parquet.js",
-    "ingest": "node fetch-updates-parquet.js",
-    "rotate": "node rotate-parquet.js"
+    "backfill": "node --max-old-space-size=8192 fetch-backfill-parquet.js",
+    "ingest": "node --max-old-space-size=8192 fetch-updates-parquet.js",
+    "rotate": "node --max-old-space-size=8192 rotate-parquet.js"
   },
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0",
