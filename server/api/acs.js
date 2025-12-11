@@ -586,88 +586,52 @@ router.get('/mining-rounds', async (req, res) => {
 
     console.log(`[ACS] Mining rounds request: closedLimit=${closedLimit}`);
 
+    // Cache the ACS source for this request to avoid recalculating
+    const acsSource = getACSSource();
+
+    // Single query to get all rounds and counts
     const sql = `
       WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
+        SELECT MAX(snapshot_time) as snapshot_time FROM ${acsSource}
       ),
-      open_rounds AS (
+      all_rounds AS (
         SELECT 
           contract_id,
-          json_extract_string(payload, '$.round.number') as round_number,
+          entity_name,
+          template_id,
+          COALESCE(
+            json_extract_string(payload, '$.round.number'),
+            json_extract_string(payload, '$.round')
+          ) as round_number,
           json_extract_string(payload, '$.opensAt') as opens_at,
           json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
           json_extract_string(payload, '$.amuletPrice') as amulet_price,
           payload
-        FROM ${getACSSource()} acs
+        FROM ${acsSource} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'OpenMiningRound' OR template_id LIKE '%:OpenMiningRound:%' OR template_id LIKE '%:OpenMiningRound')
-        ORDER BY CAST(json_extract_string(payload, '$.round.number') AS BIGINT) DESC
-      ),
-      issuing_rounds AS (
-        SELECT 
-          contract_id,
-          json_extract_string(payload, '$.round.number') as round_number,
-          json_extract_string(payload, '$.opensAt') as opens_at,
-          json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
-          json_extract_string(payload, '$.amuletPrice') as amulet_price,
-          json_extract_string(payload, '$.issuancePerSvRewardCoupon') as issuance_per_sv_reward,
-          json_extract_string(payload, '$.optIssuancePerValidatorRewardCoupon') as issuance_per_validator_reward,
-          payload
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'IssuingMiningRound' OR template_id LIKE '%:IssuingMiningRound:%' OR template_id LIKE '%:IssuingMiningRound')
-        ORDER BY CAST(json_extract_string(payload, '$.round.number') AS BIGINT) DESC
-      ),
-      closed_rounds AS (
-        SELECT 
-          contract_id,
-          json_extract_string(payload, '$.round.number') as round_number,
-          json_extract_string(payload, '$.opensAt') as opens_at,
-          json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
-          payload
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'ClosedMiningRound' OR template_id LIKE '%:ClosedMiningRound:%' OR template_id LIKE '%:ClosedMiningRound')
-        ORDER BY CAST(json_extract_string(payload, '$.round.number') AS BIGINT) DESC
-        LIMIT ${closedLimit}
+          AND (entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
+               OR template_id LIKE '%MiningRound%')
       )
-      SELECT 'open' as round_type, * FROM open_rounds
-      UNION ALL
-      SELECT 'issuing' as round_type, contract_id, round_number, opens_at, target_closes_at, amulet_price, payload FROM issuing_rounds
-      UNION ALL
-      SELECT 'closed' as round_type, contract_id, round_number, opens_at, target_closes_at, NULL as amulet_price, payload FROM closed_rounds
+      SELECT * FROM all_rounds
+      ORDER BY CAST(COALESCE(round_number, '0') AS BIGINT) DESC
     `;
 
     const rows = await db.safeQuery(sql);
 
-    // Get counts
-    const countsSql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      )
-      SELECT 
-        SUM(CASE WHEN entity_name = 'OpenMiningRound' OR template_id LIKE '%:OpenMiningRound:%' THEN 1 ELSE 0 END) as open_count,
-        SUM(CASE WHEN entity_name = 'IssuingMiningRound' OR template_id LIKE '%:IssuingMiningRound:%' THEN 1 ELSE 0 END) as issuing_count,
-        SUM(CASE WHEN entity_name = 'ClosedMiningRound' OR template_id LIKE '%:ClosedMiningRound:%' THEN 1 ELSE 0 END) as closed_count
-      FROM ${getACSSource()} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-    `;
-
-    const counts = await db.safeQuery(countsSql);
-
     // Separate by type
-    const openRounds = rows.filter(r => r.round_type === 'open');
-    const issuingRounds = rows.filter(r => r.round_type === 'issuing');
-    const closedRounds = rows.filter(r => r.round_type === 'closed');
+    const openRounds = rows.filter(r => r.entity_name === 'OpenMiningRound' || r.template_id?.includes('OpenMiningRound'));
+    const issuingRounds = rows.filter(r => r.entity_name === 'IssuingMiningRound' || r.template_id?.includes('IssuingMiningRound'));
+    const allClosedRounds = rows.filter(r => r.entity_name === 'ClosedMiningRound' || r.template_id?.includes('ClosedMiningRound'));
+    const closedRounds = allClosedRounds.slice(0, closedLimit);
 
     res.json(serializeBigInt({
       openRounds,
       issuingRounds,
       closedRounds,
       counts: {
-        open: counts[0]?.open_count || 0,
-        issuing: counts[0]?.issuing_count || 0,
-        closed: counts[0]?.closed_count || 0,
+        open: openRounds.length,
+        issuing: issuingRounds.length,
+        closed: allClosedRounds.length,
       }
     }));
   } catch (err) {
