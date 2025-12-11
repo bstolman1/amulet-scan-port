@@ -348,12 +348,10 @@ router.get('/rich-list', async (req, res) => {
 
     console.log(`[ACS] Rich list request: limit=${limit}, search=${search}`);
 
-    // Calculate holder balances aggregated by owner in SQL
+    // Calculate holder balances aggregated by owner across ALL migration files in the ACS data
+    // (no snapshot_time filter - aggregate everything in the current ACS data)
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      amulet_balances AS (
+      WITH amulet_balances AS (
         SELECT 
           payload->>'owner' as owner,
           CAST(COALESCE(
@@ -362,8 +360,7 @@ router.get('/rich-list', async (req, res) => {
             '0'
           ) AS DOUBLE) / 10000000000.0 as amount
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+        WHERE (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
           AND payload->>'owner' IS NOT NULL
       ),
       locked_balances AS (
@@ -380,8 +377,7 @@ router.get('/rich-list', async (req, res) => {
             '0'
           ) AS DOUBLE) / 10000000000.0 as amount
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
           AND (payload->'amulet'->>'owner' IS NOT NULL OR payload->>'owner' IS NOT NULL)
       ),
       combined AS (
@@ -408,12 +404,9 @@ router.get('/rich-list', async (req, res) => {
     const rows = await db.safeQuery(sql);
     console.log(`[ACS] Rich list returned ${rows.length} holders`);
 
-    // Get total supply and holder count
+    // Get total supply and holder count - aggregate across ALL migration files
     const statsSql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
-      amulet_total AS (
+      WITH amulet_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
             payload->>'$.amount.initialAmount',
@@ -422,8 +415,7 @@ router.get('/rich-list', async (req, res) => {
           ) AS DOUBLE) / 10000000000.0
         ), 0) as total
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%')
+        WHERE (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
       ),
       locked_total AS (
         SELECT COALESCE(SUM(
@@ -434,8 +426,7 @@ router.get('/rich-list', async (req, res) => {
           ) AS DOUBLE) / 10000000000.0
         ), 0) as total
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
       ),
       holder_count AS (
         SELECT COUNT(DISTINCT COALESCE(
@@ -443,10 +434,11 @@ router.get('/rich-list', async (req, res) => {
           payload->>'owner'
         )) as count
         FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name IN ('Amulet', 'LockedAmulet') 
-               OR template_id LIKE '%:Amulet:%' 
-               OR template_id LIKE '%:LockedAmulet:%')
+        WHERE (entity_name IN ('Amulet', 'LockedAmulet') 
+             OR template_id LIKE '%:Amulet:%' 
+             OR template_id LIKE '%:LockedAmulet:%'
+             OR template_id LIKE '%:Amulet'
+             OR template_id LIKE '%:LockedAmulet')
       )
       SELECT 
         amulet_total.total + locked_total.total as total_supply,
