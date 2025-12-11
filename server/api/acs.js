@@ -265,12 +265,15 @@ router.get('/templates', async (req, res) => {
 router.get('/contracts', async (req, res) => {
   try {
     if (!hasACSData()) {
+      console.log('[ACS] No ACS data available');
       return res.json({ data: [] });
     }
 
     const { template, entity } = req.query;
     const limit = Math.min(parseInt(req.query.limit) || 100, 10000);
     const offset = parseInt(req.query.offset) || 0;
+
+    console.log(`[ACS] Contracts request: template=${template}, entity=${entity}, limit=${limit}`);
 
     let whereClause = '1=1';
     if (template) {
@@ -279,6 +282,8 @@ router.get('/contracts', async (req, res) => {
       // Match by entity_name OR template_id containing the entity name
       whereClause = `(entity_name = '${entity}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
     }
+
+    console.log(`[ACS] WHERE clause: ${whereClause}`);
 
     const sql = `
       WITH latest_snapshot AS (
@@ -303,6 +308,7 @@ router.get('/contracts', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
+    console.log(`[ACS] Found ${rows.length} contracts for entity=${entity}`);
     
     // Parse payload JSON and flatten for frontend consumption
     const parsedRows = rows.map(row => {
