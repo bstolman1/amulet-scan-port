@@ -1,6 +1,22 @@
 /**
+ * CC amounts are stored with 10 decimal places in the ledger
+ * Divide raw amounts by this to get human-readable CC values
+ */
+export const CC_DECIMALS = 10;
+export const CC_DIVISOR = Math.pow(10, CC_DECIMALS);
+
+/**
+ * Convert raw ledger amount to human-readable CC value
+ */
+export function toCC(rawAmount: number | string): number {
+  const parsed = typeof rawAmount === 'string' ? parseFloat(rawAmount) : rawAmount;
+  if (isNaN(parsed)) return 0;
+  return parsed / CC_DIVISOR;
+}
+
+/**
  * Safely extracts numeric amount from various possible paths in contract data
- * Returns 0 if no valid amount found
+ * Returns 0 if no valid amount found (in raw ledger units)
  */
 export function pickAmount(obj: any): number {
   if (!obj) return 0;
@@ -25,6 +41,13 @@ export function pickAmount(obj: any): number {
   }
 
   return 0;
+}
+
+/**
+ * Safely extracts and converts amount to CC (human-readable)
+ */
+export function pickAmountAsCC(obj: any): number {
+  return toCC(pickAmount(obj));
 }
 
 /**

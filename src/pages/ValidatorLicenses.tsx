@@ -13,6 +13,8 @@ import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { useQuery } from "@tanstack/react-query";
+import { getACSValidatorStats, isApiAvailable } from "@/lib/duckdb-api-client";
 
 const ValidatorLicenses = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -22,6 +24,20 @@ const ValidatorLicenses = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
+  // Use server-side aggregation for stats
+  const { data: validatorStats, isLoading: statsLoading } = useQuery({
+    queryKey: ["acs-validator-stats"],
+    queryFn: async () => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("DuckDB API not available");
+      }
+      return getACSValidatorStats();
+    },
+    staleTime: 60_000,
+  });
+
+  // Still fetch detailed data for display (paginated)
   const licensesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:ValidatorLicense:ValidatorLicense",
@@ -51,7 +67,7 @@ const ValidatorLicenses = () => {
   const livenessData = livenessQuery.data?.data || [];
   const validatorRightsData = validatorRightsQuery.data?.data || [];
   const isLoading =
-    licensesQuery.isLoading || couponsQuery.isLoading || livenessQuery.isLoading || validatorRightsQuery.isLoading;
+    statsLoading || licensesQuery.isLoading || couponsQuery.isLoading || livenessQuery.isLoading || validatorRightsQuery.isLoading;
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -117,7 +133,7 @@ const ValidatorLicenses = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{licensesQuery.data?.totalContracts || 0}</p>
+              <p className="text-2xl font-bold">{validatorStats?.licenseCount ?? licensesQuery.data?.totalContracts ?? 0}</p>
             )}
           </Card>
 
@@ -126,7 +142,7 @@ const ValidatorLicenses = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{couponsQuery.data?.totalContracts || 0}</p>
+              <p className="text-2xl font-bold">{validatorStats?.couponCount ?? couponsQuery.data?.totalContracts ?? 0}</p>
             )}
           </Card>
         </div>

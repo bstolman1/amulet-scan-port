@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
+import { useQuery } from "@tanstack/react-query";
+import { getACSTrafficStats, isApiAvailable } from "@/lib/duckdb-api-client";
 
 const MemberTraffic = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -23,6 +25,20 @@ const MemberTraffic = () => {
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: trafficEvents, isLoading: eventsLoading } = useMemberTrafficEvents();
 
+  // Use server-side aggregation for stats
+  const { data: trafficStats, isLoading: statsLoading } = useQuery({
+    queryKey: ["acs-traffic-stats"],
+    queryFn: async () => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("DuckDB API not available");
+      }
+      return getACSTrafficStats();
+    },
+    staleTime: 60_000,
+  });
+
+  // Still fetch detailed data for display
   const trafficQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:DecentralizedSynchronizer:MemberTraffic",
@@ -30,14 +46,7 @@ const MemberTraffic = () => {
   );
 
   const trafficData = trafficQuery.data?.data || [];
-  const isLoading = trafficQuery.isLoading;
-
-  // Debug logging
-  console.log("🔍 DEBUG MemberTraffic: Total traffic records:", trafficData.length);
-  console.log("🔍 DEBUG MemberTraffic: First 3 records:", trafficData.slice(0, 3));
-  if (trafficData.length > 0) {
-    console.log("🔍 DEBUG MemberTraffic: First record structure:", JSON.stringify(trafficData[0], null, 2));
-  }
+  const isLoading = statsLoading || trafficQuery.isLoading;
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -72,14 +81,15 @@ const MemberTraffic = () => {
     return `${(b / (1024 * 1024)).toFixed(2)} MB`;
   };
 
-  const totalTraffic = trafficData.reduce((sum: number, t: any) => {
+  // Use server-side stats when available
+  const totalRecords = trafficStats?.totalRecords ?? trafficData.length;
+  const uniqueMembers = trafficStats?.uniqueMembers ?? new Set(
+    trafficData.map((t: any) => getField(t, "member", "memberId", "synchronizerId")).filter(Boolean),
+  ).size;
+  const totalTraffic = trafficStats?.totalTrafficBytes ?? trafficData.reduce((sum: number, t: any) => {
     const bytes = getField(t, "totalTrafficBytes", "totalPurchased") || 0;
     return sum + (typeof bytes === "string" ? parseInt(bytes) : bytes);
   }, 0);
-
-  const uniqueMembers = new Set(
-    trafficData.map((t: any) => getField(t, "member", "memberId", "synchronizerId")).filter(Boolean),
-  ).size;
 
   return (
     <DashboardLayout>
@@ -98,7 +108,7 @@ const MemberTraffic = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{trafficData.length.toLocaleString()}</p>
+              <p className="text-2xl font-bold">{totalRecords.toLocaleString()}</p>
             )}
           </Card>
 

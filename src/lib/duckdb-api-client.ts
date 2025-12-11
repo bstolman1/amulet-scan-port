@@ -302,6 +302,65 @@ export async function getACSSupply(): Promise<{ data: any }> {
   return apiFetch('/api/acs/supply');
 }
 
+export interface RichListHolder {
+  owner: string;
+  amount: number;
+  locked: number;
+  total: number;
+}
+
+export interface RichListResponse {
+  data: RichListHolder[];
+  totalSupply: number;
+  unlockedSupply: number;
+  lockedSupply: number;
+  holderCount: number;
+}
+
+export async function getACSRichList(params: { limit?: number; search?: string } = {}): Promise<RichListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.limit) queryParams.set('limit', params.limit.toString());
+  if (params.search) queryParams.set('search', params.search);
+  return apiFetch(`/api/acs/rich-list?${queryParams}`);
+}
+
+// Supply Stats
+export interface SupplyStats {
+  totalSupply: number;
+  unlockedSupply: number;
+  lockedSupply: number;
+  amuletCount: number;
+  lockedCount: number;
+}
+
+export async function getACSSupplyStats(): Promise<SupplyStats> {
+  return apiFetch('/api/acs/supply-stats');
+}
+
+// Validator Stats
+export interface ValidatorStats {
+  licenseCount: number;
+  couponCount: number;
+  livenessCount: number;
+  rightsCount: number;
+  uniqueValidators: number;
+}
+
+export async function getACSValidatorStats(): Promise<ValidatorStats> {
+  return apiFetch('/api/acs/validator-stats');
+}
+
+// Traffic Stats
+export interface TrafficStats {
+  totalRecords: number;
+  uniqueMembers: number;
+  totalTrafficBytes: number;
+}
+
+export async function getACSTrafficStats(): Promise<TrafficStats> {
+  return apiFetch('/api/acs/traffic-stats');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
