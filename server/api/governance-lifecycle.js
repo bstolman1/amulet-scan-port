@@ -65,6 +65,7 @@ function extractPrimaryEntityName(text) {
   const featuredApprovedMatch = cleanText.match(/featured\s*app\s*approved[:\s-]+(.+?)$/i);
   if (featuredApprovedMatch) {
     let name = featuredApprovedMatch[1].trim();
+    console.log(`EXTRACT: "Featured App Approved" pattern matched, extracted: "${name}" from "${cleanText.slice(0, 60)}"`);
     if (name.length > 1) {
       return name;
     }
@@ -197,6 +198,11 @@ function extractIdentifiers(text) {
   // Extract the primary entity name
   const entityName = extractPrimaryEntityName(text);
   identifiers.entityName = entityName;
+  
+  // Debug log for featured app detection
+  if (text.toLowerCase().includes('featured app approved')) {
+    console.log(`IDENTIFIERS: isFeaturedApp=${isFeaturedApp}, entityName="${entityName}", text="${text.slice(0, 60)}"`);
+  }
   
   if (isFeaturedApp && entityName) {
     identifiers.appName = entityName;
@@ -470,8 +476,9 @@ function correlateTopics(allTopics) {
       currentStage: topic.stage,
     };
     
-    // Log for debugging
-    console.log(`Processing topic: "${topic.subject.slice(0, 60)}..." -> type=${type}, entity="${topicEntityName || 'none'}", network=${topic.identifiers.network || 'none'}`);
+    // Log for debugging - show the primaryId being assigned
+    const assignedPrimaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40);
+    console.log(`NEW LIFECYCLE: "${topic.subject.slice(0, 60)}..." -> type=${type}, primaryId="${assignedPrimaryId}", entity="${topicEntityName || 'none'}"`);
     
     // Add the starting topic first
     item.stages[topic.stage] = item.stages[topic.stage] || [];
