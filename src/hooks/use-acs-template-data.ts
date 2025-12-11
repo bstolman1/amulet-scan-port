@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
+import { getACSTemplates as getLocalACSTemplates, getACSContracts as getLocalACSContracts } from "@/lib/duckdb-api-client";
 
 interface TemplateDataMetadata {
   template_id: string;
@@ -21,6 +23,19 @@ interface ChunkManifest {
     path: string;
     entryCount: number;
   }>;
+}
+
+// Cached DuckDB availability check
+let duckDBAvailable: boolean | null = null;
+let duckDBCheckTime = 0;
+async function isDuckDBAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (duckDBAvailable !== null && now - duckDBCheckTime < 30_000) {
+    return duckDBAvailable;
+  }
+  duckDBAvailable = await checkDuckDBConnection();
+  duckDBCheckTime = now;
+  return duckDBAvailable;
 }
 
 /**
@@ -142,18 +157,44 @@ async function fetchTemplateData(storagePath: string): Promise<any[]> {
 }
 
 /**
- * Fetch template data from Supabase Storage for a given snapshot
+ * Fetch template data from Supabase Storage or local DuckDB for a given snapshot
  */
 export function useACSTemplateData<T = any>(
   snapshotId: string | undefined,
   templateId: string,
   enabled: boolean = true,
 ) {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["acs-template-data", snapshotId, templateId],
+    queryKey: ["acs-template-data", snapshotId, templateId, useDuckDB ? "duckdb" : "supabase"],
     queryFn: async (): Promise<TemplateDataResponse<T>> => {
-      if (!snapshotId || !templateId) {
-        throw new Error("Missing snapshotId or templateId");
+      if (!templateId) {
+        throw new Error("Missing templateId");
+      }
+
+      // Try DuckDB first if configured and available
+      if (useDuckDB && await isDuckDBAvailable()) {
+        try {
+          console.log(`[useACSTemplateData] Fetching from DuckDB: ${templateId}`);
+          const response = await getLocalACSContracts({ template: templateId, limit: 100 });
+          
+          return {
+            metadata: {
+              template_id: templateId,
+              snapshot_timestamp: new Date().toISOString(),
+              entry_count: response.data.length,
+            },
+            data: response.data as T[],
+          };
+        } catch (error) {
+          console.warn("[useACSTemplateData] DuckDB failed, falling back to Supabase:", error);
+        }
+      }
+
+      // Supabase fallback
+      if (!snapshotId) {
+        throw new Error("Missing snapshotId for Supabase query");
       }
 
       // Get the storage path from template stats
@@ -173,7 +214,7 @@ export function useACSTemplateData<T = any>(
       const contractsArray = await fetchTemplateData(templateStats.storage_path);
 
       // Get snapshot info for metadata
-      const { data: snapshot } = await supabase.from("acs_snapshots").select("timestamp").eq("id", snapshotId).single();
+      const { data: snapshot } = await supabase.from("acs_snapshots").select("timestamp").eq("id", snapshotId).maybeSingle();
 
       // Wrap in expected format with metadata
       return {
@@ -185,19 +226,44 @@ export function useACSTemplateData<T = any>(
         data: Array.isArray(contractsArray) ? contractsArray : [],
       } as TemplateDataResponse<T>;
     },
-    enabled: enabled && !!snapshotId && !!templateId,
+    enabled: enabled && !!templateId,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
 
 /**
- * Get all available templates for a snapshot
+ * Get all available templates for a snapshot (with DuckDB fallback)
  */
 export function useACSTemplates(snapshotId: string | undefined) {
+  const useDuckDB = useDuckDBForLedger();
+
   return useQuery({
-    queryKey: ["acs-templates", snapshotId],
+    queryKey: ["acs-templates", snapshotId, useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
-      if (!snapshotId) throw new Error("Missing snapshotId");
+      // Try DuckDB first if configured and available
+      if (useDuckDB && await isDuckDBAvailable()) {
+        try {
+          console.log("[useACSTemplates] Fetching from DuckDB");
+          const response = await getLocalACSTemplates(500);
+          
+          // Transform to match Supabase format
+          return response.data.map(t => ({
+            template_id: t.template_id,
+            contract_count: t.contract_count,
+            storage_path: null, // Local data doesn't have storage paths
+            entity_name: t.entity_name,
+            module_name: t.module_name,
+          }));
+        } catch (error) {
+          console.warn("[useACSTemplates] DuckDB failed, falling back to Supabase:", error);
+        }
+      }
+
+      // Supabase fallback
+      if (!snapshotId) {
+        console.log("[useACSTemplates] No snapshotId and DuckDB unavailable");
+        return [];
+      }
 
       const { data, error } = await supabase
         .from("acs_template_stats")
@@ -208,7 +274,7 @@ export function useACSTemplates(snapshotId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!snapshotId,
+    enabled: true, // Always enabled - will try DuckDB even without snapshotId
     staleTime: 5 * 60 * 1000,
   });
 }
