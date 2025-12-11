@@ -349,6 +349,8 @@ router.get('/rich-list', async (req, res) => {
     console.log(`[ACS] Rich list request: limit=${limit}, search=${search}`);
 
     // Calculate holder balances aggregated by owner in SQL
+    // Note: initialAmount values are already in CC units (e.g., "12.0672273082" = 12 CC)
+    // No division needed - the payload amounts are human-readable
     const sql = `
       WITH latest_snapshot AS (
         SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
@@ -359,7 +361,7 @@ router.get('/rich-list', async (req, res) => {
           CAST(COALESCE(
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
-          ) AS DOUBLE) / 10000000000.0 as amount
+          ) AS DOUBLE) as amount
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
@@ -375,7 +377,7 @@ router.get('/rich-list', async (req, res) => {
             json_extract_string(payload, '$.amulet.amount.initialAmount'),
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
-          ) AS DOUBLE) / 10000000000.0 as amount
+          ) AS DOUBLE) as amount
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
@@ -416,7 +418,7 @@ router.get('/rich-list', async (req, res) => {
           CAST(COALESCE(
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
-          ) AS DOUBLE) / 10000000000.0
+          ) AS DOUBLE)
         ), 0) as total
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
@@ -428,7 +430,7 @@ router.get('/rich-list', async (req, res) => {
             json_extract_string(payload, '$.amulet.amount.initialAmount'),
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
-          ) AS DOUBLE) / 10000000000.0
+          ) AS DOUBLE)
         ), 0) as total
         FROM ${getACSSource()} acs
         WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
