@@ -302,6 +302,28 @@ export async function getACSSupply(): Promise<{ data: any }> {
   return apiFetch('/api/acs/supply');
 }
 
+export interface RichListHolder {
+  owner: string;
+  amount: number;
+  locked: number;
+  total: number;
+}
+
+export interface RichListResponse {
+  data: RichListHolder[];
+  totalSupply: number;
+  unlockedSupply: number;
+  lockedSupply: number;
+  holderCount: number;
+}
+
+export async function getACSRichList(params: { limit?: number; search?: string } = {}): Promise<RichListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.limit) queryParams.set('limit', params.limit.toString());
+  if (params.search) queryParams.set('search', params.search);
+  return apiFetch(`/api/acs/rich-list?${queryParams}`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
