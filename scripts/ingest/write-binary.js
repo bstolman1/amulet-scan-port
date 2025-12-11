@@ -21,8 +21,9 @@ const __dirname = dirname(__filename);
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000; // Reduced to flush more often
 const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 1;
+const MAX_PENDING_WRITES = parseInt(process.env.MAX_PENDING_WRITES) || 50; // Limit concurrent writes
 
 // In-memory buffers
 let updatesBuffer = [];
@@ -32,9 +33,9 @@ let currentMigrationId = null;
 // Pool instance
 let writerPool = null;
 
-// Track pending writes for drain
+// Track pending writes for drain - use a Set to avoid memory buildup
 let pendingWrites = 0;
-let writePromises = [];
+let writePromises = new Set();
 
 /**
  * Initialize binary writer pool
@@ -120,19 +121,27 @@ function mapEventRecord(r) {
 }
 
 /**
- * Queue a binary write job
+ * Queue a binary write job with backpressure
  */
 async function queueBinaryWrite(records, filePath, type) {
   if (records.length === 0) {
     return null;
   }
   
+  // Apply backpressure - wait if too many pending writes
+  while (pendingWrites >= MAX_PENDING_WRITES) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  
   const pool = await ensureWriterPool();
   
-  // Map records to protobuf format
+  // Map records to protobuf format - clear source array reference after mapping
   const mappedRecords = type === 'updates' 
     ? records.map(mapUpdateRecord)
     : records.map(mapEventRecord);
+  
+  // Clear the source records to free memory immediately
+  records.length = 0;
   
   pendingWrites++;
   
@@ -143,6 +152,7 @@ async function queueBinaryWrite(records, filePath, type) {
     zstdLevel: ZSTD_LEVEL,
   }).then(result => {
     pendingWrites--;
+    writePromises.delete(promise); // Remove from tracking immediately
     const ratio = result.originalSize > 0 
       ? ((result.compressedSize / result.originalSize) * 100).toFixed(1)
       : 0;
@@ -150,11 +160,12 @@ async function queueBinaryWrite(records, filePath, type) {
     return result;
   }).catch(err => {
     pendingWrites--;
+    writePromises.delete(promise); // Remove from tracking on error too
     console.error(`❌ Binary write failed for ${filePath}:`, err.message);
     throw err;
   });
   
-  writePromises.push(promise);
+  writePromises.add(promise);
   
   return { file: filePath, count: records.length, queued: true };
 }
@@ -279,9 +290,9 @@ export function getBufferStats() {
  */
 export async function waitForWrites() {
   // Wait for all tracked promises
-  if (writePromises.length > 0) {
-    await Promise.allSettled(writePromises);
-    writePromises = [];
+  if (writePromises.size > 0) {
+    await Promise.allSettled([...writePromises]);
+    writePromises.clear();
   }
   
   // Also drain the pool
