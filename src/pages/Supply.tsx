@@ -35,7 +35,7 @@ const Supply = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
+  const [openItems, setOpenItems] = useState<Record<string | number, boolean>>({});
   const itemsPerPage = 20;
 
   // Check if local ACS data is available
@@ -376,9 +376,9 @@ const Supply = () => {
           <div>
             <h4 className="text-xl font-bold mb-4 flex items-center">
               <AlertCircle className="h-5 w-5 mr-2 text-warning" />
-              Open Rounds
+              Open Rounds ({miningRoundsData?.counts?.open || 0})
             </h4>
-            {isLoading ? (
+            {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
             ) : openRounds.length === 0 ? (
               <Card className="glass-card p-6">
@@ -386,32 +386,58 @@ const Supply = () => {
               </Card>
             ) : (
               <div className="space-y-4">
-                {openRounds.map((round: any) => (
-                  <Card key={round.contract_id} className="glass-card">
-                    <div className="p-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
-                          <p className="text-sm text-muted-foreground">
-                            Opens: {round.opens_at ? new Date(round.opens_at).toLocaleString() : 'N/A'}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
-                          </p>
-                        </div>
-                        <Badge className="bg-warning/10 text-warning border-warning/20">
-                          <Clock className="h-3 w-3 mr-1" />
-                          open
-                        </Badge>
-                      </div>
-
-                      <div className="p-4 rounded-lg bg-muted/30">
-                        <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                        <p className="font-mono text-xs truncate">{round.contract_id}</p>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
+                {openRounds.map((round: any, idx: number) => {
+                  const roundKey = `open-${idx}`;
+                  return (
+                    <Card key={round.contract_id || roundKey} className="glass-card">
+                      <Collapsible
+                        open={openItems[roundKey] || false}
+                        onOpenChange={(isOpen) => setOpenItems((prev) => ({ ...prev, [roundKey]: isOpen }))}
+                      >
+                        <CollapsibleTrigger className="w-full">
+                          <div className="p-6">
+                            <div className="flex items-start justify-between mb-4">
+                              <div className="flex items-center gap-2">
+                                {openItems[roundKey] ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                                <div className="text-left">
+                                  <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
+                                  <p className="text-sm text-muted-foreground">
+                                    Opens: {round.opens_at ? new Date(round.opens_at).toLocaleString() : 'N/A'}
+                                  </p>
+                                  <p className="text-sm text-muted-foreground">
+                                    Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
+                                  </p>
+                                </div>
+                              </div>
+                              <Badge className="bg-warning/10 text-warning border-warning/20">
+                                <Clock className="h-3 w-3 mr-1" />
+                                open
+                              </Badge>
+                            </div>
+                          </div>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="px-6 pb-6 space-y-4">
+                            <div className="p-4 rounded-lg bg-muted/30">
+                              <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
+                              <p className="font-mono text-xs break-all">{round.contract_id}</p>
+                            </div>
+                            <div className="p-4 rounded-lg bg-muted/50">
+                              <p className="text-xs font-semibold mb-2">Full Payload:</p>
+                              <pre className="text-xs overflow-auto max-h-96 whitespace-pre-wrap">
+                                {JSON.stringify(typeof round.payload === 'string' ? JSON.parse(round.payload) : round.payload, null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -420,9 +446,9 @@ const Supply = () => {
           <div>
             <h4 className="text-xl font-bold mb-4 flex items-center">
               <Clock className="h-5 w-5 mr-2 text-primary" />
-              Issuing Rounds
+              Issuing Rounds ({miningRoundsData?.counts?.issuing || 0})
             </h4>
-            {isLoading ? (
+            {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
             ) : issuingRounds.length === 0 ? (
               <Card className="glass-card p-6">
@@ -430,29 +456,55 @@ const Supply = () => {
               </Card>
             ) : (
               <div className="space-y-4">
-                {issuingRounds.map((round: any) => (
-                  <Card key={round.contract_id} className="glass-card">
-                    <div className="p-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
-                          <p className="text-sm text-muted-foreground">
-                            Opens: {round.opens_at ? new Date(round.opens_at).toLocaleString() : 'N/A'}
-                          </p>
-                        </div>
-                        <Badge className="bg-primary/10 text-primary border-primary/20">
-                          <Clock className="h-3 w-3 mr-1" />
-                          issuing
-                        </Badge>
-                      </div>
-
-                      <div className="p-4 rounded-lg bg-muted/30">
-                        <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                        <p className="font-mono text-xs truncate">{round.contract_id}</p>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
+                {issuingRounds.map((round: any, idx: number) => {
+                  const roundKey = `issuing-${idx}`;
+                  return (
+                    <Card key={round.contract_id || roundKey} className="glass-card">
+                      <Collapsible
+                        open={openItems[roundKey] || false}
+                        onOpenChange={(isOpen) => setOpenItems((prev) => ({ ...prev, [roundKey]: isOpen }))}
+                      >
+                        <CollapsibleTrigger className="w-full">
+                          <div className="p-6">
+                            <div className="flex items-start justify-between mb-4">
+                              <div className="flex items-center gap-2">
+                                {openItems[roundKey] ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                                <div className="text-left">
+                                  <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
+                                  <p className="text-sm text-muted-foreground">
+                                    Opens: {round.opens_at ? new Date(round.opens_at).toLocaleString() : 'N/A'}
+                                  </p>
+                                </div>
+                              </div>
+                              <Badge className="bg-primary/10 text-primary border-primary/20">
+                                <Clock className="h-3 w-3 mr-1" />
+                                issuing
+                              </Badge>
+                            </div>
+                          </div>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="px-6 pb-6 space-y-4">
+                            <div className="p-4 rounded-lg bg-muted/30">
+                              <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
+                              <p className="font-mono text-xs break-all">{round.contract_id}</p>
+                            </div>
+                            <div className="p-4 rounded-lg bg-muted/50">
+                              <p className="text-xs font-semibold mb-2">Full Payload:</p>
+                              <pre className="text-xs overflow-auto max-h-96 whitespace-pre-wrap">
+                                {JSON.stringify(typeof round.payload === 'string' ? JSON.parse(round.payload) : round.payload, null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -461,9 +513,9 @@ const Supply = () => {
           <div>
             <h4 className="text-xl font-bold mb-4 flex items-center">
               <CheckCircle className="h-5 w-5 mr-2 text-success" />
-              Recently Closed Rounds
+              Recently Closed Rounds ({miningRoundsData?.counts?.closed || 0} total)
             </h4>
-            {isLoading ? (
+            {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
             ) : closedRounds.length === 0 ? (
               <Card className="glass-card p-6">
@@ -471,29 +523,55 @@ const Supply = () => {
               </Card>
             ) : (
               <div className="space-y-4">
-                {closedRounds.map((round: any) => (
-                  <Card key={round.contract_id} className="glass-card">
-                    <div className="p-6">
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
-                          <p className="text-sm text-muted-foreground">
-                            Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
-                          </p>
-                        </div>
-                        <Badge className="bg-success/10 text-success border-success/20">
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          closed
-                        </Badge>
-                      </div>
-
-                      <div className="p-4 rounded-lg bg-muted/30">
-                        <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
-                        <p className="font-mono text-xs truncate">{round.contract_id}</p>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
+                {closedRounds.map((round: any, idx: number) => {
+                  const roundKey = `closed-${idx}`;
+                  return (
+                    <Card key={round.contract_id || roundKey} className="glass-card">
+                      <Collapsible
+                        open={openItems[roundKey] || false}
+                        onOpenChange={(isOpen) => setOpenItems((prev) => ({ ...prev, [roundKey]: isOpen }))}
+                      >
+                        <CollapsibleTrigger className="w-full">
+                          <div className="p-6">
+                            <div className="flex items-start justify-between mb-4">
+                              <div className="flex items-center gap-2">
+                                {openItems[roundKey] ? (
+                                  <ChevronDown className="h-4 w-4" />
+                                ) : (
+                                  <ChevronRight className="h-4 w-4" />
+                                )}
+                                <div className="text-left">
+                                  <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
+                                  <p className="text-sm text-muted-foreground">
+                                    Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
+                                  </p>
+                                </div>
+                              </div>
+                              <Badge className="bg-success/10 text-success border-success/20">
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                closed
+                              </Badge>
+                            </div>
+                          </div>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="px-6 pb-6 space-y-4">
+                            <div className="p-4 rounded-lg bg-muted/30">
+                              <p className="text-sm text-muted-foreground mb-1">Contract ID</p>
+                              <p className="font-mono text-xs break-all">{round.contract_id}</p>
+                            </div>
+                            <div className="p-4 rounded-lg bg-muted/50">
+                              <p className="text-xs font-semibold mb-2">Full Payload:</p>
+                              <pre className="text-xs overflow-auto max-h-96 whitespace-pre-wrap">
+                                {JSON.stringify(typeof round.payload === 'string' ? JSON.parse(round.payload) : round.payload, null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </div>
