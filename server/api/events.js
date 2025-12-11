@@ -8,16 +8,28 @@ const router = Router();
 const getEventsSource = () => {
   const hasParquet = db.hasFileType('events', '.parquet');
   if (hasParquet) {
-    return `read_parquet('${db.DATA_PATH}/**/events-*.parquet', union_by_name=true)`;
+    return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/events-*.parquet', union_by_name=true)`;
   }
-  // Fallback to JSONL
-  return `(
-    SELECT * FROM read_json_auto('${db.DATA_PATH}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)
-    UNION ALL
-    SELECT * FROM read_json_auto('${db.DATA_PATH}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-    UNION ALL
-    SELECT * FROM read_json_auto('${db.DATA_PATH}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)
-  )`;
+  
+  // Check if any JSONL files exist before trying to read
+  const hasJsonl = db.hasFileType('events', '.jsonl');
+  const hasGzip = db.hasFileType('events', '.jsonl.gz');
+  const hasZstd = db.hasFileType('events', '.jsonl.zst');
+  
+  if (!hasJsonl && !hasGzip && !hasZstd) {
+    // Return empty table if no files exist
+    return `(SELECT NULL::VARCHAR as event_id, NULL::VARCHAR as event_type, NULL::VARCHAR as contract_id, 
+             NULL::VARCHAR as template_id, NULL::VARCHAR as package_name, NULL::TIMESTAMP as timestamp,
+             NULL::VARCHAR[] as signatories, NULL::VARCHAR[] as observers, NULL::JSON as payload WHERE false)`;
+  }
+  
+  const basePath = db.DATA_PATH.replace(/\\/g, '/');
+  const queries = [];
+  if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)`);
+  if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+  
+  return `(${queries.join(' UNION ALL ')})`;
 };
 
 // Check what data sources are available
