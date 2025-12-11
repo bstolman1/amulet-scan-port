@@ -31,12 +31,13 @@ const __dirname = dirname(__filename);
 // TLS config - must be set before any requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-// Configuration - AGGRESSIVE DEFAULTS for speed
+// Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 20; // More concurrent API requests
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Reduced from 20 to prevent memory pressure
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
+const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5; // Flush more frequently
 
 // Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
@@ -418,9 +419,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   
   while (true) {
     try {
-      // Fetch multiple pages in parallel (deeper prefetch queue)
+      // Fetch multiple pages in parallel (reduced prefetch to limit memory)
       const { results, reachedEnd } = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 5
+        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 2
       );
       
       if (results.length === 0) {
@@ -469,6 +470,11 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const compression = String(stats.compressionRatio ?? '---');
       const queuedJobs = Number(stats.queuedJobs ?? 0);
       const activeWorkers = Number(stats.activeWorkers ?? 0);
+      
+      // Force flush periodically to prevent memory buildup
+      if (batchCount % FLUSH_EVERY_BATCHES === 0) {
+        await flushAll();
+      }
       
       // Main progress line
       console.log(`   📦 Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queuedJobs}/${activeWorkers}`);
