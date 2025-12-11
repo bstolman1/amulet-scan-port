@@ -2,9 +2,10 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useACSTemplateData, useACSTemplates } from "@/hooks/use-acs-template-data";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { FileJson, Database, ChevronDown, ChevronRight } from "lucide-react";
+import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import { getPagesThatUseTemplate } from "@/lib/template-page-map";
 
@@ -12,10 +13,10 @@ const Templates = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
   // Fetch latest completed snapshot
-  const { data: latestSnapshot } = useLatestACSSnapshot();
+  const { data: latestSnapshot, isLoading: snapshotLoading, error: snapshotError } = useLatestACSSnapshot();
 
   // Fetch all templates
-  const { data: templates, isLoading: templatesLoading } = useACSTemplates(latestSnapshot?.id);
+  const { data: templates, isLoading: templatesLoading, error: templatesError } = useACSTemplates(latestSnapshot?.id);
 
   // Fetch data for selected template
   const { data: templateData, isLoading: dataLoading } = useACSTemplateData(
@@ -23,6 +24,10 @@ const Templates = () => {
     selectedTemplate || "",
     !!selectedTemplate,
   );
+
+  // Check for data source errors
+  const hasError = snapshotError || templatesError;
+  const errorMessage = (snapshotError as Error)?.message || (templatesError as Error)?.message;
 
   const analyzeDataStructure = (data: any[]): any => {
     if (!data || data.length === 0) return null;
@@ -152,6 +157,35 @@ const Templates = () => {
           </p>
         </div>
 
+        {/* Error State */}
+        {hasError && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Data Source Unavailable</AlertTitle>
+            <AlertDescription>
+              {errorMessage?.includes('exceed_db_size_quota') ? (
+                <>
+                  The Supabase database has exceeded its storage quota. Please contact support or upgrade your plan.
+                  <br />
+                  <span className="text-xs mt-1 block opacity-75">
+                    Alternatively, ensure the local DuckDB server is running at localhost:3001
+                  </span>
+                </>
+              ) : errorMessage?.includes('Failed to fetch') ? (
+                <>
+                  Unable to connect to data sources. The local server may not be running.
+                  <br />
+                  <span className="text-xs mt-1 block opacity-75">
+                    Start the server with: cd server && npm start
+                  </span>
+                </>
+              ) : (
+                errorMessage || 'Unable to load template data'
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Snapshot Info */}
         {latestSnapshot && (
           <Card className="glass-card p-4">
@@ -171,6 +205,11 @@ const Templates = () => {
               </div>
             </div>
           </Card>
+        )}
+
+        {/* Loading State for Snapshot */}
+        {snapshotLoading && !hasError && (
+          <Skeleton className="h-16 w-full" />
         )}
 
         <div className="space-y-4">
