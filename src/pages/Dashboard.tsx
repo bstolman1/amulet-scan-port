@@ -1,6 +1,6 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
-import { Activity, Coins, TrendingUp, Users, Zap, Package, Database, Clock } from "lucide-react";
+import { Activity, Coins, TrendingUp, Users, Zap, Package, Database, Clock, Lock, FileText } from "lucide-react";
 import { SearchBar } from "@/components/SearchBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfigData } from "@/lib/config-sync";
 import { useLocalOverviewStats, useLocalApiAvailable, useLocalDailyStats } from "@/hooks/use-local-stats";
 import { Badge } from "@/components/ui/badge";
+import { useLocalACSAvailable, useLocalACSStats, useLocalLatestACSSnapshot, useLocalACSTemplates } from "@/hooks/use-local-acs";
 
 const Dashboard = () => {
   // Check if local API is available
@@ -18,6 +19,12 @@ const Dashboard = () => {
   // Local DuckDB stats (from backfilled data)
   const { data: localStats, isLoading: localStatsLoading } = useLocalOverviewStats();
   const { data: dailyStats } = useLocalDailyStats(7);
+  
+  // Local ACS snapshot data
+  const { data: acsAvailable } = useLocalACSAvailable();
+  const { data: acsStats, isLoading: acsStatsLoading } = useLocalACSStats();
+  const { data: latestAcsSnapshot, isLoading: acsSnapshotLoading } = useLocalLatestACSSnapshot();
+  const { data: acsTemplates, isLoading: acsTemplatesLoading } = useLocalACSTemplates(10);
   
   // Fetch real data from Canton Scan API
   const { data: latestRound } = useQuery({
@@ -269,6 +276,129 @@ const Dashboard = () => {
                         />
                       );
                     })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Local ACS Snapshot Data - Only shown if ACS data is available */}
+        {acsAvailable && (
+          <div>
+            <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" />
+              Active Contract Set (ACS)
+              {latestAcsSnapshot && (
+                <Badge variant="secondary" className="text-xs">
+                  Snapshot: {new Date(latestAcsSnapshot.record_time).toLocaleString()}
+                </Badge>
+              )}
+            </h3>
+            
+            {/* ACS Overview Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-4">
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Package className="h-3 w-3" />
+                    Total Contracts
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold text-primary">
+                      {acsStats?.total_contracts?.toLocaleString() || "0"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <FileText className="h-3 w-3" />
+                    Total Templates
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {acsStats?.total_templates?.toLocaleString() || "0"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Coins className="h-3 w-3" />
+                    Migration ID
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsSnapshotLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {latestAcsSnapshot?.migration_id ?? "N/A"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    Entry Count
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsSnapshotLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {latestAcsSnapshot?.entry_count?.toLocaleString() ?? "0"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+            
+            {/* Top Templates */}
+            {acsTemplates && acsTemplates.length > 0 && (
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Top Templates by Contract Count
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {acsTemplatesLoading ? (
+                      <>
+                        <Skeleton className="h-6 w-full" />
+                        <Skeleton className="h-6 w-full" />
+                        <Skeleton className="h-6 w-full" />
+                      </>
+                    ) : (
+                      acsTemplates.slice(0, 5).map((template, i) => (
+                        <div key={template.template_id || i} className="flex items-center justify-between text-sm">
+                          <span className="font-mono text-xs truncate max-w-[60%]" title={template.template_id}>
+                            {template.entity_name || template.template_id?.split(':').pop() || 'Unknown'}
+                          </span>
+                          <Badge variant="secondary">
+                            {template.contract_count?.toLocaleString() || 0} contracts
+                          </Badge>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </CardContent>
               </Card>
