@@ -1,13 +1,13 @@
 /**
- * Ingest - Incrementally ingest .pb.zst files into DuckDB tables
+ * Ingest - Streaming ingestion of .pb.zst files into DuckDB tables
  * 
- * Processes files marked as not-ingested in raw_files table.
+ * STREAMING-ONLY: Processes records in batches without loading entire file into memory.
  */
 
 import { query } from '../duckdb/connection.js';
-import { decodeFileWithStats } from './decoder.js';
+import { decodeFile } from './decoder.js';
 
-const BATCH_SIZE = 5000; // Records per insert batch
+const BATCH_SIZE = 2000; // Records per insert batch
 
 /**
  * Insert a batch of events into events_raw
@@ -97,19 +97,41 @@ function sqlJson(val) {
 }
 
 /**
- * Ingest a single file
+ * Ingest a single file using streaming decode
  */
 async function ingestOneFile(fileRow) {
   const { file_id, file_path, file_type } = fileRow;
   
   try {
-    const { records, count, minTs, maxTs } = await decodeFileWithStats(file_path);
-    
-    // Insert in batches
     const insertFn = file_type === 'events' ? insertEventBatch : insertUpdateBatch;
     
-    for (let i = 0; i < records.length; i += BATCH_SIZE) {
-      const batch = records.slice(i, i + BATCH_SIZE);
+    let batch = [];
+    let totalCount = 0;
+    let minTs = null;
+    let maxTs = null;
+    
+    // Stream records and insert in batches
+    for await (const record of decodeFile(file_path)) {
+      batch.push(record);
+      totalCount++;
+      
+      // Track timestamps
+      const ts = record.recorded_at || record.effective_at;
+      if (ts) {
+        const d = new Date(ts);
+        if (!minTs || d < minTs) minTs = d;
+        if (!maxTs || d > maxTs) maxTs = d;
+      }
+      
+      // Insert when batch is full
+      if (batch.length >= BATCH_SIZE) {
+        await insertFn(batch, file_id);
+        batch = [];
+      }
+    }
+    
+    // Insert remaining records
+    if (batch.length > 0) {
       await insertFn(batch, file_id);
     }
     
@@ -117,7 +139,7 @@ async function ingestOneFile(fileRow) {
     await query(`
       UPDATE raw_files
       SET 
-        record_count = ${count},
+        record_count = ${totalCount},
         min_ts = ${minTs ? `TIMESTAMP '${minTs.toISOString()}'` : 'NULL'},
         max_ts = ${maxTs ? `TIMESTAMP '${maxTs.toISOString()}'` : 'NULL'},
         ingested = TRUE,
@@ -125,7 +147,7 @@ async function ingestOneFile(fileRow) {
       WHERE file_id = ${file_id}
     `);
     
-    return { file_id, count, success: true };
+    return { file_id, count: totalCount, success: true };
   } catch (err) {
     console.error(`❌ Failed to ingest ${file_path}: ${err.message}`);
     return { file_id, count: 0, success: false, error: err.message };
@@ -169,7 +191,7 @@ export async function ingestNewFiles(maxFiles = 5) {
 }
 
 /**
- * Get ingestion stats
+ * Get ingestion stats (uses efficient COUNT queries, not full scans)
  */
 export async function getIngestionStats() {
   const rows = await query(`
