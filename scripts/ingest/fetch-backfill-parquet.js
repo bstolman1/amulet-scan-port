@@ -9,6 +9,7 @@
  * - Parallel API fetching (configurable concurrency)
  * - Prefetch queue for continuous data flow
  * - Minimal blocking between fetch and write
+ * - Multithreaded decode via Piscina worker pool
  */
 
 import dotenv from 'dotenv';
@@ -20,6 +21,8 @@ import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import os from 'os';
+import Piscina from 'piscina';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
 
 // Use binary writer (Protobuf + ZSTD) instead of JSONL
@@ -45,6 +48,26 @@ const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5; // F
 const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
 const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
 const TARGET_MIGRATION = process.env.TARGET_MIGRATION ? parseInt(process.env.TARGET_MIGRATION) : null;
+
+// === Multithreaded decode pool (Piscina) ===
+const cpuCount = os.cpus()?.length || 4;
+const DECODE_WORKERS = Math.max(
+  2,
+  parseInt(process.env.DECODE_WORKERS || String(Math.floor(cpuCount / 2)), 10)
+);
+
+let decodePool = null;
+
+function getDecodePool() {
+  if (!decodePool) {
+    decodePool = new Piscina({
+      filename: new URL('./decode-worker.js', import.meta.url).href,
+      minThreads: Math.max(1, Math.floor(DECODE_WORKERS / 2)),
+      maxThreads: DECODE_WORKERS,
+    });
+  }
+  return decodePool;
+}
 
 // Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
@@ -248,63 +271,86 @@ function getEventTime(txOrReassign) {
 }
 
 /**
- * Process backfill items (transactions array from API response)
+ * Process backfill items using multithreaded decode (Piscina)
+ * Falls back to single-threaded if pool unavailable
  */
 async function processBackfillItems(transactions, migrationId) {
+  const pool = getDecodePool();
+  
+  // Submit all transactions to worker pool in parallel
+  const tasks = transactions.map((tx) => 
+    pool.run({ tx, migrationId }).catch(err => {
+      // Fallback: decode in main thread if worker fails
+      console.warn(`   ⚠️ Worker decode failed, using main thread: ${err.message}`);
+      return decodeInMainThread(tx, migrationId);
+    })
+  );
+  
+  const results = await Promise.all(tasks);
+
   const updates = [];
   const events = [];
-  
-  for (const tx of transactions) {
-    const isReassignment = !!tx.event;
-    const update = normalizeUpdate(tx);
-    update.migration_id = migrationId;
-    updates.push(update);
-    
-    // Extract update-level timing info to pass to events
-    const txData = tx.transaction || tx.reassignment || tx;
-    const updateInfo = {
-      record_time: txData.record_time,
-      effective_at: txData.effective_at,
-      synchronizer_id: txData.synchronizer_id,
-      // Reassignment-specific fields
-      source: txData.source || null,
-      target: txData.target || null,
-      unassign_id: txData.unassign_id || null,
-      submitter: txData.submitter || null,
-      counter: txData.counter ?? null,
-    };
-    
-    // Extract events based on type
-    if (isReassignment) {
-      // Handle reassignment events - can have created_event (assign) or archived_event (unassign)
-      const ce = tx.event?.created_event;
-      const ae = tx.event?.archived_event;
-      
-      if (ce) {
-        const normalizedEvent = normalizeEvent(ce, update.update_id, migrationId, tx, updateInfo);
-        normalizedEvent.event_type = 'reassign_create';
-        events.push(normalizedEvent);
-      }
-      if (ae) {
-        const normalizedEvent = normalizeEvent(ae, update.update_id, migrationId, tx, updateInfo);
-        normalizedEvent.event_type = 'reassign_archive';
-        events.push(normalizedEvent);
-      }
-    } else {
-      const eventsById = txData.events_by_id || tx.events_by_id || {};
-      for (const [eventId, ev] of Object.entries(eventsById)) {
-        // Pass complete event as raw + update timing info
-        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev, updateInfo);
-        normalizedEvent.event_id = eventId;
-        events.push(normalizedEvent);
-      }
+
+  for (const r of results) {
+    if (!r) continue;
+    if (r.update) updates.push(r.update);
+    if (Array.isArray(r.events) && r.events.length > 0) {
+      events.push(...r.events);
     }
   }
-  
+
   await bufferUpdates(updates);
   await bufferEvents(events);
-  
+
   return { updates: updates.length, events: events.length };
+}
+
+/**
+ * Fallback: decode in main thread (same logic as decode-worker.js)
+ */
+function decodeInMainThread(tx, migrationId) {
+  const isReassignment = !!tx.event;
+  const update = normalizeUpdate(tx);
+  update.migration_id = migrationId;
+
+  const events = [];
+  const txData = tx.transaction || tx.reassignment || tx;
+
+  const updateInfo = {
+    record_time: txData.record_time,
+    effective_at: txData.effective_at,
+    synchronizer_id: txData.synchronizer_id,
+    source: txData.source || null,
+    target: txData.target || null,
+    unassign_id: txData.unassign_id || null,
+    submitter: txData.submitter || null,
+    counter: txData.counter ?? null,
+  };
+
+  if (isReassignment) {
+    const ce = tx.event?.created_event;
+    const ae = tx.event?.archived_event;
+
+    if (ce) {
+      const ev = normalizeEvent(ce, update.update_id, migrationId, tx, updateInfo);
+      ev.event_type = 'reassign_create';
+      events.push(ev);
+    }
+    if (ae) {
+      const ev = normalizeEvent(ae, update.update_id, migrationId, tx, updateInfo);
+      ev.event_type = 'reassign_archive';
+      events.push(ev);
+    }
+  } else {
+    const eventsById = txData.events_by_id || tx.events_by_id || {};
+    for (const [eventId, rawEvent] of Object.entries(eventsById)) {
+      const ev = normalizeEvent(rawEvent, update.update_id, migrationId, rawEvent, updateInfo);
+      ev.event_id = eventId;
+      events.push(ev);
+    }
+  }
+
+  return { update, events };
 }
 
 /**
@@ -579,6 +625,7 @@ async function runBackfill() {
   }
   console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
+  console.log("   DECODE_WORKERS:", DECODE_WORKERS, "(Piscina pool)");
   console.log("=".repeat(80));
   
   // Ensure cursor directory exists
@@ -713,6 +760,9 @@ process.on('SIGINT', async () => {
   await flushAll();
   await waitForWrites();
   await shutdown();
+  if (decodePool) {
+    await decodePool.destroy();
+  }
   console.log('✅ All writes complete');
   process.exit(0);
 });
@@ -732,5 +782,8 @@ runBackfill()
     await flushAll();
     await waitForWrites();
     await shutdown();
+    if (decodePool) {
+      await decodePool.destroy();
+    }
     process.exit(1);
   });
