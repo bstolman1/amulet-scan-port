@@ -774,6 +774,25 @@ router.get('/mining-rounds', async (req, res) => {
 
     // Fall back to query - use specified snapshot or latest
     const acsSource = getACSSource();
+    
+    // First, debug what's actually in the payload for mining rounds
+    const debugSql = `
+      SELECT 
+        entity_name,
+        template_id,
+        payload,
+        json_extract_string(payload, '$.round.number') as round_dot_number,
+        json_extract_string(payload, '$.round') as round_direct,
+        json_type(payload, '$.round') as round_type
+      FROM ${acsSource}
+      WHERE entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
+         OR template_id LIKE '%MiningRound%'
+      LIMIT 5
+    `;
+    
+    const debugRows = await db.safeQuery(debugSql);
+    console.log('[ACS] Mining rounds payload debug:', JSON.stringify(debugRows, null, 2));
+    
     const sql = `
       WITH ${getSnapshotCTE(acsSource, snapshotTime)},
       all_rounds AS (
