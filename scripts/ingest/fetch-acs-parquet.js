@@ -136,7 +136,12 @@ async function runMigrationSnapshot(migrationId) {
   const recordTime = await getSnapshotTimestamp(migrationId);
   console.log(`   Record time: ${recordTime}`);
   
-  setSnapshotTime(recordTime, migrationId);
+  // Use current time for partitioning to ensure unique snapshot folders per run
+  // recordTime is the ledger state time which may be the same across multiple runs
+  const snapshotRunTime = new Date();
+  console.log(`   Snapshot run time: ${snapshotRunTime.toISOString()}`);
+  
+  setSnapshotTime(snapshotRunTime, migrationId);
   
   // Stats
   let totalContracts = 0;
