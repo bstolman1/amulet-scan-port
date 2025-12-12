@@ -1,25 +1,53 @@
-#!/bin/bash
-# Sharded Backfill Launcher
-# Launches multiple parallel backfill processes, each handling a time slice
-#
-# Usage: ./run-sharded-backfill.sh [SHARD_COUNT] [MIGRATION_ID]
-# Example: ./run-sharded-backfill.sh 4 3
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# ==========================================================
+#  WSL2 / Linux High-Performance Sharded Backfill Launcher
+#  Auto-tunes CPU usage, decode workers, and shard count
+# ==========================================================
 
-SHARD_COUNT=${1:-4}
-TARGET_MIGRATION=${2:-""}
-PARALLEL_FETCHES=${PARALLEL_FETCHES:-5}  # Lower per-shard to avoid rate limits
+# --- Auto Detect CPU Cores ---
+TOTAL_CORES=$(nproc)
+P_CORES=$((TOTAL_CORES - 4 > 0 ? TOTAL_CORES - 4 : TOTAL_CORES))
+DEFAULT_SHARDS=$P_CORES
 
-echo "════════════════════════════════════════════════════════════════════════════════"
-echo "🚀 Sharded Backfill Launcher"
-echo "   Shard count: $SHARD_COUNT"
-echo "   Target migration: ${TARGET_MIGRATION:-"all"}"
-echo "   Parallel fetches per shard: $PARALLEL_FETCHES"
-echo "════════════════════════════════════════════════════════════════════════════════"
+# --- CLI Args ---
+SHARD_COUNT="${1:-$DEFAULT_SHARDS}"
+TARGET_MIGRATION="${2:-3}"
+
+# --- Environment Defaults (can be overridden) ---
+export DATA_DIR="${DATA_DIR:-$HOME/ledger_raw}"
+export PARALLEL_FETCHES="${PARALLEL_FETCHES:-6}"
+export MAX_WORKERS="${MAX_WORKERS:-30}"
+export MAX_ROWS_PER_FILE="${MAX_ROWS_PER_FILE:-15000}"
+
+# Decode workers = CPU cores / 2 (minimum 2)
+DEFAULT_DECODE_WORKERS=$(( TOTAL_CORES / 2 ))
+if [ "$DEFAULT_DECODE_WORKERS" -lt 2 ]; then
+  DEFAULT_DECODE_WORKERS=2
+fi
+export DECODE_WORKERS="${DECODE_WORKERS:-$DEFAULT_DECODE_WORKERS}"
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- Display config ---
+echo "=========================================================="
+echo "🚀 WSL2 Canton Ledger Backfill Launcher"
+echo "=========================================================="
+echo "CPU cores detected:       $TOTAL_CORES"
+echo "Shards to launch:         $SHARD_COUNT"
+echo "Decode workers per shard: $DECODE_WORKERS"
+echo "Parallel fetches:         $PARALLEL_FETCHES"
+echo "Max binary workers:       $MAX_WORKERS"
+echo "Max rows per file:        $MAX_ROWS_PER_FILE"
+echo "Target migration:         $TARGET_MIGRATION"
+echo "DATA_DIR:                 $DATA_DIR"
+echo "Working dir:              $SCRIPT_DIR"
+echo "=========================================================="
+echo
+
+# --- Logs directory ---
 LOG_DIR="$SCRIPT_DIR/../../data/logs"
 mkdir -p "$LOG_DIR"
 
@@ -42,37 +70,43 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
-# Launch shards
+# --- Calculate and display time ranges ---
+echo "📊 Shard Time Distribution:"
+echo "   (Each shard handles an equal slice of the migration time range)"
+echo ""
+
+# --- Launch shards ---
 for ((i=0; i<SHARD_COUNT; i++)); do
     LOG_FILE="$LOG_DIR/shard-${i}.log"
     
-    echo "   Starting shard $i/$SHARD_COUNT → $LOG_FILE"
+    echo "   ➡️  Starting shard $i of $SHARD_COUNT → $LOG_FILE"
     
-    # Build environment
-    ENV_VARS="SHARD_INDEX=$i SHARD_TOTAL=$SHARD_COUNT PARALLEL_FETCHES=$PARALLEL_FETCHES"
-    if [ -n "$TARGET_MIGRATION" ]; then
-        ENV_VARS="$ENV_VARS TARGET_MIGRATION=$TARGET_MIGRATION"
-    fi
-    
-    # Launch in background, redirect to log file
+    # Launch in background
     (
         cd "$SCRIPT_DIR"
-        env $ENV_VARS node fetch-backfill-parquet.js 2>&1 | tee "$LOG_FILE"
+        SHARD_INDEX=$i SHARD_TOTAL=$SHARD_COUNT TARGET_MIGRATION=$TARGET_MIGRATION \
+            node fetch-backfill-parquet.js 2>&1 | tee "$LOG_FILE"
     ) &
     
     PIDS+=($!)
     
     # Small delay between launches to stagger initial API calls
-    sleep 2
+    sleep 0.5
 done
 
 echo ""
-echo "════════════════════════════════════════════════════════════════════════════════"
-echo "✅ All $SHARD_COUNT shards launched"
-echo "   Logs: $LOG_DIR/shard-*.log"
-echo "   Monitor: node scripts/ingest/shard-progress.js"
-echo "   Stop: Ctrl+C"
-echo "════════════════════════════════════════════════════════════════════════════════"
+echo "=========================================================="
+echo "🎉 All $SHARD_COUNT shards launched!"
+echo "📄 Logs: $LOG_DIR/shard-*.log"
+echo "=========================================================="
+echo ""
+echo "Monitor commands:"
+echo "   Progress:    node $SCRIPT_DIR/shard-progress.js"
+echo "   Live logs:   tail -f $LOG_DIR/shard-0.log"
+echo "   All shards:  tail -f $LOG_DIR/shard-*.log"
+echo "   Stop:        Ctrl+C"
+echo ""
+echo "=========================================================="
 echo ""
 
 # Wait for all shards to complete
