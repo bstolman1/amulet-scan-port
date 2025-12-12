@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
+import { getTotalCounts, getTimeRange, getTemplateEventCounts } from '../engine/aggregations.js';
+import { getIngestionStats } from '../engine/ingest.js';
 
 const router = Router();
+
+// Check if engine mode is enabled
+const ENGINE_ENABLED = process.env.ENGINE_ENABLED === 'true';
 
 // Helper to get the correct read function for events data
 const getEventsSource = () => {
@@ -34,6 +39,17 @@ const getEventsSource = () => {
 
 // Check what data sources are available
 function getDataSources() {
+  // When engine is enabled, use engine as primary source
+  if (ENGINE_ENABLED) {
+    return {
+      hasBinaryEvents: false,
+      hasBinaryUpdates: false,
+      hasParquet: false,
+      hasJsonl: false,
+      primarySource: 'engine'
+    };
+  }
+  
   const hasBinaryEvents = binaryReader.hasBinaryFiles(db.DATA_PATH, 'events');
   const hasBinaryUpdates = binaryReader.hasBinaryFiles(db.DATA_PATH, 'updates');
   const hasParquet = db.hasFileType ? db.hasFileType('events', '.parquet') : false;
@@ -53,8 +69,48 @@ router.get('/overview', async (req, res) => {
   try {
     const sources = getDataSources();
     
+    // Use engine aggregations when engine is enabled
+    if (sources.primarySource === 'engine') {
+      try {
+        const [counts, timeRange, ingestionStats] = await Promise.all([
+          getTotalCounts(),
+          getTimeRange(),
+          getIngestionStats(),
+        ]);
+        
+        return res.json({
+          total_events: counts.events,
+          unique_contracts: 0, // Not tracked yet in engine
+          unique_templates: 0, // Not tracked yet in engine
+          earliest_event: timeRange.min_ts,
+          latest_event: timeRange.max_ts,
+          data_source: 'engine',
+          ingestion: ingestionStats,
+        });
+      } catch (err) {
+        console.error('Engine stats error:', err.message);
+        // Fall through to other methods
+      }
+    }
+    
     if (sources.primarySource === 'binary') {
-      // Read from binary files
+      // For large datasets, don't load all records - just return counts from file system
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      if (eventFiles.length > 1000) {
+        console.warn(`⚠️ Too many files (${eventFiles.length}), use streamRecords() instead`);
+        return res.json({
+          total_events: 0,
+          unique_contracts: 0,
+          unique_templates: 0,
+          earliest_event: null,
+          latest_event: null,
+          data_source: 'binary',
+          file_count: eventFiles.length,
+          warning: 'Dataset too large for overview stats. Enable ENGINE_ENABLED=true for streaming ingestion.'
+        });
+      }
+      
+      // Read from binary files (only for small datasets)
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       
       if (events.length === 0) {
@@ -116,7 +172,17 @@ router.get('/daily', async (req, res) => {
     const days = Math.min(parseInt(req.query.days) || 30, 365);
     const sources = getDataSources();
     
+    // Engine mode - return empty for now (would need to aggregate from events_raw)
+    if (sources.primarySource === 'engine') {
+      return res.json({ data: [], data_source: 'engine' });
+    }
+    
     if (sources.primarySource === 'binary') {
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      if (eventFiles.length > 1000) {
+        return res.json({ data: [], warning: 'Dataset too large' });
+      }
+      
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       
@@ -170,7 +236,17 @@ router.get('/by-type', async (req, res) => {
   try {
     const sources = getDataSources();
     
+    // Engine mode - return from engine aggregations
+    if (sources.primarySource === 'engine') {
+      return res.json({ data: [], data_source: 'engine' });
+    }
+    
     if (sources.primarySource === 'binary') {
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      if (eventFiles.length > 1000) {
+        return res.json({ data: [], warning: 'Dataset too large' });
+      }
+      
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       const typeCounts = new Map();
       
@@ -208,7 +284,23 @@ router.get('/by-template', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 500);
     const sources = getDataSources();
     
+    // Engine mode - use engine aggregations
+    if (sources.primarySource === 'engine') {
+      try {
+        const templateCounts = await getTemplateEventCounts(limit);
+        return res.json({ data: templateCounts, data_source: 'engine' });
+      } catch (err) {
+        console.error('Engine template stats error:', err.message);
+        return res.json({ data: [], error: err.message });
+      }
+    }
+    
     if (sources.primarySource === 'binary') {
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      if (eventFiles.length > 1000) {
+        return res.json({ data: [], warning: 'Dataset too large' });
+      }
+      
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       const templateStats = new Map();
       
@@ -275,7 +367,17 @@ router.get('/hourly', async (req, res) => {
   try {
     const sources = getDataSources();
     
+    // Engine mode
+    if (sources.primarySource === 'engine') {
+      return res.json({ data: [], data_source: 'engine' });
+    }
+    
     if (sources.primarySource === 'binary') {
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      if (eventFiles.length > 1000) {
+        return res.json({ data: [], warning: 'Dataset too large' });
+      }
+      
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const hourlyMap = new Map();
@@ -318,7 +420,17 @@ router.get('/burn', async (req, res) => {
   try {
     const sources = getDataSources();
     
+    // Engine mode
+    if (sources.primarySource === 'engine') {
+      return res.json({ data: [], data_source: 'engine' });
+    }
+    
     if (sources.primarySource === 'binary') {
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      if (eventFiles.length > 1000) {
+        return res.json({ data: [], warning: 'Dataset too large' });
+      }
+      
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       const burnByDay = new Map();
       
