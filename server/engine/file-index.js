@@ -8,7 +8,8 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '../duckdb/connection.js';
 
-const DATA_DIR = process.env.DATA_DIR || '/mnt/c/ledger_raw';
+// Support both Windows (C:/ledger_raw) and WSL (/mnt/c/ledger_raw) paths
+const DATA_DIR = process.env.DATA_DIR || (process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw');
 const RAW_DIR = path.join(DATA_DIR, 'raw');
 
 /**
