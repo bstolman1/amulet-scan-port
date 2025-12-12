@@ -4,7 +4,10 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_PATH = path.resolve(__dirname, '../../data/raw');
+// DATA_DIR should point to the base directory (e.g., C:\ledger_raw or /mnt/c/ledger_raw)
+// Binary files are in the 'raw' subdirectory
+const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 
 // In-memory DuckDB instance
 const db = new duckdb.Database(':memory:');
