@@ -39,6 +39,13 @@ const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Reduce
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5; // Flush more frequently
 
+// Sharding configuration - allows running multiple instances in parallel
+// Each shard handles a time slice of the total range
+// Usage: SHARD_INDEX=0 SHARD_TOTAL=4 node fetch-backfill-parquet.js
+const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
+const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
+const TARGET_MIGRATION = process.env.TARGET_MIGRATION ? parseInt(process.env.TARGET_MIGRATION) : null;
+
 // Axios client with connection pooling - AGGRESSIVE
 const client = axios.create({
   baseURL: SCAN_URL,
@@ -102,10 +109,11 @@ async function retryWithBackoff(fn, options = {}) {
 }
 
 /**
- * Load cursor from file
+ * Load cursor from file (shard-aware)
  */
-function loadCursor(migrationId, synchronizerId) {
-  const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
+function loadCursor(migrationId, synchronizerId, shardIndex = null) {
+  const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
+  const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
   
   if (existsSync(cursorFile)) {
     return JSON.parse(readFileSync(cursorFile, 'utf8'));
@@ -115,20 +123,23 @@ function loadCursor(migrationId, synchronizerId) {
 }
 
 /**
- * Save cursor to file
+ * Save cursor to file (shard-aware)
  */
-function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime) {
+function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime, shardIndex = null) {
   try {
     mkdirSync(CURSOR_DIR, { recursive: true });
     
-    const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}.json`);
+    const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
+    const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
     
     const cursorData = {
       ...cursor,
       migration_id: migrationId,
       synchronizer_id: synchronizerId,
-      id: `cursor-${migrationId}-${sanitize(synchronizerId)}`,
-      cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}`,
+      shard_index: shardIndex,
+      shard_total: shardIndex !== null ? SHARD_TOTAL : null,
+      id: `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}`,
+      cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}${shardSuffix}`,
       min_time: minTime || cursor.min_time,
       max_time: maxTime || cursor.max_time,
       last_processed_round: cursor.last_processed_round || 0,
@@ -391,15 +402,16 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
 }
 
 /**
- * Backfill a single synchronizer with parallel fetching
+ * Backfill a single synchronizer with parallel fetching (shard-aware)
  */
-async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime) {
-  console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...`);
+async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime, shardIndex = null) {
+  const shardLabel = shardIndex !== null ? ` [shard ${shardIndex}/${SHARD_TOTAL}]` : '';
+  console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...${shardLabel}`);
   console.log(`   Range: ${minTime} to ${maxTime}`);
   console.log(`   Parallel fetches: ${PARALLEL_FETCHES}`);
   
-  // Load existing cursor
-  let cursor = loadCursor(migrationId, synchronizerId);
+  // Load existing cursor (shard-aware)
+  let cursor = loadCursor(migrationId, synchronizerId, shardIndex);
   let before = cursor?.last_before || maxTime;
   const atOrAfter = minTime;
   
@@ -415,7 +427,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     total_events: 0,
     started_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  }, minTime, maxTime);
+  }, minTime, maxTime, shardIndex);
   
   while (true) {
     try {
@@ -425,7 +437,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       );
       
       if (results.length === 0) {
-        console.log(`   ✅ No more transactions. Marking complete.`);
+        console.log(`   ✅ No more transactions. Marking complete.${shardLabel}`);
         break;
       }
       
@@ -463,7 +475,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         total_updates: totalUpdates,
         total_events: totalEvents,
         updated_at: new Date().toISOString(),
-      }, minTime, maxTime);
+      }, minTime, maxTime, shardIndex);
       
       const stats = getBufferStats();
       const writeSpeed = String(stats.mbPerSec ?? '0.00');
@@ -477,28 +489,28 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }
       
       // Main progress line
-      console.log(`   📦 Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queuedJobs}/${activeWorkers}`);
+      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || earliestTime <= atOrAfter) {
-        console.log(`   ✅ Reached lower bound. Complete.`);
+        console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
         break;
       }
       
     } catch (err) {
       const status = err.response?.status;
       const msg = err.response?.data?.error || err.message;
-      console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}): ${msg}`);
+      console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}): ${msg}${shardLabel}`);
       
       // Save cursor and retry for transient errors
       if ([429, 500, 502, 503, 504].includes(status)) {
-        console.log("   ⏳ Transient error, backing off...");
+        console.log(`   ⏳ Transient error, backing off...${shardLabel}`);
         saveCursor(migrationId, synchronizerId, {
           last_before: before,
           total_updates: totalUpdates,
           total_events: totalEvents,
           error: msg,
           updated_at: new Date().toISOString(),
-        }, minTime, maxTime);
+        }, minTime, maxTime, shardIndex);
         await sleep(5000);
         continue;
       }
@@ -517,24 +529,54 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     total_events: totalEvents,
     complete: true,
     updated_at: new Date().toISOString(),
-  }, minTime, maxTime);
+  }, minTime, maxTime, shardIndex);
   
   const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`   ⏱️ Completed in ${totalTime}s (${Math.round(totalUpdates / parseFloat(totalTime))}/s avg)`);
+  console.log(`   ⏱️ Completed in ${totalTime}s (${Math.round(totalUpdates / parseFloat(totalTime))}/s avg)${shardLabel}`);
   
   return { updates: totalUpdates, events: totalEvents };
 }
 
 /**
- * Main backfill function
+ * Calculate time slice for a shard
+ * Divides the time range into equal parts
+ */
+function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
+  const minMs = new Date(minTime).getTime();
+  const maxMs = new Date(maxTime).getTime();
+  const rangeMs = maxMs - minMs;
+  const sliceMs = rangeMs / shardTotal;
+  
+  // Shards work backwards in time (maxTime to minTime)
+  // Shard 0 gets the most recent slice, shard N-1 gets the oldest
+  const shardMaxMs = maxMs - (shardIndex * sliceMs);
+  const shardMinMs = maxMs - ((shardIndex + 1) * sliceMs);
+  
+  return {
+    minTime: new Date(shardMinMs).toISOString(),
+    maxTime: new Date(shardMaxMs).toISOString(),
+  };
+}
+
+/**
+ * Main backfill function (shard-aware)
  */
 async function runBackfill() {
+  const isSharded = SHARD_TOTAL > 1;
+  const shardLabel = isSharded ? ` [SHARD ${SHARD_INDEX}/${SHARD_TOTAL}]` : '';
+  
   console.log("\n" + "=".repeat(80));
-  console.log("🚀 Starting Canton ledger backfill (Parquet mode)");
+  console.log(`🚀 Starting Canton ledger backfill (Parquet mode)${shardLabel}`);
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES, "(per synchronizer)");
   console.log("   PURGE_AFTER_MIGRATION:", PURGE_AFTER_MIGRATION);
+  if (isSharded) {
+    console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL} (0-indexed)`);
+  }
+  if (TARGET_MIGRATION) {
+    console.log(`   TARGET_MIGRATION: ${TARGET_MIGRATION} only`);
+  }
   console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
@@ -543,7 +585,16 @@ async function runBackfill() {
   mkdirSync(CURSOR_DIR, { recursive: true });
   
   // Detect migrations
-  const migrations = await detectMigrations();
+  let migrations = await detectMigrations();
+  
+  // Filter to target migration if specified
+  if (TARGET_MIGRATION) {
+    migrations = migrations.filter(id => id === TARGET_MIGRATION);
+    if (!migrations.length) {
+      console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`);
+      return;
+    }
+  }
   
   if (!migrations.length) {
     console.log("⚠️ No migrations found. Exiting.");
@@ -556,7 +607,7 @@ async function runBackfill() {
   
   for (const migrationId of migrations) {
     console.log(`\n${"─".repeat(80)}`);
-    console.log(`📘 Migration ${migrationId}: fetching backfilling metadata`);
+    console.log(`📘 Migration ${migrationId}: fetching backfilling metadata${shardLabel}`);
     console.log(`${"─".repeat(80)}`);
     
     const info = await getMigrationInfo(migrationId);
@@ -577,25 +628,36 @@ async function runBackfill() {
     
     for (const range of ranges) {
       const synchronizerId = range.synchronizer_id;
-      const minTime = range.min;
-      const maxTime = range.max;
+      let minTime = range.min;
+      let maxTime = range.max;
       
-      // Check if already complete
-      const cursor = loadCursor(migrationId, synchronizerId);
+      // Apply sharding if enabled
+      if (isSharded) {
+        const shardRange = calculateShardTimeRange(minTime, maxTime, SHARD_INDEX, SHARD_TOTAL);
+        minTime = shardRange.minTime;
+        maxTime = shardRange.maxTime;
+        console.log(`   🔀 Shard ${SHARD_INDEX}: time slice ${minTime} to ${maxTime}`);
+      }
+      
+      // Check if already complete (shard-aware)
+      const cursor = loadCursor(migrationId, synchronizerId, isSharded ? SHARD_INDEX : null);
       if (cursor?.complete) {
-        console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)`);
+        console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)${shardLabel}`);
         continue;
       }
       
-      const { updates, events } = await backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime);
+      const { updates, events } = await backfillSynchronizer(
+        migrationId, synchronizerId, minTime, maxTime, 
+        isSharded ? SHARD_INDEX : null
+      );
       grandTotalUpdates += updates;
       grandTotalEvents += events;
     }
     
-    console.log(`✅ Completed migration ${migrationId}`);
+    console.log(`✅ Completed migration ${migrationId}${shardLabel}`);
     
-    // Purge migration data to free disk space before next migration
-    if (PURGE_AFTER_MIGRATION) {
+    // Purge migration data to free disk space before next migration (only if not sharded)
+    if (PURGE_AFTER_MIGRATION && !isSharded) {
       console.log(`\n🗑️ Purging migration ${migrationId} data to free disk space...`);
       await waitForWrites(); // Ensure all writes are complete
       purgeMigrationData(migrationId);
