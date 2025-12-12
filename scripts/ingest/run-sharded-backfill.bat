@@ -11,8 +11,12 @@ REM Defaults - 6 shards balances parallelism with data distribution
 if "%SHARD_COUNT%"=="" set SHARD_COUNT=6
 if "%TARGET_MIGRATION%"=="" set TARGET_MIGRATION=3
 
-REM Data directory - where backfill data is written
+REM Data directory - unified location for all data
 if "%DATA_DIR%"=="" set DATA_DIR=C:\ledger_raw
+
+REM Derived directories (all under DATA_DIR)
+set CURSOR_DIR=%DATA_DIR%\cursors
+set LOG_DIR=%DATA_DIR%\logs
 
 REM Performance tuning
 if "%PARALLEL_FETCHES%"=="" set PARALLEL_FETCHES=8
@@ -37,11 +41,13 @@ echo   MAX_ROWS_PER_FILE: %MAX_ROWS_PER_FILE%
 echo ========================================
 echo.
 
-REM Create logs directory
-if not exist "..\..\data\logs" mkdir "..\..\data\logs"
+REM Create directories
+if not exist "%DATA_DIR%\raw" mkdir "%DATA_DIR%\raw"
+if not exist "%CURSOR_DIR%" mkdir "%CURSOR_DIR%"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM Build env string to pass to child windows
-set ENV_VARS=DATA_DIR=%DATA_DIR%^&^&set PARALLEL_FETCHES=%PARALLEL_FETCHES%^&^&set MAX_WORKERS=%MAX_WORKERS%^&^&set ZSTD_LEVEL=%ZSTD_LEVEL%^&^&set MAX_ROWS_PER_FILE=%MAX_ROWS_PER_FILE%^&^&set IO_BUFFER_SIZE=%IO_BUFFER_SIZE%^&^&set CHUNK_SIZE=%CHUNK_SIZE%
+set ENV_VARS=DATA_DIR=%DATA_DIR%^&^&set CURSOR_DIR=%CURSOR_DIR%^&^&set PARALLEL_FETCHES=%PARALLEL_FETCHES%^&^&set MAX_WORKERS=%MAX_WORKERS%^&^&set ZSTD_LEVEL=%ZSTD_LEVEL%^&^&set MAX_ROWS_PER_FILE=%MAX_ROWS_PER_FILE%^&^&set IO_BUFFER_SIZE=%IO_BUFFER_SIZE%^&^&set CHUNK_SIZE=%CHUNK_SIZE%
 
 REM Launch each shard in a new window with all env vars
 for /L %%i in (0,1,%SHARD_COUNT%) do (

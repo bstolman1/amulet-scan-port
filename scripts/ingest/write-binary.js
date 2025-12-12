@@ -19,8 +19,9 @@ import { getBinaryWriterPool, shutdownBinaryPool } from './binary-writer-pool.js
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration
-const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
+// Configuration - DATA_DIR should be set to C:\ledger_raw or /mnt/c/ledger_raw
+const BASE_DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
+const DATA_DIR = join(BASE_DATA_DIR, 'raw'); // Binary files go in raw/ subdirectory
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000; // Reduced to flush more often
 const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 1;
 const MAX_PENDING_WRITES = parseInt(process.env.MAX_PENDING_WRITES) || 50; // Limit concurrent writes
