@@ -142,17 +142,21 @@ export function useAggregatedTemplateData(
           console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}, entity: ${entityName}, module: ${moduleName}`);
           
           // Use entity parameter which matches entity_name column directly
+          // Don't limit the request - let server handle it and return true count
           const response = await getLocalACSContracts({ 
             entity: entityName,
-            limit: 10000 
+            limit: 100000 
           });
           
-          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts for entity=${entityName}`);
+          // Use count from response if available, otherwise fall back to data length
+          const totalCount = response.count ?? response.data?.length ?? 0;
+          
+          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts (total: ${totalCount}) for entity=${entityName}`);
           
           return {
             data: response.data || [],
             templateCount: 1,
-            totalContracts: response.data?.length || 0,
+            totalContracts: totalCount,
             templateIds: [templateSuffix],
             source: "duckdb",
           };

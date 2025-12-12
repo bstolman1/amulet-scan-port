@@ -357,11 +357,11 @@ router.get('/contracts', async (req, res) => {
   try {
     if (!hasACSData()) {
       console.log('[ACS] No ACS data available');
-      return res.json({ data: [] });
+      return res.json({ data: [], count: 0 });
     }
 
     const { template, entity } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 10000);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 100000);
     const offset = parseInt(req.query.offset) || 0;
 
     console.log(`[ACS] Contracts request: template=${template}, entity=${entity}, limit=${limit}`);
@@ -377,6 +377,20 @@ router.get('/contracts', async (req, res) => {
     console.log(`[ACS] WHERE clause: ${whereClause}`);
 
     const acsSource = getACSSource();
+    
+    // First get total count
+    const countSql = `
+      WITH ${getLatestSnapshotCTE(acsSource)}
+      SELECT COUNT(*) as total_count
+      FROM ${acsSource} acs
+      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        AND ${whereClause}
+    `;
+    
+    const countResult = await db.safeQuery(countSql);
+    const totalCount = Number(countResult[0]?.total_count || 0);
+    
     const sql = `
       WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
@@ -399,7 +413,7 @@ router.get('/contracts', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    console.log(`[ACS] Found ${rows.length} contracts for entity=${entity}`);
+    console.log(`[ACS] Found ${rows.length} contracts (total: ${totalCount}) for entity=${entity}`);
     
     // Parse payload JSON and flatten for frontend consumption
     const parsedRows = rows.map(row => {
@@ -420,7 +434,7 @@ router.get('/contracts', async (req, res) => {
       };
     });
     
-    res.json(serializeBigInt({ data: parsedRows }));
+    res.json(serializeBigInt({ data: parsedRows, count: totalCount }));
   } catch (err) {
     console.error('ACS contracts error:', err);
     res.status(500).json({ error: err.message });
