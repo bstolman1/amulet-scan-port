@@ -80,7 +80,21 @@ function hasACSData() {
 }
 
 // Helper function to get CTE for latest snapshot (filters by latest migration_id first)
-function getLatestSnapshotCTE(acsSource) {
+// If snapshotTime is provided, uses that specific snapshot instead of latest
+function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
+  if (snapshotTime) {
+    // Use specific snapshot
+    return `
+      snapshot_params AS (
+        SELECT 
+          '${snapshotTime}'::TIMESTAMP as snapshot_time,
+          ${migrationId || `(SELECT MAX(migration_id) FROM ${acsSource} WHERE snapshot_time = '${snapshotTime}'::TIMESTAMP)`} as migration_id
+      ),
+      latest_migration AS (SELECT migration_id FROM snapshot_params),
+      latest_snapshot AS (SELECT snapshot_time, migration_id FROM snapshot_params)
+    `;
+  }
+  // Use latest snapshot from latest migration
   return `
     latest_migration AS (
       SELECT MAX(migration_id) as migration_id FROM ${acsSource}
@@ -91,6 +105,11 @@ function getLatestSnapshotCTE(acsSource) {
       WHERE migration_id = (SELECT migration_id FROM latest_migration)
     )
   `;
+}
+
+// Backwards compatible alias
+function getLatestSnapshotCTE(acsSource) {
+  return getSnapshotCTE(acsSource);
 }
 
 // GET /api/acs/cache - Get cache statistics (for debugging)
@@ -146,8 +165,9 @@ router.get('/snapshots', async (req, res) => {
     const rows = await db.safeQuery(sql);
     
     // Transform to match the UI's expected format
-    const snapshots = rows.map((row, index) => ({
-      id: `local-${row.migration_id}-${index}`,
+    // Use snapshot_time as the unique identifier for each snapshot
+    const snapshots = rows.map((row) => ({
+      id: `local-m${row.migration_id}-${new Date(row.snapshot_time).toISOString()}`,
       timestamp: row.snapshot_time,
       migration_id: row.migration_id,
       record_time: row.record_time,
@@ -714,6 +734,7 @@ router.get('/allocations', async (req, res) => {
 });
 
 // GET /api/acs/mining-rounds - Get mining rounds with server-side aggregation
+// Supports optional `snapshot` query param to query a specific snapshot time
 router.get('/mining-rounds', async (req, res) => {
   try {
     if (!hasACSData()) {
@@ -721,19 +742,22 @@ router.get('/mining-rounds', async (req, res) => {
     }
 
     const closedLimit = Math.min(parseInt(req.query.closedLimit) || 20, 100);
+    const snapshotTime = req.query.snapshot || null; // Optional: specific snapshot timestamp
 
-    // Check cache
-    const cacheKey = `acs:mining-rounds:${closedLimit}`;
+    // Check cache (include snapshot in key if specified)
+    const cacheKey = snapshotTime 
+      ? `acs:mining-rounds:${closedLimit}:${snapshotTime}`
+      : `acs:mining-rounds:${closedLimit}`;
     const cached = getCached(cacheKey);
     if (cached) {
-      console.log(`[ACS] Mining rounds cache HIT`);
+      console.log(`[ACS] Mining rounds cache HIT: ${cacheKey}`);
       return res.json(cached);
     }
 
     console.log(`[ACS] Mining rounds cache MISS: ${cacheKey}`);
 
-    // Try to use pre-computed aggregation first
-    const aggregation = getCached('aggregation:mining-rounds');
+    // Skip pre-computed aggregation if specific snapshot requested
+    const aggregation = !snapshotTime && getCached('aggregation:mining-rounds');
     if (aggregation) {
       const result = serializeBigInt({
         openRounds: aggregation.openRounds,
@@ -748,17 +772,10 @@ router.get('/mining-rounds', async (req, res) => {
       return res.json(result);
     }
 
-    // Fall back to query - use latest migration_id AND latest snapshot_time
+    // Fall back to query - use specified snapshot or latest
     const acsSource = getACSSource();
     const sql = `
-      WITH latest_migration AS (
-        SELECT MAX(migration_id) as migration_id FROM ${acsSource}
-      ),
-      latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time 
-        FROM ${acsSource}
-        WHERE migration_id = (SELECT migration_id FROM latest_migration)
-      ),
+      WITH ${getSnapshotCTE(acsSource, snapshotTime)},
       all_rounds AS (
         SELECT 
           contract_id,
@@ -774,7 +791,8 @@ router.get('/mining-rounds', async (req, res) => {
           json_extract_string(payload, '$.opensAt') as opens_at,
           json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
           json_extract_string(payload, '$.amuletPrice') as amulet_price,
-          payload
+          payload,
+          (SELECT snapshot_time FROM latest_snapshot) as snapshot_time
         FROM ${acsSource} acs
         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
@@ -793,6 +811,9 @@ router.get('/mining-rounds', async (req, res) => {
     const allClosedRounds = rows.filter(r => r.entity_name === 'ClosedMiningRound' || r.template_id?.includes('ClosedMiningRound'));
     const closedRounds = allClosedRounds.slice(0, closedLimit);
 
+    // Get snapshot_time from first row or null
+    const actualSnapshotTime = rows[0]?.snapshot_time || null;
+
     const result = serializeBigInt({
       openRounds,
       issuingRounds,
@@ -801,7 +822,8 @@ router.get('/mining-rounds', async (req, res) => {
         open: openRounds.length,
         issuing: issuingRounds.length,
         closed: allClosedRounds.length,
-      }
+      },
+      snapshotTime: actualSnapshotTime, // Include actual snapshot time used
     });
     
     setCache(cacheKey, result, CACHE_TTL.MINING_ROUNDS);
