@@ -727,9 +727,12 @@ router.get('/mining-rounds', async (req, res) => {
           contract_id,
           entity_name,
           template_id,
+          -- Try multiple extraction paths for round number
           COALESCE(
-            json_extract_string(payload, '$.round.number'),
-            json_extract_string(payload, '$.round')
+            NULLIF(json_extract_string(payload, '$.round.number'), ''),
+            NULLIF(CAST(json_extract(payload, '$.round.number') AS VARCHAR), ''),
+            NULLIF(json_extract_string(payload, '$.round'), ''),
+            NULLIF(CAST(json_extract(payload, '$.round') AS VARCHAR), '')
           ) as round_number,
           json_extract_string(payload, '$.opensAt') as opens_at,
           json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
@@ -741,7 +744,7 @@ router.get('/mining-rounds', async (req, res) => {
                OR template_id LIKE '%MiningRound%')
       )
       SELECT * FROM all_rounds
-      ORDER BY CAST(COALESCE(round_number, '0') AS BIGINT) DESC
+      ORDER BY entity_name, CAST(COALESCE(NULLIF(round_number, ''), '0') AS BIGINT) DESC
     `;
 
     const rows = await db.safeQuery(sql);

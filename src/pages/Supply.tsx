@@ -542,9 +542,6 @@ const Supply = () => {
                                 )}
                                 <div className="text-left">
                                   <h4 className="text-xl font-bold mb-1">Round {round.round_number}</h4>
-                                  <p className="text-sm text-muted-foreground">
-                                    Target Close: {round.target_closes_at ? new Date(round.target_closes_at).toLocaleString() : 'N/A'}
-                                  </p>
                                 </div>
                               </div>
                               <Badge className="bg-success/10 text-success border-success/20">
