@@ -23,10 +23,10 @@ async function getLastFileId(aggName) {
 async function setLastFileId(aggName, fileId) {
   await query(`
     INSERT INTO aggregation_state (agg_name, last_file_id, last_updated)
-    VALUES ('${aggName}', ${fileId}, CURRENT_TIMESTAMP)
+    VALUES ('${aggName}', ${fileId}, NOW())
     ON CONFLICT (agg_name) DO UPDATE SET 
       last_file_id = ${fileId},
-      last_updated = CURRENT_TIMESTAMP
+      last_updated = NOW()
   `);
 }
 
