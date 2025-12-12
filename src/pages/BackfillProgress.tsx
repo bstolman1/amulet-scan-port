@@ -9,6 +9,7 @@ import { Database, Activity, Trash2, FileText, Layers, Zap, Clock } from "lucide
 import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
 import { useBackfillCursors, useBackfillStats, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
+import { ShardProgressCard } from "@/components/ShardProgressCard";
 
 /**
  * Calculate ETA for a cursor based on throughput
@@ -330,6 +331,9 @@ const BackfillProgress = () => {
           </Card>
 
         </div>
+
+        {/* Shard Progress */}
+        <ShardProgressCard refreshInterval={3000} />
 
         {/* Backfill Cursors Progress */}
         <Card className="bg-card/50 backdrop-blur">
