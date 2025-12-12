@@ -5,9 +5,10 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // DATA_DIR should point to the base directory (e.g., C:\ledger_raw or /mnt/c/ledger_raw)
-// Binary files are in the 'raw' subdirectory
+// Binary files are in the 'raw' subdirectory, ACS files in 'acs' subdirectory
 const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
+const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'acs');
 
 // In-memory DuckDB instance
 const db = new duckdb.Database(':memory:');
@@ -250,4 +251,4 @@ initializeViews();
 
 export { hasFileType, countDataFiles, hasDataFiles };
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
