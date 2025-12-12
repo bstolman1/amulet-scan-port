@@ -9,8 +9,10 @@ const __dirname = dirname(__filename);
 
 const router = Router();
 
-// Path to cursor directory (relative to server directory)
-const CURSOR_DIR = join(__dirname, '../../data/cursors');
+// Path to cursor directory - configurable via env var for WSL/cross-platform support
+// Defaults to: server/../data/cursors
+const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
+const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
 
 /**
  * Read all cursor files from the cursors directory
@@ -285,7 +287,7 @@ router.get('/shards', (req, res) => {
 // DELETE /api/backfill/purge - Purge all backfill data (local files)
 router.delete('/purge', (req, res) => {
   try {
-    const dataDir = join(__dirname, '../../data');
+    const dataDir = DATA_DIR;
     const rawDir = join(dataDir, 'raw');
     let deletedCursors = 0;
     let deletedDataFiles = 0;
