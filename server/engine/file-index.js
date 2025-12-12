@@ -135,12 +135,7 @@ export async function getFileStats() {
     ORDER BY file_type, ingested
   `);
   
-  // Convert BigInt to Number for JSON serialization
-  return rows.map(r => ({
-    ...r,
-    count: Number(r.count || 0),
-    records: Number(r.records || 0),
-  }));
+  return rows;
 }
 
 /**
@@ -150,6 +145,5 @@ export async function getPendingFileCount() {
   const rows = await query(`
     SELECT COUNT(*) as count FROM raw_files WHERE ingested = FALSE
   `);
-  // Convert BigInt to Number for JSON serialization
-  return Number(rows[0]?.count || 0);
+  return rows[0]?.count || 0;
 }
