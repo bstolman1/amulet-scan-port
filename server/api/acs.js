@@ -2,8 +2,20 @@ import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import path from 'path';
 import fs from 'fs';
+import { getCached, setCache, getCacheStats, invalidateCache } from '../cache/stats-cache.js';
 
 const router = Router();
+
+// Cache TTL for different endpoints
+const CACHE_TTL = {
+  RICH_LIST: 5 * 60 * 1000,     // 5 minutes
+  SUPPLY: 5 * 60 * 1000,        // 5 minutes  
+  MINING_ROUNDS: 5 * 60 * 1000, // 5 minutes
+  ALLOCATIONS: 5 * 60 * 1000,   // 5 minutes
+  TEMPLATES: 10 * 60 * 1000,    // 10 minutes
+  STATS: 10 * 60 * 1000,        // 10 minutes
+  SNAPSHOTS: 10 * 60 * 1000,    // 10 minutes
+};
 
 // Helper to convert BigInt to Number for JSON serialization
 function serializeBigInt(obj) {
@@ -67,11 +79,30 @@ function hasACSData() {
   return findACSFiles().length > 0;
 }
 
+// GET /api/acs/cache - Get cache statistics (for debugging)
+router.get('/cache', (req, res) => {
+  res.json(getCacheStats());
+});
+
+// POST /api/acs/cache/invalidate - Invalidate cache
+router.post('/cache/invalidate', (req, res) => {
+  const { prefix } = req.body || {};
+  invalidateCache(prefix || 'acs:');
+  res.json({ status: 'ok', message: 'Cache invalidated' });
+});
+
 // GET /api/acs/snapshots - List all available snapshots
 router.get('/snapshots', async (req, res) => {
   try {
     if (!hasACSData()) {
       return res.json({ data: [], message: 'No ACS data available' });
+    }
+
+    // Check cache first
+    const cacheKey = 'acs:snapshots';
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
     }
 
     // First, get distinct migration_ids to understand what's available
@@ -113,7 +144,9 @@ router.get('/snapshots', async (req, res) => {
     }));
 
     console.log(`Returning ${snapshots.length} snapshots:`, snapshots.map(s => `M${s.migration_id}`).join(', '));
-    res.json(serializeBigInt({ data: snapshots }));
+    const result = serializeBigInt({ data: snapshots });
+    setCache(cacheKey, result, CACHE_TTL.SNAPSHOTS);
+    res.json(result);
   } catch (err) {
     console.error('ACS snapshots error:', err);
     res.status(500).json({ error: err.message });
@@ -125,6 +158,13 @@ router.get('/latest', async (req, res) => {
   try {
     if (!hasACSData()) {
       return res.json({ data: null, message: 'No ACS data available' });
+    }
+
+    // Check cache
+    const cacheKey = 'acs:latest';
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
     }
 
     // Get basic snapshot info
@@ -206,7 +246,7 @@ router.get('/latest', async (req, res) => {
 
     const circulatingSupply = amuletTotal - lockedTotal;
 
-    res.json(serializeBigInt({
+    const result = serializeBigInt({
       data: {
         id: 'local-latest',
         timestamp: row.snapshot_time,
@@ -220,7 +260,10 @@ router.get('/latest', async (req, res) => {
         status: 'completed',
         source: 'local',
       }
-    }));
+    });
+    
+    setCache(cacheKey, result, CACHE_TTL.SUPPLY);
+    res.json(result);
   } catch (err) {
     console.error('ACS latest error:', err);
     res.status(500).json({ error: err.message });
@@ -235,6 +278,13 @@ router.get('/templates', async (req, res) => {
     }
 
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    
+    // Check cache
+    const cacheKey = `acs:templates:${limit}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
 
     const sql = `
       WITH latest_snapshot AS (
@@ -254,7 +304,9 @@ router.get('/templates', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json(serializeBigInt({ data: rows }));
+    const result = serializeBigInt({ data: rows });
+    setCache(cacheKey, result, CACHE_TTL.TEMPLATES);
+    res.json(result);
   } catch (err) {
     console.error('ACS templates error:', err);
     res.status(500).json({ error: err.message });
@@ -262,6 +314,7 @@ router.get('/templates', async (req, res) => {
 });
 
 // GET /api/acs/contracts - Get contracts by template with parsed payload
+// Note: Not cached because it depends on template/entity query params and is paginated
 router.get('/contracts', async (req, res) => {
   try {
     if (!hasACSData()) {
@@ -346,11 +399,42 @@ router.get('/rich-list', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const search = req.query.search || '';
 
-    console.log(`[ACS] Rich list request: limit=${limit}, search=${search}`);
+    // Check cache - use search-specific key
+    const cacheKey = `acs:rich-list:${limit}:${search}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      console.log(`[ACS] Rich list cache HIT: ${cacheKey}`);
+      return res.json(cached);
+    }
 
-    // Calculate holder balances aggregated by owner in SQL
-    // Note: initialAmount values are already in CC units (e.g., "12.0672273082" = 12 CC)
-    // No division needed - the payload amounts are human-readable
+    console.log(`[ACS] Rich list cache MISS: ${cacheKey}`);
+
+    // Try to use pre-computed aggregation first
+    const aggregation = getCached('aggregation:holder-balances');
+    if (aggregation && !search) {
+      // Use pre-computed data
+      const holders = aggregation.holders.slice(0, limit).map(row => ({
+        owner: row.owner,
+        amount: row.unlocked_balance,
+        locked: row.locked_balance,
+        total: row.total_balance,
+      }));
+      
+      const result = serializeBigInt({
+        data: holders,
+        totalSupply: aggregation.totalSupply,
+        unlockedSupply: aggregation.unlockedSupply,
+        lockedSupply: aggregation.lockedSupply,
+        holderCount: aggregation.holderCount,
+        cached: true,
+        refreshedAt: aggregation.refreshedAt,
+      });
+      
+      setCache(cacheKey, result, CACHE_TTL.RICH_LIST);
+      return res.json(result);
+    }
+
+    // Fall back to query (for search or if no pre-computed data)
     const sql = `
       WITH latest_snapshot AS (
         SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
@@ -461,7 +545,7 @@ router.get('/rich-list', async (req, res) => {
     const lockedSupply = stats[0]?.locked_supply || 0;
     const holderCount = stats[0]?.holder_count || 0;
 
-    res.json(serializeBigInt({
+    const result = serializeBigInt({
       data: rows.map(row => ({
         owner: row.owner,
         amount: row.unlocked_balance,
@@ -472,7 +556,10 @@ router.get('/rich-list', async (req, res) => {
       unlockedSupply,
       lockedSupply,
       holderCount,
-    }));
+    });
+    
+    setCache(cacheKey, result, CACHE_TTL.RICH_LIST);
+    res.json(result);
   } catch (err) {
     console.error('ACS rich-list error:', err);
     res.status(500).json({ error: err.message });
@@ -484,6 +571,13 @@ router.get('/supply', async (req, res) => {
   try {
     if (!hasACSData()) {
       return res.json({ data: null });
+    }
+
+    // Check cache
+    const cacheKey = 'acs:supply';
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
     }
 
     const sql = `
@@ -500,7 +594,9 @@ router.get('/supply', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json(serializeBigInt({ data: rows[0] || null }));
+    const result = serializeBigInt({ data: rows[0] || null });
+    setCache(cacheKey, result, CACHE_TTL.SUPPLY);
+    res.json(result);
   } catch (err) {
     console.error('ACS supply error:', err);
     res.status(500).json({ error: err.message });
@@ -517,6 +613,13 @@ router.get('/allocations', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const offset = parseInt(req.query.offset) || 0;
     const search = req.query.search || '';
+
+    // Check cache
+    const cacheKey = `acs:allocations:${limit}:${offset}:${search}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
 
     console.log(`[ACS] Allocations request: limit=${limit}, offset=${offset}, search=${search}`);
 
@@ -563,12 +666,15 @@ router.get('/allocations', async (req, res) => {
 
     const stats = await db.safeQuery(statsSql);
 
-    res.json(serializeBigInt({
+    const result = serializeBigInt({
       data: rows,
       totalCount: stats[0]?.total_count || 0,
       totalAmount: stats[0]?.total_amount || 0,
       uniqueExecutors: stats[0]?.unique_executors || 0,
-    }));
+    });
+    
+    setCache(cacheKey, result, CACHE_TTL.ALLOCATIONS);
+    res.json(result);
   } catch (err) {
     console.error('ACS allocations error:', err);
     res.status(500).json({ error: err.message });
@@ -584,12 +690,34 @@ router.get('/mining-rounds', async (req, res) => {
 
     const closedLimit = Math.min(parseInt(req.query.closedLimit) || 20, 100);
 
-    console.log(`[ACS] Mining rounds request: closedLimit=${closedLimit}`);
+    // Check cache
+    const cacheKey = `acs:mining-rounds:${closedLimit}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      console.log(`[ACS] Mining rounds cache HIT`);
+      return res.json(cached);
+    }
 
-    // Cache the ACS source for this request to avoid recalculating
+    console.log(`[ACS] Mining rounds cache MISS: ${cacheKey}`);
+
+    // Try to use pre-computed aggregation first
+    const aggregation = getCached('aggregation:mining-rounds');
+    if (aggregation) {
+      const result = serializeBigInt({
+        openRounds: aggregation.openRounds,
+        issuingRounds: aggregation.issuingRounds,
+        closedRounds: aggregation.closedRounds.slice(0, closedLimit),
+        counts: aggregation.counts,
+        cached: true,
+        refreshedAt: aggregation.refreshedAt,
+      });
+      
+      setCache(cacheKey, result, CACHE_TTL.MINING_ROUNDS);
+      return res.json(result);
+    }
+
+    // Fall back to query
     const acsSource = getACSSource();
-
-    // Single query to get all rounds and counts
     const sql = `
       WITH latest_snapshot AS (
         SELECT MAX(snapshot_time) as snapshot_time FROM ${acsSource}
@@ -599,9 +727,12 @@ router.get('/mining-rounds', async (req, res) => {
           contract_id,
           entity_name,
           template_id,
+          -- Try multiple extraction paths for round number
           COALESCE(
-            json_extract_string(payload, '$.round.number'),
-            json_extract_string(payload, '$.round')
+            NULLIF(json_extract_string(payload, '$.round.number'), ''),
+            NULLIF(CAST(json_extract(payload, '$.round.number') AS VARCHAR), ''),
+            NULLIF(json_extract_string(payload, '$.round'), ''),
+            NULLIF(CAST(json_extract(payload, '$.round') AS VARCHAR), '')
           ) as round_number,
           json_extract_string(payload, '$.opensAt') as opens_at,
           json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
@@ -613,7 +744,7 @@ router.get('/mining-rounds', async (req, res) => {
                OR template_id LIKE '%MiningRound%')
       )
       SELECT * FROM all_rounds
-      ORDER BY CAST(COALESCE(round_number, '0') AS BIGINT) DESC
+      ORDER BY entity_name, CAST(COALESCE(NULLIF(round_number, ''), '0') AS BIGINT) DESC
     `;
 
     const rows = await db.safeQuery(sql);
@@ -624,7 +755,7 @@ router.get('/mining-rounds', async (req, res) => {
     const allClosedRounds = rows.filter(r => r.entity_name === 'ClosedMiningRound' || r.template_id?.includes('ClosedMiningRound'));
     const closedRounds = allClosedRounds.slice(0, closedLimit);
 
-    res.json(serializeBigInt({
+    const result = serializeBigInt({
       openRounds,
       issuingRounds,
       closedRounds,
@@ -633,7 +764,10 @@ router.get('/mining-rounds', async (req, res) => {
         issuing: issuingRounds.length,
         closed: allClosedRounds.length,
       }
-    }));
+    });
+    
+    setCache(cacheKey, result, CACHE_TTL.MINING_ROUNDS);
+    res.json(result);
   } catch (err) {
     console.error('ACS mining-rounds error:', err);
     res.status(500).json({ error: err.message });
@@ -654,6 +788,13 @@ router.get('/stats', async (req, res) => {
       });
     }
 
+    // Check cache
+    const cacheKey = 'acs:stats';
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const sql = `
       SELECT 
         COUNT(*) as total_contracts,
@@ -665,7 +806,9 @@ router.get('/stats', async (req, res) => {
     `;
 
     const rows = await db.safeQuery(sql);
-    res.json(serializeBigInt({ data: rows[0] || {} }));
+    const result = serializeBigInt({ data: rows[0] || {} });
+    setCache(cacheKey, result, CACHE_TTL.STATS);
+    res.json(result);
   } catch (err) {
     console.error('ACS stats error:', err);
     res.status(500).json({ error: err.message });
