@@ -8,7 +8,8 @@ import { setCache, invalidateCache } from './stats-cache.js';
 import path from 'path';
 import fs from 'fs';
 
-const ACS_DATA_PATH = path.resolve(db.DATA_PATH, 'acs');
+// ACS data path - use the centralized path from duckdb connection
+const ACS_DATA_PATH = db.ACS_DATA_PATH;
 
 // Cache TTL for pre-computed aggregations (longer since we control refresh)
 const AGGREGATION_TTL = 30 * 60 * 1000; // 30 minutes
