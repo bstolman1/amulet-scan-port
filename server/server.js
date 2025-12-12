@@ -16,6 +16,9 @@ import governanceLifecycleRouter, { fetchFreshData, writeCache } from './api/gov
 import db, { initializeViews } from './duckdb/connection.js';
 import { refreshAllAggregations, invalidateACSCache } from './cache/aggregation-worker.js';
 import { getCacheStats } from './cache/stats-cache.js';
+// Warehouse engine imports
+import { startEngineWorker, getEngineStatus } from './engine/worker.js';
+import engineRouter from './engine/api.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,15 +26,29 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Engine enabled flag - set to true to use the new warehouse engine
+const ENGINE_ENABLED = process.env.ENGINE_ENABLED === 'true';
+
 app.use(cors());
 app.use(express.json());
 
 // Root route - API info
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+  let engineStatus = null;
+  if (ENGINE_ENABLED) {
+    try {
+      engineStatus = await getEngineStatus();
+    } catch (err) {
+      engineStatus = { error: err.message };
+    }
+  }
+  
   res.json({
     name: 'Amulet Scan DuckDB API',
     version: '1.0.0',
     status: 'ok',
+    engine: ENGINE_ENABLED ? 'enabled' : 'disabled',
+    engineStatus,
     endpoints: [
       'GET /health',
       'GET /api/events/latest',
@@ -42,17 +59,32 @@ app.get('/', (req, res) => {
       'POST /api/acs/cache/invalidate',
       'POST /api/refresh-views',
       'POST /api/refresh-aggregations',
+      'GET /api/engine/status',
+      'GET /api/engine/stats',
+      'POST /api/engine/cycle',
     ],
     dataPath: db.DATA_PATH,
   });
 });
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const cacheStats = getCacheStats();
+  let engineStatus = null;
+  
+  if (ENGINE_ENABLED) {
+    try {
+      engineStatus = await getEngineStatus();
+    } catch (err) {
+      engineStatus = { error: err.message };
+    }
+  }
+  
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
+    engine: ENGINE_ENABLED ? 'enabled' : 'disabled',
+    engineStatus,
     cache: {
       entries: cacheStats.totalEntries,
     }
@@ -103,6 +135,9 @@ app.use('/api/acs', acsRouter);
 app.use('/api/announcements', announcementsRouter);
 app.use('/api/governance-lifecycle', governanceLifecycleRouter);
 
+// Engine API routes
+app.use('/api/engine', engineRouter);
+
 // Schedule governance data refresh every 4 hours
 cron.schedule('0 */4 * * *', async () => {
   console.log('⏰ Scheduled governance data refresh starting...');
@@ -115,15 +150,17 @@ cron.schedule('0 */4 * * *', async () => {
   }
 });
 
-// Schedule aggregation refresh every 15 minutes
-cron.schedule('*/15 * * * *', async () => {
-  console.log('⏰ Scheduled aggregation refresh starting...');
-  try {
-    await refreshAllAggregations();
-  } catch (err) {
-    console.error('❌ Scheduled aggregation refresh failed:', err.message);
-  }
-});
+// Schedule aggregation refresh every 15 minutes (only if engine is disabled)
+if (!ENGINE_ENABLED) {
+  cron.schedule('*/15 * * * *', async () => {
+    console.log('⏰ Scheduled aggregation refresh starting...');
+    try {
+      await refreshAllAggregations();
+    } catch (err) {
+      console.error('❌ Scheduled aggregation refresh failed:', err.message);
+    }
+  });
+}
 
 // Schedule ACS snapshot every 3 hours starting at 00:00 UTC
 // Runs at: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
@@ -169,20 +206,30 @@ cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
   });
 });
 
-// Initial aggregation refresh on startup (delayed to allow server to start)
-setTimeout(async () => {
-  console.log('🚀 Running initial aggregation refresh...');
-  try {
-    await refreshAllAggregations();
-  } catch (err) {
-    console.error('❌ Initial aggregation refresh failed:', err.message);
-  }
-}, 5000);
-
-app.listen(PORT, () => {
+// Startup logic
+app.listen(PORT, async () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
   console.log(`⏰ Governance data refresh scheduled every 4 hours`);
-  console.log(`⏰ Aggregation refresh scheduled every 15 minutes`);
   console.log(`⏰ ACS snapshot scheduled every 3 hours (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)`);
+  
+  if (ENGINE_ENABLED) {
+    console.log(`⚙️ Warehouse engine ENABLED - starting background worker...`);
+    try {
+      await startEngineWorker();
+    } catch (err) {
+      console.error('❌ Failed to start engine worker:', err.message);
+    }
+  } else {
+    console.log(`⏰ Aggregation refresh scheduled every 15 minutes (engine disabled)`);
+    // Initial aggregation refresh on startup (delayed to allow server to start)
+    setTimeout(async () => {
+      console.log('🚀 Running initial aggregation refresh...');
+      try {
+        await refreshAllAggregations();
+      } catch (err) {
+        console.error('❌ Initial aggregation refresh failed:', err.message);
+      }
+    }, 5000);
+  }
 });
