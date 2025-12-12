@@ -37,7 +37,10 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 // Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
-const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
+// CURSOR_DIR defaults to DATA_DIR/cursors if DATA_DIR is set, otherwise project data/cursors
+const BASE_DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
+const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
+const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Reduced from 20 to prevent memory pressure
 const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Reduced from 20 to prevent memory pressure
 const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5; // Flush more frequently

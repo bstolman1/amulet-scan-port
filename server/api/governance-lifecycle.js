@@ -4,7 +4,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = path.resolve(__dirname, '../../data/cache');
+// Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
+const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+const CACHE_DIR = path.join(BASE_DATA_DIR, 'cache');
 const CACHE_FILE = path.join(CACHE_DIR, 'governance-lifecycle.json');
 
 const router = express.Router();

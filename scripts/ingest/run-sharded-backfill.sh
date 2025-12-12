@@ -16,10 +16,15 @@ SHARD_COUNT="${1:-$DEFAULT_SHARDS}"
 TARGET_MIGRATION="${2:-3}"
 
 # --- Environment Defaults (can be overridden) ---
-export DATA_DIR="${DATA_DIR:-$HOME/ledger_raw}"
+# Use /mnt/c/ledger_raw for Windows interop (maps to C:\ledger_raw)
+export DATA_DIR="${DATA_DIR:-/mnt/c/ledger_raw}"
 export PARALLEL_FETCHES="${PARALLEL_FETCHES:-6}"
 export MAX_WORKERS="${MAX_WORKERS:-30}"
 export MAX_ROWS_PER_FILE="${MAX_ROWS_PER_FILE:-15000}"
+
+# Derived directories (all under DATA_DIR)
+export CURSOR_DIR="${DATA_DIR}/cursors"
+export LOG_DIR="${DATA_DIR}/logs"
 
 # Decode workers = CPU cores / 2 (minimum 2)
 DEFAULT_DECODE_WORKERS=$(( TOTAL_CORES / 2 ))
@@ -43,12 +48,15 @@ echo "Max binary workers:       $MAX_WORKERS"
 echo "Max rows per file:        $MAX_ROWS_PER_FILE"
 echo "Target migration:         $TARGET_MIGRATION"
 echo "DATA_DIR:                 $DATA_DIR"
+echo "CURSOR_DIR:               $CURSOR_DIR"
+echo "LOG_DIR:                  $LOG_DIR"
 echo "Working dir:              $SCRIPT_DIR"
 echo "=========================================================="
 echo
 
-# --- Logs directory ---
-LOG_DIR="$SCRIPT_DIR/../../data/logs"
+# --- Ensure directories exist ---
+mkdir -p "$DATA_DIR/raw"
+mkdir -p "$CURSOR_DIR"
 mkdir -p "$LOG_DIR"
 
 # Array to hold PIDs

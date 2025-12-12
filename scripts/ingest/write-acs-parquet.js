@@ -13,8 +13,10 @@ import { getACSPartitionPath, ACS_COLUMNS } from './acs-schema.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - use absolute path relative to project root
-const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
+// Configuration - DATA_DIR should be set to C:\ledger_raw or /mnt/c/ledger_raw
+// ACS data goes in DATA_DIR/acs subdirectory
+const BASE_DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
+const DATA_DIR = join(BASE_DATA_DIR, 'acs');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
 // In-memory buffer for batching

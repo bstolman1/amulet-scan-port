@@ -22,8 +22,8 @@ function serializeBigInt(obj) {
   return JSON.parse(JSON.stringify(obj, (_, v) => typeof v === 'bigint' ? Number(v) : v));
 }
 
-// ACS data path - data is written to DATA_PATH/acs/ by the ingest scripts
-const ACS_DATA_PATH = path.resolve(db.DATA_PATH, 'acs');
+// ACS data path - use the centralized path from duckdb connection
+const ACS_DATA_PATH = db.ACS_DATA_PATH;
 
 // Find ACS files and return their paths
 function findACSFiles() {
