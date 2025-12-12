@@ -155,6 +155,133 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// GET /api/backfill/shards - Get shard progress data
+router.get('/shards', (req, res) => {
+  try {
+    const cursors = readAllCursors();
+    
+    // Group cursors by migration and synchronizer, identifying shards
+    const groups = {};
+    
+    for (const cursor of cursors) {
+      const migrationId = cursor.migration_id || 0;
+      const synchronizerId = cursor.synchronizer_id || 'unknown';
+      
+      // Extract shard info from cursor name or file
+      const shardMatch = cursor.cursor_name?.match(/-shard(\d+)$/) || cursor.id?.match(/-shard(\d+)$/);
+      const shardIndex = shardMatch ? parseInt(shardMatch[1]) : null;
+      const isSharded = shardIndex !== null;
+      
+      // Create base key (without shard suffix)
+      const baseKey = `${migrationId}-${synchronizerId}`;
+      
+      if (!groups[baseKey]) {
+        groups[baseKey] = {
+          migrationId,
+          synchronizerId,
+          shards: [],
+          totalUpdates: 0,
+          totalEvents: 0,
+        };
+      }
+      
+      // Calculate progress
+      let progress = 0;
+      if (cursor.complete) {
+        progress = 100;
+      } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
+        const minMs = new Date(cursor.min_time).getTime();
+        const maxMs = new Date(cursor.max_time).getTime();
+        const currentMs = new Date(cursor.last_before).getTime();
+        const totalRange = maxMs - minMs;
+        if (totalRange > 0) {
+          progress = Math.min(100, Math.max(0, ((maxMs - currentMs) / totalRange) * 100));
+        }
+      }
+      
+      // Calculate throughput and ETA
+      let throughput = null;
+      let eta = null;
+      if (cursor.started_at && cursor.updated_at && !cursor.complete) {
+        const startedAt = new Date(cursor.started_at).getTime();
+        const updatedAt = new Date(cursor.updated_at).getTime();
+        const elapsed = updatedAt - startedAt;
+        
+        if (elapsed > 0 && cursor.total_updates) {
+          throughput = Math.round(cursor.total_updates / (elapsed / 1000));
+        }
+        
+        if (elapsed > 0 && progress > 0) {
+          const totalEstimate = (elapsed / progress) * 100;
+          const remaining = totalEstimate - elapsed;
+          if (remaining > 0) {
+            eta = remaining;
+          }
+        }
+      }
+      
+      groups[baseKey].shards.push({
+        shardIndex,
+        isSharded,
+        progress,
+        throughput,
+        eta,
+        complete: cursor.complete,
+        totalUpdates: cursor.total_updates || 0,
+        totalEvents: cursor.total_events || 0,
+        minTime: cursor.min_time,
+        maxTime: cursor.max_time,
+        lastBefore: cursor.last_before,
+        updatedAt: cursor.updated_at,
+        startedAt: cursor.started_at,
+        error: cursor.error,
+      });
+      
+      groups[baseKey].totalUpdates += cursor.total_updates || 0;
+      groups[baseKey].totalEvents += cursor.total_events || 0;
+    }
+    
+    // Calculate aggregate stats for each group
+    const result = Object.values(groups).map(group => {
+      const sortedShards = group.shards.sort((a, b) => (a.shardIndex || 0) - (b.shardIndex || 0));
+      const totalShards = sortedShards.length;
+      const completedShards = sortedShards.filter(s => s.complete).length;
+      const overallProgress = totalShards > 0 
+        ? sortedShards.reduce((sum, s) => sum + s.progress, 0) / totalShards 
+        : 0;
+      
+      // Calculate combined ETA (use slowest shard)
+      const activeShards = sortedShards.filter(s => !s.complete && s.eta);
+      const combinedEta = activeShards.length > 0 
+        ? Math.max(...activeShards.map(s => s.eta))
+        : null;
+      
+      // Check for active shards (updated in last minute)
+      const now = Date.now();
+      const activeCount = sortedShards.filter(s => {
+        if (s.complete) return false;
+        if (!s.updatedAt) return false;
+        return now - new Date(s.updatedAt).getTime() < 60000;
+      }).length;
+      
+      return {
+        ...group,
+        shards: sortedShards,
+        totalShards,
+        completedShards,
+        activeShards: activeCount,
+        overallProgress,
+        combinedEta,
+      };
+    });
+    
+    res.json({ data: result, count: result.length });
+  } catch (err) {
+    console.error('Error reading shard progress:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/backfill/purge - Purge all backfill data (local files)
 router.delete('/purge', (req, res) => {
   try {
