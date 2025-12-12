@@ -133,26 +133,25 @@ export function useAggregatedTemplateData(
       // Try DuckDB first if configured and available
       if (useDuckDB && await isDuckDBAvailable()) {
         try {
-          // Extract entity name from templateSuffix (e.g., "Splice:Amulet:Amulet" -> "Amulet")
-          // Also extract module for more precise matching (e.g., "Amulet" vs "Ans")
-          const parts = templateSuffix.split(':');
-          const entityName = parts[parts.length - 1];  // Last part is entity name
-          const moduleName = parts.length >= 2 ? parts[parts.length - 2] : null;  // Second to last is module
+          // Use the full templateSuffix for template matching (e.g., "Splice:AmuletRules:AmuletRules")
+          // This provides more precise matching than just entity name
+          console.log(`[useAggregatedTemplateData] Using DuckDB for template=${templateSuffix}`);
           
-          console.log(`[useAggregatedTemplateData] Using DuckDB for ${templateSuffix}, entity: ${entityName}, module: ${moduleName}`);
-          
-          // Use entity parameter which matches entity_name column directly
+          // Pass template suffix for precise matching via template_id LIKE query
           const response = await getLocalACSContracts({ 
-            entity: entityName,
-            limit: 10000 
+            template: templateSuffix,
+            limit: 100000 
           });
           
-          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts for entity=${entityName}`);
+          // Use count from response if available, otherwise fall back to data length
+          const totalCount = response.count ?? response.data?.length ?? 0;
+          
+          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts (total: ${totalCount}) for template=${templateSuffix}`);
           
           return {
             data: response.data || [],
             templateCount: 1,
-            totalContracts: response.data?.length || 0,
+            totalContracts: totalCount,
             templateIds: [templateSuffix],
             source: "duckdb",
           };
