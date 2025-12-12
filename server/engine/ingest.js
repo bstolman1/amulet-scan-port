@@ -1,25 +1,75 @@
 /**
  * Ingest - Streaming ingestion of .pb.zst files into DuckDB tables
- *
- * SAFE MODE (WSL-Optimized)
- * - Loads ZERO whole files into memory
- * - Inserts in small batches
- * - Limits to 2 files per cycle (prevents OOM)
- * - Protects against BigInt serialization errors
+ * 
+ * STREAMING-ONLY: Processes records in batches without loading entire file into memory.
  */
 
 import { query } from '../duckdb/connection.js';
 import { decodeFile } from './decoder.js';
 
-// Smaller batch size → lower peak RAM usage
-const BATCH_SIZE = 1500;
+const BATCH_SIZE = 2000; // Records per insert batch
 
-// GLOBAL safety: never ingest too many files in one cycle
-export const INGEST_FILE_LIMIT = 2;
+/**
+ * Insert a batch of events into events_raw
+ */
+async function insertEventBatch(records, fileId) {
+  if (records.length === 0) return;
+  
+  // Build VALUES clause
+  const values = records.map(r => {
+    const id = sqlStr(r.id);
+    const updateId = sqlStr(r.update_id);
+    const type = sqlStr(r.type);
+    const synchronizer = sqlStr(r.synchronizer);
+    const effectiveAt = sqlTs(r.effective_at);
+    const recordedAt = sqlTs(r.recorded_at);
+    const contractId = sqlStr(r.contract_id);
+    const party = sqlStr(r.party);
+    const template = sqlStr(r.template);
+    const packageName = sqlStr(r.package_name);
+    const signatories = sqlArray(r.signatories);
+    const observers = sqlArray(r.observers);
+    const payload = sqlJson(r.payload);
+    const rawJson = sqlJson(r.raw_json);
+    
+    return `(${id}, ${updateId}, ${type}, ${synchronizer}, ${effectiveAt}, ${recordedAt}, ${contractId}, ${party}, ${template}, ${packageName}, ${signatories}, ${observers}, ${payload}, ${rawJson}, ${fileId})`;
+  }).join(',\n');
+  
+  await query(`
+    INSERT INTO events_raw (id, update_id, type, synchronizer, effective_at, recorded_at, contract_id, party, template, package_name, signatories, observers, payload, raw_json, _file_id)
+    VALUES ${values}
+  `);
+}
 
-/* ---------------------------------------------
- * SQL HELPERS (ESCAPING SAFE)
- * ------------------------------------------- */
+/**
+ * Insert a batch of updates into updates_raw
+ */
+async function insertUpdateBatch(records, fileId) {
+  if (records.length === 0) return;
+  
+  const values = records.map(r => {
+    const id = sqlStr(r.id);
+    const synchronizer = sqlStr(r.synchronizer);
+    const effectiveAt = sqlTs(r.effective_at);
+    const recordedAt = sqlTs(r.recorded_at);
+    const type = sqlStr(r.type);
+    const commandId = sqlStr(r.command_id);
+    const workflowId = sqlStr(r.workflow_id);
+    const kind = sqlStr(r.kind);
+    const migrationId = r.migration_id ?? 'NULL';
+    const offsetVal = r.offset_val ?? 'NULL';
+    const eventCount = r.event_count ?? 0;
+    
+    return `(${id}, ${synchronizer}, ${effectiveAt}, ${recordedAt}, ${type}, ${commandId}, ${workflowId}, ${kind}, ${migrationId}, ${offsetVal}, ${eventCount}, ${fileId})`;
+  }).join(',\n');
+  
+  await query(`
+    INSERT INTO updates_raw (id, synchronizer, effective_at, recorded_at, type, command_id, workflow_id, kind, migration_id, offset_val, event_count, _file_id)
+    VALUES ${values}
+  `);
+}
+
+// SQL helpers
 function sqlStr(val) {
   if (val === null || val === undefined) return 'NULL';
   return `'${String(val).replace(/'/g, "''")}'`;
@@ -27,7 +77,13 @@ function sqlStr(val) {
 
 function sqlTs(val) {
   if (!val) return 'NULL';
-  return `TIMESTAMP '${new Date(val).toISOString()}'`;
+  return `TIMESTAMP '${val}'`;
+}
+
+function sqlArray(arr) {
+  if (!arr || arr.length === 0) return 'NULL';
+  const escaped = arr.map(s => `'${String(s).replace(/'/g, "''")}'`).join(', ');
+  return `[${escaped}]`;
 }
 
 function sqlJson(val) {
@@ -40,129 +96,69 @@ function sqlJson(val) {
   }
 }
 
-function sqlArray(arr) {
-  if (!arr || arr.length === 0) return 'NULL';
-  return `[${arr.map(v => sqlStr(v)).join(', ')}]`;
-}
-
-/* ---------------------------------------------
- * INSERT HELPERS
- * ------------------------------------------- */
-async function insertEventBatch(records, fileId) {
-  if (records.length === 0) return;
-
-  const values = records.map(r => `
-    (${sqlStr(r.id)},
-     ${sqlStr(r.update_id)},
-     ${sqlStr(r.type)},
-     ${sqlStr(r.synchronizer)},
-     ${sqlTs(r.effective_at)},
-     ${sqlTs(r.recorded_at)},
-     ${sqlStr(r.contract_id)},
-     ${sqlStr(r.party)},
-     ${sqlStr(r.template)},
-     ${sqlStr(r.package_name)},
-     ${sqlArray(r.signatories)},
-     ${sqlArray(r.observers)},
-     ${sqlJson(r.payload)},
-     ${sqlJson(r.raw_json)},
-     ${fileId})
-  `).join(',');
-
-  await query(`
-    INSERT INTO events_raw
-    (id, update_id, type, synchronizer, effective_at, recorded_at, contract_id, party,
-     template, package_name, signatories, observers, payload, raw_json, _file_id)
-    VALUES ${values}
-  `);
-}
-
-async function insertUpdateBatch(records, fileId) {
-  if (records.length === 0) return;
-
-  const values = records.map(r => `
-    (${sqlStr(r.id)},
-     ${sqlStr(r.synchronizer)},
-     ${sqlTs(r.effective_at)},
-     ${sqlTs(r.recorded_at)},
-     ${sqlStr(r.type)},
-     ${sqlStr(r.command_id)},
-     ${sqlStr(r.workflow_id)},
-     ${sqlStr(r.kind)},
-     ${r.migration_id ?? 'NULL'},
-     ${r.offset_val ?? 'NULL'},
-     ${r.event_count ?? 0},
-     ${fileId})
-  `).join(',');
-
-  await query(`
-    INSERT INTO updates_raw
-    (id, synchronizer, effective_at, recorded_at, type, command_id, workflow_id,
-     kind, migration_id, offset_val, event_count, _file_id)
-    VALUES ${values}
-  `);
-}
-
-/* ---------------------------------------------
- * INGEST ONE FILE (STREAMING)
- * ------------------------------------------- */
-export async function ingestOneFile(fileRow) {
+/**
+ * Ingest a single file using streaming decode
+ */
+async function ingestOneFile(fileRow) {
   const { file_id, file_path, file_type } = fileRow;
-
-  const insertFn = file_type === 'events'
-    ? insertEventBatch
-    : insertUpdateBatch;
-
-  let batch = [];
-  let total = 0;
-  let minTs = null;
-  let maxTs = null;
-
+  
   try {
-    for await (const rec of decodeFile(file_path)) {
-      batch.push(rec);
-      total++;
-
-      const ts = rec.recorded_at || rec.effective_at;
+    const insertFn = file_type === 'events' ? insertEventBatch : insertUpdateBatch;
+    
+    let batch = [];
+    let totalCount = 0;
+    let minTs = null;
+    let maxTs = null;
+    
+    // Stream records and insert in batches
+    for await (const record of decodeFile(file_path)) {
+      batch.push(record);
+      totalCount++;
+      
+      // Track timestamps
+      const ts = record.recorded_at || record.effective_at;
       if (ts) {
         const d = new Date(ts);
         if (!minTs || d < minTs) minTs = d;
         if (!maxTs || d > maxTs) maxTs = d;
       }
-
+      
+      // Insert when batch is full
       if (batch.length >= BATCH_SIZE) {
         await insertFn(batch, file_id);
-        batch.length = 0;
+        batch = [];
       }
     }
-
-    if (batch.length) {
+    
+    // Insert remaining records
+    if (batch.length > 0) {
       await insertFn(batch, file_id);
     }
-
+    
+    // Update file metadata
     await query(`
-      UPDATE raw_files SET
-        record_count = ${total},
-        min_ts = ${minTs ? sqlTs(minTs) : 'NULL'},
-        max_ts = ${maxTs ? sqlTs(maxTs) : 'NULL'},
+      UPDATE raw_files
+      SET 
+        record_count = ${totalCount},
+        min_ts = ${minTs ? `TIMESTAMP '${minTs.toISOString()}'` : 'NULL'},
+        max_ts = ${maxTs ? `TIMESTAMP '${maxTs.toISOString()}'` : 'NULL'},
         ingested = TRUE,
         ingested_at = CURRENT_TIMESTAMP
       WHERE file_id = ${file_id}
     `);
-
-    console.log(`🧩 Ingested ${total} records from file ${file_id}`);
-    return { success: true, count: total };
-
+    
+    return { file_id, count: totalCount, success: true };
   } catch (err) {
-    console.error(`❌ Ingest failed for ${file_path}:`, err);
-    return { success: false, error: err.message };
+    console.error(`❌ Failed to ingest ${file_path}: ${err.message}`);
+    return { file_id, count: 0, success: false, error: err.message };
   }
 }
 
-/* ---------------------------------------------
- * INGEST NEW FILES (LIMITED PER CYCLE)
- * ------------------------------------------- */
-export async function ingestNewFiles(maxFiles = INGEST_FILE_LIMIT) {
+/**
+ * Ingest up to maxFiles un-ingested files
+ */
+export async function ingestNewFiles(maxFiles = 5) {
+  // Get files to ingest (oldest first by record_date)
   const files = await query(`
     SELECT file_id, file_path, file_type, migration_id
     FROM raw_files
@@ -170,45 +166,49 @@ export async function ingestNewFiles(maxFiles = INGEST_FILE_LIMIT) {
     ORDER BY record_date ASC, file_id ASC
     LIMIT ${maxFiles}
   `);
-
-  if (!files.length) {
+  
+  if (files.length === 0) {
     return { ingested: 0, records: 0 };
   }
-
-  let ingested = 0;
+  
+  let totalIngested = 0;
   let totalRecords = 0;
-
-  for (const f of files) {
-    const result = await ingestOneFile(f);
+  
+  for (const file of files) {
+    const result = await ingestOneFile(file);
     if (result.success) {
-      ingested++;
+      totalIngested++;
       totalRecords += result.count;
+      console.log(`🧩 Ingested ${result.count} records from file ${file.file_id}`);
     }
   }
-
-  console.log(`📥 Ingested ${totalRecords} records from ${ingested} files`);
-  return { ingested, records: totalRecords };
+  
+  if (totalIngested > 0) {
+    console.log(`📥 Ingested ${totalRecords} records from ${totalIngested} files`);
+  }
+  
+  return { ingested: totalIngested, records: totalRecords };
 }
 
-/* ---------------------------------------------
- * GET INGESTION STATS (SAFE FOR JSON)
- * ------------------------------------------- */
+/**
+ * Get ingestion stats (uses efficient COUNT queries, not full scans)
+ */
 export async function getIngestionStats() {
   const rows = await query(`
     SELECT 
-      COUNT(*) FILTER (WHERE ingested = TRUE)             AS ingested_files,
-      COUNT(*) FILTER (WHERE ingested = FALSE)            AS pending_files,
-      SUM(record_count) FILTER (WHERE ingested = TRUE)    AS total_records,
-      MAX(max_ts)                                         AS latest_ts
+      COUNT(*) FILTER (WHERE ingested = TRUE) as ingested_files,
+      COUNT(*) FILTER (WHERE ingested = FALSE) as pending_files,
+      SUM(record_count) FILTER (WHERE ingested = TRUE) as total_records,
+      MAX(max_ts) as latest_ts
     FROM raw_files
   `);
-
-  const r = rows[0];
-
+  
+  const row = rows[0] || {};
+  // Convert BigInt to Number for JSON serialization
   return {
-    ingested_files: Number(r.ingested_files || 0),
-    pending_files: Number(r.pending_files || 0),
-    total_records: Number(r.total_records || 0),
-    latest_ts: r.latest_ts
+    ingested_files: Number(row.ingested_files || 0),
+    pending_files: Number(row.pending_files || 0),
+    total_records: Number(row.total_records || 0),
+    latest_ts: row.latest_ts,
   };
 }
