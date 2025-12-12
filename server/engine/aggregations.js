@@ -62,7 +62,6 @@ export async function updateEventTypeCounts() {
   
   if (maxFileId <= lastFileId) return null;
   
-  // Use aggregation query - DuckDB handles this efficiently
   const rows = await query(`
     SELECT 
       type,
@@ -74,7 +73,8 @@ export async function updateEventTypeCounts() {
   
   await setLastFileId(aggName, maxFileId);
   
-  return rows;
+  // Convert BigInt counts to Number for JSON serialization
+  return rows.map(r => ({ ...r, count: Number(r.count) }));
 }
 
 /**
@@ -109,7 +109,6 @@ export async function* streamTemplateEventCounts(pageSize = STREAM_PAGE_SIZE) {
  * Get recent event counts by template (paginated)
  */
 export async function getTemplateEventCounts(limit = 100) {
-  // For small limits, direct query is fine
   const rows = await query(`
     SELECT 
       template,
@@ -121,7 +120,8 @@ export async function getTemplateEventCounts(limit = 100) {
     LIMIT ${limit}
   `);
   
-  return rows;
+  // Convert BigInt counts to Number for JSON serialization
+  return rows.map(r => ({ ...r, count: Number(r.count) }));
 }
 
 /**
@@ -133,9 +133,10 @@ export async function getTotalCounts() {
     query('SELECT COUNT(*) as count FROM updates_raw'),
   ]);
   
+  // Convert BigInt to Number for JSON serialization
   return {
-    events: events[0]?.count || 0,
-    updates: updates[0]?.count || 0,
+    events: Number(events[0]?.count || 0),
+    updates: Number(updates[0]?.count || 0),
   };
 }
 

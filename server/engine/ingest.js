@@ -203,5 +203,12 @@ export async function getIngestionStats() {
     FROM raw_files
   `);
   
-  return rows[0] || {};
+  const row = rows[0] || {};
+  // Convert BigInt to Number for JSON serialization
+  return {
+    ingested_files: Number(row.ingested_files || 0),
+    pending_files: Number(row.pending_files || 0),
+    total_records: Number(row.total_records || 0),
+    latest_ts: row.latest_ts,
+  };
 }
