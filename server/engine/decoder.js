@@ -2,7 +2,7 @@
  * Decoder - Streaming decoder for .pb.zst files
  * 
  * Uses the same protobuf schema as the backfill writers.
- * Yields records one at a time to avoid memory issues.
+ * STREAMING-ONLY: Yields records one at a time to avoid memory issues.
  */
 
 import fs from 'fs';
@@ -91,7 +91,7 @@ function tryParseJson(str) {
 }
 
 /**
- * Decode a .pb.zst file and yield records
+ * Streaming decode a .pb.zst file - yields records one at a time
  * 
  * File format: sequence of [4-byte BE length][zstd-compressed protobuf batch]
  */
@@ -104,42 +104,54 @@ export async function* decodeFile(filePath) {
   const recordKey = isEvents ? 'events' : 'updates';
   const toPlain = isEvents ? eventToPlain : updateToPlain;
   
-  // Read entire file (files are typically <50MB compressed)
-  const fileBuffer = fs.readFileSync(filePath);
+  // Read file in chunks to avoid loading entire file
+  const fd = fs.openSync(filePath, 'r');
+  const fileSize = fs.fstatSync(fd).size;
   let offset = 0;
   
-  while (offset < fileBuffer.length) {
-    if (offset + 4 > fileBuffer.length) break;
-    
-    const chunkLength = fileBuffer.readUInt32BE(offset);
-    offset += 4;
-    
-    if (offset + chunkLength > fileBuffer.length) break;
-    
-    const compressedChunk = fileBuffer.subarray(offset, offset + chunkLength);
-    offset += chunkLength;
-    
-    // Decompress and decode
-    const decompressed = await decompress(compressedChunk);
-    const message = BatchType.decode(decompressed);
-    const records = message[recordKey] || [];
-    
-    for (const r of records) {
-      yield toPlain(r);
+  try {
+    while (offset < fileSize) {
+      // Read 4-byte length header
+      const lenBuf = Buffer.alloc(4);
+      const lenRead = fs.readSync(fd, lenBuf, 0, 4, offset);
+      if (lenRead < 4) break;
+      
+      const chunkLength = lenBuf.readUInt32BE(0);
+      offset += 4;
+      
+      if (offset + chunkLength > fileSize) break;
+      
+      // Read compressed chunk
+      const compressedChunk = Buffer.alloc(chunkLength);
+      fs.readSync(fd, compressedChunk, 0, chunkLength, offset);
+      offset += chunkLength;
+      
+      // Decompress and decode batch
+      const decompressed = await decompress(compressedChunk);
+      const message = BatchType.decode(decompressed);
+      const records = message[recordKey] || [];
+      
+      // Yield records one at a time
+      for (const r of records) {
+        yield toPlain(r);
+      }
     }
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
 /**
- * Decode file and return all records with stats
+ * Streaming decode with stats tracking - yields { record, stats } 
+ * Stats are updated incrementally as records are yielded
  */
-export async function decodeFileWithStats(filePath) {
-  const records = [];
+export async function* decodeFileStreaming(filePath) {
+  let count = 0;
   let minTs = null;
   let maxTs = null;
   
   for await (const record of decodeFile(filePath)) {
-    records.push(record);
+    count++;
     
     const ts = record.recorded_at || record.effective_at;
     if (ts) {
@@ -147,12 +159,20 @@ export async function decodeFileWithStats(filePath) {
       if (!minTs || d < minTs) minTs = d;
       if (!maxTs || d > maxTs) maxTs = d;
     }
+    
+    yield {
+      record,
+      stats: { count, minTs, maxTs }
+    };
   }
-  
-  return {
-    records,
-    count: records.length,
-    minTs,
-    maxTs,
-  };
+}
+
+/**
+ * Get file type from path
+ */
+export function getFileType(filePath) {
+  const basename = path.basename(filePath);
+  if (basename.startsWith('events-')) return 'events';
+  if (basename.startsWith('updates-')) return 'updates';
+  return null;
 }

@@ -1,11 +1,14 @@
 /**
- * Aggregations - Incremental aggregation updates
+ * Aggregations - Incremental aggregation updates (streaming-only)
  * 
  * Maintains aggregate tables based on ingested data,
  * tracking last-processed file to avoid reprocessing.
+ * Uses streaming queries with LIMIT/OFFSET for large result sets.
  */
 
 import { query } from '../duckdb/connection.js';
+
+const STREAM_PAGE_SIZE = 10000; // Max rows per query page
 
 /**
  * Get the last processed file ID for an aggregation
@@ -50,7 +53,7 @@ export async function hasNewData(aggName) {
 }
 
 /**
- * Get counts by event type from newly ingested events
+ * Get counts by event type from newly ingested events (streaming aggregation)
  */
 export async function updateEventTypeCounts() {
   const aggName = 'event_type_counts';
@@ -59,6 +62,7 @@ export async function updateEventTypeCounts() {
   
   if (maxFileId <= lastFileId) return null;
   
+  // Use aggregation query - DuckDB handles this efficiently
   const rows = await query(`
     SELECT 
       type,
@@ -74,9 +78,38 @@ export async function updateEventTypeCounts() {
 }
 
 /**
- * Get recent event counts by template
+ * Stream template event counts with pagination
+ */
+export async function* streamTemplateEventCounts(pageSize = STREAM_PAGE_SIZE) {
+  let offset = 0;
+  let hasMore = true;
+  
+  while (hasMore) {
+    const rows = await query(`
+      SELECT 
+        template,
+        type,
+        COUNT(*) as count
+      FROM events_raw
+      GROUP BY template, type
+      ORDER BY count DESC
+      LIMIT ${pageSize} OFFSET ${offset}
+    `);
+    
+    for (const row of rows) {
+      yield row;
+    }
+    
+    hasMore = rows.length === pageSize;
+    offset += pageSize;
+  }
+}
+
+/**
+ * Get recent event counts by template (paginated)
  */
 export async function getTemplateEventCounts(limit = 100) {
+  // For small limits, direct query is fine
   const rows = await query(`
     SELECT 
       template,
@@ -92,7 +125,7 @@ export async function getTemplateEventCounts(limit = 100) {
 }
 
 /**
- * Get total record counts
+ * Get total record counts (efficient - uses DuckDB stats)
  */
 export async function getTotalCounts() {
   const [events, updates] = await Promise.all([
@@ -107,7 +140,7 @@ export async function getTotalCounts() {
 }
 
 /**
- * Get time range of ingested data
+ * Get time range of ingested data (efficient - MIN/MAX scan)
  */
 export async function getTimeRange() {
   const rows = await query(`
@@ -119,6 +152,36 @@ export async function getTimeRange() {
   `);
   
   return rows[0] || {};
+}
+
+/**
+ * Stream events with pagination
+ */
+export async function* streamEvents(options = {}) {
+  const { template, type, pageSize = STREAM_PAGE_SIZE } = options;
+  let offset = 0;
+  let hasMore = true;
+  
+  const whereClause = [];
+  if (template) whereClause.push(`template = '${template.replace(/'/g, "''")}'`);
+  if (type) whereClause.push(`type = '${type.replace(/'/g, "''")}'`);
+  const where = whereClause.length > 0 ? `WHERE ${whereClause.join(' AND ')}` : '';
+  
+  while (hasMore) {
+    const rows = await query(`
+      SELECT * FROM events_raw
+      ${where}
+      ORDER BY recorded_at DESC
+      LIMIT ${pageSize} OFFSET ${offset}
+    `);
+    
+    for (const row of rows) {
+      yield row;
+    }
+    
+    hasMore = rows.length === pageSize;
+    offset += pageSize;
+  }
 }
 
 /**
