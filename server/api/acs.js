@@ -612,9 +612,9 @@ router.get('/allocations', async (req, res) => {
 
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const offset = parseInt(req.query.offset) || 0;
-    const search = req.query.search || '';
+    const search = (req.query.search || '').trim();
 
-    // Check cache
+    // Check cache for paginated data
     const cacheKey = `acs:allocations:${limit}:${offset}:${search}`;
     const cached = getCached(cacheKey);
     if (cached) {
@@ -650,27 +650,39 @@ router.get('/allocations', async (req, res) => {
 
     const rows = await db.safeQuery(sql);
 
-    // Get totals
-    const statsSql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      )
-      SELECT 
-        COUNT(*) as total_count,
-        COALESCE(SUM(CAST(COALESCE(json_extract_string(payload, '$.allocation.transferLeg.amount'), '0') AS DOUBLE)), 0) as total_amount,
-        COUNT(DISTINCT json_extract_string(payload, '$.allocation.settlement.executor')) as unique_executors
-      FROM ${getACSSource()} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
-    `;
+    // Get totals (cached separately from paginated data to avoid refetching on page change)
+    const statsCacheKey = `acs:allocations-stats:${search}`;
+    let stats = getCached(statsCacheKey);
+    
+    if (!stats) {
+      const statsSql = `
+        WITH latest_snapshot AS (
+          SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
+        )
+        SELECT 
+          COUNT(*) as total_count,
+          COALESCE(SUM(CAST(COALESCE(json_extract_string(payload, '$.allocation.transferLeg.amount'), '0') AS DOUBLE)), 0) as total_amount,
+          COUNT(DISTINCT json_extract_string(payload, '$.allocation.settlement.executor')) as unique_executors
+        FROM ${getACSSource()} acs
+        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+          AND (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
+          ${search ? `AND (
+            json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
+            OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${search.replace(/'/g, "''")}%'
+            OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${search.replace(/'/g, "''")}%'
+          )` : ''}
+      `;
 
-    const stats = await db.safeQuery(statsSql);
+      const statsRows = await db.safeQuery(statsSql);
+      stats = statsRows[0] || { total_count: 0, total_amount: 0, unique_executors: 0 };
+      setCache(statsCacheKey, stats, CACHE_TTL.ALLOCATIONS);
+    }
 
     const result = serializeBigInt({
       data: rows,
-      totalCount: stats[0]?.total_count || 0,
-      totalAmount: stats[0]?.total_amount || 0,
-      uniqueExecutors: stats[0]?.unique_executors || 0,
+      totalCount: stats.total_count || 0,
+      totalAmount: stats.total_amount || 0,
+      uniqueExecutors: stats.unique_executors || 0,
     });
     
     setCache(cacheKey, result, CACHE_TTL.ALLOCATIONS);
