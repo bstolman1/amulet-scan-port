@@ -345,14 +345,20 @@ const Supply = () => {
           <div>
             <h3 className="text-2xl font-bold mb-2">Mining Rounds</h3>
             <p className="text-muted-foreground">Track open, issuing, and closed mining rounds</p>
+            {latestSnapshot?.timestamp && (
+              <p className="text-xs text-muted-foreground mt-1">
+                ACS Snapshot: {new Date(latestSnapshot.timestamp).toLocaleString()}
+              </p>
+            )}
           </div>
 
-          {/* Current Round Info */}
+          {/* Current Round Info - from LIVE scan API */}
           <Card className="glass-card">
             <div className="p-6">
               <h3 className="text-xl font-bold mb-4 flex items-center">
                 <Clock className="h-5 w-5 mr-2 text-primary" />
                 Current Round
+                <Badge variant="outline" className="ml-2 text-xs">Live</Badge>
               </h3>
               {isLoading ? (
                 <Skeleton className="h-24 w-full" />
@@ -373,11 +379,12 @@ const Supply = () => {
             </div>
           </Card>
 
-          {/* Open Rounds */}
+          {/* Open Rounds - from ACS snapshot */}
           <div>
             <h4 className="text-xl font-bold mb-4 flex items-center">
               <AlertCircle className="h-5 w-5 mr-2 text-warning" />
               Open Rounds ({miningRoundsData?.counts?.open || 0})
+              <Badge variant="outline" className="ml-2 text-xs">ACS Snapshot</Badge>
             </h4>
             {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
