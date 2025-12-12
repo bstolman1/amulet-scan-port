@@ -9,7 +9,7 @@ interface PaginationControlsProps {
 }
 
 export const PaginationControls = ({ currentPage, totalItems, pageSize, onPageChange }: PaginationControlsProps) => {
-  const totalPages = Math.ceil(totalItems / pageSize);
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   
   return (
     <div className="flex items-center justify-center gap-2 mt-4">

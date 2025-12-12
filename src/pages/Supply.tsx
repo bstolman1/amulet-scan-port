@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { useQueryClient, useQuery, keepPreviousData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState } from "react";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -75,6 +75,7 @@ const Supply = () => {
       search: searchTerm || undefined 
     }),
     staleTime: 30000,
+    placeholderData: keepPreviousData, // Keep old data while fetching new page
   });
 
   // Fetch mining rounds from server-side
