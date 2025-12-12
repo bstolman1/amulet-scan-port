@@ -1,0 +1,25 @@
+{
+  "shardCount": 12,
+  "parallelFetches": 3,
+  "decodeWorkers": 8,
+  "maxBinaryWorkers": 24,
+  "maxRowsPerFile": 15000,
+  "zstdLevel": 1,
+  "chunkSize": 4096,
+  "batchSize": 1000,
+
+  "targetMigration": 3,
+
+  "dirs": {
+    "data": "/mnt/c/ledger_raw",
+    "cursor": "/mnt/c/ledger_raw/cursors",
+    "logs": "/mnt/c/ledger_raw/logs"
+  },
+
+  "scanApi": {
+    "baseUrl": "https://scan.sv-1.global.canton.network.sync.global/api/scan",
+    "timeoutMs": 15000,
+    "maxRetries": 5,
+    "retryDelayMs": 1000
+  }
+}
