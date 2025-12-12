@@ -6,7 +6,9 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // DATA_DIR should point to the base directory (e.g., C:\ledger_raw or /mnt/c/ledger_raw)
 // Binary files are in the 'raw' subdirectory, ACS files in 'acs' subdirectory
-const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+// Auto-detect platform: Windows uses C:/ledger_raw, WSL uses /mnt/c/ledger_raw
+const DEFAULT_DATA_DIR = process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw';
+const BASE_DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'acs');
 
