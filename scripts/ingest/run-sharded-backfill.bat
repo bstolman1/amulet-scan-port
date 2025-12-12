@@ -7,21 +7,18 @@ setlocal enabledelayedexpansion
 set SHARD_COUNT=%1
 set TARGET_MIGRATION=%2
 
-REM Defaults optimized for i7-12700K (20 threads, 32GB RAM)
-REM - 6 shards balances parallelism with API rate limits
-REM - Lower PARALLEL_FETCHES reduces 503 errors per shard
-REM - Smaller MAX_ROWS_PER_FILE = faster visible progress
-if "%SHARD_COUNT%"=="" set SHARD_COUNT=6
+REM Defaults optimized for aggressive parallel fetching
+if "%SHARD_COUNT%"=="" set SHARD_COUNT=12
 if "%TARGET_MIGRATION%"=="" set TARGET_MIGRATION=3
 
 REM Data directory - where backfill data is written
 if "%DATA_DIR%"=="" set DATA_DIR=C:\ledger_raw
 
-REM Performance tuning - adjust these as needed
-if "%PARALLEL_FETCHES%"=="" set PARALLEL_FETCHES=4
-if "%MAX_WORKERS%"=="" set MAX_WORKERS=30
+REM Performance tuning
+if "%PARALLEL_FETCHES%"=="" set PARALLEL_FETCHES=8
+if "%MAX_WORKERS%"=="" set MAX_WORKERS=12
 if "%ZSTD_LEVEL%"=="" set ZSTD_LEVEL=1
-if "%MAX_ROWS_PER_FILE%"=="" set MAX_ROWS_PER_FILE=15000
+if "%MAX_ROWS_PER_FILE%"=="" set MAX_ROWS_PER_FILE=20000
 if "%IO_BUFFER_SIZE%"=="" set IO_BUFFER_SIZE=1048576
 if "%CHUNK_SIZE%"=="" set CHUNK_SIZE=4096
 
