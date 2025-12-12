@@ -79,6 +79,20 @@ function hasACSData() {
   return findACSFiles().length > 0;
 }
 
+// Helper function to get CTE for latest snapshot (filters by latest migration_id first)
+function getLatestSnapshotCTE(acsSource) {
+  return `
+    latest_migration AS (
+      SELECT MAX(migration_id) as migration_id FROM ${acsSource}
+    ),
+    latest_snapshot AS (
+      SELECT MAX(snapshot_time) as snapshot_time, (SELECT migration_id FROM latest_migration) as migration_id
+      FROM ${acsSource}
+      WHERE migration_id = (SELECT migration_id FROM latest_migration)
+    )
+  `;
+}
+
 // GET /api/acs/cache - Get cache statistics (for debugging)
 router.get('/cache', (req, res) => {
   res.json(getCacheStats());
@@ -167,18 +181,20 @@ router.get('/latest', async (req, res) => {
       return res.json(cached);
     }
 
-    // Get basic snapshot info
+    // Get basic snapshot info - latest migration and latest snapshot within it
+    const acsSource = getACSSource();
     const basicSql = `
+      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
-        snapshot_time,
-        migration_id,
+        acs.snapshot_time,
+        acs.migration_id,
         COUNT(*) as contract_count,
         COUNT(DISTINCT template_id) as template_count,
         MIN(record_time) as record_time
-      FROM ${getACSSource()}
-      GROUP BY snapshot_time, migration_id
-      ORDER BY snapshot_time DESC
-      LIMIT 1
+      FROM ${acsSource} acs
+      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      GROUP BY acs.snapshot_time, acs.migration_id
     `;
 
     const basicRows = await db.safeQuery(basicSql);
@@ -189,13 +205,15 @@ router.get('/latest', async (req, res) => {
 
     const row = basicRows[0];
     const snapshotTime = row.snapshot_time;
+    const migrationId = row.migration_id;
 
     // Calculate supply metrics from Amulet and LockedAmulet contracts
     const supplySql = `
       WITH latest_contracts AS (
         SELECT template_id, entity_name, payload
-        FROM ${getACSSource()}
-        WHERE snapshot_time = '${snapshotTime}'
+        FROM ${acsSource}
+        WHERE migration_id = ${migrationId}
+          AND snapshot_time = '${snapshotTime}'
       ),
       amulet_totals AS (
         SELECT 
@@ -286,18 +304,18 @@ router.get('/templates', async (req, res) => {
       return res.json(cached);
     }
 
+    const acsSource = getACSSource();
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      )
+      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         template_id,
         entity_name,
         module_name,
         COUNT(*) as contract_count,
         COUNT(DISTINCT contract_id) as unique_contracts
-      FROM ${getACSSource()} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      FROM ${acsSource} acs
+      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
       GROUP BY template_id, entity_name, module_name
       ORDER BY contract_count DESC
       LIMIT ${limit}
@@ -338,10 +356,9 @@ router.get('/contracts', async (req, res) => {
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
 
+    const acsSource = getACSSource();
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      )
+      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         contract_id,
         template_id,
@@ -352,8 +369,9 @@ router.get('/contracts', async (req, res) => {
         payload,
         record_time,
         snapshot_time
-      FROM ${getACSSource()} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      FROM ${acsSource} acs
+      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
         AND ${whereClause}
       ORDER BY contract_id
       LIMIT ${limit}
@@ -435,10 +453,9 @@ router.get('/rich-list', async (req, res) => {
     }
 
     // Fall back to query (for search or if no pre-computed data)
+    const acsSource = getACSSource();
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
+      WITH ${getLatestSnapshotCTE(acsSource)},
       amulet_balances AS (
         SELECT 
           json_extract_string(payload, '$.owner') as owner,
@@ -446,8 +463,9 @@ router.get('/rich-list', async (req, res) => {
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) as amount
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
           AND json_extract_string(payload, '$.owner') IS NOT NULL
       ),
@@ -462,8 +480,9 @@ router.get('/rich-list', async (req, res) => {
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) as amount
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
           AND (json_extract_string(payload, '$.amulet.owner') IS NOT NULL 
                OR json_extract_string(payload, '$.owner') IS NOT NULL)
@@ -492,11 +511,9 @@ router.get('/rich-list', async (req, res) => {
     const rows = await db.safeQuery(sql);
     console.log(`[ACS] Rich list returned ${rows.length} holders`);
 
-    // Get total supply and holder count
+    // Get total supply and holder count (using same acsSource)
     const statsSql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      ),
+      WITH ${getLatestSnapshotCTE(acsSource)},
       amulet_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
@@ -504,8 +521,9 @@ router.get('/rich-list', async (req, res) => {
             '0'
           ) AS DOUBLE)
         ), 0) as total
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%')
       ),
       locked_total AS (
@@ -516,8 +534,9 @@ router.get('/rich-list', async (req, res) => {
             '0'
           ) AS DOUBLE)
         ), 0) as total
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
       ),
       holder_count AS (
@@ -525,8 +544,9 @@ router.get('/rich-list', async (req, res) => {
           json_extract_string(payload, '$.amulet.owner'),
           json_extract_string(payload, '$.owner')
         )) as count
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name IN ('Amulet', 'LockedAmulet') 
                OR template_id LIKE '%:Amulet:%' 
                OR template_id LIKE '%:LockedAmulet:%')
@@ -580,15 +600,16 @@ router.get('/supply', async (req, res) => {
       return res.json(cached);
     }
 
+    const acsSource = getACSSource();
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      )
+      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         COUNT(*) as amulet_count,
-        snapshot_time
-      FROM ${getACSSource()} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        snapshot_time,
+        (SELECT migration_id FROM latest_migration) as migration_id
+      FROM ${acsSource} acs
+      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
         AND (entity_name = 'Amulet' OR template_id LIKE '%Amulet%')
       GROUP BY snapshot_time
     `;
@@ -623,10 +644,9 @@ router.get('/allocations', async (req, res) => {
 
     console.log(`[ACS] Allocations request: limit=${limit}, offset=${offset}, search=${search}`);
 
+    const acsSource = getACSSource();
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-      )
+      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         contract_id,
         json_extract_string(payload, '$.allocation.settlement.executor') as executor,
@@ -636,8 +656,9 @@ router.get('/allocations', async (req, res) => {
         json_extract_string(payload, '$.allocation.settlement.requestedAt') as requested_at,
         json_extract_string(payload, '$.allocation.transferLegId') as transfer_leg_id,
         payload
-      FROM ${getACSSource()} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      FROM ${acsSource} acs
+      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
         AND (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
         ${search ? `AND (
           json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
@@ -656,15 +677,14 @@ router.get('/allocations', async (req, res) => {
     
     if (!stats) {
       const statsSql = `
-        WITH latest_snapshot AS (
-          SELECT MAX(snapshot_time) as snapshot_time FROM ${getACSSource()}
-        )
+        WITH ${getLatestSnapshotCTE(acsSource)}
         SELECT 
           COUNT(*) as total_count,
           COALESCE(SUM(CAST(COALESCE(json_extract_string(payload, '$.allocation.transferLeg.amount'), '0') AS DOUBLE)), 0) as total_amount,
           COUNT(DISTINCT json_extract_string(payload, '$.allocation.settlement.executor')) as unique_executors
-        FROM ${getACSSource()} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
           ${search ? `AND (
             json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
@@ -728,11 +748,16 @@ router.get('/mining-rounds', async (req, res) => {
       return res.json(result);
     }
 
-    // Fall back to query
+    // Fall back to query - use latest migration_id AND latest snapshot_time
     const acsSource = getACSSource();
     const sql = `
-      WITH latest_snapshot AS (
-        SELECT MAX(snapshot_time) as snapshot_time FROM ${acsSource}
+      WITH latest_migration AS (
+        SELECT MAX(migration_id) as migration_id FROM ${acsSource}
+      ),
+      latest_snapshot AS (
+        SELECT MAX(snapshot_time) as snapshot_time 
+        FROM ${acsSource}
+        WHERE migration_id = (SELECT migration_id FROM latest_migration)
       ),
       all_rounds AS (
         SELECT 
@@ -751,7 +776,8 @@ router.get('/mining-rounds', async (req, res) => {
           json_extract_string(payload, '$.amuletPrice') as amulet_price,
           payload
         FROM ${acsSource} acs
-        WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
                OR template_id LIKE '%MiningRound%')
       )
