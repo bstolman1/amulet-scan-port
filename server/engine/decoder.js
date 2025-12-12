@@ -1,0 +1,158 @@
+/**
+ * Decoder - Streaming decoder for .pb.zst files
+ * 
+ * Uses the same protobuf schema as the backfill writers.
+ * Yields records one at a time to avoid memory issues.
+ */
+
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { decompress } from '@mongodb-js/zstd';
+import protobuf from 'protobufjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Schema path relative to this file
+const SCHEMA_PATH = path.resolve(__dirname, '../../scripts/ingest/schema/ledger.proto');
+
+let cachedRoot = null;
+
+/**
+ * Load protobuf schema
+ */
+async function getRoot() {
+  if (!cachedRoot) {
+    cachedRoot = await protobuf.load(SCHEMA_PATH);
+  }
+  return cachedRoot;
+}
+
+/**
+ * Get batch decoders
+ */
+async function getDecoders() {
+  const root = await getRoot();
+  return {
+    EventBatch: root.lookupType('ledger.EventBatch'),
+    UpdateBatch: root.lookupType('ledger.UpdateBatch'),
+  };
+}
+
+/**
+ * Convert protobuf event to plain object
+ */
+function eventToPlain(record) {
+  return {
+    id: record.id || null,
+    update_id: record.updateId || null,
+    type: record.type || null,
+    synchronizer: record.synchronizer || null,
+    effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
+    recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
+    contract_id: record.contractId || null,
+    party: record.party || null,
+    template: record.template || null,
+    package_name: record.packageName || null,
+    signatories: record.signatories || [],
+    observers: record.observers || [],
+    payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
+    raw_json: record.rawJson ? tryParseJson(record.rawJson) : null,
+  };
+}
+
+/**
+ * Convert protobuf update to plain object
+ */
+function updateToPlain(record) {
+  return {
+    id: record.id || null,
+    synchronizer: record.synchronizer || null,
+    effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
+    recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
+    type: record.type || null,
+    command_id: record.commandId || null,
+    workflow_id: record.workflowId || null,
+    kind: record.kind || null,
+    migration_id: record.migrationId ? Number(record.migrationId) : null,
+    offset_val: record.offset ? Number(record.offset) : null,
+    event_count: record.eventCount || 0,
+  };
+}
+
+function tryParseJson(str) {
+  if (!str) return null;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return str;
+  }
+}
+
+/**
+ * Decode a .pb.zst file and yield records
+ * 
+ * File format: sequence of [4-byte BE length][zstd-compressed protobuf batch]
+ */
+export async function* decodeFile(filePath) {
+  const { EventBatch, UpdateBatch } = await getDecoders();
+  
+  const basename = path.basename(filePath);
+  const isEvents = basename.startsWith('events-');
+  const BatchType = isEvents ? EventBatch : UpdateBatch;
+  const recordKey = isEvents ? 'events' : 'updates';
+  const toPlain = isEvents ? eventToPlain : updateToPlain;
+  
+  // Read entire file (files are typically <50MB compressed)
+  const fileBuffer = fs.readFileSync(filePath);
+  let offset = 0;
+  
+  while (offset < fileBuffer.length) {
+    if (offset + 4 > fileBuffer.length) break;
+    
+    const chunkLength = fileBuffer.readUInt32BE(offset);
+    offset += 4;
+    
+    if (offset + chunkLength > fileBuffer.length) break;
+    
+    const compressedChunk = fileBuffer.subarray(offset, offset + chunkLength);
+    offset += chunkLength;
+    
+    // Decompress and decode
+    const decompressed = await decompress(compressedChunk);
+    const message = BatchType.decode(decompressed);
+    const records = message[recordKey] || [];
+    
+    for (const r of records) {
+      yield toPlain(r);
+    }
+  }
+}
+
+/**
+ * Decode file and return all records with stats
+ */
+export async function decodeFileWithStats(filePath) {
+  const records = [];
+  let minTs = null;
+  let maxTs = null;
+  
+  for await (const record of decodeFile(filePath)) {
+    records.push(record);
+    
+    const ts = record.recorded_at || record.effective_at;
+    if (ts) {
+      const d = new Date(ts);
+      if (!minTs || d < minTs) minTs = d;
+      if (!maxTs || d > maxTs) maxTs = d;
+    }
+  }
+  
+  return {
+    records,
+    count: records.length,
+    minTs,
+    maxTs,
+  };
+}
