@@ -7,8 +7,8 @@ setlocal enabledelayedexpansion
 set SHARD_COUNT=%1
 set TARGET_MIGRATION=%2
 
-REM Defaults optimized for aggressive parallel fetching
-if "%SHARD_COUNT%"=="" set SHARD_COUNT=12
+REM Defaults - 6 shards balances parallelism with data distribution
+if "%SHARD_COUNT%"=="" set SHARD_COUNT=6
 if "%TARGET_MIGRATION%"=="" set TARGET_MIGRATION=3
 
 REM Data directory - where backfill data is written
