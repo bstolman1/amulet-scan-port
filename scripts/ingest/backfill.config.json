@@ -1,7 +1,18 @@
 {
   "shardCount": 12,
-  "parallelFetches": 3,
-  "decodeWorkers": 8,
+  
+  "parallelFetches": {
+    "start": 2,
+    "min": 1,
+    "max": 6
+  },
+  
+  "decodeWorkers": {
+    "start": 8,
+    "min": 4,
+    "max": 16
+  },
+  
   "maxBinaryWorkers": 24,
   "maxRowsPerFile": 15000,
   "zstdLevel": 1,
@@ -21,5 +32,13 @@
     "timeoutMs": 15000,
     "maxRetries": 5,
     "retryDelayMs": 1000
+  },
+  
+  "autoTuning": {
+    "fetchTuneWindowMs": 30000,
+    "decodeTuneWindowMs": 30000,
+    "minSuccessForScaleUp": 20,
+    "maxErrorRateForScaleDown": 0.10,
+    "minErrorsForScaleDown": 5
   }
 }

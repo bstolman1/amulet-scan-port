@@ -37,51 +37,93 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 // Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
-// CURSOR_DIR defaults to DATA_DIR/cursors if DATA_DIR is set, otherwise project data/cursors
 const BASE_DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
 const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
-const PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 10; // Reduced from 20 to prevent memory pressure
-const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true'; // Purge data after each migration to save disk space
-const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5; // Flush more frequently
+const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true';
+const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5;
 
-// Sharding configuration - allows running multiple instances in parallel
-// Each shard handles a time slice of the total range
-// Usage: SHARD_INDEX=0 SHARD_TOTAL=4 node fetch-backfill-parquet.js
+// Sharding configuration
 const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
 const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
 const TARGET_MIGRATION = process.env.TARGET_MIGRATION ? parseInt(process.env.TARGET_MIGRATION) : null;
 
-// === Multithreaded decode pool (Piscina) ===
-const cpuCount = os.cpus()?.length || 4;
-const DECODE_WORKERS = Math.max(
-  2,
-  parseInt(process.env.DECODE_WORKERS || String(Math.floor(cpuCount / 2)), 10)
+// ==========================================
+// AUTO-TUNING: PARALLEL FETCHES
+// ==========================================
+const BASE_PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 2;
+const MIN_PARALLEL_FETCHES = parseInt(process.env.MIN_PARALLEL_FETCHES) || 1;
+const MAX_PARALLEL_FETCHES = parseInt(process.env.MAX_PARALLEL_FETCHES) || 6;
+
+let dynamicParallelFetches = Math.min(
+  Math.max(BASE_PARALLEL_FETCHES, MIN_PARALLEL_FETCHES),
+  MAX_PARALLEL_FETCHES
 );
 
+const FETCH_TUNE_WINDOW_MS = 30_000;
+let fetchStats = {
+  windowStart: Date.now(),
+  successCount: 0,
+  retry503Count: 0,
+};
+
+// ==========================================
+// AUTO-TUNING: DECODE WORKERS
+// ==========================================
+const cpuCount = os.cpus()?.length || 4;
+const BASE_DECODE_WORKERS = parseInt(process.env.DECODE_WORKERS) || Math.floor(cpuCount / 2);
+const MIN_DECODE_WORKERS = parseInt(process.env.MIN_DECODE_WORKERS) || 4;
+const MAX_DECODE_WORKERS = parseInt(process.env.MAX_DECODE_WORKERS) || 16;
+
+let dynamicDecodeWorkers = Math.min(
+  Math.max(BASE_DECODE_WORKERS, MIN_DECODE_WORKERS),
+  MAX_DECODE_WORKERS
+);
+
+const DECODE_TUNE_WINDOW_MS = 30_000;
+let decodeStats = {
+  windowStart: Date.now(),
+  startQueued: 0,
+  endQueued: 0,
+  decoded: 0,
+};
+
+// ==========================================
+// DECODE WORKER POOL (Dynamic)
+// ==========================================
 let decodePool = null;
+
+function createDecodePool(maxThreads) {
+  return new Piscina({
+    filename: new URL('./decode-worker.js', import.meta.url).href,
+    minThreads: MIN_DECODE_WORKERS,
+    maxThreads: maxThreads,
+  });
+}
 
 function getDecodePool() {
   if (!decodePool) {
-    decodePool = new Piscina({
-      filename: new URL('./decode-worker.js', import.meta.url).href,
-      minThreads: Math.max(1, Math.floor(DECODE_WORKERS / 2)),
-      maxThreads: DECODE_WORKERS,
-    });
+    decodePool = createDecodePool(dynamicDecodeWorkers);
   }
   return decodePool;
 }
 
-// Axios client with connection pooling - AGGRESSIVE
+// ==========================================
+// HTTP CLIENT (uses MAX for socket pool)
+// ==========================================
 const client = axios.create({
   baseURL: SCAN_URL,
-  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 60000, maxSockets: PARALLEL_FETCHES * 2 }),
+  httpAgent: new HttpAgent({
+    keepAlive: true,
+    keepAliveMsecs: 60000,
+    maxSockets: MAX_PARALLEL_FETCHES * 4,
+  }),
   httpsAgent: new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 60000,
     rejectUnauthorized: false,
-    maxSockets: PARALLEL_FETCHES * 2,
+    maxSockets: MAX_PARALLEL_FETCHES * 4,
   }),
-  timeout: 180000, // 3 min timeout for large batches
+  timeout: 180000,
 });
 
 /**
@@ -92,7 +134,7 @@ function sleep(ms) {
 }
 
 /**
- * Retry with exponential backoff
+ * Retry with exponential backoff + fetch stats tracking
  */
 async function retryWithBackoff(fn, options = {}) {
   const {
@@ -113,9 +155,18 @@ async function retryWithBackoff(fn, options = {}) {
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await fn();
+      const result = await fn();
+      // ✅ Count successful API calls
+      fetchStats.successCount++;
+      return result;
     } catch (error) {
       lastError = error;
+      const status = error.response?.status;
+
+      // ❌ Count 503/429 as "rate-limit" signals for tuning
+      if (status === 503 || status === 429 || error.code === 'ERR_BAD_RESPONSE') {
+        fetchStats.retry503Count++;
+      }
       
       if (attempt === maxRetries || !shouldRetry(error)) {
         throw error;
@@ -125,12 +176,97 @@ async function retryWithBackoff(fn, options = {}) {
       const jitter = Math.random() * exponentialDelay * 0.3;
       const delay = exponentialDelay + jitter;
       
-      console.log(`   ⏳ Retry attempt ${attempt + 1}/${maxRetries} after ${Math.round(delay)}ms (error: ${error.code || error.message})`);
+      console.log(
+        `   ⏳ Retry attempt ${attempt + 1}/${maxRetries} ` +
+        `after ${Math.round(delay)}ms (error: ${error.code || status || error.message})`
+      );
       await sleep(delay);
     }
   }
   
   throw lastError;
+}
+
+/**
+ * Auto-tune parallel fetches based on 503 rate
+ */
+function maybeTuneParallelFetches(shardLabel = '') {
+  const now = Date.now();
+  const elapsed = now - fetchStats.windowStart;
+  if (elapsed < FETCH_TUNE_WINDOW_MS) return;
+
+  const { successCount, retry503Count } = fetchStats;
+  const total = successCount + retry503Count;
+
+  if (total === 0) {
+    fetchStats = { windowStart: now, successCount: 0, retry503Count: 0 };
+    return;
+  }
+
+  const errorRate = retry503Count / total;
+
+  // Too many 503s → scale down parallelism
+  if (retry503Count >= 5 && errorRate > 0.10 && dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
+    const old = dynamicParallelFetches;
+    dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - 1);
+    console.log(
+      `   🔧 Auto-tune${shardLabel}: high 503 rate (${retry503Count}/${total}, ${(errorRate * 100).toFixed(1)}%) → PARALLEL_FETCHES ${old} → ${dynamicParallelFetches}`
+    );
+  }
+  // No 503s and plenty of successes → cautiously scale up
+  else if (retry503Count === 0 && successCount >= 20 && dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
+    const old = dynamicParallelFetches;
+    dynamicParallelFetches = Math.min(MAX_PARALLEL_FETCHES, dynamicParallelFetches + 1);
+    console.log(
+      `   🔧 Auto-tune${shardLabel}: stable (${successCount} ok, 0 503s) → PARALLEL_FETCHES ${old} → ${dynamicParallelFetches}`
+    );
+  }
+
+  fetchStats = { windowStart: now, successCount: 0, retry503Count: 0 };
+}
+
+/**
+ * Auto-tune decode workers based on queue depth
+ */
+async function maybeTuneDecodeWorkers(shardLabel = '') {
+  const now = Date.now();
+  const elapsed = now - decodeStats.windowStart;
+  if (elapsed < DECODE_TUNE_WINDOW_MS) return;
+
+  const { startQueued, endQueued, decoded } = decodeStats;
+  const queueGrowth = endQueued - startQueued;
+
+  // Rule 1 — queue is growing → add workers
+  if (queueGrowth > 0 && dynamicDecodeWorkers < MAX_DECODE_WORKERS) {
+    const old = dynamicDecodeWorkers;
+    dynamicDecodeWorkers++;
+    console.log(`   🔧 Auto-tune${shardLabel}: decode queue growing (+${queueGrowth}) → workers ${old} → ${dynamicDecodeWorkers}`);
+
+    // Recreate pool with new size
+    if (decodePool) {
+      await decodePool.destroy();
+    }
+    decodePool = createDecodePool(dynamicDecodeWorkers);
+  }
+  // Rule 2 — queue empty/shrinking → reduce workers
+  else if (queueGrowth <= 0 && decoded > 0 && dynamicDecodeWorkers > MIN_DECODE_WORKERS) {
+    const old = dynamicDecodeWorkers;
+    dynamicDecodeWorkers--;
+    console.log(`   🔧 Auto-tune${shardLabel}: decode queue stable/shrinking → workers ${old} → ${dynamicDecodeWorkers}`);
+
+    if (decodePool) {
+      await decodePool.destroy();
+    }
+    decodePool = createDecodePool(dynamicDecodeWorkers);
+  }
+
+  // Reset stats
+  decodeStats = {
+    windowStart: now,
+    startQueued: endQueued,
+    endQueued: 0,
+    decoded: 0,
+  };
 }
 
 /**
@@ -275,20 +411,32 @@ function getEventTime(txOrReassign) {
 /**
  * Process backfill items using multithreaded decode (Piscina)
  * Falls back to single-threaded if pool unavailable
+ * Tracks decode stats for auto-tuning
  */
 async function processBackfillItems(transactions, migrationId) {
   const pool = getDecodePool();
   
+  // Track queue depth at start for auto-tuning
+  if (decodeStats.startQueued === 0) {
+    decodeStats.startQueued = pool.queueSize || 0;
+  }
+  
   // Submit all transactions to worker pool in parallel
   const tasks = transactions.map((tx) => 
-    pool.run({ tx, migrationId }).catch(err => {
-      // Fallback: decode in main thread if worker fails
+    pool.run({ tx, migrationId }).then(result => {
+      decodeStats.decoded++;
+      return result;
+    }).catch(err => {
       console.warn(`   ⚠️ Worker decode failed, using main thread: ${err.message}`);
+      decodeStats.decoded++;
       return decodeInMainThread(tx, migrationId);
     })
   );
   
   const results = await Promise.all(tasks);
+
+  // Track queue depth at end for auto-tuning
+  decodeStats.endQueued = pool.queueSize || 0;
 
   const updates = [];
   const events = [];
@@ -358,16 +506,16 @@ function decodeInMainThread(tx, migrationId) {
 /**
  * Parallel fetch with sliding window - fetches multiple pages concurrently
  * Maintains full parallelism by refilling slots as requests complete
+ * Now accepts dynamic concurrency for auto-tuning
  */
-async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches) {
+async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
   const results = [];
   const pending = new Map();
-  const seenTimestamps = new Set(); // Prevent duplicate fetches
+  const seenTimestamps = new Set();
   let nextBefore = startBefore;
   let fetched = 0;
   let reachedEnd = false;
   
-  // Helper to start a fetch
   const startFetch = (before) => {
     if (reachedEnd || seenTimestamps.has(before)) return false;
     seenTimestamps.add(before);
@@ -385,9 +533,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   // Fill initial parallel slots
   startFetch(nextBefore);
   
-  // Process results as they complete, keeping slots full
   while (pending.size > 0 && !reachedEnd) {
-    // Wait for any fetch to complete
     const completed = await Promise.race(
       Array.from(pending.values()).map(p => p.promise)
     );
@@ -400,26 +546,20 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     
     const txs = completed.data?.transactions || [];
     
-    // Handle empty batches - sparse region aware
     if (txs.length === 0) {
-      // If we actually reached the lower bound, THEN stop
       if (completed.before <= atOrAfter) {
         reachedEnd = true;
         break;
       }
 
-      // Otherwise: we hit a sparse region → go backward 1 ms and continue
       const d = new Date(completed.before);
       d.setMilliseconds(d.getMilliseconds() - 1);
       nextBefore = d.toISOString();
-
-      // Continue without marking reachedEnd
       continue;
     }
     
     results.push({ transactions: txs, before: completed.before });
     
-    // Find earliest timestamp from this batch
     let earliest = null;
     for (const tx of txs) {
       const t = getEventTime(tx);
@@ -431,15 +571,13 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       break;
     }
     
-    // Update nextBefore for future fetches
     if (earliest && earliest < nextBefore) {
       nextBefore = earliest;
     }
     
-    // Refill ALL empty slots, not just one
-    while (pending.size < PARALLEL_FETCHES && fetched < maxBatches && !reachedEnd) {
+    // Refill slots based on *current* dynamic concurrency
+    while (pending.size < concurrency && fetched < maxBatches && !reachedEnd) {
       if (!startFetch(nextBefore)) break;
-      // Decrement slightly to avoid exact duplicates
       const d = new Date(nextBefore);
       d.setMilliseconds(d.getMilliseconds() - 1);
       nextBefore = d.toISOString();
@@ -451,12 +589,14 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
 
 /**
  * Backfill a single synchronizer with parallel fetching (shard-aware)
+ * Uses auto-tuning for parallel fetches and decode workers
  */
 async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime, shardIndex = null) {
   const shardLabel = shardIndex !== null ? ` [shard ${shardIndex}/${SHARD_TOTAL}]` : '';
   console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...${shardLabel}`);
   console.log(`   Range: ${minTime} to ${maxTime}`);
-  console.log(`   Parallel fetches: ${PARALLEL_FETCHES}`);
+  console.log(`   Parallel fetches (auto-tuned): ${dynamicParallelFetches} (min=${MIN_PARALLEL_FETCHES}, max=${MAX_PARALLEL_FETCHES})`);
+  console.log(`   Decode workers (auto-tuned): ${dynamicDecodeWorkers} (min=${MIN_DECODE_WORKERS}, max=${MAX_DECODE_WORKERS})`);
   
   // Load existing cursor (shard-aware)
   let cursor = loadCursor(migrationId, synchronizerId, shardIndex);
@@ -479,9 +619,13 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   
   while (true) {
     try {
-      // Fetch multiple pages in parallel (reduced prefetch to limit memory)
+      // Use current dynamic concurrency values
+      const localParallel = dynamicParallelFetches;
+      
       const { results, reachedEnd } = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, PARALLEL_FETCHES * 2
+        migrationId, synchronizerId, before, atOrAfter, 
+        localParallel * 2,  // maxBatches per cycle
+        localParallel       // actual concurrency
       );
       
       if (results.length === 0) {
@@ -536,8 +680,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         await flushAll();
       }
       
-      // Main progress line
-      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | Write: ${writeSpeed} MB/s (${compression}) | Q: ${queuedJobs}/${activeWorkers}`);
+      // Auto-tune after processing this wave
+      maybeTuneParallelFetches(shardLabel);
+      await maybeTuneDecodeWorkers(shardLabel);
+      
+      // Main progress line with current tuning values
+      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || earliestTime <= atOrAfter) {
         console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
@@ -614,10 +762,11 @@ async function runBackfill() {
   const shardLabel = isSharded ? ` [SHARD ${SHARD_INDEX}/${SHARD_TOTAL}]` : '';
   
   console.log("\n" + "=".repeat(80));
-  console.log(`🚀 Starting Canton ledger backfill (Parquet mode)${shardLabel}`);
+  console.log(`🚀 Starting Canton ledger backfill (Auto-Tuning Mode)${shardLabel}`);
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
-  console.log("   PARALLEL_FETCHES:", PARALLEL_FETCHES, "(per synchronizer)");
+  console.log("   PARALLEL_FETCHES:", `${dynamicParallelFetches} (auto-tuning: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
+  console.log("   DECODE_WORKERS:", `${dynamicDecodeWorkers} (auto-tuning: ${MIN_DECODE_WORKERS}-${MAX_DECODE_WORKERS})`);
   console.log("   PURGE_AFTER_MIGRATION:", PURGE_AFTER_MIGRATION);
   if (isSharded) {
     console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL} (0-indexed)`);
@@ -627,7 +776,6 @@ async function runBackfill() {
   }
   console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
-  console.log("   DECODE_WORKERS:", DECODE_WORKERS, "(Piscina pool)");
   console.log("=".repeat(80));
   
   // Ensure cursor directory exists
