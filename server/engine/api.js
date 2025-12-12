@@ -1,13 +1,15 @@
 /**
  * Engine API - REST endpoints for engine status and control
+ * Includes streaming endpoints with cursor-based pagination
  */
 
 import { Router } from 'express';
 import { getEngineStatus, triggerCycle } from './worker.js';
 import { getFileStats, scanAndIndexFiles } from './file-index.js';
 import { getIngestionStats, ingestNewFiles } from './ingest.js';
-import { getTotalCounts, getTimeRange, getTemplateEventCounts } from './aggregations.js';
+import { getTotalCounts, getTimeRange, getTemplateEventCounts, streamEvents } from './aggregations.js';
 import { resetEngineSchema } from './schema.js';
+import { query } from '../duckdb/connection.js';
 
 const router = Router();
 
@@ -56,6 +58,101 @@ router.get('/templates', async (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
     const templates = await getTemplateEventCounts(limit);
     res.json({ templates });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/engine/events/stream - Streaming events with cursor-based pagination
+ * 
+ * Query params:
+ *   - cursor: recorded_at timestamp to start after (ISO string)
+ *   - limit: max records per page (default 100, max 1000)
+ *   - template: filter by template name
+ *   - type: filter by event type (Created, Archived)
+ *   - order: 'asc' or 'desc' (default 'desc')
+ */
+router.get('/events/stream', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const cursor = req.query.cursor; // ISO timestamp
+    const template = req.query.template;
+    const type = req.query.type;
+    const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
+    
+    // Build WHERE clause
+    const conditions = [];
+    if (cursor) {
+      const op = order === 'DESC' ? '<' : '>';
+      conditions.push(`recorded_at ${op} TIMESTAMP '${cursor}'`);
+    }
+    if (template) {
+      conditions.push(`template = '${template.replace(/'/g, "''")}'`);
+    }
+    if (type) {
+      conditions.push(`type = '${type.replace(/'/g, "''")}'`);
+    }
+    
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    
+    const rows = await query(`
+      SELECT 
+        id, update_id, type, synchronizer, 
+        effective_at, recorded_at, 
+        contract_id, party, template, package_name,
+        signatories, observers, payload
+      FROM events_raw
+      ${where}
+      ORDER BY recorded_at ${order}
+      LIMIT ${limit + 1}
+    `);
+    
+    // Check if there are more results
+    const hasMore = rows.length > limit;
+    const data = hasMore ? rows.slice(0, limit) : rows;
+    
+    // Next cursor is the last item's recorded_at
+    const nextCursor = hasMore && data.length > 0 
+      ? data[data.length - 1].recorded_at 
+      : null;
+    
+    res.json({
+      data,
+      pagination: {
+        limit,
+        count: data.length,
+        hasMore,
+        nextCursor,
+        order,
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/engine/events/count - Get event counts with optional filters
+ */
+router.get('/events/count', async (req, res) => {
+  try {
+    const template = req.query.template;
+    const type = req.query.type;
+    
+    const conditions = [];
+    if (template) {
+      conditions.push(`template = '${template.replace(/'/g, "''")}'`);
+    }
+    if (type) {
+      conditions.push(`type = '${type.replace(/'/g, "''")}'`);
+    }
+    
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    
+    const rows = await query(`SELECT COUNT(*) as count FROM events_raw ${where}`);
+    
+    res.json({ count: rows[0]?.count || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
