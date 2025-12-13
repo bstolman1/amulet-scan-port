@@ -14,10 +14,7 @@ const router = express.Router();
 const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
-// Inference is disabled until Python environment is set up
-// Set INFERENCE_ENABLED=true once scripts/ingest/venv is configured
-const INFERENCE_THRESHOLD = 0.85;
-const INFERENCE_ENABLED = false;
+
 // Define the governance groups and their lifecycle stages
 // Each group maps to a specific flow and stage within that flow
 // CIP Flow: cip-discuss → cip-vote → cip-announce → sv-announce
@@ -716,27 +713,6 @@ async function fetchFreshData() {
       const content = topic.snippet || topic.body || topic.preview || '';
       const postedStage = group.stage;
       
-      // Run inference if enabled
-      let inferredStage = null;
-      let inferenceConfidence = null;
-      let effectiveStage = postedStage;
-      
-      if (INFERENCE_ENABLED) {
-        try {
-          const inferResult = await inferStage(subject, content);
-          if (inferResult) {
-            inferredStage = inferResult.stage;
-            inferenceConfidence = inferResult.confidence;
-            // Only override if confidence meets threshold
-            if (inferenceConfidence >= INFERENCE_THRESHOLD) {
-              effectiveStage = inferredStage;
-            }
-          }
-        } catch (err) {
-          console.error(`Inference failed for topic ${topic.id}:`, err.message);
-        }
-      }
-      
       const mappedTopic = {
         id: topic.id?.toString() || `topic-${Math.random()}`,
         subject,
@@ -748,11 +724,7 @@ async function fetchFreshData() {
         messageCount: topic.num_msgs || 1,
         groupName: name,
         groupLabel: group.label,
-        stage: postedStage,           // Original forum-derived stage (unchanged)
-        postedStage,                  // Explicit field for clarity
-        inferredStage,                // Model output label (null if inference disabled/failed)
-        inferenceConfidence,          // Model confidence (null if inference disabled/failed)
-        effectiveStage,               // inferredStage if confidence >= threshold, else postedStage
+        stage: postedStage,
         flow: group.flow,
         identifiers: extractIdentifiers(subject + ' ' + content),
       };
@@ -777,14 +749,6 @@ async function fetchFreshData() {
     lifecycleItems.filter(i => i.type === 'validator').map(i => i.primaryId.toLowerCase())
   );
   
-  // Inference stats
-  const inferredTopics = allTopics.filter(t => t.inferredStage !== null);
-  const overriddenTopics = allTopics.filter(t => 
-    t.inferenceConfidence !== null && 
-    t.inferenceConfidence >= INFERENCE_THRESHOLD && 
-    t.inferredStage !== t.postedStage
-  );
-  
   const stats = {
     totalTopics: allTopics.length,
     lifecycleItems: lifecycleItems.length,
@@ -804,15 +768,6 @@ async function fetchFreshData() {
         allTopics.filter(t => t.groupName === name).length
       ])
     ),
-    inference: {
-      enabled: INFERENCE_ENABLED,
-      threshold: INFERENCE_THRESHOLD,
-      totalInferred: inferredTopics.length,
-      overridden: overriddenTopics.length,
-      averageConfidence: inferredTopics.length > 0 
-        ? Math.round((inferredTopics.reduce((sum, t) => sum + t.inferenceConfidence, 0) / inferredTopics.length) * 100) / 100
-        : null,
-    },
   };
   
   return {
@@ -899,137 +854,6 @@ router.get('/cache-info', (req, res) => {
   }
 });
 
-// ============================================================
-// DIAGNOSTIC ENDPOINT - Phase 2: Observe inference disagreements
-// Does NOT change any behavior, only reports discrepancies
-// ============================================================
-router.get('/inference-disagreements', (req, res) => {
-  const cached = readCache();
-  if (!cached) {
-    return res.json({ 
-      error: 'No cached data available. Run a refresh first.',
-      disagreements: [],
-      summary: null,
-    });
-  }
-
-  const threshold = parseFloat(req.query.threshold) || INFERENCE_THRESHOLD;
-  const allTopics = cached.allTopics || [];
-  
-  // Find disagreements: postedStage != inferredStage AND confidence >= threshold
-  const disagreements = allTopics
-    .filter(topic => 
-      topic.inferredStage !== null &&
-      topic.inferenceConfidence !== null &&
-      topic.inferenceConfidence >= threshold &&
-      topic.postedStage !== topic.inferredStage
-    )
-    .map(topic => ({
-      id: topic.id,
-      subject: topic.subject,
-      date: topic.date,
-      groupName: topic.groupName,
-      postedStage: topic.postedStage,
-      inferredStage: topic.inferredStage,
-      confidence: topic.inferenceConfidence,
-      sourceUrl: topic.sourceUrl,
-      excerpt: topic.excerpt?.substring(0, 200),
-    }))
-    .sort((a, b) => b.confidence - a.confidence);
-
-  // Build summary by stage confusion matrix
-  const confusionMatrix = {};
-  for (const d of disagreements) {
-    const key = `${d.postedStage} → ${d.inferredStage}`;
-    confusionMatrix[key] = (confusionMatrix[key] || 0) + 1;
-  }
-
-  // Sort confusion matrix by count
-  const sortedConfusion = Object.entries(confusionMatrix)
-    .sort((a, b) => b[1] - a[1])
-    .map(([transition, count]) => ({ transition, count }));
-
-  // Summary stats
-  const totalTopics = allTopics.length;
-  const topicsWithInference = allTopics.filter(t => t.inferredStage !== null).length;
-  const disagreementCount = disagreements.length;
-  const disagreementRate = topicsWithInference > 0 
-    ? Math.round((disagreementCount / topicsWithInference) * 10000) / 100 
-    : 0;
-
-  res.json({
-    threshold,
-    cachedAt: cached.cachedAt,
-    summary: {
-      totalTopics,
-      topicsWithInference,
-      disagreementCount,
-      disagreementRate: `${disagreementRate}%`,
-      confusionMatrix: sortedConfusion,
-    },
-    disagreements,
-  });
-});
-
-// Console-friendly disagreement dump (for manual inspection)
-router.get('/inference-disagreements/text', (req, res) => {
-  const cached = readCache();
-  if (!cached) {
-    res.type('text/plain').send('No cached data available. Run a refresh first.');
-    return;
-  }
-
-  const threshold = parseFloat(req.query.threshold) || INFERENCE_THRESHOLD;
-  const allTopics = cached.allTopics || [];
-  
-  const disagreements = allTopics
-    .filter(topic => 
-      topic.inferredStage !== null &&
-      topic.inferenceConfidence !== null &&
-      topic.inferenceConfidence >= threshold &&
-      topic.postedStage !== topic.inferredStage
-    )
-    .sort((a, b) => b.inferenceConfidence - a.inferenceConfidence);
-
-  const lines = [
-    `INFERENCE DISAGREEMENT REPORT`,
-    `Generated: ${new Date().toISOString()}`,
-    `Cached at: ${cached.cachedAt}`,
-    `Threshold: ${threshold}`,
-    `Total disagreements: ${disagreements.length}`,
-    ``,
-    `---`,
-    ``
-  ];
-
-  for (const topic of disagreements) {
-    lines.push(topic.subject);
-    lines.push(`  posted: ${topic.postedStage}`);
-    lines.push(`  inferred: ${topic.inferredStage}`);
-    lines.push(`  confidence: ${topic.inferenceConfidence}`);
-    lines.push(`  url: ${topic.sourceUrl}`);
-    lines.push(``);
-  }
-
-  // Confusion matrix
-  const confusionMatrix = {};
-  for (const d of disagreements) {
-    const key = `${d.postedStage} → ${d.inferredStage}`;
-    confusionMatrix[key] = (confusionMatrix[key] || 0) + 1;
-  }
-
-  lines.push(`---`);
-  lines.push(`CONFUSION MATRIX (posted → inferred)`);
-  lines.push(``);
-  
-  Object.entries(confusionMatrix)
-    .sort((a, b) => b[1] - a[1])
-    .forEach(([transition, count]) => {
-      lines.push(`  ${transition}: ${count}`);
-    });
-
-  res.type('text/plain').send(lines.join('\n'));
-});
 
 export { fetchFreshData, writeCache, readCache };
 export default router;
