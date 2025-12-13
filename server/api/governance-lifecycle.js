@@ -901,5 +901,137 @@ router.get('/cache-info', (req, res) => {
   }
 });
 
+// ============================================================
+// DIAGNOSTIC ENDPOINT - Phase 2: Observe inference disagreements
+// Does NOT change any behavior, only reports discrepancies
+// ============================================================
+router.get('/inference-disagreements', (req, res) => {
+  const cached = readCache();
+  if (!cached) {
+    return res.json({ 
+      error: 'No cached data available. Run a refresh first.',
+      disagreements: [],
+      summary: null,
+    });
+  }
+
+  const threshold = parseFloat(req.query.threshold) || INFERENCE_THRESHOLD;
+  const allTopics = cached.allTopics || [];
+  
+  // Find disagreements: postedStage != inferredStage AND confidence >= threshold
+  const disagreements = allTopics
+    .filter(topic => 
+      topic.inferredStage !== null &&
+      topic.inferenceConfidence !== null &&
+      topic.inferenceConfidence >= threshold &&
+      topic.postedStage !== topic.inferredStage
+    )
+    .map(topic => ({
+      id: topic.id,
+      subject: topic.subject,
+      date: topic.date,
+      groupName: topic.groupName,
+      postedStage: topic.postedStage,
+      inferredStage: topic.inferredStage,
+      confidence: topic.inferenceConfidence,
+      sourceUrl: topic.sourceUrl,
+      excerpt: topic.excerpt?.substring(0, 200),
+    }))
+    .sort((a, b) => b.confidence - a.confidence);
+
+  // Build summary by stage confusion matrix
+  const confusionMatrix = {};
+  for (const d of disagreements) {
+    const key = `${d.postedStage} → ${d.inferredStage}`;
+    confusionMatrix[key] = (confusionMatrix[key] || 0) + 1;
+  }
+
+  // Sort confusion matrix by count
+  const sortedConfusion = Object.entries(confusionMatrix)
+    .sort((a, b) => b[1] - a[1])
+    .map(([transition, count]) => ({ transition, count }));
+
+  // Summary stats
+  const totalTopics = allTopics.length;
+  const topicsWithInference = allTopics.filter(t => t.inferredStage !== null).length;
+  const disagreementCount = disagreements.length;
+  const disagreementRate = topicsWithInference > 0 
+    ? Math.round((disagreementCount / topicsWithInference) * 10000) / 100 
+    : 0;
+
+  res.json({
+    threshold,
+    cachedAt: cached.cachedAt,
+    summary: {
+      totalTopics,
+      topicsWithInference,
+      disagreementCount,
+      disagreementRate: `${disagreementRate}%`,
+      confusionMatrix: sortedConfusion,
+    },
+    disagreements,
+  });
+});
+
+// Console-friendly disagreement dump (for manual inspection)
+router.get('/inference-disagreements/text', (req, res) => {
+  const cached = readCache();
+  if (!cached) {
+    res.type('text/plain').send('No cached data available. Run a refresh first.');
+    return;
+  }
+
+  const threshold = parseFloat(req.query.threshold) || INFERENCE_THRESHOLD;
+  const allTopics = cached.allTopics || [];
+  
+  const disagreements = allTopics
+    .filter(topic => 
+      topic.inferredStage !== null &&
+      topic.inferenceConfidence !== null &&
+      topic.inferenceConfidence >= threshold &&
+      topic.postedStage !== topic.inferredStage
+    )
+    .sort((a, b) => b.inferenceConfidence - a.inferenceConfidence);
+
+  const lines = [
+    `INFERENCE DISAGREEMENT REPORT`,
+    `Generated: ${new Date().toISOString()}`,
+    `Cached at: ${cached.cachedAt}`,
+    `Threshold: ${threshold}`,
+    `Total disagreements: ${disagreements.length}`,
+    ``,
+    `---`,
+    ``
+  ];
+
+  for (const topic of disagreements) {
+    lines.push(topic.subject);
+    lines.push(`  posted: ${topic.postedStage}`);
+    lines.push(`  inferred: ${topic.inferredStage}`);
+    lines.push(`  confidence: ${topic.inferenceConfidence}`);
+    lines.push(`  url: ${topic.sourceUrl}`);
+    lines.push(``);
+  }
+
+  // Confusion matrix
+  const confusionMatrix = {};
+  for (const d of disagreements) {
+    const key = `${d.postedStage} → ${d.inferredStage}`;
+    confusionMatrix[key] = (confusionMatrix[key] || 0) + 1;
+  }
+
+  lines.push(`---`);
+  lines.push(`CONFUSION MATRIX (posted → inferred)`);
+  lines.push(``);
+  
+  Object.entries(confusionMatrix)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([transition, count]) => {
+      lines.push(`  ${transition}: ${count}`);
+    });
+
+  res.type('text/plain').send(lines.join('\n'));
+});
+
 export { fetchFreshData, writeCache, readCache };
 export default router;
