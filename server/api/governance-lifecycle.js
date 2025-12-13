@@ -486,7 +486,7 @@ function correlateTopics(allTopics) {
       type = 'outcome';
     } else if (isValidatorOperations || hasValidatorIndicator) {
       type = 'validator';
-    } else if (hasFeaturedAppIndicator) {
+    } else if (hasAppIndicator) {
       type = 'featured-app';
     } else {
       type = 'other';
