@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { inferStage } from '../inference/inferStage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -14,6 +15,11 @@ const router = express.Router();
 const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
+// Inference confidence threshold - only use inferred stage if confidence >= this
+const INFERENCE_THRESHOLD = 0.85;
+
+// Enable/disable inference (can be toggled via env)
+const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED !== 'false';
 // Define the governance groups and their lifecycle stages
 // Each group maps to a specific flow and stage within that flow
 // CIP Flow: cip-discuss → cip-vote → cip-announce → sv-announce
@@ -706,27 +712,56 @@ async function fetchFreshData() {
     const topics = await fetchGroupTopics(group.id, name, 300);
     console.log(`Got ${topics.length} topics from ${name}`);
     
-    const mappedTopics = topics.map(topic => {
+    for (const topic of topics) {
       const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
+      const subject = topic.subject || topic.title || 'Untitled';
+      const content = topic.snippet || topic.body || topic.preview || '';
+      const postedStage = group.stage;
       
-      return {
+      // Run inference if enabled
+      let inferredStage = null;
+      let inferenceConfidence = null;
+      let effectiveStage = postedStage;
+      
+      if (INFERENCE_ENABLED) {
+        try {
+          const inferResult = await inferStage(subject, content);
+          if (inferResult) {
+            inferredStage = inferResult.stage;
+            inferenceConfidence = inferResult.confidence;
+            // Only override if confidence meets threshold
+            if (inferenceConfidence >= INFERENCE_THRESHOLD) {
+              effectiveStage = inferredStage;
+            }
+          }
+        } catch (err) {
+          console.error(`Inference failed for topic ${topic.id}:`, err.message);
+        }
+      }
+      
+      const mappedTopic = {
         id: topic.id?.toString() || `topic-${Math.random()}`,
-        subject: topic.subject || topic.title || 'Untitled',
+        subject,
         date: topic.created || topic.updated || new Date().toISOString(),
-        content: topic.snippet || topic.body || topic.preview || '',
-        excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
+        content,
+        excerpt: content.substring(0, 500),
         sourceUrl,
-        linkedUrls: extractUrls(topic.snippet || topic.body || ''),
+        linkedUrls: extractUrls(content),
         messageCount: topic.num_msgs || 1,
         groupName: name,
         groupLabel: group.label,
-        stage: group.stage,
+        stage: postedStage,           // Original forum-derived stage (unchanged)
+        postedStage,                  // Explicit field for clarity
+        inferredStage,                // Model output label (null if inference disabled/failed)
+        inferenceConfidence,          // Model confidence (null if inference disabled/failed)
+        effectiveStage,               // inferredStage if confidence >= threshold, else postedStage
         flow: group.flow,
-        identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
+        identifiers: extractIdentifiers(subject + ' ' + content),
       };
-    });
+      
+      allTopics.push(mappedTopic);
+    }
     
-    allTopics.push(...mappedTopics);
     await delay(500);
   }
   
@@ -742,6 +777,14 @@ async function fetchFreshData() {
   );
   const uniqueValidators = new Set(
     lifecycleItems.filter(i => i.type === 'validator').map(i => i.primaryId.toLowerCase())
+  );
+  
+  // Inference stats
+  const inferredTopics = allTopics.filter(t => t.inferredStage !== null);
+  const overriddenTopics = allTopics.filter(t => 
+    t.inferenceConfidence !== null && 
+    t.inferenceConfidence >= INFERENCE_THRESHOLD && 
+    t.inferredStage !== t.postedStage
   );
   
   const stats = {
@@ -763,6 +806,15 @@ async function fetchFreshData() {
         allTopics.filter(t => t.groupName === name).length
       ])
     ),
+    inference: {
+      enabled: INFERENCE_ENABLED,
+      threshold: INFERENCE_THRESHOLD,
+      totalInferred: inferredTopics.length,
+      overridden: overriddenTopics.length,
+      averageConfidence: inferredTopics.length > 0 
+        ? Math.round((inferredTopics.reduce((sum, t) => sum + t.inferenceConfidence, 0) / inferredTopics.length) * 100) / 100
+        : null,
+    },
   };
   
   return {

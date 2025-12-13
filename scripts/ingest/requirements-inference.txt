@@ -1,0 +1,5 @@
+# Python dependencies for governance stage inference
+# Install in venv: pip install -r requirements-inference.txt
+
+torch>=2.0.0
+transformers>=4.30.0
