@@ -8,7 +8,8 @@ import fs from 'fs';
 import path from 'path';
 import { query } from '../duckdb/connection.js';
 
-const DATA_DIR = process.env.DATA_DIR || '/mnt/c/ledger_raw';
+// Support both Windows (C:/ledger_raw) and WSL (/mnt/c/ledger_raw) paths
+const DATA_DIR = process.env.DATA_DIR || (process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw');
 const RAW_DIR = path.join(DATA_DIR, 'raw');
 
 /**
@@ -134,7 +135,12 @@ export async function getFileStats() {
     ORDER BY file_type, ingested
   `);
   
-  return rows;
+  // Convert BigInt to Number for JSON serialization
+  return rows.map(r => ({
+    ...r,
+    count: Number(r.count || 0),
+    records: Number(r.records || 0),
+  }));
 }
 
 /**
@@ -144,5 +150,6 @@ export async function getPendingFileCount() {
   const rows = await query(`
     SELECT COUNT(*) as count FROM raw_files WHERE ingested = FALSE
   `);
-  return rows[0]?.count || 0;
+  // Convert BigInt to Number for JSON serialization
+  return Number(rows[0]?.count || 0);
 }
