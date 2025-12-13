@@ -858,16 +858,19 @@ router.get('/', async (req, res) => {
 // Refresh endpoint - explicitly fetches fresh data
 router.post('/refresh', async (req, res) => {
   if (!API_KEY) {
-    return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured' });
+    console.error('GROUPS_IO_API_KEY is not set in environment');
+    return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured. Please set this environment variable.' });
   }
 
   try {
+    console.log('Starting governance lifecycle refresh...');
     const data = await fetchFreshData();
     writeCache(data);
+    console.log('Refresh complete:', data.stats);
     return res.json({ success: true, stats: data.stats, cachedAt: data.cachedAt });
   } catch (error) {
-    console.error('Error refreshing governance lifecycle:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error refreshing governance lifecycle:', error.stack || error);
+    res.status(500).json({ error: error.message, stack: error.stack });
   }
 });
 
