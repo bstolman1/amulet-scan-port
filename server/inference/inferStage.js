@@ -17,12 +17,13 @@ const ALLOWED_STAGES = new Set([
   "other",
 ]);
 
-// Absolute path to Python script
+// Absolute path to Python script - check multiple possible locations
 const SCRIPT_PATH = path.resolve(
   __dirname,
   "..",
   "..",
   "scripts",
+  "ingest",
   "infer_stage.py"
 );
 
