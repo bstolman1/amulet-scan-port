@@ -2,7 +2,19 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { inferStage } from '../inference/inferStage.js';
+
+// Optional inference - only import if ENABLE_INFERENCE=true
+let inferStage = null;
+const INFERENCE_ENABLED = process.env.ENABLE_INFERENCE === 'true';
+if (INFERENCE_ENABLED) {
+  try {
+    const inferModule = await import('../inference/inferStage.js');
+    inferStage = inferModule.inferStage;
+    console.log('Stage inference enabled');
+  } catch (err) {
+    console.warn('Stage inference disabled - failed to load:', err.message);
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -732,18 +744,20 @@ async function fetchFreshData() {
       mapped.inferenceConfidence = null;
       mapped.effectiveStage = mapped.stage;
 
-      try {
-        const inference = await inferStage(mapped.subject, mapped.content || '');
-        if (inference && inference.stage) {
-          mapped.inferredStage = inference.stage;
-          mapped.inferenceConfidence = inference.confidence;
+      if (inferStage) {
+        try {
+          const inference = await inferStage(mapped.subject, mapped.content || '');
+          if (inference && inference.stage) {
+            mapped.inferredStage = inference.stage;
+            mapped.inferenceConfidence = inference.confidence;
 
-          if (inference.confidence >= 0.85 && inference.stage !== 'other') {
-            mapped.effectiveStage = inference.stage;
+            if (inference.confidence >= 0.85 && inference.stage !== 'other') {
+              mapped.effectiveStage = inference.stage;
+            }
           }
+        } catch (err) {
+          console.error('Inference failed for topic', mapped.id, err.message);
         }
-      } catch (err) {
-        console.error('Inference failed for topic', mapped.id, err.message);
       }
       // ───────────────────────────────────────────
 
