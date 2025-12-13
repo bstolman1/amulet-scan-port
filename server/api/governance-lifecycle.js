@@ -14,7 +14,6 @@ const router = express.Router();
 const API_KEY = process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
-
 // Define the governance groups and their lifecycle stages
 // Each group maps to a specific flow and stage within that flow
 // CIP Flow: cip-discuss → cip-vote → cip-announce → sv-announce
@@ -707,31 +706,27 @@ async function fetchFreshData() {
     const topics = await fetchGroupTopics(group.id, name, 300);
     console.log(`Got ${topics.length} topics from ${name}`);
     
-    for (const topic of topics) {
+    const mappedTopics = topics.map(topic => {
       const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
-      const subject = topic.subject || topic.title || 'Untitled';
-      const content = topic.snippet || topic.body || topic.preview || '';
-      const postedStage = group.stage;
       
-      const mappedTopic = {
+      return {
         id: topic.id?.toString() || `topic-${Math.random()}`,
-        subject,
+        subject: topic.subject || topic.title || 'Untitled',
         date: topic.created || topic.updated || new Date().toISOString(),
-        content,
-        excerpt: content.substring(0, 500),
+        content: topic.snippet || topic.body || topic.preview || '',
+        excerpt: (topic.snippet || topic.body || topic.preview || '').substring(0, 500),
         sourceUrl,
-        linkedUrls: extractUrls(content),
+        linkedUrls: extractUrls(topic.snippet || topic.body || ''),
         messageCount: topic.num_msgs || 1,
         groupName: name,
         groupLabel: group.label,
-        stage: postedStage,
+        stage: group.stage,
         flow: group.flow,
-        identifiers: extractIdentifiers(subject + ' ' + content),
+        identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
       };
-      
-      allTopics.push(mappedTopic);
-    }
+    });
     
+    allTopics.push(...mappedTopics);
     await delay(500);
   }
   
@@ -853,7 +848,6 @@ router.get('/cache-info', (req, res) => {
     res.json({ hasCachedData: false });
   }
 });
-
 
 export { fetchFreshData, writeCache, readCache };
 export default router;
