@@ -2,7 +2,15 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { inferStage } from '../inference/inferStage.js';
+
+// Graceful import of inference module - doesn't crash if not available
+let inferStage = null;
+try {
+  const inferModule = await import('../inference/inferStage.js');
+  inferStage = inferModule.inferStage;
+} catch (err) {
+  console.warn('[governance-lifecycle] Inference module not available:', err.message);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -18,8 +26,8 @@ const BASE_URL = 'https://lists.sync.global';
 // Inference confidence threshold - only use inferred stage if confidence >= this
 const INFERENCE_THRESHOLD = 0.85;
 
-// Enable/disable inference (can be toggled via env)
-const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED !== 'false';
+// Enable/disable inference (can be toggled via env, and only if module loaded)
+const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED !== 'false' && inferStage !== null;
 // Define the governance groups and their lifecycle stages
 // Each group maps to a specific flow and stage within that flow
 // CIP Flow: cip-discuss → cip-vote → cip-announce → sv-announce
