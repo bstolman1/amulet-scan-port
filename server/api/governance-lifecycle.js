@@ -789,10 +789,21 @@ router.get('/', async (req, res) => {
   
   // No cache or force refresh - fetch fresh data
   if (!API_KEY) {
-    return res.status(500).json({ 
-      error: 'GROUPS_IO_API_KEY not configured',
+    // Check if we have stale cache to serve (even on force refresh when no API key)
+    const staleCache = readCache();
+    if (staleCache) {
+      console.log('No API key configured, serving existing cache');
+      return res.json({ ...staleCache, stale: true, warning: 'GROUPS_IO_API_KEY not configured - showing cached data' });
+    }
+    
+    // No cache AND no API key - return empty data with 200 (not 500) so UI can handle gracefully
+    console.warn('No GROUPS_IO_API_KEY and no cache available');
+    return res.json({ 
       lifecycleItems: [],
+      allTopics: [],
       groups: {},
+      stats: { totalTopics: 0, lifecycleItems: 0, byType: {}, byStage: {}, groupCounts: {} },
+      warning: 'GROUPS_IO_API_KEY not configured. Please set the API key or load cached data.',
     });
   }
 

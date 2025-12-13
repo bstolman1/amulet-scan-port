@@ -140,19 +140,28 @@ const GovernanceFlow = () => {
         : `${baseUrl}/api/governance-lifecycle`;
       const response = await fetch(url);
       
+      // Handle non-2xx responses
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to fetch: ${response.status}`);
       }
       
       const result = await response.json();
       
-      if (result.error && !result.lifecycleItems) {
+      // Check for warning (API key not configured but has cached data)
+      if (result.warning) {
+        console.warn('Governance data warning:', result.warning);
+      }
+      
+      // Only treat as error if no data AND explicit error
+      if (result.error && (!result.lifecycleItems || result.lifecycleItems.length === 0)) {
         throw new Error(result.error);
       }
       
       setData(result);
       setCachedAt(result.cachedAt || null);
     } catch (err) {
+      console.error('Failed to fetch governance data:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch governance data');
     } finally {
       setIsLoading(false);
