@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { inferStage } from '../inference/inferStage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -706,10 +707,10 @@ async function fetchFreshData() {
     const topics = await fetchGroupTopics(group.id, name, 300);
     console.log(`Got ${topics.length} topics from ${name}`);
     
-    const mappedTopics = topics.map(topic => {
+    for (const topic of topics) {
       const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
-      
-      return {
+
+      const mapped = {
         id: topic.id?.toString() || `topic-${Math.random()}`,
         subject: topic.subject || topic.title || 'Untitled',
         date: topic.created || topic.updated || new Date().toISOString(),
@@ -724,9 +725,30 @@ async function fetchFreshData() {
         flow: group.flow,
         identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
       };
-    });
-    
-    allTopics.push(...mappedTopics);
+
+      // ───── Pattern A: inference annotation ─────
+      mapped.postedStage = mapped.stage;
+      mapped.inferredStage = null;
+      mapped.inferenceConfidence = null;
+      mapped.effectiveStage = mapped.stage;
+
+      try {
+        const inference = await inferStage(mapped.subject, mapped.content || '');
+        if (inference && inference.stage) {
+          mapped.inferredStage = inference.stage;
+          mapped.inferenceConfidence = inference.confidence;
+
+          if (inference.confidence >= 0.85 && inference.stage !== 'other') {
+            mapped.effectiveStage = inference.stage;
+          }
+        }
+      } catch (err) {
+        console.error('Inference failed for topic', mapped.id, err.message);
+      }
+      // ───────────────────────────────────────────
+
+      allTopics.push(mapped);
+    }
     await delay(500);
   }
   
