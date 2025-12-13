@@ -1,4 +1,13 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath as fileURLToPathForDotenv } from 'url';
+
+// Load .env from server directory explicitly
+const __dirnameForDotenv = path.dirname(fileURLToPathForDotenv(import.meta.url));
+dotenv.config({ path: path.join(__dirnameForDotenv, '.env') });
+
+// Debug: Log if GROUPS_IO_API_KEY is loaded
+console.log('🔑 GROUPS_IO_API_KEY loaded:', process.env.GROUPS_IO_API_KEY ? 'YES (length: ' + process.env.GROUPS_IO_API_KEY.length + ')' : 'NO');
 import express from 'express';
 import cors from 'cors';
 import cron from 'node-cron';
