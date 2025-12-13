@@ -3,19 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Optional inference - only import if ENABLE_INFERENCE=true
-let inferStage = null;
-const INFERENCE_ENABLED = process.env.ENABLE_INFERENCE === 'true';
-if (INFERENCE_ENABLED) {
-  try {
-    const inferModule = await import('../inference/inferStage.js');
-    inferStage = inferModule.inferStage;
-    console.log('Stage inference enabled');
-  } catch (err) {
-    console.warn('Stage inference disabled - failed to load:', err.message);
-  }
-}
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
 const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
@@ -719,10 +706,10 @@ async function fetchFreshData() {
     const topics = await fetchGroupTopics(group.id, name, 300);
     console.log(`Got ${topics.length} topics from ${name}`);
     
-    for (const topic of topics) {
+    const mappedTopics = topics.map(topic => {
       const sourceUrl = `${BASE_URL}/g/${group.urlName}/topic/${topic.id}`;
-
-      const mapped = {
+      
+      return {
         id: topic.id?.toString() || `topic-${Math.random()}`,
         subject: topic.subject || topic.title || 'Untitled',
         date: topic.created || topic.updated || new Date().toISOString(),
@@ -737,32 +724,9 @@ async function fetchFreshData() {
         flow: group.flow,
         identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
       };
-
-      // ───── Pattern A: inference annotation ─────
-      mapped.postedStage = mapped.stage;
-      mapped.inferredStage = null;
-      mapped.inferenceConfidence = null;
-      mapped.effectiveStage = mapped.stage;
-
-      if (inferStage) {
-        try {
-          const inference = await inferStage(mapped.subject, mapped.content || '');
-          if (inference && inference.stage) {
-            mapped.inferredStage = inference.stage;
-            mapped.inferenceConfidence = inference.confidence;
-
-            if (inference.confidence >= 0.85 && inference.stage !== 'other') {
-              mapped.effectiveStage = inference.stage;
-            }
-          }
-        } catch (err) {
-          console.error('Inference failed for topic', mapped.id, err.message);
-        }
-      }
-      // ───────────────────────────────────────────
-
-      allTopics.push(mapped);
-    }
+    });
+    
+    allTopics.push(...mappedTopics);
     await delay(500);
   }
   
@@ -858,19 +822,16 @@ router.get('/', async (req, res) => {
 // Refresh endpoint - explicitly fetches fresh data
 router.post('/refresh', async (req, res) => {
   if (!API_KEY) {
-    console.error('GROUPS_IO_API_KEY is not set in environment');
-    return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured. Please set this environment variable.' });
+    return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured' });
   }
 
   try {
-    console.log('Starting governance lifecycle refresh...');
     const data = await fetchFreshData();
     writeCache(data);
-    console.log('Refresh complete:', data.stats);
     return res.json({ success: true, stats: data.stats, cachedAt: data.cachedAt });
   } catch (error) {
-    console.error('Error refreshing governance lifecycle:', error.stack || error);
-    res.status(500).json({ error: error.message, stack: error.stack });
+    console.error('Error refreshing governance lifecycle:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
