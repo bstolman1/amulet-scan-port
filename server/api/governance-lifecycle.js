@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { inferStage } from '../inference/inferStage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -9,6 +10,10 @@ const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../dat
 const CACHE_DIR = path.join(BASE_DATA_DIR, 'cache');
 const CACHE_FILE = path.join(CACHE_DIR, 'governance-lifecycle.json');
 
+// Inference confidence threshold - only override postedStage if confidence >= threshold
+const INFERENCE_THRESHOLD = 0.85;
+// Feature flag to enable/disable inference (set via env var)
+const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED === 'true';
 const router = express.Router();
 
 const API_KEY = process.env.GROUPS_IO_API_KEY;
@@ -723,6 +728,11 @@ async function fetchFreshData() {
         stage: group.stage,
         flow: group.flow,
         identifiers: extractIdentifiers((topic.subject || '') + ' ' + (topic.snippet || '')),
+        // Inference metadata - will be populated below if INFERENCE_ENABLED
+        postedStage: group.stage,  // Original forum-derived stage (preserved)
+        inferredStage: null,       // Model output label
+        inferenceConfidence: null, // Model confidence score
+        effectiveStage: group.stage, // inferredStage if confidence >= THRESHOLD else postedStage
       };
     });
     
@@ -731,6 +741,42 @@ async function fetchFreshData() {
   }
   
   console.log(`Total topics across all groups: ${allTopics.length}`);
+  
+  // ========== INFERENCE STEP (additive metadata only) ==========
+  // Run zero-shot NLI classification on each topic if inference is enabled
+  // This adds postedStage, inferredStage, inferenceConfidence, effectiveStage
+  // Does NOT change grouping, correlation, or UI behavior
+  if (INFERENCE_ENABLED) {
+    console.log('🧠 Running inference classification on topics...');
+    let inferenceCount = 0;
+    let overrideCount = 0;
+    
+    for (const topic of allTopics) {
+      try {
+        const result = await inferStage(topic.subject, topic.content);
+        
+        if (result) {
+          topic.inferredStage = result.stage;
+          topic.inferenceConfidence = result.confidence;
+          inferenceCount++;
+          
+          // Override effectiveStage only if confidence meets threshold
+          if (result.confidence >= INFERENCE_THRESHOLD) {
+            topic.effectiveStage = result.stage;
+            overrideCount++;
+          }
+        }
+      } catch (err) {
+        console.error(`[inference] Error for topic ${topic.id}:`, err.message);
+        // Leave inference fields as null on error
+      }
+    }
+    
+    console.log(`🧠 Inference complete: ${inferenceCount}/${allTopics.length} classified, ${overrideCount} overrides (threshold: ${INFERENCE_THRESHOLD})`);
+  } else {
+    console.log('ℹ️ Inference disabled (set INFERENCE_ENABLED=true to enable)');
+  }
+  // ========== END INFERENCE STEP ==========
   
   // Correlate topics into lifecycle items
   const lifecycleItems = correlateTopics(allTopics);
