@@ -906,5 +906,91 @@ router.get('/cache-info', (req, res) => {
   }
 });
 
+// ========== DIAGNOSTIC ENDPOINT (Phase 2) ==========
+// Shows high-confidence disagreements between postedStage and inferredStage
+// This is for observation only - does NOT change any behavior
+router.get('/inference-disagreements', (req, res) => {
+  const cached = readCache();
+  
+  if (!cached || !cached.allTopics) {
+    return res.json({
+      error: 'No cached data available. Run with INFERENCE_ENABLED=true first.',
+      disagreements: [],
+      stats: null,
+    });
+  }
+  
+  const threshold = parseFloat(req.query.threshold) || INFERENCE_THRESHOLD;
+  const allTopics = cached.allTopics;
+  
+  // Find disagreements: postedStage != inferredStage AND confidence >= threshold
+  const disagreements = allTopics
+    .filter(topic => {
+      return (
+        topic.inferredStage !== null &&
+        topic.inferenceConfidence !== null &&
+        topic.inferredStage !== topic.postedStage &&
+        topic.inferenceConfidence >= threshold
+      );
+    })
+    .map(topic => ({
+      id: topic.id,
+      subject: topic.subject,
+      postedStage: topic.postedStage,
+      inferredStage: topic.inferredStage,
+      confidence: topic.inferenceConfidence,
+      groupName: topic.groupName,
+      date: topic.date,
+      sourceUrl: topic.sourceUrl,
+    }))
+    .sort((a, b) => b.confidence - a.confidence);
+  
+  // Calculate stats by stage pair
+  const stagePairs = {};
+  for (const d of disagreements) {
+    const key = `${d.postedStage} → ${d.inferredStage}`;
+    stagePairs[key] = (stagePairs[key] || 0) + 1;
+  }
+  
+  // Topics with inference data
+  const topicsWithInference = allTopics.filter(t => t.inferredStage !== null);
+  const agreements = topicsWithInference.filter(t => t.inferredStage === t.postedStage);
+  
+  const stats = {
+    totalTopics: allTopics.length,
+    topicsWithInference: topicsWithInference.length,
+    agreementCount: agreements.length,
+    disagreementCount: disagreements.length,
+    agreementRate: topicsWithInference.length > 0 
+      ? ((agreements.length / topicsWithInference.length) * 100).toFixed(1) + '%'
+      : 'N/A',
+    threshold,
+    stagePairBreakdown: stagePairs,
+  };
+  
+  // Console-friendly report
+  console.log('\n========== INFERENCE DISAGREEMENT REPORT ==========');
+  console.log(`Threshold: ${threshold}`);
+  console.log(`Topics with inference: ${stats.topicsWithInference}`);
+  console.log(`Agreements: ${stats.agreementCount} (${stats.agreementRate})`);
+  console.log(`Disagreements: ${stats.disagreementCount}`);
+  console.log('\nStage pair breakdown:');
+  for (const [pair, count] of Object.entries(stagePairs).sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${pair}: ${count}`);
+  }
+  console.log('\nTop disagreements:');
+  for (const d of disagreements.slice(0, 20)) {
+    console.log(`  [${d.confidence.toFixed(2)}] "${d.subject.slice(0, 50)}..."`);
+    console.log(`    posted: ${d.postedStage} → inferred: ${d.inferredStage}`);
+  }
+  console.log('====================================================\n');
+  
+  res.json({
+    stats,
+    disagreements,
+    cachedAt: cached.cachedAt,
+  });
+});
+
 export { fetchFreshData, writeCache, readCache };
 export default router;
