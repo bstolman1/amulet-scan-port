@@ -508,17 +508,15 @@ function decodeInMainThread(tx, migrationId) {
  * Maintains full parallelism by refilling slots as requests complete
  * Now accepts dynamic concurrency for auto-tuning
  * 
- * OPTIMIZED: Better empty gap handling to avoid slow crawling
+ * OPTIMIZED: Deduplication to prevent double-writes, safe empty handling
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
   const results = [];
   const pending = new Map();
-  const seenUpdateIds = new Set(); // Track by update_id to avoid duplicates
+  const seenUpdateIds = new Set(); // Track by update_id to prevent duplicates
   let nextBefore = startBefore;
   let fetched = 0;
   let reachedEnd = false;
-  let consecutiveEmpty = 0; // Track consecutive empty responses
-  const MAX_CONSECUTIVE_EMPTY = 10; // Safety limit
   
   const startFetch = (before) => {
     if (reachedEnd) return false;
@@ -550,44 +548,27 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     const txs = completed.data?.transactions || [];
     
     if (txs.length === 0) {
-      consecutiveEmpty++;
-      
+      // Empty response with at_or_after means NO data in the entire range
+      // This is the correct termination - the API already checked the full range
       if (completed.before <= atOrAfter) {
         reachedEnd = true;
         break;
       }
       
-      // Progressive backoff for empty gaps - jump larger chunks
-      // This prevents slow crawling through empty time ranges
-      const skipMs = Math.min(
-        1000 * Math.pow(2, consecutiveEmpty), // Exponential: 1s, 2s, 4s, 8s...
-        3600000 // Cap at 1 hour jumps
-      );
-      
+      // Conservative skip: 100ms instead of 1ms (100x faster, still safe)
       const d = new Date(completed.before);
-      d.setTime(d.getTime() - skipMs);
+      d.setTime(d.getTime() - 100);
       
-      // Don't go past the lower bound
       if (d.getTime() <= new Date(atOrAfter).getTime()) {
         reachedEnd = true;
         break;
       }
       
       nextBefore = d.toISOString();
-      
-      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
-        console.log(`   ⏭️ Skipping ${consecutiveEmpty} empty responses, jumping ${skipMs}ms`);
-        reachedEnd = true;
-        break;
-      }
-      
       continue;
     }
     
-    // Reset empty counter on success
-    consecutiveEmpty = 0;
-    
-    // Deduplicate transactions by update_id
+    // Deduplicate transactions by update_id to prevent double-writes
     const uniqueTxs = [];
     for (const tx of txs) {
       const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
@@ -598,6 +579,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
         // No update_id, include anyway (shouldn't happen but be safe)
         uniqueTxs.push(tx);
       }
+      // Skip if already seen (duplicate)
     }
     
     if (uniqueTxs.length > 0) {
