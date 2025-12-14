@@ -507,18 +507,21 @@ function decodeInMainThread(tx, migrationId) {
  * Parallel fetch with sliding window - fetches multiple pages concurrently
  * Maintains full parallelism by refilling slots as requests complete
  * Now accepts dynamic concurrency for auto-tuning
+ * 
+ * OPTIMIZED: Better empty gap handling to avoid slow crawling
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
   const results = [];
   const pending = new Map();
-  const seenTimestamps = new Set();
+  const seenUpdateIds = new Set(); // Track by update_id to avoid duplicates
   let nextBefore = startBefore;
   let fetched = 0;
   let reachedEnd = false;
+  let consecutiveEmpty = 0; // Track consecutive empty responses
+  const MAX_CONSECUTIVE_EMPTY = 10; // Safety limit
   
   const startFetch = (before) => {
-    if (reachedEnd || seenTimestamps.has(before)) return false;
-    seenTimestamps.add(before);
+    if (reachedEnd) return false;
     
     const fetchId = fetched++;
     pending.set(fetchId, {
@@ -547,21 +550,62 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     const txs = completed.data?.transactions || [];
     
     if (txs.length === 0) {
+      consecutiveEmpty++;
+      
       if (completed.before <= atOrAfter) {
         reachedEnd = true;
         break;
       }
-
+      
+      // Progressive backoff for empty gaps - jump larger chunks
+      // This prevents slow crawling through empty time ranges
+      const skipMs = Math.min(
+        1000 * Math.pow(2, consecutiveEmpty), // Exponential: 1s, 2s, 4s, 8s...
+        3600000 // Cap at 1 hour jumps
+      );
+      
       const d = new Date(completed.before);
-      d.setMilliseconds(d.getMilliseconds() - 1);
+      d.setTime(d.getTime() - skipMs);
+      
+      // Don't go past the lower bound
+      if (d.getTime() <= new Date(atOrAfter).getTime()) {
+        reachedEnd = true;
+        break;
+      }
+      
       nextBefore = d.toISOString();
+      
+      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+        console.log(`   ⏭️ Skipping ${consecutiveEmpty} empty responses, jumping ${skipMs}ms`);
+        reachedEnd = true;
+        break;
+      }
+      
       continue;
     }
     
-    results.push({ transactions: txs, before: completed.before });
+    // Reset empty counter on success
+    consecutiveEmpty = 0;
+    
+    // Deduplicate transactions by update_id
+    const uniqueTxs = [];
+    for (const tx of txs) {
+      const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+      if (updateId && !seenUpdateIds.has(updateId)) {
+        seenUpdateIds.add(updateId);
+        uniqueTxs.push(tx);
+      } else if (!updateId) {
+        // No update_id, include anyway (shouldn't happen but be safe)
+        uniqueTxs.push(tx);
+      }
+    }
+    
+    if (uniqueTxs.length > 0) {
+      results.push({ transactions: uniqueTxs, before: completed.before });
+    }
     
     let earliest = null;
-    for (const tx of txs) {
+    for (const tx of uniqueTxs) {
       const t = getEventTime(tx);
       if (t && (!earliest || t < earliest)) earliest = t;
     }
@@ -578,6 +622,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     // Refill slots based on *current* dynamic concurrency
     while (pending.size < concurrency && fetched < maxBatches && !reachedEnd) {
       if (!startFetch(nextBefore)) break;
+      // Small decrement to get next page
       const d = new Date(nextBefore);
       d.setMilliseconds(d.getMilliseconds() - 1);
       nextBefore = d.toISOString();
