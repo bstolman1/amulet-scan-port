@@ -58,7 +58,6 @@ const BackfillProgress = () => {
   const { data: stats, refetch: refetchStats } = useBackfillStats();
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
-  const [prevStats, setPrevStats] = useState<{ updates: number; events: number } | null>(null);
   const { toast } = useToast();
 
   // Calculate merged cursors list
@@ -66,33 +65,34 @@ const BackfillProgress = () => {
     return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
   }, [cursors, realtimeCursors]);
 
-  // Track if data is still being written (counts increasing OR pending writes/buffers)
+  // Track if data is still being written (cursor buffers OR counts increasing)
   const hasPendingWork = useMemo(() => {
     return allCursors.some((c) => (c.pending_writes || 0) > 0 || (c.buffered_records || 0) > 0);
   }, [allCursors]);
 
-  const isStillWriting = useMemo(() => {
-    if (hasPendingWork) return true;
-    if (!stats || !prevStats) return false;
-    return stats.totalUpdates > prevStats.updates || stats.totalEvents > prevStats.events;
-  }, [stats, prevStats, hasPendingWork]);
+  const [prevStats, setPrevStats] = useState<{ updates: number; events: number } | null>(null);
+  const [isStatsIncreasing, setIsStatsIncreasing] = useState(false);
 
-  // Update previous stats when stats change
+  // Detect increasing counts across polling intervals (keep the signal true until the next stats update)
   useEffect(() => {
-    if (stats) {
-      setPrevStats(prev => {
-        // Only update after we've had a chance to compare
-        if (prev === null) {
-          return { updates: stats.totalUpdates, events: stats.totalEvents };
-        }
-        // Delay update to allow comparison
-        setTimeout(() => {
-          setPrevStats({ updates: stats.totalUpdates, events: stats.totalEvents });
-        }, 100);
-        return prev;
-      });
-    }
+    if (!stats) return;
+
+    setPrevStats((prev) => {
+      if (prev) {
+        setIsStatsIncreasing(
+          stats.totalUpdates > prev.updates || stats.totalEvents > prev.events,
+        );
+      } else {
+        setIsStatsIncreasing(false);
+      }
+
+      return { updates: stats.totalUpdates, events: stats.totalEvents };
+    });
   }, [stats]);
+
+  const isStillWriting = useMemo(() => {
+    return hasPendingWork || isStatsIncreasing;
+  }, [hasPendingWork, isStatsIncreasing]);
 
   // Group cursors by migration_id
   const cursorsByMigration = useMemo(() => {
@@ -438,21 +438,31 @@ const BackfillProgress = () => {
                           const cursorHasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
 
                           let progressPercent = 0;
+
+                          // Compute range progress (backfill runs backwards: max_time → min_time)
                           if (cursor.min_time && cursor.max_time && cursor.last_before) {
                             const minTime = new Date(cursor.min_time).getTime();
                             const maxTime = new Date(cursor.max_time).getTime();
                             const currentTime = new Date(cursor.last_before).getTime();
                             const totalRange = maxTime - minTime;
                             const progressFromMax = maxTime - currentTime;
-                            progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+                            progressPercent = totalRange > 0
+                              ? Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100))
+                              : 0;
                           } else if (cursor.complete) {
                             progressPercent = cursorHasPendingWork ? 99.9 : 100;
                           }
 
-                          // If we're still writing data, don't render a misleading 100%.
-                          const displayProgressPercent = (isStillWriting || cursorHasPendingWork) && progressPercent >= 99.95
-                            ? 99.9
-                            : progressPercent;
+                          // Never show 100% unless cursor is explicitly complete.
+                          // Otherwise, 100% can happen when last_before <= min_time even if the cursor wasn't finalized.
+                          let displayProgressPercent = cursor.complete
+                            ? (cursorHasPendingWork ? 99.9 : 100)
+                            : Math.min(progressPercent, 99.9);
+
+                          // While data is still being written, also avoid rendering a misleading 100%/near-100%.
+                          if ((isStillWriting || cursorHasPendingWork) && displayProgressPercent >= 99.95) {
+                            displayProgressPercent = 99.9;
+                          }
 
                           const { eta, throughput } = calculateETA(cursor);
 
