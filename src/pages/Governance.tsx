@@ -30,7 +30,6 @@ const Governance = () => {
   const { data: dsoRulesData } = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:DsoRules:DsoRules",
-    !!latestSnapshot,
   );
 
   // Fetch vote requests - aggregated across all packages
@@ -38,27 +37,24 @@ const Governance = () => {
     data: voteRequestsData,
     isLoading,
     isError,
-  } = useAggregatedTemplateData(latestSnapshot?.id, "Splice:DsoRules:VoteRequest", !!latestSnapshot);
+  } = useAggregatedTemplateData(latestSnapshot?.id, "Splice:DsoRules:VoteRequest");
 
   // Fetch Amulet Price Votes
   const { data: priceVotesData, isLoading: priceVotesLoading } = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:DSO:AmuletPrice:AmuletPriceVote",
-    !!latestSnapshot,
   );
 
   // Fetch Confirmations
   const { data: confirmationsData } = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:DsoRules:Confirmation",
-    !!latestSnapshot,
   );
 
   // Fetch AmuletRules
   const { data: amuletRulesData } = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:AmuletRules:AmuletRules",
-    !!latestSnapshot,
   );
 
   const priceVotes = priceVotesData?.data || [];
