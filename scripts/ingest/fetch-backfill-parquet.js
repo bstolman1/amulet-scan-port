@@ -1077,7 +1077,15 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   // Flush remaining data
   await flushAll();
   
-  // Mark as complete
+  // CRITICAL: Wait for all writes to complete before marking as done
+  console.log(`   ⏳ Waiting for all pending writes to complete...${shardLabel}`);
+  await waitForWrites();
+  
+  // Get final write stats
+  const finalStats = getBufferStats();
+  console.log(`   ✅ All writes complete. Final queue: ${finalStats.queuedJobs || 0} pending, ${finalStats.activeWorkers || 0} active${shardLabel}`);
+  
+  // Now safe to mark as complete - all data is written
   saveCursor(migrationId, synchronizerId, {
     last_before: before,
     total_updates: totalUpdates,

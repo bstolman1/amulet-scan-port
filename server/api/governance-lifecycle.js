@@ -489,6 +489,8 @@ function correlateTopics(allTopics) {
     let type;
     if (isOutcome) {
       type = 'outcome';
+    } else if (hasCip || isCipDiscussion) {
+      type = 'cip';  // CIP topics need explicit type for correlation to work
     } else if (isValidatorOperations || hasValidatorIndicator) {
       type = 'validator';
     } else if (hasAppIndicator) {
