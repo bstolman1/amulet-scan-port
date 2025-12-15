@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
-import { Database, Activity, Trash2, FileText, Layers, Zap, Clock } from "lucide-react";
+import { Database, Activity, Trash2, FileText, Layers, Zap, Clock, PlayCircle, PauseCircle, CheckCircle2 } from "lucide-react";
 import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
 import { useBackfillCursors, useBackfillStats, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
@@ -326,6 +326,73 @@ const BackfillProgress = () => {
                 </span>
                 <span>{stats?.totalUpdates?.toLocaleString() || 0} updates • {stats?.totalEvents?.toLocaleString() || 0} events</span>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Live Updates Status Card */}
+        {cursorsByMigration.length > 0 && (
+          <Card className={`border-2 ${
+            cursorsByMigration.every(({ cursors }) => cursors.every(c => c.complete)) && !isStillWriting
+              ? "border-green-500/50 bg-green-500/5"
+              : "border-amber-500/50 bg-amber-500/5"
+          }`}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  {cursorsByMigration.every(({ cursors }) => cursors.every(c => c.complete)) && !isStillWriting ? (
+                    <>
+                      <PlayCircle className="w-5 h-5 text-green-500" />
+                      <span className="font-semibold text-green-500">Live Updates Ready</span>
+                    </>
+                  ) : (
+                    <>
+                      <PauseCircle className="w-5 h-5 text-amber-500" />
+                      <span className="font-semibold text-amber-500">Live Updates Pending</span>
+                    </>
+                  )}
+                </div>
+              </div>
+              
+              {cursorsByMigration.every(({ cursors }) => cursors.every(c => c.complete)) && !isStillWriting ? (
+                <p className="text-sm text-muted-foreground">
+                  All migrations complete. Live updates will start automatically.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Migrations must complete before live updates begin:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {cursorsByMigration.map(({ migrationId, cursors: migCursors }) => {
+                      const allComplete = migCursors.every(c => c.complete);
+                      const hasPending = migCursors.some(c => (c.pending_writes || 0) > 0 || (c.buffered_records || 0) > 0);
+                      const completedCount = migCursors.filter(c => c.complete).length;
+                      
+                      return (
+                        <div 
+                          key={migrationId}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm ${
+                            allComplete && !hasPending
+                              ? "bg-green-500/20 text-green-400"
+                              : "bg-amber-500/20 text-amber-400"
+                          }`}
+                        >
+                          {allComplete && !hasPending ? (
+                            <CheckCircle2 className="w-4 h-4" />
+                          ) : (
+                            <Activity className="w-4 h-4 animate-pulse" />
+                          )}
+                          <span>Migration {migrationId}</span>
+                          <span className="text-xs opacity-75">
+                            ({completedCount}/{migCursors.length})
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
