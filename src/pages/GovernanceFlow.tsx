@@ -790,322 +790,97 @@ const GovernanceFlow = () => {
         {/* View Toggle */}
         <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline')}>
           <TabsList>
-            <TabsTrigger value="lifecycle">Lifecycle View ({filteredItems.length})</TabsTrigger>
+            <TabsTrigger value="lifecycle">Submissions ({filteredTopics.length})</TabsTrigger>
             <TabsTrigger value="timeline">Timeline ({timelineData.length} months)</TabsTrigger>
             <TabsTrigger value="all">All Topics ({filteredTopics.length})</TabsTrigger>
           </TabsList>
 
-          {/* Lifecycle View */}
-          <TabsContent value="lifecycle" className="space-y-4 mt-4">
+          {/* Lifecycle View - Individual Cards */}
+          <TabsContent value="lifecycle" className="space-y-2 mt-4">
             {isLoading ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <Card key={i}>
-                  <CardHeader>
-                    <Skeleton className="h-6 w-3/4" />
-                    <Skeleton className="h-4 w-1/2 mt-2" />
-                  </CardHeader>
-                  <CardContent>
-                    <Skeleton className="h-8 w-full" />
-                  </CardContent>
-                </Card>
+              Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-20 w-full" />
               ))
-            ) : filteredItems.length === 0 ? (
+            ) : filteredTopics.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12">
                   <FileText className="h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium">No Items Found</h3>
+                  <h3 className="text-lg font-medium">No Submissions Found</h3>
                   <p className="text-muted-foreground text-sm mt-1">
                     Try adjusting your filters
                   </p>
                 </CardContent>
               </Card>
             ) : (
-              <>
-                {/* CIP-00XX Section - TBD/Unassigned CIPs - Flattened view */}
-                {tbdItems.length > 0 && (() => {
-                  // Aggregate all topics from all TBD items, grouped by stage
-                  const allTbdTopics = tbdItems.flatMap(item => item.topics);
-                  const cipStages = WORKFLOW_STAGES.cip;
-                  const tbdStages: Record<string, typeof allTbdTopics> = {};
-                  
-                  cipStages.forEach(stage => {
-                    const stageTopics = tbdItems.flatMap(item => item.stages[stage] || []);
-                    if (stageTopics.length > 0) {
-                      tbdStages[stage] = stageTopics;
-                    }
-                  });
-                  
-                  const tbdIsExpanded = expandedIds.has('cip-00xx-section');
-                  
-                  return (
-                    <Card className="border-amber-500/30 bg-amber-500/5">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-2 flex-1">
-                            <Badge className="bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                              CIP-00XX
-                            </Badge>
-                            <CardTitle className="text-base">
-                              Pending CIP Number Assignment ({allTbdTopics.length} topics)
-                            </CardTitle>
-                            <p className="text-sm text-muted-foreground">
-                              CIPs awaiting official number assignment
-                            </p>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => toggleExpand('cip-00xx-section')}
-                            className="shrink-0"
-                          >
-                            {tbdIsExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                          </Button>
-                        </div>
-                        
-                        {/* Lifecycle Progress - show CIP-specific stages */}
-                        <div className="pt-2">
-                          <div className="flex items-center gap-1">
-                            {cipStages.map((stage, index) => {
-                              const config = STAGE_CONFIG[stage];
-                              if (!config) return null;
-                              const count = tbdStages[stage]?.length || 0;
-                              const isActive = count > 0;
-                              const Icon = config.icon;
-                              
-                              return (
-                                <React.Fragment key={stage}>
-                                  <div className="flex items-center gap-1">
-                                    <div 
-                                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs ${
-                                        isActive ? config.color : 'bg-muted/30 text-muted-foreground'
-                                      }`}
-                                    >
-                                      <Icon className="h-3 w-3" />
-                                      <span className="hidden sm:inline">{config.label}</span>
-                                      {isActive && <span className="font-medium">({count})</span>}
-                                    </div>
-                                  </div>
-                                  {index < cipStages.length - 1 && (
-                                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
-                                  )}
-                                </React.Fragment>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </CardHeader>
-                      
-                      {tbdIsExpanded && (
-                        <CardContent className="pt-0 space-y-4">
-                          {cipStages.map(stage => {
-                            const config = STAGE_CONFIG[stage];
-                            if (!config) return null;
-                            const stageTopics = tbdStages[stage];
-                            if (!stageTopics || stageTopics.length === 0) return null;
-                            const Icon = config.icon;
-                            
-                            return (
-                              <div key={stage} className="space-y-2">
-                                <h5 className="text-sm font-medium flex items-center gap-2">
-                                  <Icon className="h-4 w-4" />
-                                  {config.label} ({stageTopics.length})
-                                </h5>
-                                <div className="space-y-2 pl-6">
-                                  {stageTopics.map(topic => renderTopicCard(topic))}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </CardContent>
-                      )}
-                    </Card>
-                  );
-                })()}
-
-                {/* Grouped Items (testnet/mainnet combined) */}
-                {groupedRegularItems.map((group) => {
-                  const groupId = `group-${group.primaryId.toLowerCase()}`;
-                  const isExpanded = expandedIds.has(groupId);
-                  const typeConfig = TYPE_CONFIG[group.type];
-                  
-                  return (
-                    <Card key={groupId} className="hover:border-primary/30 transition-colors">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-2 flex-1">
+              <ScrollArea className="h-[calc(100vh-450px)] pr-4">
+                <div className="space-y-2">
+                  {filteredTopics.map((topic) => {
+                    // Determine item type for styling
+                    const isOutcome = /\bOutcomes\s*-/i.test(topic.subject.trim());
+                    const itemType = isOutcome ? 'outcome' :
+                                    topic.identifiers.cipNumber ? 'cip' :
+                                    topic.identifiers.appName ? 'featured-app' :
+                                    topic.identifiers.validatorName ? 'validator' : 'other';
+                    const typeConfig = TYPE_CONFIG[itemType];
+                    const stageConfig = STAGE_CONFIG[topic.stage];
+                    const StageIcon = stageConfig?.icon || FileText;
+                    
+                    return (
+                      <a
+                        key={topic.id}
+                        href={topic.sourceUrl || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={cn(
+                          "block p-4 rounded-lg bg-card border border-border/50 hover:border-primary/30 transition-colors",
+                          topic.sourceUrl ? "cursor-pointer hover:bg-muted/30" : "cursor-default"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1 space-y-2">
+                            {/* Type and Stage Badges */}
                             <div className="flex items-center gap-2 flex-wrap">
-                              <Badge className={typeConfig.color}>
+                              <Badge className={cn("text-xs", typeConfig.color)}>
                                 {typeConfig.label}
                               </Badge>
-                              {group.hasMultipleNetworks ? (
-                                <Badge variant="outline" className="text-[10px] h-5 border-blue-500/50 text-blue-400 bg-blue-500/10">
-                                  Testnet + Mainnet
-                                </Badge>
-                              ) : group.items[0]?.network && (
-                                <Badge 
-                                  variant="outline" 
-                                  className={cn(
-                                    "text-[10px] h-5",
-                                    group.items[0].network === 'mainnet' 
-                                      ? 'border-green-500/50 text-green-400 bg-green-500/10' 
-                                      : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
-                                  )}
-                                >
-                                  {group.items[0].network}
+                              {stageConfig && (
+                                <Badge variant="outline" className={cn("text-xs", stageConfig.color)}>
+                                  <StageIcon className="h-3 w-3 mr-1" />
+                                  {stageConfig.label}
                                 </Badge>
                               )}
+                              <Badge variant="outline" className="text-[10px] h-5">
+                                {topic.groupLabel}
+                              </Badge>
                             </div>
-                            <CardTitle className="text-lg leading-tight break-words whitespace-normal">
-                              {group.primaryId}
-                            </CardTitle>
-                            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                            
+                            {/* Title */}
+                            <h3 className="font-medium text-sm leading-tight">{topic.subject}</h3>
+                            
+                            {/* Date and message count */}
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
                               <span className="flex items-center gap-1">
-                                <Calendar className="h-3.5 w-3.5" />
-                                {formatDate(group.firstDate)} → {formatDate(group.lastDate)}
+                                <Calendar className="h-3 w-3" />
+                                {formatDate(topic.date)}
                               </span>
-                              <span>{group.totalTopics} topics</span>
+                              {topic.messageCount && topic.messageCount > 1 && (
+                                <span>{topic.messageCount} messages</span>
+                              )}
                             </div>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => toggleExpand(groupId)}
-                            className="shrink-0"
-                          >
-                            {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                          </Button>
-                        </div>
-                        
-                        {/* Lifecycle Progress - show combined progress for multi-network */}
-                        <div className="pt-2">
-                          {group.hasMultipleNetworks ? (
-                            <div className="space-y-2">
-                              {group.items.map((item) => (
-                                <div key={item.id} className="flex items-center gap-2">
-                                  <Badge 
-                                    variant="outline" 
-                                    className={cn(
-                                      "text-[10px] h-5 w-16 justify-center",
-                                      item.network === 'mainnet' 
-                                        ? 'border-green-500/50 text-green-400 bg-green-500/10' 
-                                        : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
-                                    )}
-                                  >
-                                    {item.network}
-                                  </Badge>
-                                  <div className="flex-1">
-                                    {renderLifecycleProgress(item)}
-                                  </div>
-                                </div>
-                              ))}
+                          
+                          {/* External link icon */}
+                          {topic.sourceUrl && (
+                            <div className="shrink-0 text-muted-foreground">
+                              <ExternalLink className="h-4 w-4" />
                             </div>
-                          ) : (
-                            renderLifecycleProgress(group.items[0])
                           )}
                         </div>
-                      </CardHeader>
-                      
-                      {isExpanded && (
-                        <CardContent className="space-y-4 border-t pt-4">
-                          {group.hasMultipleNetworks ? (
-                            /* Multi-network view with sections */
-                            group.items.map((item) => (
-                              <div key={item.id} className="space-y-3">
-                                <div className="flex items-center gap-2 pb-2 border-b border-border/50">
-                                  <Badge 
-                                    variant="outline" 
-                                    className={cn(
-                                      "text-xs",
-                                      item.network === 'mainnet' 
-                                        ? 'border-green-500/50 text-green-400 bg-green-500/10' 
-                                        : 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
-                                    )}
-                                  >
-                                    {item.network}
-                                  </Badge>
-                                  <span className="text-sm text-muted-foreground">
-                                    {item.topics.length} topics • {formatDate(item.firstDate)} → {formatDate(item.lastDate)}
-                                  </span>
-                                </div>
-                                {(WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
-                                  const config = STAGE_CONFIG[stage];
-                                  if (!config) return null;
-                                  const stageTopics = item.stages[stage];
-                                  if (!stageTopics || stageTopics.length === 0) return null;
-                                  const Icon = config.icon;
-                                  
-                                  return (
-                                    <div key={stage} className="space-y-2 pl-4">
-                                      <h4 className="text-sm font-medium flex items-center gap-2">
-                                        <Icon className="h-4 w-4" />
-                                        {config.label} ({stageTopics.length})
-                                      </h4>
-                                      <div className="space-y-2 pl-6">
-                                        {stageTopics.map(topic => renderTopicCard(topic))}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ))
-                          ) : (
-                            /* Single network view - show stages or fallback to all topics */
-                            (() => {
-                              const item = group.items[0];
-                              
-                              // For outcomes, always show topics directly since they don't follow multi-stage workflow
-                              if (item.type === 'outcome' && item.topics.length > 0) {
-                                return (
-                                  <div className="space-y-2">
-                                    <h4 className="text-sm font-medium">Topics ({item.topics.length})</h4>
-                                    <div className="space-y-2 pl-6">
-                                      {item.topics.map(topic => renderTopicCard(topic, true))}
-                                    </div>
-                                  </div>
-                                );
-                              }
-                              
-                              const stageElements = (WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other).map(stage => {
-                                const config = STAGE_CONFIG[stage];
-                                if (!config) return null;
-                                const stageTopics = item.stages[stage];
-                                if (!stageTopics || stageTopics.length === 0) return null;
-                                const Icon = config.icon;
-                                
-                                return (
-                                  <div key={stage} className="space-y-2">
-                                    <h4 className="text-sm font-medium flex items-center gap-2">
-                                      <Icon className="h-4 w-4" />
-                                      {config.label} ({stageTopics.length})
-                                    </h4>
-                                    <div className="space-y-2 pl-6">
-                                      {stageTopics.map(topic => renderTopicCard(topic))}
-                                    </div>
-                                  </div>
-                                );
-                              }).filter(Boolean);
-                              
-                              // Fallback: if no stage-based content, show all topics directly
-                              if (stageElements.length === 0 && item.topics.length > 0) {
-                                return (
-                                  <div className="space-y-2">
-                                    <h4 className="text-sm font-medium">Topics ({item.topics.length})</h4>
-                                    <div className="space-y-2 pl-6">
-                                      {item.topics.map(topic => renderTopicCard(topic, true))}
-                                    </div>
-                                  </div>
-                                );
-                              }
-                              
-                              return stageElements;
-                            })()
-                          )}
-                        </CardContent>
-                      )}
-                    </Card>
-                  );
-                })}
-              </>
+                      </a>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
             )}
           </TabsContent>
 
