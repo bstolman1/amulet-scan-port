@@ -674,12 +674,23 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   let totalUpdates = 0;
   let totalEvents = 0;
   let earliestTime = startBefore;
+  let pageCount = 0;
+  const streamStartTime = Date.now();
   
-  // Process callback that handles transactions immediately
+  // Process callback that handles transactions immediately with progress logging
   const processCallback = async (transactions) => {
     const { updates, events } = await processBackfillItems(transactions, migrationId);
     totalUpdates += updates;
     totalEvents += events;
+    pageCount++;
+    
+    // Log progress every 10 pages
+    if (pageCount % 10 === 0) {
+      const elapsed = (Date.now() - streamStartTime) / 1000;
+      const throughput = Math.round(totalUpdates / elapsed);
+      const stats = getBufferStats();
+      console.log(`   📥 Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | Q: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`);
+    }
   };
   
   // Launch all slices in parallel with streaming
