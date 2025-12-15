@@ -51,8 +51,14 @@ router.get('/latest', async (req, res) => {
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      // Use streaming for memory efficiency
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', { limit, offset });
+      // For huge datasets, keep this endpoint snappy by scanning only recent partitions
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        maxDays: 14,
+        maxFilesToScan: 120,
+        sortBy: 'timestamp',
+      });
       return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
     

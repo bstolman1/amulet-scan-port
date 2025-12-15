@@ -361,21 +361,30 @@ const MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_MAX_FILES) || 500;
 
 // Stream records with pagination (memory efficient for large datasets)
 export async function streamRecords(dirPath, type = 'events', options = {}) {
-  const { limit = 100, offset = 0, filter = null, sortBy = 'effective_at', maxDays = 30 } = options;
+  const {
+    limit = 100,
+    offset = 0,
+    filter = null,
+    sortBy = 'effective_at',
+    maxDays = 30,
+    maxFilesToScan: maxFilesToScanOverride,
+  } = options;
+  
+  const maxFilesToScanLimit = Math.min(
+    typeof maxFilesToScanOverride === 'number' ? maxFilesToScanOverride : MAX_FILES_TO_SCAN,
+    MAX_FILES_TO_SCAN,
+  );
   
   // Use FAST finder that leverages partition structure instead of scanning 55k+ files
-  const files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: MAX_FILES_TO_SCAN });
+  const files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });
   
   if (files.length === 0) {
     return { records: [], total: 0, hasMore: false };
   }
   
   // Files are already sorted by data date desc from findBinaryFilesFast
-  
-  // For effective_at sorting, we need to read more files and sort globally
-  // because file write order doesn't match event effective_at order
   const allRecords = [];
-  const maxFilesToScan = Math.min(files.length, MAX_FILES_TO_SCAN);
+  const maxFilesToScan = Math.min(files.length, maxFilesToScanLimit);
   
   for (let i = 0; i < maxFilesToScan; i++) {
     const file = files[i];
@@ -390,8 +399,9 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
       
       allRecords.push(...fileRecords);
       
-      // If we have enough records and sortBy is timestamp (write order), we can stop early
-      if (sortBy === 'timestamp' && allRecords.length >= offset + limit + 1000) {
+      // Early stop once we have comfortably more than we need.
+      // Since files are ordered newest data date → oldest, later files are unlikely to contain newer records.
+      if (allRecords.length >= offset + limit + 2000) {
         break;
       }
     } catch (err) {
