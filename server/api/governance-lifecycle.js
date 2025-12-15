@@ -668,12 +668,36 @@ function correlateTopics(allTopics) {
   return lifecycleItems;
 }
 
+// Fix types based on primaryId patterns (for cached data that may have incorrect types)
+function fixLifecycleItemTypes(data) {
+  if (!data || !data.lifecycleItems) return data;
+  
+  for (const item of data.lifecycleItems) {
+    // Fix type based on primaryId patterns
+    if (item.primaryId) {
+      const pid = item.primaryId.toUpperCase();
+      if (pid.includes('CIP-') || pid.includes('CIP ') || pid.startsWith('CIP')) {
+        item.type = 'cip';
+      } else if (item.type === 'other') {
+        // Check topics for better type inference
+        const hasAppName = item.topics?.some(t => t.identifiers?.appName);
+        const hasValidatorName = item.topics?.some(t => t.identifiers?.validatorName);
+        if (hasAppName) item.type = 'featured-app';
+        else if (hasValidatorName) item.type = 'validator';
+      }
+    }
+  }
+  
+  return data;
+}
+
 // Helper to read cached data
 function readCache() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
       const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
-      return data;
+      // Fix types in cached data
+      return fixLifecycleItemTypes(data);
     }
   } catch (err) {
     console.error('Error reading cache:', err.message);
