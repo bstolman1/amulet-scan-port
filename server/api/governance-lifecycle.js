@@ -466,37 +466,49 @@ function correlateTopics(allTopics) {
   for (const topic of sortedTopics) {
     if (used.has(topic.id)) continue;
     
-    // Determine the type and primary ID based on identifiers
-    // IMPORTANT: Only classify as featured-app/validator if we have a valid entity name
-    // This prevents generic "Featured App Approved" type topics from grouping everything
+    // Determine the type based on GROUP FLOW (primary) and subject-line heuristics (secondary)
+    // The group a topic is posted to IS the ground truth for its stage
     const topicEntityName = topic.identifiers.entityName;
     const hasCip = !!topic.identifiers.cipNumber;
-    const isCipDiscussion = !!topic.identifiers.isCipDiscussion;  // CIP Discuss without a number
+    const isCipDiscussion = !!topic.identifiers.isCipDiscussion;
     const hasAppIndicator = !!topic.identifiers.appName;
     const hasValidatorIndicator = !!topic.identifiers.validatorName;
     
-    // Type determination: require entity name for featured-app/validator classification
-    // Check if this is an outcome - matches "Tokenomics Outcomes" with or without a date suffix
+    // Check for special subject-line patterns
     const subjectTrimmed = topic.subject.trim();
     const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
     const isValidatorOperations = /\bValidator\s+Operations\b/i.test(subjectTrimmed);
     
-    // Debug log for outcome detection
-    if (subjectTrimmed.toLowerCase().includes('outcome')) {
-      console.log(`[Outcome check] Subject: "${topic.subject}" -> isOutcome: ${isOutcome}`);
-    }
-    
+    // TYPE DETERMINATION: Use group flow as primary signal
+    // CIP groups (cip-discuss, cip-vote, cip-announce) -> cip type
+    // Shared groups need subject-line disambiguation for featured-app vs validator
     let type;
+    
     if (isOutcome) {
+      // Outcomes are a special case regardless of group
       type = 'outcome';
-    } else if (hasCip || isCipDiscussion) {
-      type = 'cip';  // CIP topics need explicit type for correlation to work
-    } else if (isValidatorOperations || hasValidatorIndicator) {
-      type = 'validator';
-    } else if (hasAppIndicator) {
+    } else if (topic.flow === 'cip') {
+      // CIP groups are always CIP type
+      type = 'cip';
+    } else if (topic.flow === 'featured-app') {
+      // tokenomics-announce is specifically for featured-app flow
       type = 'featured-app';
+    } else if (topic.flow === 'shared') {
+      // Shared groups (tokenomics, sv-announce) need subject-line disambiguation
+      // Priority: CIP > Validator > Featured App > fallback to featured-app
+      if (hasCip || isCipDiscussion) {
+        type = 'cip';
+      } else if (isValidatorOperations || hasValidatorIndicator) {
+        type = 'validator';
+      } else if (hasAppIndicator) {
+        type = 'featured-app';
+      } else {
+        // Default shared group topics to featured-app (most common)
+        type = 'featured-app';
+      }
     } else {
-      type = 'other';
+      // Fallback - should rarely happen since all groups have a flow
+      type = 'featured-app';
     }
     
     // For outcomes, each topic gets its own card based on the topic date
