@@ -4,11 +4,22 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Prefer the repository-local data directory if it exists (common in Lovable + WSL setups)
+// Repo layout: server/duckdb/connection.js -> ../../data
+const REPO_DATA_DIR = path.join(__dirname, '../../data');
+const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
+
 // DATA_DIR should point to the base directory (e.g., C:\ledger_raw or /mnt/c/ledger_raw)
 // Binary files and ACS files are both in the 'raw' subdirectory
 // Auto-detect platform: Windows uses C:/ledger_raw, WSL uses /mnt/c/ledger_raw
-const DEFAULT_DATA_DIR = process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw';
-const BASE_DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
+const PLATFORM_DEFAULT_DATA_DIR = process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw';
+
+// Final selection order:
+// 1) process.env.DATA_DIR (explicit override)
+// 2) repo-local data/ (if present)
+// 3) platform default
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : PLATFORM_DEFAULT_DATA_DIR);
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 
