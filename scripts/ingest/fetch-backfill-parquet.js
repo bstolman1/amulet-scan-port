@@ -847,8 +847,17 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       totalEvents += batchEvents;
       batchCount++;
       
-      // Update cursor position
-      before = earliestTime;
+      // Update cursor position - subtract 1ms to prevent re-fetching same record
+      if (earliestTime !== before) {
+        const d = new Date(earliestTime);
+        d.setMilliseconds(d.getMilliseconds() - 1);
+        before = d.toISOString();
+      } else {
+        // No new data found, small step back
+        const d = new Date(before);
+        d.setMilliseconds(d.getMilliseconds() - 1);
+        before = d.toISOString();
+      }
       
       // Calculate throughput
       const elapsed = (Date.now() - startTime) / 1000;
@@ -880,7 +889,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       // Main progress line with current tuning values
       console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
       
-      if (reachedEnd || earliestTime <= atOrAfter) {
+      if (reachedEnd || new Date(before).getTime() <= new Date(atOrAfter).getTime()) {
         console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
         break;
       }
