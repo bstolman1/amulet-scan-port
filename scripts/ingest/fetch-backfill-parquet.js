@@ -504,27 +504,194 @@ function decodeInMainThread(tx, migrationId) {
 }
 
 /**
- * Sequential fetch with proper page chaining
+ * Fetch a single time slice sequentially (used by parallel partitioned fetch)
+ * Returns all transactions in the slice using proper page chaining.
+ */
+async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex) {
+  const results = [];
+  const seenUpdateIds = new Set();
+  let currentBefore = sliceBefore;
+  let consecutiveEmpty = 0;
+  const MAX_CONSECUTIVE_EMPTY = 2;
+  
+  while (true) {
+    // Check if we've passed the lower bound of this slice
+    if (new Date(currentBefore).getTime() <= new Date(sliceAfter).getTime()) {
+      break;
+    }
+    
+    let response;
+    try {
+      response = await fetchBackfillBefore(migrationId, synchronizerId, currentBefore, sliceAfter);
+    } catch (err) {
+      throw err;
+    }
+    
+    const txs = response?.transactions || [];
+    
+    if (txs.length === 0) {
+      consecutiveEmpty++;
+      
+      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+        // Range is empty
+        break;
+      }
+      
+      // Small jump to handle edge cases
+      const d = new Date(currentBefore);
+      d.setTime(d.getTime() - 500);
+      
+      if (d.getTime() <= new Date(sliceAfter).getTime()) {
+        break;
+      }
+      
+      currentBefore = d.toISOString();
+      continue;
+    }
+    
+    consecutiveEmpty = 0;
+    
+    // Deduplicate within this slice
+    const uniqueTxs = [];
+    for (const tx of txs) {
+      const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+      if (updateId) {
+        if (!seenUpdateIds.has(updateId)) {
+          seenUpdateIds.add(updateId);
+          uniqueTxs.push(tx);
+        }
+      } else {
+        uniqueTxs.push(tx);
+      }
+    }
+    
+    if (uniqueTxs.length > 0) {
+      results.push(...uniqueTxs);
+    }
+    
+    // Find oldest timestamp for next page
+    let oldestTime = null;
+    for (const tx of txs) {
+      const t = getEventTime(tx);
+      if (t && (!oldestTime || t < oldestTime)) {
+        oldestTime = t;
+      }
+    }
+    
+    if (oldestTime && new Date(oldestTime).getTime() <= new Date(sliceAfter).getTime()) {
+      break;
+    }
+    
+    if (oldestTime) {
+      currentBefore = oldestTime;
+    } else {
+      const d = new Date(currentBefore);
+      d.setMilliseconds(d.getMilliseconds() - 1);
+      currentBefore = d.toISOString();
+    }
+    
+    // Memory safety
+    if (seenUpdateIds.size > 50000) {
+      seenUpdateIds.clear();
+    }
+  }
+  
+  return { sliceIndex, transactions: results };
+}
+
+/**
+ * Parallel fetch with TIME-RANGE PARTITIONING
  * 
- * FIXED ISSUES:
- * 1. Uses oldest timestamp from response as next 'before' (proper chaining)
- * 2. Empty response = entire range from 'before' to 'at_or_after' is empty (done)
- * 3. No overlapping requests - sequential is safer for correctness
- * 4. Deduplication resets per batch cycle to prevent memory bloat
+ * Divides the time range into N non-overlapping slices and fetches each in parallel.
+ * This ensures no overlapping requests while maximizing throughput.
  * 
- * The API returns transactions in descending order (newest first).
- * To page backwards: use the oldest record_time from current page as next 'before'.
+ * Example with concurrency=4:
+ *   |----slice0----|----slice1----|----slice2----|----slice3----|
+ *   maxTime                                                    minTime
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
+  const startMs = new Date(atOrAfter).getTime();
+  const endMs = new Date(startBefore).getTime();
+  const rangeMs = endMs - startMs;
+  
+  // Don't parallelize tiny ranges
+  if (rangeMs < 60000 * concurrency) {
+    // Less than 1 minute per slice - use sequential
+    return sequentialFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches);
+  }
+  
+  // Divide into non-overlapping time slices
+  const sliceMs = rangeMs / concurrency;
+  const slicePromises = [];
+  
+  console.log(`   🔀 Parallel fetch: ${concurrency} slices of ${Math.round(sliceMs / 1000)}s each`);
+  
+  for (let i = 0; i < concurrency; i++) {
+    // Slice i covers: [sliceAfter, sliceBefore)
+    // Slice 0 = most recent, Slice N-1 = oldest
+    const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
+    const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
+    
+    slicePromises.push(
+      fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAfter, i)
+        .catch(err => {
+          console.error(`   ❌ Slice ${i} failed: ${err.message}`);
+          return { sliceIndex: i, transactions: [], error: err };
+        })
+    );
+  }
+  
+  // Wait for all slices to complete
+  const sliceResults = await Promise.all(slicePromises);
+  
+  // Merge results and deduplicate across slices (edge cases at boundaries)
+  const seenUpdateIds = new Set();
+  const allTransactions = [];
+  let hasError = false;
+  
+  // Process in order (newest to oldest)
+  for (const slice of sliceResults.sort((a, b) => a.sliceIndex - b.sliceIndex)) {
+    if (slice.error) {
+      hasError = true;
+      continue;
+    }
+    
+    for (const tx of slice.transactions) {
+      const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+      if (updateId) {
+        if (!seenUpdateIds.has(updateId)) {
+          seenUpdateIds.add(updateId);
+          allTransactions.push(tx);
+        }
+      } else {
+        allTransactions.push(tx);
+      }
+    }
+  }
+  
+  // Return in format expected by caller
+  if (allTransactions.length === 0) {
+    return { results: [], reachedEnd: !hasError };
+  }
+  
+  return { 
+    results: [{ transactions: allTransactions, before: startBefore }], 
+    reachedEnd: true  // We processed the entire range
+  };
+}
+
+/**
+ * Sequential fallback for small ranges or when parallel fails
+ */
+async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches) {
   const results = [];
-  const seenUpdateIds = new Set(); // Dedup within this batch cycle
+  const seenUpdateIds = new Set();
   let currentBefore = startBefore;
   let batchesFetched = 0;
   let consecutiveEmpty = 0;
-  const MAX_CONSECUTIVE_EMPTY = 3; // If 3 empties in a row, we've hit a gap
+  const MAX_CONSECUTIVE_EMPTY = 3;
   
   while (batchesFetched < maxBatches) {
-    // Check if we've passed the lower bound
     if (new Date(currentBefore).getTime() <= new Date(atOrAfter).getTime()) {
       return { results, reachedEnd: true };
     }
@@ -542,18 +709,12 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     if (txs.length === 0) {
       consecutiveEmpty++;
       
-      // The API searches the ENTIRE range from 'before' down to 'at_or_after'
-      // Empty means NO transactions exist in that entire range - we're done!
-      console.log(`   ℹ️ Empty response (${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY}): no data from ${currentBefore} to ${atOrAfter}`);
-      
       if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
-        // Multiple empty responses confirms the range is truly empty
         return { results, reachedEnd: true };
       }
       
-      // Try a small jump to handle edge cases (API might have hiccups)
       const d = new Date(currentBefore);
-      d.setTime(d.getTime() - 1000); // Jump 1 second
+      d.setTime(d.getTime() - 1000);
       
       if (d.getTime() <= new Date(atOrAfter).getTime()) {
         return { results, reachedEnd: true };
@@ -563,10 +724,8 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       continue;
     }
     
-    // Reset consecutive empty counter on success
     consecutiveEmpty = 0;
     
-    // Deduplicate transactions
     const uniqueTxs = [];
     for (const tx of txs) {
       const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
@@ -575,9 +734,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
           seenUpdateIds.add(updateId);
           uniqueTxs.push(tx);
         }
-        // else: duplicate, skip
       } else {
-        // No update_id (shouldn't happen), include anyway
         uniqueTxs.push(tx);
       }
     }
@@ -586,31 +743,26 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       results.push({ transactions: uniqueTxs, before: currentBefore });
     }
     
-    // Find the OLDEST timestamp to use as next 'before'
     let oldestTime = null;
     for (const tx of txs) {
       const t = getEventTime(tx);
       if (t && (!oldestTime || t < oldestTime)) {
         oldestTime = t;
-      }
+    }
     }
     
-    // Check if we've reached the lower bound
     if (oldestTime && new Date(oldestTime).getTime() <= new Date(atOrAfter).getTime()) {
       return { results, reachedEnd: true };
     }
     
-    // Use oldest time as next before (proper paging)
     if (oldestTime) {
       currentBefore = oldestTime;
     } else {
-      // Fallback: shouldn't happen, but decrement by 1ms
       const d = new Date(currentBefore);
       d.setMilliseconds(d.getMilliseconds() - 1);
       currentBefore = d.toISOString();
     }
     
-    // Limit dedup set size to prevent memory bloat
     if (seenUpdateIds.size > 100000) {
       seenUpdateIds.clear();
     }
