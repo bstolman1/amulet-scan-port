@@ -47,22 +47,31 @@ const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
 const TARGET_MIGRATION = process.env.TARGET_MIGRATION ? parseInt(process.env.TARGET_MIGRATION) : null;
 
 // ==========================================
-// AUTO-TUNING: PARALLEL FETCHES
+// AUTO-TUNING: PARALLEL FETCHES (Enhanced with Latency Tracking)
 // ==========================================
-const BASE_PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 2;
-const MIN_PARALLEL_FETCHES = parseInt(process.env.MIN_PARALLEL_FETCHES) || 1;
-const MAX_PARALLEL_FETCHES = parseInt(process.env.MAX_PARALLEL_FETCHES) || 6;
+const BASE_PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 8;
+const MIN_PARALLEL_FETCHES = parseInt(process.env.MIN_PARALLEL_FETCHES) || 2;
+const MAX_PARALLEL_FETCHES = parseInt(process.env.MAX_PARALLEL_FETCHES) || 24;
 
 let dynamicParallelFetches = Math.min(
   Math.max(BASE_PARALLEL_FETCHES, MIN_PARALLEL_FETCHES),
   MAX_PARALLEL_FETCHES
 );
 
-const FETCH_TUNE_WINDOW_MS = 30_000;
+// Latency thresholds (milliseconds)
+const LATENCY_LOW_MS = parseInt(process.env.LATENCY_LOW_MS) || 500;
+const LATENCY_HIGH_MS = parseInt(process.env.LATENCY_HIGH_MS) || 2000;
+const LATENCY_CRITICAL_MS = parseInt(process.env.LATENCY_CRITICAL_MS) || 5000;
+
+const FETCH_TUNE_WINDOW_MS = 15_000; // Faster tuning window (was 30s)
 let fetchStats = {
   windowStart: Date.now(),
   successCount: 0,
   retry503Count: 0,
+  latencies: [],           // Rolling window of recent response times
+  avgLatency: 0,
+  p95Latency: 0,
+  consecutiveStableWindows: 0,
 };
 
 // ==========================================
@@ -164,7 +173,16 @@ async function retryWithBackoff(fn, options = {}) {
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      const callStart = Date.now();
       const result = await fn();
+      const latency = Date.now() - callStart;
+      
+      // Track latency (rolling window of last 100 requests)
+      fetchStats.latencies.push(latency);
+      if (fetchStats.latencies.length > 100) {
+        fetchStats.latencies.shift();
+      }
+      
       // ✅ Count successful API calls
       fetchStats.successCount++;
       return result;
@@ -197,41 +215,88 @@ async function retryWithBackoff(fn, options = {}) {
 }
 
 /**
- * Auto-tune parallel fetches based on 503 rate
+ * Reset fetch stats for new tuning window
+ */
+function resetFetchStats(now) {
+  fetchStats.windowStart = now;
+  fetchStats.successCount = 0;
+  fetchStats.retry503Count = 0;
+  fetchStats.latencies = [];
+}
+
+/**
+ * Auto-tune parallel fetches based on error rate AND latency
  */
 function maybeTuneParallelFetches(shardLabel = '') {
   const now = Date.now();
   const elapsed = now - fetchStats.windowStart;
   if (elapsed < FETCH_TUNE_WINDOW_MS) return;
 
-  const { successCount, retry503Count } = fetchStats;
+  const { successCount, retry503Count, latencies } = fetchStats;
   const total = successCount + retry503Count;
 
   if (total === 0) {
-    fetchStats = { windowStart: now, successCount: 0, retry503Count: 0 };
+    resetFetchStats(now);
     return;
   }
 
+  // Calculate latency percentiles
+  let avgLatency = 0;
+  let p95Latency = 0;
+  if (latencies.length > 0) {
+    const sorted = [...latencies].sort((a, b) => a - b);
+    avgLatency = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+    p95Latency = sorted[Math.floor(sorted.length * 0.95)] || sorted[sorted.length - 1];
+    fetchStats.avgLatency = avgLatency;
+    fetchStats.p95Latency = p95Latency;
+  }
+
   const errorRate = retry503Count / total;
+  let action = null;
 
-  // Too many 503s → scale down parallelism
-  if (retry503Count >= 5 && errorRate > 0.10 && dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
-    const old = dynamicParallelFetches;
-    dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - 1);
-    console.log(
-      `   🔧 Auto-tune${shardLabel}: high 503 rate (${retry503Count}/${total}, ${(errorRate * 100).toFixed(1)}%) → PARALLEL_FETCHES ${old} → ${dynamicParallelFetches}`
-    );
+  // RULE 1: High error rate → immediate scale down by 2
+  if (retry503Count >= 3 && errorRate > 0.05) {
+    if (dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
+      const old = dynamicParallelFetches;
+      dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - 2);
+      console.log(`   🔧 Auto-tune${shardLabel}: HIGH ERRORS (${retry503Count}/${total}, ${(errorRate*100).toFixed(1)}%) → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      action = 'down';
+    }
   }
-  // No 503s and plenty of successes → cautiously scale up
-  else if (retry503Count === 0 && successCount >= 20 && dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
-    const old = dynamicParallelFetches;
-    dynamicParallelFetches = Math.min(MAX_PARALLEL_FETCHES, dynamicParallelFetches + 1);
-    console.log(
-      `   🔧 Auto-tune${shardLabel}: stable (${successCount} ok, 0 503s) → PARALLEL_FETCHES ${old} → ${dynamicParallelFetches}`
-    );
+  // RULE 2: Critical latency → scale down
+  else if (p95Latency > LATENCY_CRITICAL_MS || avgLatency > LATENCY_HIGH_MS) {
+    if (dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
+      const old = dynamicParallelFetches;
+      dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - 1);
+      console.log(`   🔧 Auto-tune${shardLabel}: HIGH LATENCY (avg=${avgLatency.toFixed(0)}ms, p95=${p95Latency.toFixed(0)}ms) → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      action = 'down';
+    }
+  }
+  // RULE 3: Low errors + low latency → scale up aggressively
+  else if (retry503Count === 0 && successCount >= 15 && avgLatency < LATENCY_LOW_MS && avgLatency > 0) {
+    if (dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
+      const old = dynamicParallelFetches;
+      const increment = avgLatency < 300 ? 2 : 1;
+      dynamicParallelFetches = Math.min(MAX_PARALLEL_FETCHES, dynamicParallelFetches + increment);
+      console.log(`   🔧 Auto-tune${shardLabel}: FAST+STABLE (avg=${avgLatency.toFixed(0)}ms, ${successCount} ok) → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      action = 'up';
+    }
+  }
+  // RULE 4: Stable with moderate latency → cautious scale up
+  else if (retry503Count === 0 && successCount >= 20 && avgLatency < LATENCY_HIGH_MS) {
+    fetchStats.consecutiveStableWindows++;
+    if (fetchStats.consecutiveStableWindows >= 2 && dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
+      const old = dynamicParallelFetches;
+      dynamicParallelFetches = Math.min(MAX_PARALLEL_FETCHES, dynamicParallelFetches + 1);
+      console.log(`   🔧 Auto-tune${shardLabel}: STABLE x${fetchStats.consecutiveStableWindows} → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      action = 'up';
+      fetchStats.consecutiveStableWindows = 0;
+    }
   }
 
-  fetchStats = { windowStart: now, successCount: 0, retry503Count: 0 };
+  // Reset window
+  if (action !== 'up') fetchStats.consecutiveStableWindows = 0;
+  resetFetchStats(now);
 }
 
 /**
@@ -1028,9 +1093,12 @@ async function runBackfill() {
   console.log(`🚀 Starting Canton ledger backfill (Auto-Tuning Mode)${shardLabel}`);
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
-  console.log("   PARALLEL_FETCHES:", `${dynamicParallelFetches} (auto-tuning: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
-  console.log("   DECODE_WORKERS:", `${dynamicDecodeWorkers} (auto-tuning: ${MIN_DECODE_WORKERS}-${MAX_DECODE_WORKERS})`);
-  console.log("   FLUSH_EVERY_BATCHES:", FLUSH_EVERY_BATCHES);
+  console.log("=".repeat(80));
+  console.log("\n⚙️  Auto-Tuning Configuration:");
+  console.log(`   Parallel Fetches: ${dynamicParallelFetches} (range: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
+  console.log(`   Decode Workers: ${dynamicDecodeWorkers} (range: ${MIN_DECODE_WORKERS}-${MAX_DECODE_WORKERS})`);
+  console.log(`   Tune Window: ${FETCH_TUNE_WINDOW_MS/1000}s | Latency thresholds: ${LATENCY_LOW_MS}ms / ${LATENCY_HIGH_MS}ms / ${LATENCY_CRITICAL_MS}ms`);
+  console.log(`   FLUSH_EVERY_BATCHES: ${FLUSH_EVERY_BATCHES}`);
   if (isSharded) {
     console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL} (0-indexed)`);
   }
