@@ -42,6 +42,13 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 def main():
+    import gc
+    import os
+    
+    # Memory optimization settings
+    os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'max_split_size_mb:128')
+    os.environ.setdefault('TRANSFORMERS_CACHE', '/tmp/hf_cache')
+    
     log("Loading NLI classification model...")
     
     # Load zero-shot classification pipeline
@@ -50,7 +57,8 @@ def main():
         classifier = pipeline(
             "zero-shot-classification",
             model="facebook/bart-large-mnli",
-            device=-1  # CPU for determinism
+            device=-1,  # CPU for determinism
+            torch_dtype="float32",  # Explicit dtype
         )
     except Exception as e:
         log(f"Error loading model: {e}")
@@ -61,8 +69,60 @@ def main():
     # Create candidate labels with descriptions for better matching
     candidate_labels = [STAGE_DESCRIPTIONS[stage] for stage in ALLOWED_STAGES]
     
-    # Process each line as a JSON object
+    # Buffer items and process in mini-batches for memory efficiency
+    BATCH_SIZE = 10  # Process 10 at a time, then GC
+    buffer = []
     processed = 0
+    
+    def process_batch(items):
+        """Process a mini-batch and free memory"""
+        nonlocal processed
+        for item in items:
+            item_id = item.get("id", "unknown")
+            text = item.get("text", "").strip()
+            
+            if not text:
+                print(json.dumps({"id": item_id, "stage": "other", "confidence": 0.0}), flush=True)
+                processed += 1
+                continue
+            
+            try:
+                # Run zero-shot classification
+                result = classifier(
+                    text,
+                    candidate_labels,
+                    hypothesis_template="This message is about {}.",
+                    multi_label=False
+                )
+                
+                # Map back from description to stage label
+                best_description = result["labels"][0]
+                best_score = result["scores"][0]
+                
+                best_stage = "other"
+                for stage, desc in STAGE_DESCRIPTIONS.items():
+                    if desc == best_description:
+                        best_stage = stage
+                        break
+                
+                print(json.dumps({
+                    "id": item_id,
+                    "stage": best_stage,
+                    "confidence": round(best_score, 4)
+                }), flush=True)
+                
+            except Exception as e:
+                log(f"Classification error for {item_id}: {e}")
+                print(json.dumps({"id": item_id, "stage": "other", "confidence": 0.0}), flush=True)
+            
+            processed += 1
+            if processed % 50 == 0:
+                log(f"Processed {processed} items...")
+        
+        # Force garbage collection after each batch
+        gc.collect()
+    
+    # Read and buffer items
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -70,57 +130,20 @@ def main():
         
         try:
             item = json.loads(line)
-            item_id = item.get("id", "unknown")
-            text = item.get("text", "").strip()
+            buffer.append(item)
             
-            if not text:
-                # Empty text - return default
-                print(json.dumps({"id": item_id, "stage": "other", "confidence": 0.0}), flush=True)
-                continue
-            
-            # Run zero-shot classification
-            result = classifier(
-                text,
-                candidate_labels,
-                hypothesis_template="This message is about {}.",
-                multi_label=False  # Single best label only
-            )
-            
-            # Map back from description to stage label
-            best_description = result["labels"][0]
-            best_score = result["scores"][0]
-            
-            # Find the stage that matches this description
-            best_stage = "other"
-            for stage, desc in STAGE_DESCRIPTIONS.items():
-                if desc == best_description:
-                    best_stage = stage
-                    break
-            
-            # Output strict JSON schema
-            output = {
-                "id": item_id,
-                "stage": best_stage,
-                "confidence": round(best_score, 4)
-            }
-            print(json.dumps(output), flush=True)
-            
-            processed += 1
-            if processed % 50 == 0:
-                log(f"Processed {processed} items...")
+            # Process when buffer is full
+            if len(buffer) >= BATCH_SIZE:
+                process_batch(buffer)
+                buffer = []
                 
         except json.JSONDecodeError as e:
             log(f"Invalid JSON line: {e}")
             continue
-        except Exception as e:
-            log(f"Classification error: {e}")
-            # Output error result for this item
-            try:
-                item_id = json.loads(line).get("id", "unknown")
-                print(json.dumps({"id": item_id, "stage": "other", "confidence": 0.0}), flush=True)
-            except:
-                pass
-            continue
+    
+    # Process remaining items
+    if buffer:
+        process_batch(buffer)
     
     log(f"Inference complete. Processed {processed} items total.")
 
