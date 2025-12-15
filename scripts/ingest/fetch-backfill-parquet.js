@@ -379,6 +379,7 @@ async function getMigrationInfo(migrationId) {
  * Fetch backfill data before a timestamp (single request)
  */
 let fetchCount = 0;
+let firstCallLogged = false;
 async function fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter) {
   const payload = {
     migration_id: migrationId,
@@ -394,17 +395,13 @@ async function fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfte
   const thisCall = ++fetchCount;
   const startTime = Date.now();
   
-  // Log every 10th call or first few calls for visibility
-  const shouldLog = thisCall <= 3 || thisCall % 10 === 0;
-  if (shouldLog) {
-    console.log(`   🌐 API call #${thisCall}: before=${before.substring(0, 23)} ...`);
-  }
-  
   return await retryWithBackoff(async () => {
     const response = await client.post('/v0/backfilling/updates-before', payload);
-    const elapsed = Date.now() - startTime;
-    if (shouldLog || elapsed > 10000) {
-      console.log(`   ✓ API call #${thisCall} returned ${response.data?.transactions?.length || 0} txs in ${elapsed}ms`);
+    // Log only the first successful call
+    if (!firstCallLogged) {
+      firstCallLogged = true;
+      const elapsed = Date.now() - startTime;
+      console.log(`   ✅ API connected: first call returned ${response.data?.transactions?.length || 0} txs in ${elapsed}ms`);
     }
     return response.data;
   });
