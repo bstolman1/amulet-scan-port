@@ -31,28 +31,24 @@ const UnclaimedSVRewards = () => {
   const { data: rewardCouponsData, isLoading: couponsLoading } = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:Amulet:ValidatorRewardCoupon",
-    !!snapshot,
   );
 
   // Fetch SvRewardCoupon contracts
   const { data: svRewardCouponsData, isLoading: svCouponsLoading } = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:Amulet:SvRewardCoupon",
-    !!snapshot,
   );
 
   // Fetch AppRewardCoupon contracts
   const { data: appRewardCouponsData, isLoading: appCouponsLoading } = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:Amulet:AppRewardCoupon",
-    !!snapshot,
   );
 
   // Fetch UnclaimedReward contracts
   const { data: unclaimedRewardsData, isLoading: unclaimedLoading } = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:Amulet:UnclaimedReward",
-    !!snapshot,
   );
 
   const isLoading = couponsLoading || svCouponsLoading || appCouponsLoading || unclaimedLoading;

@@ -25,25 +25,21 @@ const ValidatorLicenses = () => {
   const licensesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:ValidatorLicense:ValidatorLicense",
-    !!latestSnapshot,
   );
 
   const couponsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:ValidatorLicense:ValidatorFaucetCoupon",
-    !!latestSnapshot,
   );
 
   const livenessQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:ValidatorLicense:ValidatorLivenessActivityRecord",
-    !!latestSnapshot,
   );
 
   const validatorRightsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:Amulet:ValidatorRight",
-    !!latestSnapshot,
   );
 
   const licensesData = licensesQuery.data?.data || [];

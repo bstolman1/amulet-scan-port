@@ -23,17 +23,14 @@ const Transfers = () => {
   const preapprovalsQuery = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:AmuletRules:TransferPreapproval",
-    !!snapshot,
   );
   const commandsQuery = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:ExternalPartyAmuletRules:TransferCommand",
-    !!snapshot,
   );
   const instructionsQuery = useAggregatedTemplateData(
     snapshot?.id,
     "Splice:AmuletTransferInstruction:AmuletTransferInstruction",
-    !!snapshot,
   );
 
   const isLoading = preapprovalsQuery.isLoading || commandsQuery.isLoading || instructionsQuery.isLoading;

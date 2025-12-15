@@ -16,7 +16,6 @@ const ExternalPartySetup = () => {
   const proposalsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:AmuletRules:ExternalPartySetupProposal",
-    !!latestSnapshot,
   );
 
   const proposalsData = proposalsQuery.data?.data || [];

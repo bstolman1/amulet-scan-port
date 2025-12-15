@@ -229,7 +229,6 @@ const AmuletRules = () => {
   const amuletRulesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:AmuletRules:AmuletRules",
-    !!latestSnapshot,
   );
 
   const normalizedRule = useMemo(() => normalizeAmuletRule(amuletRulesQuery.data?.data?.[0]), [amuletRulesQuery.data]);

@@ -22,7 +22,6 @@ const TransferCounters = () => {
   const countersQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:ExternalPartyAmuletRules:TransferCommandCounter",
-    !!latestSnapshot,
   );
 
   const getField = (obj: any, fieldNames: string[]) => {

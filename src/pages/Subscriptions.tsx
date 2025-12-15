@@ -24,19 +24,16 @@ const Subscriptions = () => {
   const subscriptionsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Wallet:Subscriptions:Subscription",
-    !!latestSnapshot,
   );
 
   const idleStatesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Wallet:Subscriptions:SubscriptionIdleState",
-    !!latestSnapshot,
   );
 
   const requestsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Wallet:Subscriptions:SubscriptionRequest",
-    !!latestSnapshot,
   );
 
   const subscriptionsData = subscriptionsQuery.data?.data || [];

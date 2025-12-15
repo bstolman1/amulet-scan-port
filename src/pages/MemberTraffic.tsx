@@ -26,7 +26,6 @@ const MemberTraffic = () => {
   const trafficQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:DecentralizedSynchronizer:MemberTraffic",
-    !!latestSnapshot,
   );
 
   const trafficData = trafficQuery.data?.data || [];
