@@ -6,7 +6,10 @@
   "scripts": {
     "backfill": "node --max-old-space-size=8192 fetch-backfill-parquet.js",
     "ingest": "node --max-old-space-size=8192 fetch-updates-parquet.js",
-    "rotate": "node --max-old-space-size=8192 rotate-parquet.js"
+    "rotate": "node --max-old-space-size=8192 rotate-parquet.js",
+    "acs": "node fetch-acs-parquet.js",
+    "acs:schedule": "node acs-scheduler.js",
+    "acs:schedule:now": "node acs-scheduler.js --run-now"
   },
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0",
@@ -14,6 +17,7 @@
     "bignumber.js": "^9.1.2",
     "dotenv": "^16.4.0",
     "duckdb": "^1.0.0",
+    "node-cron": "^3.0.3",
     "parquetjs": "^0.11.2",
     "piscina": "^4.8.0",
     "protobufjs": "^7.4.0"
