@@ -6,8 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
-import { Clock, Database, FileText, Activity, CheckCircle, XCircle, Trash2, Server, Filter } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { Clock, Database, FileText, Activity, CheckCircle, XCircle, Trash2, Server, Filter, Calendar, Timer } from "lucide-react";
+import { formatDistanceToNow, differenceInMinutes, differenceInSeconds } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
 import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
@@ -51,6 +51,135 @@ interface TemplateStats {
   created_at?: string;
   updated_at?: string;
 }
+
+// Calculate next scheduled run based on 3-hour UTC schedule (00:00, 03:00, 06:00, etc.)
+function getNextScheduledRun(): Date {
+  const now = new Date();
+  const scheduleHours = [0, 3, 6, 9, 12, 15, 18, 21];
+  
+  for (const hour of scheduleHours) {
+    const nextRun = new Date(now);
+    nextRun.setUTCHours(hour, 0, 0, 0);
+    if (nextRun > now) {
+      return nextRun;
+    }
+  }
+  
+  // Next day at 00:00 UTC
+  const tomorrow = new Date(now);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  tomorrow.setUTCHours(0, 0, 0, 0);
+  return tomorrow;
+}
+
+function getPreviousScheduledRun(): Date {
+  const now = new Date();
+  const scheduleHours = [0, 3, 6, 9, 12, 15, 18, 21];
+  
+  // Find the most recent scheduled time
+  for (let i = scheduleHours.length - 1; i >= 0; i--) {
+    const prevRun = new Date(now);
+    prevRun.setUTCHours(scheduleHours[i], 0, 0, 0);
+    if (prevRun <= now) {
+      return prevRun;
+    }
+  }
+  
+  // Yesterday's last run (21:00 UTC)
+  const yesterday = new Date(now);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  yesterday.setUTCHours(21, 0, 0, 0);
+  return yesterday;
+}
+
+// Scheduler Status Component
+const SchedulerStatusCard = ({ latestSnapshotTime }: { latestSnapshotTime?: string }) => {
+  const [now, setNow] = useState(new Date());
+  
+  // Update every second to keep countdown accurate
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+  
+  const nextRun = getNextScheduledRun();
+  const prevRun = getPreviousScheduledRun();
+  
+  const minutesToNext = differenceInMinutes(nextRun, now);
+  const secondsToNext = differenceInSeconds(nextRun, now) % 60;
+  
+  // Check if latest snapshot is from the previous scheduled run (within 30 min window)
+  const latestSnapshot = latestSnapshotTime ? new Date(latestSnapshotTime) : null;
+  const wasSnapshotTaken = latestSnapshot && 
+    Math.abs(differenceInMinutes(latestSnapshot, prevRun)) < 30;
+  
+  return (
+    <Card className="glass-card border-primary/20 bg-primary/5">
+      <CardContent className="py-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Calendar className="h-5 w-5 text-primary" />
+          <span className="font-semibold">ACS Snapshot Schedule</span>
+          <Badge variant="outline" className="text-xs ml-2">Every 3 hours UTC</Badge>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div className="text-sm text-muted-foreground">Next Scheduled Run</div>
+            <div className="text-lg font-bold text-primary">
+              {nextRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {nextRun.toLocaleDateString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">Time Until Next</div>
+            <div className="text-lg font-bold flex items-center gap-1">
+              <Timer className="h-4 w-4 text-primary" />
+              {minutesToNext}m {secondsToNext}s
+            </div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">Previous Scheduled</div>
+            <div className="text-lg font-bold">
+              {prevRun.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {prevRun.toLocaleDateString()}
+            </div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">Last Snapshot Status</div>
+            <div className="flex items-center gap-2">
+              {wasSnapshotTaken ? (
+                <>
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm text-green-500">Completed</span>
+                </>
+              ) : latestSnapshot ? (
+                <>
+                  <Clock className="h-4 w-4 text-yellow-500" />
+                  <span className="text-sm text-yellow-500">
+                    {formatDistanceToNow(latestSnapshot, { addSuffix: true })}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">No data</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 text-xs text-muted-foreground">
+          Schedule: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC
+          <span className="mx-2">•</span>
+          Start scheduler: <code className="bg-muted px-1 rounded">npm run acs:schedule</code>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 const AUTO_REFRESH_INTERVAL = 10000; // 10 seconds for local mode
 
@@ -409,6 +538,11 @@ const SnapshotProgress = () => {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Scheduler Status Card - Only show in local mode */}
+        {isLocalMode && (
+          <SchedulerStatusCard latestSnapshotTime={snapshots[0]?.timestamp} />
         )}
 
         {/* Migration Filter */}
