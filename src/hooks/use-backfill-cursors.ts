@@ -16,6 +16,9 @@ export interface BackfillCursor {
   total_updates?: number | null;
   total_events?: number | null;
   started_at?: string | null;
+  pending_writes?: number | null;
+  buffered_records?: number | null;
+  error?: string | null;
 }
 
 export interface BackfillStats {

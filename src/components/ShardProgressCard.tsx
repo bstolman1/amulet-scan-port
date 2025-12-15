@@ -128,10 +128,17 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
     const activeShards = shardedGroups.reduce((sum, g) => sum + g.activeShards, 0);
     const totalUpdates = shardedGroups.reduce((sum, g) => sum + g.totalUpdates, 0);
     const totalEvents = shardedGroups.reduce((sum, g) => sum + g.totalEvents, 0);
-    const overallProgress = totalShards > 0
+
+    const hasPendingWork = shardedGroups.some((g) =>
+      g.shards.some((s) => (s.pendingWrites || 0) > 0 || (s.bufferedRecords || 0) > 0),
+    );
+
+    const computedOverallProgress = totalShards > 0
       ? shardedGroups.reduce((sum, g) => sum + g.overallProgress * g.totalShards, 0) / totalShards
       : 0;
-    
+
+    const overallProgress = hasPendingWork ? Math.min(computedOverallProgress, 99.9) : computedOverallProgress;
+
     return { totalShards, completedShards, activeShards, totalUpdates, totalEvents, overallProgress };
   }, [shardedGroups]);
 
@@ -240,7 +247,7 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
             const stillWriting = isDataStillWriting(group) || hasPendingWork;
             const allComplete = group.completedShards === group.totalShards;
             const displayComplete = allComplete && !stillWriting;
-            const displayProgress = stillWriting && group.overallProgress >= 100 ? 99.9 : group.overallProgress;
+            const displayProgress = stillWriting && group.overallProgress >= 99.95 ? 99.9 : group.overallProgress;
 
             return (
               <Collapsible key={key} open={isExpanded} onOpenChange={() => toggleGroup(key)}>
@@ -288,7 +295,7 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
 
                         const isFinalizing = (shard.pendingWrites || 0) > 0 || (shard.bufferedRecords || 0) > 0 || (!shard.complete && shard.progress >= 99.5);
 
-                        const displayShardProgress = stillWriting && shard.progress >= 100 ? 99.9 : shard.progress;
+                        const displayShardProgress = stillWriting && shard.progress >= 99.95 ? 99.9 : shard.progress;
 
                         return (
                           <div key={idx} className="flex items-center gap-3 p-2 rounded bg-muted/30">
