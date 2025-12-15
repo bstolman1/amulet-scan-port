@@ -130,7 +130,7 @@ export function useAggregatedTemplateData(
         throw new Error("Missing templateSuffix");
       }
 
-      // Try DuckDB first if configured and available
+      // Try DuckDB first if configured and available (doesn't require snapshotId)
       if (useDuckDB && await isDuckDBAvailable()) {
         try {
           // Use the full templateSuffix for template matching (e.g., "Splice:AmuletRules:AmuletRules")
@@ -208,7 +208,9 @@ export function useAggregatedTemplateData(
         templateIds: templateStats.map((t) => t.template_id),
       };
     },
-    enabled: enabled && !!snapshotId && !!templateSuffix,
+    // For DuckDB, snapshotId is optional - the server uses latest snapshot automatically
+    // For Supabase, we need snapshotId to query the correct data
+    enabled: enabled && !!templateSuffix && (useDuckDB || !!snapshotId),
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
