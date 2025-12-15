@@ -58,6 +58,22 @@ const results = {
   coverage: {},
   errors: [],
   startTime: Date.now(),
+  // New: File sampling stats
+  fileSampling: {
+    updates: { sampled: 0, totalRecords: 0, minRecords: Infinity, maxRecords: 0, sizes: [] },
+    events: { sampled: 0, totalRecords: 0, minRecords: Infinity, maxRecords: 0, sizes: [] },
+  },
+  // New: Cursor vs File reconciliation
+  reconciliation: {
+    cursorTotalUpdates: 0,
+    cursorTotalEvents: 0,
+    fileTotalUpdates: 0,
+    fileTotalEvents: 0,
+    updatesDiff: 0,
+    eventsDiff: 0,
+    updatesDiffPercent: 0,
+    eventsDiffPercent: 0,
+  },
 };
 
 /**
@@ -123,6 +139,85 @@ function findDataFiles(migrationFilter = null) {
   
   scanDir(RAW_DIR);
   return files;
+}
+
+/**
+ * Sample random files to check actual records per file
+ * This helps diagnose if batch sizes are different than expected
+ */
+async function sampleFileSizes(files, type, sampleSize = 50) {
+  const sampling = results.fileSampling[type];
+  
+  if (files.length === 0) return;
+  
+  // Pick random sample of files
+  const sampleIndices = new Set();
+  const maxSamples = Math.min(sampleSize, files.length);
+  
+  while (sampleIndices.size < maxSamples) {
+    sampleIndices.add(Math.floor(Math.random() * files.length));
+  }
+  
+  console.log(`   Sampling ${maxSamples} ${type} files...`);
+  
+  let processed = 0;
+  for (const idx of sampleIndices) {
+    try {
+      const stats = await getFileStats(files[idx]);
+      const count = stats.count || 0;
+      
+      sampling.sampled++;
+      sampling.totalRecords += count;
+      sampling.sizes.push(count);
+      sampling.minRecords = Math.min(sampling.minRecords, count);
+      sampling.maxRecords = Math.max(sampling.maxRecords, count);
+      
+      processed++;
+      if (processed % 10 === 0) {
+        process.stdout.write(`\r   Sampled: ${processed}/${maxSamples} files`);
+      }
+    } catch (err) {
+      // Skip corrupt files in sampling
+    }
+  }
+  console.log('');
+}
+
+/**
+ * Reconcile cursor totals vs actual file record counts
+ * This detects data loss or cursor inflation
+ */
+function reconcileCursorsVsFiles(cursors) {
+  const recon = results.reconciliation;
+  
+  // Sum up cursor totals
+  for (const cursor of cursors) {
+    recon.cursorTotalUpdates += cursor.total_updates || 0;
+    recon.cursorTotalEvents += cursor.total_events || 0;
+  }
+  
+  // File totals come from the validation scan
+  recon.fileTotalUpdates = results.totalUpdates;
+  recon.fileTotalEvents = results.totalEvents;
+  
+  // Calculate differences
+  recon.updatesDiff = recon.cursorTotalUpdates - recon.fileTotalUpdates;
+  recon.eventsDiff = recon.cursorTotalEvents - recon.fileTotalEvents;
+  
+  // Calculate percentage differences
+  if (recon.cursorTotalUpdates > 0) {
+    recon.updatesDiffPercent = ((recon.updatesDiff / recon.cursorTotalUpdates) * 100).toFixed(2);
+  }
+  if (recon.cursorTotalEvents > 0) {
+    recon.eventsDiffPercent = ((recon.eventsDiff / recon.cursorTotalEvents) * 100).toFixed(2);
+  }
+}
+
+/**
+ * Calculate expected file count based on records and batch size
+ */
+function calculateExpectedFiles(totalRecords, recordsPerFile = 5000) {
+  return Math.ceil(totalRecords / recordsPerFile);
 }
 
 /**
@@ -436,6 +531,65 @@ function printReport() {
   console.log(`   Total updates:    ${results.totalUpdates.toLocaleString()}`);
   console.log(`   Total events:     ${results.totalEvents.toLocaleString()}`);
   
+  // === NEW: File Sampling Analysis ===
+  console.log('\n📊 FILE SIZE SAMPLING (Records Per File):');
+  const updateSampling = results.fileSampling.updates;
+  const eventSampling = results.fileSampling.events;
+  
+  if (updateSampling.sampled > 0) {
+    const avgUpdates = Math.round(updateSampling.totalRecords / updateSampling.sampled);
+    const expectedUpdateFiles = calculateExpectedFiles(results.reconciliation.cursorTotalUpdates, avgUpdates);
+    console.log(`   UPDATES:`);
+    console.log(`      Files sampled:     ${updateSampling.sampled}`);
+    console.log(`      Avg records/file:  ${avgUpdates.toLocaleString()}`);
+    console.log(`      Min records/file:  ${updateSampling.minRecords.toLocaleString()}`);
+    console.log(`      Max records/file:  ${updateSampling.maxRecords.toLocaleString()}`);
+    console.log(`      Expected files:    ~${expectedUpdateFiles.toLocaleString()} (based on cursor totals)`);
+  }
+  
+  if (eventSampling.sampled > 0) {
+    const avgEvents = Math.round(eventSampling.totalRecords / eventSampling.sampled);
+    const expectedEventFiles = calculateExpectedFiles(results.reconciliation.cursorTotalEvents, avgEvents);
+    console.log(`   EVENTS:`);
+    console.log(`      Files sampled:     ${eventSampling.sampled}`);
+    console.log(`      Avg records/file:  ${avgEvents.toLocaleString()}`);
+    console.log(`      Min records/file:  ${eventSampling.minRecords.toLocaleString()}`);
+    console.log(`      Max records/file:  ${eventSampling.maxRecords.toLocaleString()}`);
+    console.log(`      Expected files:    ~${expectedEventFiles.toLocaleString()} (based on cursor totals)`);
+  }
+  
+  // === NEW: Cursor vs File Reconciliation ===
+  console.log('\n🔄 CURSOR vs FILE RECONCILIATION:');
+  const recon = results.reconciliation;
+  
+  console.log(`   UPDATES:`);
+  console.log(`      Cursor total:   ${recon.cursorTotalUpdates.toLocaleString()}`);
+  console.log(`      File total:     ${recon.fileTotalUpdates.toLocaleString()}`);
+  console.log(`      Difference:     ${recon.updatesDiff.toLocaleString()} (${recon.updatesDiffPercent}%)`);
+  if (Math.abs(recon.updatesDiff) > 1000) {
+    if (recon.updatesDiff > 0) {
+      console.log(`      ⚠️ MISSING DATA: ${recon.updatesDiff.toLocaleString()} updates not in files!`);
+    } else {
+      console.log(`      ⚠️ EXTRA DATA: ${Math.abs(recon.updatesDiff).toLocaleString()} more updates than cursors report`);
+    }
+  } else {
+    console.log(`      ✅ Within tolerance`);
+  }
+  
+  console.log(`   EVENTS:`);
+  console.log(`      Cursor total:   ${recon.cursorTotalEvents.toLocaleString()}`);
+  console.log(`      File total:     ${recon.fileTotalEvents.toLocaleString()}`);
+  console.log(`      Difference:     ${recon.eventsDiff.toLocaleString()} (${recon.eventsDiffPercent}%)`);
+  if (Math.abs(recon.eventsDiff) > 1000) {
+    if (recon.eventsDiff > 0) {
+      console.log(`      ⚠️ MISSING DATA: ${recon.eventsDiff.toLocaleString()} events not in files!`);
+    } else {
+      console.log(`      ⚠️ EXTRA DATA: ${Math.abs(recon.eventsDiff).toLocaleString()} more events than cursors report`);
+    }
+  } else {
+    console.log(`      ✅ Within tolerance`);
+  }
+  
   // Gaps
   console.log('\n⏱️ TIME GAPS:');
   if (results.gapsFound.length === 0) {
@@ -506,7 +660,8 @@ function printReport() {
   // Exit code based on issues found
   const hasIssues = results.filesCorrupted > 0 || 
                    results.gapsFound.length > 0 || 
-                   results.cursorIssues.length > 0;
+                   results.cursorIssues.length > 0 ||
+                   Math.abs(results.reconciliation.eventsDiff) > 10000; // Flag significant data loss
   
   return hasIssues ? 1 : 0;
 }
@@ -537,6 +692,11 @@ async function runValidation() {
   const files = findDataFiles(targetMigration);
   console.log(`   Found ${files.updates.length} update file(s)`);
   console.log(`   Found ${files.events.length} event file(s)`);
+  
+  // === NEW: Sample file sizes first (fast, helps diagnose batch sizes) ===
+  console.log('\n📊 Sampling file sizes...');
+  await sampleFileSizes(files.updates, 'updates', 100);
+  await sampleFileSizes(files.events, 'events', 100);
   
   // Validate files
   const updateResults = [];
@@ -616,6 +776,10 @@ async function runValidation() {
     const fixed = fixIncompleteCursors(results.cursorIssues);
     console.log(`   Fixed ${fixed} cursor(s)`);
   }
+  
+  // === NEW: Reconcile cursor totals vs file totals ===
+  console.log('\n🔄 Reconciling cursor totals vs file totals...');
+  reconcileCursorsVsFiles(cursors);
   
   // Print report
   const exitCode = printReport();
