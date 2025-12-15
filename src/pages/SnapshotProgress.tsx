@@ -430,8 +430,20 @@ const SnapshotProgress = () => {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Progress Bar - Only show for completed snapshots */}
-              {snapshot.status === "completed" && (
+              {/* Progress Bar - For local mode, don't show 100% since data may still be writing */}
+              {isLocalMode ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Contracts Indexed</span>
+                    <span className="font-medium text-primary">
+                      {snapshot.entry_count?.toLocaleString() || 0} contracts
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Data refreshes automatically as files are written
+                  </div>
+                </div>
+              ) : snapshot.status === "completed" ? (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Overall Progress</span>
@@ -439,7 +451,7 @@ const SnapshotProgress = () => {
                   </div>
                   <Progress value={100} className="h-2" />
                 </div>
-              )}
+              ) : null}
 
               {/* Stats Grid - Show different stats for local vs remote */}
               {isLocalMode ? (
