@@ -19,6 +19,7 @@ async function isDuckDBAvailable(): Promise<boolean> {
   }
   duckDBAvailable = await checkDuckDBConnection();
   duckDBCheckTime = now;
+  console.log(`[Backend] DuckDB available: ${duckDBAvailable}`);
   return duckDBAvailable;
 }
 
