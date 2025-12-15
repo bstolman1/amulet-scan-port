@@ -15,6 +15,8 @@ interface Shard {
   complete: boolean;
   totalUpdates: number;
   totalEvents: number;
+  pendingWrites?: number;
+  bufferedRecords?: number;
   minTime: string;
   maxTime: string;
   lastBefore: string;
@@ -233,8 +235,9 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
               ? group.synchronizerId.substring(0, 30) + "..." 
               : group.synchronizerId;
             
-            // Check if data is still being written even if "complete"
-            const stillWriting = isDataStillWriting(group);
+            // Check if data is still being written even if "complete" (totals increasing OR pending writes/buffers)
+            const hasPendingWork = group.shards.some(s => (s.pendingWrites || 0) > 0 || (s.bufferedRecords || 0) > 0);
+            const stillWriting = isDataStillWriting(group) || hasPendingWork;
             const allComplete = group.completedShards === group.totalShards;
             const displayComplete = allComplete && !stillWriting;
             const displayProgress = stillWriting && group.overallProgress >= 100 ? 99.9 : group.overallProgress;
@@ -283,7 +286,8 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
                         const isActive = !shard.complete && shard.updatedAt && 
                           (Date.now() - new Date(shard.updatedAt).getTime() < 60000);
 
-                        const isFinalizing = !shard.complete && shard.progress >= 99.5;
+                        const isFinalizing = (shard.pendingWrites || 0) > 0 || (shard.bufferedRecords || 0) > 0 || (!shard.complete && shard.progress >= 99.5);
+
                         const displayShardProgress = stillWriting && shard.progress >= 100 ? 99.9 : shard.progress;
 
                         return (
