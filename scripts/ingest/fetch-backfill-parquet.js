@@ -90,17 +90,27 @@ let decodeStats = {
 // DECODE WORKER POOL (Dynamic)
 // ==========================================
 let decodePool = null;
+let decodePoolFailed = false;
 
 function createDecodePool(maxThreads) {
-  return new Piscina({
-    filename: new URL('./decode-worker.js', import.meta.url).href,
-    minThreads: MIN_DECODE_WORKERS,
-    maxThreads: maxThreads,
-  });
+  console.log(`   🔧 Creating decode pool with ${maxThreads} workers...`);
+  try {
+    const pool = new Piscina({
+      filename: new URL('./decode-worker.js', import.meta.url).href,
+      minThreads: MIN_DECODE_WORKERS,
+      maxThreads: maxThreads,
+    });
+    console.log(`   ✅ Decode pool ready`);
+    return pool;
+  } catch (err) {
+    console.error(`   ❌ Failed to create decode pool: ${err.message}`);
+    decodePoolFailed = true;
+    return null;
+  }
 }
 
 function getDecodePool() {
-  if (!decodePool) {
+  if (!decodePool && !decodePoolFailed) {
     decodePool = createDecodePool(dynamicDecodeWorkers);
   }
   return decodePool;
@@ -425,6 +435,24 @@ function getEventTime(txOrReassign) {
  */
 async function processBackfillItems(transactions, migrationId) {
   const pool = getDecodePool();
+  
+  // Fall back to main thread if pool failed
+  if (!pool) {
+    console.log(`   ⚠️ Using main-thread decode (no worker pool)`);
+    const results = transactions.map(tx => decodeInMainThread(tx, migrationId));
+    const updates = [];
+    const events = [];
+    for (const r of results) {
+      if (!r) continue;
+      if (r.update) updates.push(r.update);
+      if (Array.isArray(r.events) && r.events.length > 0) {
+        events.push(...r.events);
+      }
+    }
+    await bufferUpdates(updates);
+    await bufferEvents(events);
+    return { updates: updates.length, events: events.length };
+  }
   
   // Track queue depth at start for auto-tuning
   if (decodeStats.startQueued === 0) {
