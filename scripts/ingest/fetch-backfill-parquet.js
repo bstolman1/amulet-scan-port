@@ -1153,6 +1153,51 @@ function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
 }
 
 /**
+ * Check if ALL migrations are fully complete (all cursors marked complete)
+ */
+async function areAllMigrationsComplete() {
+  // Detect all available migrations
+  const allMigrations = await detectMigrations();
+  
+  if (allMigrations.length === 0) {
+    return { complete: true, pendingMigrations: [] };
+  }
+  
+  const pendingMigrations = [];
+  
+  for (const migrationId of allMigrations) {
+    const info = await getMigrationInfo(migrationId);
+    if (!info) continue;
+    
+    const ranges = info.record_time_range || [];
+    for (const range of ranges) {
+      const synchronizerId = range.synchronizer_id;
+      
+      // For sharded setups, check all shards
+      if (SHARD_TOTAL > 1) {
+        for (let shard = 0; shard < SHARD_TOTAL; shard++) {
+          const cursor = loadCursor(migrationId, synchronizerId, shard);
+          if (!cursor?.complete) {
+            pendingMigrations.push({ migrationId, synchronizerId, shard });
+          }
+        }
+      } else {
+        const cursor = loadCursor(migrationId, synchronizerId, null);
+        if (!cursor?.complete) {
+          pendingMigrations.push({ migrationId, synchronizerId, shard: null });
+        }
+      }
+    }
+  }
+  
+  return {
+    complete: pendingMigrations.length === 0,
+    pendingMigrations,
+    totalMigrations: allMigrations.length,
+  };
+}
+
+/**
  * Main backfill function (shard-aware)
  */
 async function runBackfill() {
@@ -1184,19 +1229,20 @@ async function runBackfill() {
   
   // Detect migrations
   let migrations = await detectMigrations();
+  const allDetectedMigrations = [...migrations]; // Keep a copy of ALL migrations
   
   // Filter to target migration if specified
   if (TARGET_MIGRATION) {
     migrations = migrations.filter(id => id === TARGET_MIGRATION);
     if (!migrations.length) {
       console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`);
-      return;
+      return { success: false, allMigrationsComplete: false };
     }
   }
   
   if (!migrations.length) {
     console.log("⚠️ No migrations found. Exiting.");
-    return;
+    return { success: false, allMigrationsComplete: false };
   }
   
   let grandTotalUpdates = 0;
@@ -1265,7 +1311,29 @@ async function runBackfill() {
   console.log(`   Average throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s`);
   console.log(`${"═".repeat(80)}\n`);
   
-  return { success: true, totalUpdates: grandTotalUpdates, totalEvents: grandTotalEvents };
+  // Check if ALL migrations are complete (not just the ones we processed)
+  const completionStatus = await areAllMigrationsComplete();
+  
+  if (!completionStatus.complete) {
+    console.log(`\n⚠️ Not all migrations are complete yet:`);
+    const pendingByMigration = {};
+    for (const p of completionStatus.pendingMigrations) {
+      if (!pendingByMigration[p.migrationId]) pendingByMigration[p.migrationId] = [];
+      pendingByMigration[p.migrationId].push(p);
+    }
+    for (const [mig, items] of Object.entries(pendingByMigration)) {
+      console.log(`   • Migration ${mig}: ${items.length} cursor(s) pending`);
+    }
+    console.log(`\n   Live updates will NOT start until all migrations are backfilled.`);
+  }
+  
+  return { 
+    success: true, 
+    totalUpdates: grandTotalUpdates, 
+    totalEvents: grandTotalEvents,
+    allMigrationsComplete: completionStatus.complete,
+    pendingMigrations: completionStatus.pendingMigrations,
+  };
 }
 
 /**
@@ -1311,13 +1379,20 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Run backfill, then start live updates
+// Run backfill, then start live updates ONLY if all migrations are complete
 runBackfill()
   .then(async (result) => {
-    if (result?.success) {
+    if (result?.success && result?.allMigrationsComplete) {
       // Small delay to ensure all file handles are released
       await new Promise(resolve => setTimeout(resolve, 1000));
       await startLiveUpdates();
+    } else if (result?.success && !result?.allMigrationsComplete) {
+      console.log(`\n${"═".repeat(80)}`);
+      console.log(`⏸️ Backfill for target migration complete, but other migrations remain.`);
+      console.log(`   Live updates will start once ALL migrations are backfilled.`);
+      console.log(`   Run backfill again without TARGET_MIGRATION to process remaining migrations.`);
+      console.log(`${"═".repeat(80)}\n`);
+      process.exit(0);
     }
   })
   .catch(async err => {
