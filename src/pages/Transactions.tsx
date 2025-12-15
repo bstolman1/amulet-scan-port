@@ -145,13 +145,19 @@ const Transactions = () => {
     return parts[parts.length - 1] || templateId;
   };
 
-  const formatTimestamp = (ts: string | null) => {
+  const formatTimestamp = (ts: string | null, label?: string) => {
     if (!ts) return "N/A";
     try {
-      return new Date(ts).toLocaleString();
+      const formatted = new Date(ts).toLocaleString();
+      return label ? `${label}: ${formatted}` : formatted;
     } catch {
       return ts;
     }
+  };
+
+  // Helper to get the display timestamp - prefer effective_at (actual transaction time)
+  const getDisplayTimestamp = (event: LocalEvent) => {
+    return event.effective_at || event.timestamp;
   };
 
   return (
@@ -218,9 +224,16 @@ const Transactions = () => {
                         {extractTemplateName(event.template_id)}
                       </Badge>
                     </div>
-                    <span className="text-sm text-muted-foreground">
-                      {formatTimestamp(event.timestamp)}
-                    </span>
+                    <div className="text-right">
+                      <span className="text-sm text-muted-foreground">
+                        {formatTimestamp(getDisplayTimestamp(event))}
+                      </span>
+                      {event.effective_at && event.timestamp && event.effective_at !== event.timestamp && (
+                        <span className="block text-xs text-muted-foreground/60" title="When the file was written">
+                          (written {formatTimestamp(event.timestamp)})
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 

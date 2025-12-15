@@ -6,6 +6,7 @@ import { getLatestEvents, type LedgerEvent as DuckDBEvent } from "@/lib/duckdb-a
 export interface LedgerUpdate {
   id: string;
   timestamp: string;
+  effective_at?: string;
   update_type: string;
   update_data: any;
   created_at: string;
@@ -31,6 +32,7 @@ export function useLedgerUpdates(limit: number = 50) {
           return response.data.map((event: DuckDBEvent) => ({
             id: event.event_id,
             timestamp: event.timestamp,
+            effective_at: event.effective_at,
             update_type: event.event_type,
             update_data: event.payload,
             created_at: event.timestamp,

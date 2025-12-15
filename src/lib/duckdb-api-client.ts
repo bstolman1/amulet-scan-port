@@ -47,6 +47,7 @@ export interface LedgerEvent {
   template_id: string;
   package_name: string;
   timestamp: string;
+  effective_at?: string;
   signatories: string[];
   observers: string[];
   payload: any;
