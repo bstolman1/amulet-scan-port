@@ -278,6 +278,8 @@ export function getBufferStats() {
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
+    updatesBuffered: updatesBuffer.length,
+    eventsBuffered: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
     queuedWrites: poolStats.queuedJobs || 0,
     activeWrites: poolStats.activeWorkers || 0,
