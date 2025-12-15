@@ -63,12 +63,12 @@ const SnapshotProgress = () => {
   const [localStats, setLocalStats] = useState<{ total_contracts: number; total_templates: number } | null>(null);
   const [selectedMigration, setSelectedMigration] = useState<string>('all');
   const [prevContractCount, setPrevContractCount] = useState<number | null>(null);
-  const [stableCheckCount, setStableCheckCount] = useState(0); // Count consecutive checks with no change
+  const [isCountIncreasing, setIsCountIncreasing] = useState(false); // True only if count actively increased
   const { toast } = useToast();
   const useDuckDB = useDuckDBForLedger();
 
-  // Data is "still writing" until we've seen 2 consecutive refreshes with the same count
-  const isStillWriting = stableCheckCount < 2;
+  // Data is "still writing" only if the count is actively increasing between refreshes
+  const isStillWriting = isCountIncreasing;
 
   // Get unique migrations from snapshots
   const uniqueMigrations = [...new Set(snapshots.map(s => s.migration_id))]
@@ -173,11 +173,11 @@ const SnapshotProgress = () => {
       
       // Detect if data is still being written by comparing to previous count
       if (prevContractCount !== null && currentCount > prevContractCount) {
-        // Count increased - data is still being written, reset stable counter
-        setStableCheckCount(0);
-      } else if (prevContractCount !== null && currentCount === prevContractCount) {
-        // Count hasn't changed - increment stable counter
-        setStableCheckCount(prev => prev + 1);
+        // Count increased - data is still being written
+        setIsCountIncreasing(true);
+      } else {
+        // Count hasn't changed - data is stable
+        setIsCountIncreasing(false);
       }
       setPrevContractCount(currentCount);
 
