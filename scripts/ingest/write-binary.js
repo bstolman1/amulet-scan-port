@@ -202,9 +202,12 @@ export async function bufferEvents(events) {
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
   
-  const timestamp = updatesBuffer[0]?.timestamp || new Date();
-  const migrationId = currentMigrationId || updatesBuffer[0]?.migration_id || null;
-  const partition = getPartitionPath(timestamp, migrationId);
+  // CRITICAL: Use effective_at (data time) for partitioning, not timestamp (write time)
+  // This ensures files are organized by when the data HAPPENED, not when we wrote it
+  const firstRecord = updatesBuffer[0];
+  const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
+  const migrationId = currentMigrationId || firstRecord?.migration_id || null;
+  const partition = getPartitionPath(effectiveAt, migrationId);
   const partitionDir = join(DATA_DIR, partition);
   
   ensureDir(partitionDir);
@@ -224,9 +227,12 @@ export async function flushUpdates() {
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
   
-  const timestamp = eventsBuffer[0]?.timestamp || new Date();
-  const migrationId = currentMigrationId || eventsBuffer[0]?.migration_id || null;
-  const partition = getPartitionPath(timestamp, migrationId);
+  // CRITICAL: Use effective_at (data time) for partitioning, not timestamp (write time)
+  // This ensures files are organized by when the data HAPPENED, not when we wrote it
+  const firstRecord = eventsBuffer[0];
+  const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
+  const migrationId = currentMigrationId || firstRecord?.migration_id || null;
+  const partition = getPartitionPath(effectiveAt, migrationId);
   const partitionDir = join(DATA_DIR, partition);
   
   ensureDir(partitionDir);
