@@ -237,6 +237,7 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
             const stillWriting = isDataStillWriting(group);
             const allComplete = group.completedShards === group.totalShards;
             const displayComplete = allComplete && !stillWriting;
+            const displayProgress = stillWriting && group.overallProgress >= 100 ? 99.9 : group.overallProgress;
 
             return (
               <Collapsible key={key} open={isExpanded} onOpenChange={() => toggleGroup(key)}>
@@ -253,21 +254,24 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
                         <span className="font-medium">Migration {group.migrationId}</span>
                         <span className="text-xs text-muted-foreground font-mono">{syncShort}</span>
                         {stillWriting && (
-                          <Badge variant="default" className="text-xs bg-blue-600 animate-pulse">
+                          <Badge variant="default" className="text-xs bg-accent text-accent-foreground animate-pulse">
                             <Activity className="w-3 h-3 mr-1" />
                             Writing
                           </Badge>
                         )}
                       </div>
                       <div className="flex items-center gap-3">
-                        <Badge variant={displayComplete ? "default" : "secondary"} className={displayComplete ? "bg-green-600" : ""}>
+                        <Badge
+                          variant={displayComplete ? "default" : "secondary"}
+                          className={displayComplete ? "bg-primary text-primary-foreground" : ""}
+                        >
                           {group.completedShards}/{group.totalShards} shards
                         </Badge>
-                        <span className="text-sm font-medium text-primary">{group.overallProgress.toFixed(1)}%</span>
+                        <span className="text-sm font-medium text-primary">{displayProgress.toFixed(1)}%</span>
                       </div>
                     </div>
                     <div className="mt-2">
-                      <Progress value={group.overallProgress} className="h-2" />
+                      <Progress value={displayProgress} className="h-2" />
                     </div>
                   </CollapsibleTrigger>
 
@@ -280,16 +284,17 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
                           (Date.now() - new Date(shard.updatedAt).getTime() < 60000);
 
                         const isFinalizing = !shard.complete && shard.progress >= 99.5;
+                        const displayShardProgress = stillWriting && shard.progress >= 100 ? 99.9 : shard.progress;
 
                         return (
                           <div key={idx} className="flex items-center gap-3 p-2 rounded bg-muted/30">
                             <div className="w-24 flex items-center gap-2">
                               {shard.complete && !stillWriting ? (
-                                <Badge variant="default" className="text-xs bg-green-600">Done</Badge>
+                                <Badge variant="default" className="text-xs bg-primary text-primary-foreground">Done</Badge>
                               ) : shard.complete && stillWriting ? (
-                                <Badge variant="default" className="text-xs bg-blue-600 animate-pulse">Writing</Badge>
+                                <Badge variant="default" className="text-xs bg-accent text-accent-foreground animate-pulse">Writing</Badge>
                               ) : isFinalizing ? (
-                                <Badge variant="default" className="text-xs bg-yellow-600 animate-pulse">Finalizing</Badge>
+                                <Badge variant="default" className="text-xs bg-accent text-accent-foreground animate-pulse">Finalizing</Badge>
                               ) : isActive ? (
                                 <Badge variant="default" className="text-xs animate-pulse">Active</Badge>
                               ) : (
@@ -298,9 +303,9 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
                             </div>
                             <span className="font-mono text-sm w-20">{shardLabel}</span>
                             <div className="flex-1">
-                              <Progress value={shard.progress} className="h-1.5" />
+                              <Progress value={displayShardProgress} className="h-1.5" />
                             </div>
-                            <span className="text-sm font-medium w-14 text-right">{shard.progress.toFixed(1)}%</span>
+                            <span className="text-sm font-medium w-14 text-right">{displayShardProgress.toFixed(1)}%</span>
                             <div className="flex items-center gap-1 text-xs text-muted-foreground w-24">
                               <Zap className="w-3 h-3" />
                               {shard.throughput ? `${shard.throughput.toLocaleString()}/s` : "-"}
