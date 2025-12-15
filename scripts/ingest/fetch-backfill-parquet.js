@@ -926,19 +926,47 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   let before = cursor?.last_before || maxTime;
   const atOrAfter = minTime;
   
-  let totalUpdates = 0;
-  let totalEvents = 0;
+  // CRITICAL: Check if cursor.last_before is already at or before minTime
+  // This means we've already processed everything and should be marked complete
+  if (cursor && cursor.last_before) {
+    const lastBeforeMs = new Date(cursor.last_before).getTime();
+    const minTimeMs = new Date(minTime).getTime();
+    
+    if (lastBeforeMs <= minTimeMs) {
+      console.log(`   ⚠️ Cursor last_before (${cursor.last_before}) is at or before minTime (${minTime})`);
+      console.log(`   ⚠️ This synchronizer appears complete. Marking and skipping.`);
+      
+      // Mark complete if not already
+      if (!cursor.complete) {
+        saveCursor(migrationId, synchronizerId, {
+          ...cursor,
+          complete: true,
+          updated_at: new Date().toISOString(),
+        }, minTime, maxTime, shardIndex);
+      }
+      
+      return { updates: cursor.total_updates || 0, events: cursor.total_events || 0 };
+    }
+    
+    // Also log cursor state for debugging
+    console.log(`   📍 Resuming from cursor: last_before=${cursor.last_before}, updates=${cursor.total_updates || 0}, complete=${cursor.complete || false}`);
+  }
+  
+  let totalUpdates = cursor?.total_updates || 0;
+  let totalEvents = cursor?.total_events || 0;
   let batchCount = 0;
   const startTime = Date.now();
   
-  // Save initial cursor
-  saveCursor(migrationId, synchronizerId, {
-    last_before: before,
-    total_updates: 0,
-    total_events: 0,
-    started_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  }, minTime, maxTime, shardIndex);
+  // Save initial cursor only if this is a fresh start
+  if (!cursor) {
+    saveCursor(migrationId, synchronizerId, {
+      last_before: before,
+      total_updates: 0,
+      total_events: 0,
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, minTime, maxTime, shardIndex);
+  }
   
   while (true) {
     try {
