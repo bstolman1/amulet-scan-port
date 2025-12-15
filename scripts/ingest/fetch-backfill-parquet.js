@@ -1003,7 +1003,6 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         updated_at: new Date().toISOString(),
       }, minTime, maxTime, shardIndex);
       
-      const stats = getBufferStats();
       const queuedJobs = Number(stats.queuedJobs ?? 0);
       const activeWorkers = Number(stats.activeWorkers ?? 0);
       
