@@ -458,17 +458,6 @@ const GovernanceFlow = () => {
   };
 
   const renderTopicCard = (topic: Topic, showGroup = true) => {
-    const confidence = topic.inferenceConfidence;
-    const hasInference = confidence !== null && confidence !== undefined;
-    const stageChanged = hasInference && topic.inferredStage && topic.inferredStage !== topic.postedStage;
-    
-    // Color coding for confidence
-    const getConfidenceColor = (conf: number) => {
-      if (conf >= 0.85) return 'bg-green-500/20 text-green-400 border-green-500/30';
-      if (conf >= 0.5) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
-      return 'bg-red-500/20 text-red-400 border-red-500/30';
-    };
-    
     return (
       <a 
         key={topic.id}
@@ -495,17 +484,6 @@ const GovernanceFlow = () => {
               )}
               {topic.messageCount && topic.messageCount > 1 && (
                 <span>{topic.messageCount} msgs</span>
-              )}
-              {/* Inference confidence indicator */}
-              {hasInference && (
-                <Badge 
-                  variant="outline" 
-                  className={cn("text-[10px] h-5 font-mono", getConfidenceColor(confidence))}
-                  title={`Inferred: ${topic.inferredStage} | Posted: ${topic.postedStage} | Effective: ${topic.effectiveStage}`}
-                >
-                  {stageChanged ? '⚡' : '✓'} {(confidence * 100).toFixed(0)}%
-                  {stageChanged && ` → ${topic.inferredStage}`}
-                </Badge>
               )}
             </div>
           </div>
