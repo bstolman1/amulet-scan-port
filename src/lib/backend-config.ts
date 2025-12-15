@@ -16,11 +16,12 @@ interface BackendConfig {
   duckdbApiUrl: string;
 }
 
-// Configuration - defaults to DuckDB for ledger data, Supabase for metadata
+// Configuration - hardcoded for local DuckDB backend
+// The Lovable preview can't access localhost, so this only works when running locally
 const config: BackendConfig = {
-  ledgerBackend: (import.meta.env.VITE_LEDGER_BACKEND as BackendType) || 'duckdb',
-  metadataBackend: 'supabase', // Keep Supabase for small metadata tables
-  duckdbApiUrl: import.meta.env.VITE_DUCKDB_API_URL || 'http://localhost:3001',
+  ledgerBackend: 'duckdb',
+  metadataBackend: 'supabase', // Keep Supabase for small metadata tables  
+  duckdbApiUrl: 'http://localhost:3001',
 };
 
 export function getBackendConfig(): BackendConfig {
