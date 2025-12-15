@@ -2,17 +2,20 @@ import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Coins, Lock, TrendingUp, RefreshCw } from "lucide-react";
+import { Coins, Lock, TrendingUp, RefreshCw, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/hooks/use-toast";
+
+const AUTO_REFRESH_INTERVAL = 30000; // 30 seconds
 
 export const ACSSnapshotCard = () => {
   const { data: snapshot, isPending, refetch } = useLatestACSSnapshot();
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async (showToast = true) => {
     setIsRefreshing(true);
     try {
       // Invalidate server-side cache first
@@ -21,7 +24,7 @@ export const ACSSnapshotCard = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prefix: 'acs:' }),
-      });
+      }).catch(() => {}); // Ignore cache invalidation errors
       
       // Invalidate all ACS-related queries
       await queryClient.invalidateQueries({ queryKey: ['latestACSSnapshot'] });
@@ -31,14 +34,29 @@ export const ACSSnapshotCard = () => {
       await queryClient.invalidateQueries({ queryKey: ['localLatestACSSnapshot'] });
       
       await refetch();
-      toast({ title: "ACS data refreshed", description: "Latest snapshot data loaded" });
+      if (showToast) {
+        toast({ title: "ACS data refreshed", description: "Latest snapshot data loaded" });
+      }
     } catch (err) {
       console.error('Refresh failed:', err);
-      toast({ title: "Refresh failed", description: "Could not refresh ACS data", variant: "destructive" });
+      if (showToast) {
+        toast({ title: "Refresh failed", description: "Could not refresh ACS data", variant: "destructive" });
+      }
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [queryClient, refetch]);
+
+  // Auto-refresh effect
+  useEffect(() => {
+    if (!autoRefresh) return;
+    
+    const interval = setInterval(() => {
+      handleRefresh(false); // Silent refresh
+    }, AUTO_REFRESH_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [autoRefresh, handleRefresh]);
 
   if (isPending) {
     return (
@@ -74,18 +92,34 @@ export const ACSSnapshotCard = () => {
           <h3 className="text-lg font-semibold">ACS Snapshot</h3>
           <p className="text-sm text-muted-foreground">
             Latest: {new Date(snapshot.timestamp).toLocaleString()}
+            {autoRefresh && (
+              <span className="ml-2 text-xs text-primary">
+                <Loader2 className="inline h-3 w-3 animate-spin mr-1" />
+                Auto-refreshing
+              </span>
+            )}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-          className="gap-2"
-        >
-          <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-          {isRefreshing ? 'Refreshing...' : 'Refresh'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={autoRefresh ? "default" : "outline"}
+            size="sm"
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            className="text-xs"
+          >
+            {autoRefresh ? 'Auto: ON' : 'Auto: OFF'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleRefresh(true)}
+            disabled={isRefreshing}
+            className="gap-2"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
