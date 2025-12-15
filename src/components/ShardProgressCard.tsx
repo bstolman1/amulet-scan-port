@@ -248,11 +248,15 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
                         const isActive = !shard.complete && shard.updatedAt && 
                           (Date.now() - new Date(shard.updatedAt).getTime() < 60000);
 
+                        const isFinalizing = !shard.complete && shard.progress >= 99.5;
+
                         return (
                           <div key={idx} className="flex items-center gap-3 p-2 rounded bg-muted/30">
                             <div className="w-20 flex items-center gap-2">
                               {shard.complete ? (
                                 <Badge variant="default" className="text-xs bg-green-600">Done</Badge>
+                              ) : isFinalizing ? (
+                                <Badge variant="default" className="text-xs bg-yellow-600 animate-pulse">Finalizing</Badge>
                               ) : isActive ? (
                                 <Badge variant="default" className="text-xs animate-pulse">Active</Badge>
                               ) : (

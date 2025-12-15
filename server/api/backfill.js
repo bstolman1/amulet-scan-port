@@ -197,7 +197,12 @@ router.get('/shards', (req, res) => {
         const currentMs = new Date(cursor.last_before).getTime();
         const totalRange = maxMs - minMs;
         if (totalRange > 0) {
-          progress = Math.min(100, Math.max(0, ((maxMs - currentMs) / totalRange) * 100));
+          let rawProgress = ((maxMs - currentMs) / totalRange) * 100;
+          // Cap at 99.9% if not marked complete (still flushing writes)
+          if (rawProgress >= 100 && !cursor.complete) {
+            rawProgress = 99.9;
+          }
+          progress = Math.min(100, Math.max(0, rawProgress));
         }
       }
       
