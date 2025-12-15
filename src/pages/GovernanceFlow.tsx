@@ -52,6 +52,11 @@ interface Topic {
   flow: string;
   messageCount?: number;
   identifiers: TopicIdentifiers;
+  // Inference metadata
+  postedStage?: string;
+  inferredStage?: string | null;
+  inferenceConfidence?: number | null;
+  effectiveStage?: string;
 }
 
 interface LifecycleItem {
@@ -452,48 +457,72 @@ const GovernanceFlow = () => {
     );
   };
 
-  const renderTopicCard = (topic: Topic, showGroup = true) => (
-    <a 
-      key={topic.id}
-      href={topic.sourceUrl || '#'}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={cn(
-        "block p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors",
-        topic.sourceUrl ? "cursor-pointer hover:bg-muted/50" : "cursor-default"
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h4 className="font-medium text-sm">{topic.subject}</h4>
-          <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Calendar className="h-3 w-3" />
-              {formatDate(topic.date)}
-            </span>
-            {showGroup && (
-              <Badge variant="outline" className="text-[10px] h-5">
-                {topic.groupLabel}
-              </Badge>
-            )}
-            {topic.messageCount && topic.messageCount > 1 && (
-              <span>{topic.messageCount} msgs</span>
-            )}
-          </div>
-        </div>
-        {topic.sourceUrl && (
-          <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
-            <ExternalLink className="h-3.5 w-3.5" />
-          </div>
+  const renderTopicCard = (topic: Topic, showGroup = true) => {
+    const confidence = topic.inferenceConfidence;
+    const hasInference = confidence !== null && confidence !== undefined;
+    const stageChanged = hasInference && topic.inferredStage && topic.inferredStage !== topic.postedStage;
+    
+    // Color coding for confidence
+    const getConfidenceColor = (conf: number) => {
+      if (conf >= 0.85) return 'bg-green-500/20 text-green-400 border-green-500/30';
+      if (conf >= 0.5) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+      return 'bg-red-500/20 text-red-400 border-red-500/30';
+    };
+    
+    return (
+      <a 
+        key={topic.id}
+        href={topic.sourceUrl || '#'}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(
+          "block p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors",
+          topic.sourceUrl ? "cursor-pointer hover:bg-muted/50" : "cursor-default"
         )}
-      </div>
-      {topic.excerpt && (
-        <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
-          {topic.excerpt}
-        </p>
-      )}
-    </a>
-  );
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h4 className="font-medium text-sm">{topic.subject}</h4>
+            <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                {formatDate(topic.date)}
+              </span>
+              {showGroup && (
+                <Badge variant="outline" className="text-[10px] h-5">
+                  {topic.groupLabel}
+                </Badge>
+              )}
+              {topic.messageCount && topic.messageCount > 1 && (
+                <span>{topic.messageCount} msgs</span>
+              )}
+              {/* Inference confidence indicator */}
+              {hasInference && (
+                <Badge 
+                  variant="outline" 
+                  className={cn("text-[10px] h-5 font-mono", getConfidenceColor(confidence))}
+                  title={`Inferred: ${topic.inferredStage} | Posted: ${topic.postedStage} | Effective: ${topic.effectiveStage}`}
+                >
+                  {stageChanged ? '⚡' : '✓'} {(confidence * 100).toFixed(0)}%
+                  {stageChanged && ` → ${topic.inferredStage}`}
+                </Badge>
+              )}
+            </div>
+          </div>
+          {topic.sourceUrl && (
+            <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
+              <ExternalLink className="h-3.5 w-3.5" />
+            </div>
+          )}
+        </div>
+        {topic.excerpt && (
+          <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+            {topic.excerpt}
+          </p>
+        )}
+      </a>
+    );
+  };
 
   return (
     <DashboardLayout>
