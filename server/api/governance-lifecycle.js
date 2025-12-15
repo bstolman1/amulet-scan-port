@@ -242,7 +242,9 @@ function extractIdentifiers(text) {
   );
   
   // Check if text contains validator indicators - including "validator approved" and "validator operator approved"
-  const isValidator = /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
+  // BUT exclude "Vote Proposal" patterns which are typically CIP-related even if they mention validators
+  const isVoteProposal = /\bvote\s+proposal\b/i.test(text);
+  const isValidator = !isVoteProposal && /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
   
   // Extract the primary entity name (now returns { name, isMultiEntity })
   const entityResult = extractPrimaryEntityName(text);
@@ -587,6 +589,8 @@ function correlateTopics(allTopics) {
     const subjectTrimmed = topic.subject.trim();
     const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
     const isValidatorOperations = /\bValidator\s+Operations\b/i.test(subjectTrimmed);
+    // "Vote Proposal" patterns are typically CIP-related votes, not validator applications
+    const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
     
     // TYPE DETERMINATION: Use group flow as primary signal
     // CIP groups (cip-discuss, cip-vote, cip-announce) -> cip type
@@ -604,8 +608,9 @@ function correlateTopics(allTopics) {
       type = 'featured-app';
     } else if (topic.flow === 'shared') {
       // Shared groups (tokenomics, sv-announce) need subject-line disambiguation
-      // Priority: CIP > Validator > Featured App > fallback to featured-app
-      if (hasCip || isCipDiscussion) {
+      // Priority: Vote Proposal (CIP) > CIP number/discussion > Validator Operations > Featured App
+      if (isVoteProposal || hasCip || isCipDiscussion) {
+        // "Vote Proposal" patterns are CIP-related even if they mention validators
         type = 'cip';
       } else if (isValidatorOperations || hasValidatorIndicator) {
         type = 'validator';
