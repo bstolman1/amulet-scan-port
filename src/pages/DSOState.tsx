@@ -14,18 +14,16 @@ import { Button } from "@/components/ui/button";
 const DSOState = () => {
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  const nodeStatesQuery = useAggregatedTemplateData(latestSnapshot?.id, "DSO:SvState:SvNodeState", !!latestSnapshot);
+  const nodeStatesQuery = useAggregatedTemplateData(latestSnapshot?.id, "DSO:SvState:SvNodeState");
 
   const statusReportsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "DSO:SvState:SvStatusReport",
-    !!latestSnapshot,
   );
 
   const rewardStatesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "DSO:SvState:SvRewardState",
-    !!latestSnapshot,
   );
 
   const nodeStatesData = nodeStatesQuery.data?.data || [];

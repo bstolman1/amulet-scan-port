@@ -16,8 +16,8 @@ const ANS = () => {
 
   const { data: snapshot } = useLatestACSSnapshot();
 
-  const ansEntriesQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntry", !!snapshot);
-  const ansContextsQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntryContext", !!snapshot);
+  const ansEntriesQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntry");
+  const ansContextsQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntryContext");
 
   const isLoading = ansEntriesQuery.isLoading || ansContextsQuery.isLoading;
   const ansEntries = ansEntriesQuery.data?.data || [];

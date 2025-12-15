@@ -14,11 +14,10 @@ const Apps = () => {
   const { data: localAcsAvailable } = useLocalACSAvailable();
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight", !!latestSnapshot);
+  const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight");
   const activityQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:Amulet:FeaturedAppActivityMarker",
-    !!latestSnapshot,
   );
 
   const isLoading = appsQuery.isLoading || activityQuery.isLoading;
