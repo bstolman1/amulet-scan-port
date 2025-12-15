@@ -11,9 +11,11 @@
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0",
     "axios": "^1.7.0",
+    "bignumber.js": "^9.1.2",
     "dotenv": "^16.4.0",
     "duckdb": "^1.0.0",
     "parquetjs": "^0.11.2",
+    "piscina": "^4.8.0",
     "protobufjs": "^7.4.0"
   }
 }
