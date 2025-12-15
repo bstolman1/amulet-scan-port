@@ -194,10 +194,10 @@ router.get('/count', async (req, res) => {
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
-      // Just count files * estimated records per file to avoid OOM
-      const files = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
-      const estimated = files.length * 100; // ~100 records per file estimate
-      return res.json({ count: estimated, estimated: true, fileCount: files.length, source: 'binary' });
+      // Use fast count function that doesn't load all paths into memory
+      const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
+      const estimated = fileCount * 100; // ~100 records per file estimate
+      return res.json({ count: estimated, estimated: true, fileCount, source: 'binary' });
     }
     
     const sql = `
@@ -216,27 +216,16 @@ router.get('/count', async (req, res) => {
 router.get('/debug', async (req, res) => {
   try {
     const sources = getDataSources();
-    const files = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
-    // Sort by DATA date (from partition path), not write time
-    const sortedByDataDate = files.slice().sort((a, b) => {
-      const yearA = a.match(/year=(\d{4})/)?.[1] || '0';
-      const monthA = a.match(/month=(\d{2})/)?.[1] || '00';
-      const dayA = a.match(/day=(\d{2})/)?.[1] || '00';
-      const yearB = b.match(/year=(\d{4})/)?.[1] || '0';
-      const monthB = b.match(/month=(\d{2})/)?.[1] || '00';
-      const dayB = b.match(/day=(\d{2})/)?.[1] || '00';
-      return `${yearB}${monthB}${dayB}`.localeCompare(`${yearA}${monthA}${dayA}`);
-    });
-    
-    const newestByDataDate = sortedByDataDate.slice(0, 5);
-    const oldestByDataDate = sortedByDataDate.slice(-5);
+    // Use FAST finder for newest files (no full scan needed)
+    const newestFiles = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', { maxDays: 7, maxFiles: 10 });
+    const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
     
     // Sample first record from newest file (by data date)
     let sampleRecord = null;
-    if (newestByDataDate.length > 0) {
+    if (newestFiles.length > 0) {
       try {
-        const result = await binaryReader.readBinaryFile(newestByDataDate[0]);
+        const result = await binaryReader.readBinaryFile(newestFiles[0]);
         sampleRecord = result.records[0] || null;
       } catch (e) {
         sampleRecord = { error: e.message };
@@ -246,8 +235,8 @@ router.get('/debug', async (req, res) => {
     res.json({
       dataPath: db.DATA_PATH,
       sources,
-      totalBinaryFiles: files.length,
-      newestByDataDate: newestByDataDate.map(f => ({
+      totalBinaryFiles: fileCount,
+      newestByDataDate: newestFiles.slice(0, 5).map(f => ({
         path: f,
         dataDate: (() => {
           const y = f.match(/year=(\d{4})/)?.[1];
@@ -258,15 +247,6 @@ router.get('/debug', async (req, res) => {
         writeTimestamp: (() => {
           const match = f.match(/events-(\d+)-/);
           return match ? new Date(parseInt(match[1])).toISOString() : null;
-        })()
-      })),
-      oldestByDataDate: oldestByDataDate.map(f => ({
-        path: f,
-        dataDate: (() => {
-          const y = f.match(/year=(\d{4})/)?.[1];
-          const m = f.match(/month=(\d{2})/)?.[1];
-          const d = f.match(/day=(\d{2})/)?.[1];
-          return y && m && d ? `${y}-${m}-${d}` : null;
         })()
       })),
       sampleNewestRecord: sampleRecord,

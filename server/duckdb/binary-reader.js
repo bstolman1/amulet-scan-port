@@ -212,7 +212,72 @@ export async function readBinaryFile(filePath) {
 }
 
 /**
- * Find all .pb.zst files in a directory
+ * Fast file finder that uses partition structure for recent data
+ * Returns files sorted by data date (newest first) without scanning all 55k+ files
+ */
+export function findBinaryFilesFast(dirPath, type = 'events', options = {}) {
+  const { maxDays = 7, maxFiles = 1000 } = options;
+  const files = [];
+  
+  // Generate date paths for the last N days (most likely to have recent data)
+  const today = new Date();
+  const datePaths = [];
+  
+  for (let i = 0; i < maxDays; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    datePaths.push({ year, month, day, dateMs: d.getTime() });
+  }
+  
+  // Scan migration folders
+  const migrations = [];
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.startsWith('migration=')) {
+        migrations.push(path.join(dirPath, entry.name));
+      }
+    }
+  } catch { }
+  
+  // For each date (newest first), scan for files
+  for (const { year, month, day, dateMs } of datePaths) {
+    for (const migrationDir of migrations) {
+      const dayDir = path.join(migrationDir, `year=${year}`, `month=${month}`, `day=${day}`);
+      try {
+        if (fs.existsSync(dayDir)) {
+          const entries = fs.readdirSync(dayDir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
+              files.push({
+                path: path.join(dayDir, entry.name),
+                dataDateMs: dateMs,
+                writeTs: extractWriteTimestampFromPath(path.join(dayDir, entry.name))
+              });
+            }
+          }
+        }
+      } catch { }
+    }
+    
+    // Stop if we have enough files
+    if (files.length >= maxFiles) break;
+  }
+  
+  // Sort by data date desc, then write timestamp desc
+  files.sort((a, b) => {
+    if (a.dataDateMs !== b.dataDateMs) return b.dataDateMs - a.dataDateMs;
+    return b.writeTs - a.writeTs;
+  });
+  
+  return files.slice(0, maxFiles).map(f => f.path);
+}
+
+/**
+ * Find all .pb.zst files in a directory (full scan - use sparingly)
  */
 export function findBinaryFiles(dirPath, type = 'events') {
   const files = [];
@@ -238,6 +303,33 @@ export function findBinaryFiles(dirPath, type = 'events') {
   }
   
   return files;
+}
+
+/**
+ * Count total binary files without loading them all (fast)
+ */
+export function countBinaryFiles(dirPath, type = 'events') {
+  let count = 0;
+  
+  function scanDir(dir) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          scanDir(fullPath);
+        } else if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
+          count++;
+        }
+      }
+    } catch { }
+  }
+  
+  if (fs.existsSync(dirPath)) {
+    scanDir(dirPath);
+  }
+  
+  return count;
 }
 
 /**
@@ -269,31 +361,16 @@ const MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_MAX_FILES) || 500;
 
 // Stream records with pagination (memory efficient for large datasets)
 export async function streamRecords(dirPath, type = 'events', options = {}) {
-  const { limit = 100, offset = 0, filter = null, sortBy = 'effective_at' } = options;
+  const { limit = 100, offset = 0, filter = null, sortBy = 'effective_at', maxDays = 30 } = options;
   
-  const files = findBinaryFiles(dirPath, type);
+  // Use FAST finder that leverages partition structure instead of scanning 55k+ files
+  const files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: MAX_FILES_TO_SCAN });
   
   if (files.length === 0) {
     return { records: [], total: 0, hasMore: false };
   }
   
-  // CRITICAL FIX: Sort files by DATA date (from partition path), not write timestamp
-  // This ensures we read files containing the most recent DATA first
-  // Backfill runs backwards (newest→oldest), so write order ≠ data order
-  files.sort((a, b) => {
-    const dataDateA = extractDataDateFromPath(a);
-    const dataDateB = extractDataDateFromPath(b);
-    
-    // Primary sort: data date descending (newest data first)
-    if (dataDateA !== dataDateB) {
-      return dataDateB - dataDateA;
-    }
-    
-    // Secondary sort: write timestamp descending (newest written first for same date)
-    const writeA = extractWriteTimestampFromPath(a);
-    const writeB = extractWriteTimestampFromPath(b);
-    return writeB - writeA;
-  });
+  // Files are already sorted by data date desc from findBinaryFilesFast
   
   // For effective_at sorting, we need to read more files and sort globally
   // because file write order doesn't match event effective_at order
@@ -387,6 +464,8 @@ export function invalidateCache() {
 export default {
   readBinaryFile,
   findBinaryFiles,
+  findBinaryFilesFast,
+  countBinaryFiles,
   hasBinaryFiles,
   loadAllRecords,
   streamRecords,
