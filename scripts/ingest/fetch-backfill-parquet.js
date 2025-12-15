@@ -533,13 +533,14 @@ async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAft
       consecutiveEmpty++;
       
       if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
-        // Range is empty
+        // Range is confirmed empty after multiple attempts
         break;
       }
       
-      // Small jump to handle edge cases
+      // Use exponential backoff for empty jumps (10ms, 100ms, 1s)
+      const jumpMs = Math.min(10 * Math.pow(10, consecutiveEmpty), 1000);
       const d = new Date(currentBefore);
-      d.setTime(d.getTime() - 500);
+      d.setTime(d.getTime() - jumpMs);
       
       if (d.getTime() <= new Date(sliceAfter).getTime()) {
         break;
@@ -583,7 +584,12 @@ async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAft
     }
     
     if (oldestTime) {
-      currentBefore = oldestTime;
+      // CRITICAL: Subtract 1ms to avoid fetching the same record again
+      // The API's "before" parameter is exclusive, but returning the same timestamp
+      // would cause an infinite loop fetching the same records
+      const d = new Date(oldestTime);
+      d.setMilliseconds(d.getMilliseconds() - 1);
+      currentBefore = d.toISOString();
     } else {
       const d = new Date(currentBefore);
       d.setMilliseconds(d.getMilliseconds() - 1);
@@ -748,7 +754,7 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
       const t = getEventTime(tx);
       if (t && (!oldestTime || t < oldestTime)) {
         oldestTime = t;
-    }
+      }
     }
     
     if (oldestTime && new Date(oldestTime).getTime() <= new Date(atOrAfter).getTime()) {
@@ -756,7 +762,10 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
     }
     
     if (oldestTime) {
-      currentBefore = oldestTime;
+      // CRITICAL: Subtract 1ms to avoid fetching the same record again
+      const d = new Date(oldestTime);
+      d.setMilliseconds(d.getMilliseconds() - 1);
+      currentBefore = d.toISOString();
     } else {
       const d = new Date(currentBefore);
       d.setMilliseconds(d.getMilliseconds() - 1);
