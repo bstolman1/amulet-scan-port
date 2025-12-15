@@ -212,4 +212,48 @@ router.get('/count', async (req, res) => {
   }
 });
 
+// GET /api/events/debug - Debug endpoint to show data paths and latest files
+router.get('/debug', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    const files = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    
+    // Get the 5 newest files by timestamp in filename
+    const sortedFiles = files.slice().sort((a, b) => {
+      const matchA = a.match(/events-(\d+)-/);
+      const matchB = b.match(/events-(\d+)-/);
+      const tsA = matchA ? parseInt(matchA[1]) : 0;
+      const tsB = matchB ? parseInt(matchB[1]) : 0;
+      return tsB - tsA;
+    }).slice(0, 5);
+    
+    // Sample first record from newest file
+    let sampleRecord = null;
+    if (sortedFiles.length > 0) {
+      try {
+        const result = await binaryReader.readBinaryFile(sortedFiles[0]);
+        sampleRecord = result.records[0] || null;
+      } catch (e) {
+        sampleRecord = { error: e.message };
+      }
+    }
+    
+    res.json({
+      dataPath: db.DATA_PATH,
+      sources,
+      totalBinaryFiles: files.length,
+      newestFiles: sortedFiles.map(f => ({
+        path: f,
+        timestamp: (() => {
+          const match = f.match(/events-(\d+)-/);
+          return match ? new Date(parseInt(match[1])).toISOString() : null;
+        })()
+      })),
+      sampleRecord,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

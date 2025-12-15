@@ -119,6 +119,23 @@ function tryParseJson(str) {
 }
 
 /**
+ * Extract timestamp from filename pattern: events-{timestamp}-{random}.pb.zst
+ */
+function extractTimestampFromPath(filePath) {
+  const basename = path.basename(filePath);
+  const match = basename.match(/(?:events|updates)-(\d+)-/);
+  if (match) {
+    return parseInt(match[1], 10);
+  }
+  // Fallback to file mtime
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Read and decode a single .pb.zst file
  */
 export async function readBinaryFile(filePath) {
@@ -233,8 +250,13 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     return { records: [], total: 0, hasMore: false };
   }
   
-  // Sort files by name (which includes timestamp) in descending order
-  files.sort((a, b) => b.localeCompare(a));
+  // Sort files by timestamp embedded in filename (descending = newest first)
+  // Filename pattern: events-{timestamp}-{random}.pb.zst
+  files.sort((a, b) => {
+    const tsA = extractTimestampFromPath(a);
+    const tsB = extractTimestampFromPath(b);
+    return tsB - tsA; // Descending order (newest first)
+  });
   
   const records = [];
   let skipped = 0;
