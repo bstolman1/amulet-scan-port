@@ -58,8 +58,9 @@ function extractUrls(text) {
 
 // Extract the primary entity name from a subject line
 // This extracts the key identifier that makes each proposal unique
+// Returns { name: string|null, isMultiEntity: boolean }
 function extractPrimaryEntityName(text) {
-  if (!text) return null;
+  if (!text) return { name: null, isMultiEntity: false };
   
   // Remove common prefixes/suffixes first
   let cleanText = text
@@ -68,13 +69,30 @@ function extractPrimaryEntityName(text) {
     .replace(/\s*vote\s*(proposal)?\s*$/i, '')
     .trim();
   
+  // MULTI-ENTITY DETECTION: Check for batch approval patterns first
+  // "Validator Operators Approved: A, B, C, D..." or "Featured Apps Approved: X, Y, Z"
+  const batchApprovalMatch = cleanText.match(/(?:validator\s*operators?|validators|featured\s*apps?)\s*approved[:\s-]+(.+?)$/i);
+  if (batchApprovalMatch) {
+    const content = batchApprovalMatch[1].trim();
+    // If contains comma or "and" with multiple entities, it's multi-entity
+    if (content.includes(',') || /\s+and\s+/i.test(content)) {
+      console.log(`EXTRACT: Multi-entity batch approval detected: "${content.slice(0, 60)}"`);
+      return { name: null, isMultiEntity: true };
+    }
+  }
+  
   // Pattern 0a: "Validator Approved: EntityName" - extract entity name from validator approval announcements
   const validatorApprovedMatch = cleanText.match(/validator\s*(?:approved|operator\s+approved)[:\s-]+(.+?)$/i);
   if (validatorApprovedMatch) {
     let name = validatorApprovedMatch[1].trim();
+    // Check for multi-entity (comma-separated list)
+    if (name.includes(',') || /\s+and\s+/i.test(name)) {
+      console.log(`EXTRACT: Multi-entity validator list detected: "${name.slice(0, 60)}"`);
+      return { name: null, isMultiEntity: true };
+    }
     console.log(`EXTRACT: "Validator Approved" pattern matched, extracted: "${name}" from "${cleanText.slice(0, 60)}"`);
     if (name.length > 1) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -82,9 +100,14 @@ function extractPrimaryEntityName(text) {
   const featuredApprovedMatch = cleanText.match(/featured\s*app\s*approved[:\s-]+(.+?)$/i);
   if (featuredApprovedMatch) {
     let name = featuredApprovedMatch[1].trim();
+    // Check for multi-entity
+    if (name.includes(',') || /\s+and\s+/i.test(name)) {
+      console.log(`EXTRACT: Multi-entity app list detected: "${name.slice(0, 60)}"`);
+      return { name: null, isMultiEntity: true };
+    }
     console.log(`EXTRACT: "Featured App Approved" pattern matched, extracted: "${name}" from "${cleanText.slice(0, 60)}"`);
     if (name.length > 1) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -95,7 +118,7 @@ function extractPrimaryEntityName(text) {
   if (forAppMatch) {
     let name = forAppMatch[1].trim();
     if (name.length > 1) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -107,7 +130,7 @@ function extractPrimaryEntityName(text) {
     // Remove trailing "by Company" if still present
     name = name.replace(/\s+by\s+.*$/i, '').trim();
     if (name.length > 2) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -120,7 +143,7 @@ function extractPrimaryEntityName(text) {
     // Remove "by Company" suffix
     name = name.replace(/\s+by\s+.*$/i, '').trim();
     if (name.length > 2 && !/^(the|this|new|our)$/i.test(name)) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -131,7 +154,7 @@ function extractPrimaryEntityName(text) {
     name = name.replace(/^(?:mainnet|testnet)[:\s]+/i, '').trim();
     name = name.replace(/\s+by\s+.*$/i, '').trim();
     if (name.length > 2) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -140,7 +163,7 @@ function extractPrimaryEntityName(text) {
   if (prefixMatch) {
     const name = prefixMatch[1].trim();
     if (name.length > 1 && !/^(new|the|this|our|featured|app|vote|proposal|to)$/i.test(name)) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -149,7 +172,7 @@ function extractPrimaryEntityName(text) {
   if (bracketMatch) {
     const name = bracketMatch[1].trim();
     if (name.length > 2) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -158,7 +181,7 @@ function extractPrimaryEntityName(text) {
   if (capitalizedMatch) {
     const name = capitalizedMatch[1].trim();
     if (!/^(Featured App|Super Validator|Vote Proposal|New Request|Token Economics|Main Net|Test Net)$/i.test(name)) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
@@ -167,22 +190,23 @@ function extractPrimaryEntityName(text) {
   if (forSingleMatch) {
     const name = forSingleMatch[1].trim();
     if (name.length > 1 && !/^(the|this|that|it)$/i.test(name)) {
-      return name;
+      return { name, isMultiEntity: false };
     }
   }
   
-  return null;
+  return { name: null, isMultiEntity: false };
 }
 
 // Extract identifiers from subject/content for correlation
 function extractIdentifiers(text) {
-  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, network: null, keywords: [] };
+  if (!text) return { cipNumber: null, appName: null, validatorName: null, entityName: null, isMultiEntity: false, network: null, keywords: [] };
   
   const identifiers = {
     cipNumber: null,
     appName: null,
     validatorName: null,
     entityName: null,  // Primary entity name for correlation
+    isMultiEntity: false, // True if this is a batch approval with multiple entities
     network: null,     // 'testnet' or 'mainnet'
     keywords: [],
   };
@@ -220,30 +244,31 @@ function extractIdentifiers(text) {
   // Check if text contains validator indicators - including "validator approved" and "validator operator approved"
   const isValidator = /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
   
-  // Extract the primary entity name
-  const entityName = extractPrimaryEntityName(text);
-  identifiers.entityName = entityName;
+  // Extract the primary entity name (now returns { name, isMultiEntity })
+  const entityResult = extractPrimaryEntityName(text);
+  identifiers.entityName = entityResult.name;
+  identifiers.isMultiEntity = entityResult.isMultiEntity;
   
   // Add CIP discussion flag to identifiers
   identifiers.isCipDiscussion = isCipDiscussion;
   
   // Debug log for featured app detection
   if (text.toLowerCase().includes('featured app approved')) {
-    console.log(`IDENTIFIERS: isFeaturedApp=${isFeaturedApp}, entityName="${entityName}", text="${text.slice(0, 60)}"`);
+    console.log(`IDENTIFIERS: isFeaturedApp=${isFeaturedApp}, entityName="${entityResult.name}", isMultiEntity=${entityResult.isMultiEntity}, text="${text.slice(0, 60)}"`);
   }
   
   // Debug log for validator detection
   if (text.toLowerCase().includes('validator approved')) {
-    console.log(`IDENTIFIERS: isValidator=${isValidator}, entityName="${entityName}", text="${text.slice(0, 60)}"`);
+    console.log(`IDENTIFIERS: isValidator=${isValidator}, entityName="${entityResult.name}", isMultiEntity=${entityResult.isMultiEntity}, text="${text.slice(0, 60)}"`);
   }
   
   // Don't set appName if this is a CIP discussion (even if it mentions featured apps)
-  if (isFeaturedApp && entityName && !isCipDiscussion) {
-    identifiers.appName = entityName;
+  if (isFeaturedApp && entityResult.name && !isCipDiscussion) {
+    identifiers.appName = entityResult.name;
   }
   
-  if (isValidator && entityName) {
-    identifiers.validatorName = entityName;
+  if (isValidator && entityResult.name) {
+    identifiers.validatorName = entityResult.name;
   }
   
   // Extract key words for fuzzy matching (fallback)
@@ -391,11 +416,95 @@ async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
   return allTopics;
 }
 
-// Calculate similarity between two topics for correlation
-// Normalize entity name for comparison (case-insensitive, whitespace-normalized)
+// Normalize entity name for comparison
+// Removes common suffixes, normalizes whitespace/case, removes punctuation
 function normalizeEntityName(name) {
   if (!name) return null;
-  return name.toLowerCase().replace(/\s+/g, ' ').trim();
+  return name
+    .toLowerCase()
+    // Remove common company suffixes
+    .replace(/\b(llc|inc|corp|ltd|gmbh|ag|sa|bv|pty|co|company|limited|incorporated|corporation)\b\.?/gi, '')
+    // Remove punctuation
+    .replace(/[.,\-_'"()]/g, ' ')
+    // Normalize whitespace
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Even more aggressive normalization - removes all spaces for fuzzy comparison
+function normalizeEntityNameStrict(name) {
+  if (!name) return null;
+  const normalized = normalizeEntityName(name);
+  if (!normalized) return null;
+  // Remove all spaces for strict comparison
+  return normalized.replace(/\s+/g, '');
+}
+
+// Calculate Levenshtein distance between two strings
+function levenshteinDistance(str1, str2) {
+  if (!str1 || !str2) return Infinity;
+  const m = str1.length;
+  const n = str2.length;
+  
+  // Quick exit for very different lengths
+  if (Math.abs(m - n) > Math.max(m, n) * 0.5) return Infinity;
+  
+  const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,      // deletion
+        dp[i][j - 1] + 1,      // insertion
+        dp[i - 1][j - 1] + cost // substitution
+      );
+    }
+  }
+  
+  return dp[m][n];
+}
+
+// Check if two entity names match (with fuzzy matching)
+function entitiesMatch(entity1, entity2) {
+  if (!entity1 || !entity2) return false;
+  
+  const norm1 = normalizeEntityName(entity1);
+  const norm2 = normalizeEntityName(entity2);
+  
+  if (!norm1 || !norm2) return false;
+  
+  // Exact match after normalization
+  if (norm1 === norm2) return true;
+  
+  // Substring match (e.g., "Node Fortress" matches "Node Fortress App")
+  if (norm1.includes(norm2) || norm2.includes(norm1)) return true;
+  
+  // Strict match (no spaces) - e.g., "nodefortress" matches "node fortress"
+  const strict1 = normalizeEntityNameStrict(entity1);
+  const strict2 = normalizeEntityNameStrict(entity2);
+  if (strict1 === strict2) return true;
+  
+  // Fuzzy match using Levenshtein distance
+  // Allow up to 20% character differences for longer names
+  const maxLen = Math.max(norm1.length, norm2.length);
+  const minLen = Math.min(norm1.length, norm2.length);
+  
+  // Only use fuzzy matching for names of similar length (within 30%)
+  if (minLen < maxLen * 0.7) return false;
+  
+  const distance = levenshteinDistance(norm1, norm2);
+  const threshold = Math.max(2, Math.floor(maxLen * 0.2)); // At least 2, or 20% of length
+  
+  if (distance <= threshold) {
+    console.log(`  -> Fuzzy match: "${entity1}" ~ "${entity2}" (distance=${distance}, threshold=${threshold})`);
+    return true;
+  }
+  
+  return false;
 }
 
 // Calculate similarity between two topics for correlation
@@ -546,10 +655,14 @@ function correlateTopics(allTopics) {
     item.topics.push(topic);
     used.add(topic.id);
     
-    // For types that require entity names, skip correlation if no entity found
-    // Each topic without an entity will be its own separate item
-    if ((type === 'featured-app' || type === 'validator') && !topicEntityName) {
-      console.log(`  -> No entity name found, creating standalone item`);
+    // For types that require entity names, skip correlation if no entity found OR if multi-entity
+    // Multi-entity batch approvals (e.g., "Validators Approved: A, B, C") are always standalone
+    if ((type === 'featured-app' || type === 'validator') && (!topicEntityName || topic.identifiers.isMultiEntity)) {
+      if (topic.identifiers.isMultiEntity) {
+        console.log(`  -> Multi-entity batch approval, creating standalone item`);
+      } else {
+        console.log(`  -> No entity name found, creating standalone item`);
+      }
       lifecycleItems.push(item);
       continue;
     }
@@ -565,6 +678,9 @@ function correlateTopics(allTopics) {
     for (const candidate of sortedTopics) {
       if (used.has(candidate.id)) continue;
       if (candidate.id === topic.id) continue; // Already added above
+      
+      // Skip multi-entity candidates - they should be standalone
+      if (candidate.identifiers.isMultiEntity) continue;
       
       // For CIPs: ONLY correlate if they have an EXACT CIP number match
       if (item.type === 'cip') {
@@ -590,23 +706,18 @@ function correlateTopics(allTopics) {
         continue;
       }
       
-      // For Featured Apps and Validators: REQUIRE entity name match
-      // This is the key change - each app/validator gets its own lifecycle
+      // For Featured Apps and Validators: Use fuzzy entity matching
+      // This handles variations like "Node Fortress" vs "Node Fortress LLC" vs "NodeFortress"
       if (item.type === 'featured-app' || item.type === 'validator') {
-        const topicEntity = normalizeEntityName(topicEntityName);
-        const candidateEntity = normalizeEntityName(candidate.identifiers.entityName);
+        const candidateEntity = candidate.identifiers.entityName;
         
-        // Only correlate if BOTH have an entity name and they match
-        if (!topicEntity || !candidateEntity) {
+        // Only correlate if candidate has an entity name
+        if (!candidateEntity) {
           continue;
         }
         
-        // Check for exact match or substring match (e.g., "Node Fortress" matches "Node Fortress App")
-        const matches = topicEntity === candidateEntity || 
-                       topicEntity.includes(candidateEntity) || 
-                       candidateEntity.includes(topicEntity);
-        
-        if (!matches) {
+        // Use fuzzy matching function (handles normalization, substrings, Levenshtein distance)
+        if (!entitiesMatch(topicEntityName, candidateEntity)) {
           continue;
         }
         
