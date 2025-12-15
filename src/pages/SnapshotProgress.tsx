@@ -60,6 +60,8 @@ const SnapshotProgress = () => {
   const [isLocalMode, setIsLocalMode] = useState(false);
   const [localStats, setLocalStats] = useState<{ total_contracts: number; total_templates: number } | null>(null);
   const [selectedMigration, setSelectedMigration] = useState<string>('all');
+  const [prevContractCount, setPrevContractCount] = useState<number | null>(null);
+  const [isStillWriting, setIsStillWriting] = useState(false);
   const { toast } = useToast();
   const useDuckDB = useDuckDBForLedger();
 
@@ -150,6 +152,17 @@ const SnapshotProgress = () => {
         getACSTemplates(100),
         getACSStats(),
       ]);
+
+      const currentCount = statsResponse.data.total_contracts;
+      
+      // Detect if data is still being written by comparing to previous count
+      if (prevContractCount !== null && currentCount > prevContractCount) {
+        setIsStillWriting(true);
+      } else if (prevContractCount !== null && currentCount === prevContractCount) {
+        // Count hasn't changed - data writing may have stopped
+        setIsStillWriting(false);
+      }
+      setPrevContractCount(currentCount);
 
       // Transform local snapshots to match UI format
       const transformedSnapshots: Snapshot[] = snapshotsResponse.data.map((s: LocalACSSnapshot) => ({
@@ -430,17 +443,30 @@ const SnapshotProgress = () => {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Progress Bar - For local mode, don't show 100% since data may still be writing */}
+              {/* Progress Bar */}
               {isLocalMode ? (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Contracts Indexed</span>
-                    <span className="font-medium text-primary">
-                      {snapshot.entry_count?.toLocaleString() || 0} contracts
+                    <span className="text-muted-foreground">Overall Progress</span>
+                    <span className="font-medium">
+                      {isStillWriting ? (
+                        <span className="text-blue-500">Writing data...</span>
+                      ) : prevContractCount === null ? (
+                        <span className="text-muted-foreground">Checking...</span>
+                      ) : (
+                        <span className="text-green-500">100%</span>
+                      )}
                     </span>
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    Data refreshes automatically as files are written
+                  <Progress 
+                    value={isStillWriting ? 75 : (prevContractCount === null ? 0 : 100)} 
+                    className={`h-2 ${isStillWriting ? '[&>div]:animate-pulse' : ''}`}
+                  />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{snapshot.entry_count?.toLocaleString() || 0} contracts indexed</span>
+                    {isStillWriting && (
+                      <span className="text-blue-500">Data still being written...</span>
+                    )}
                   </div>
                 </div>
               ) : snapshot.status === "completed" ? (
