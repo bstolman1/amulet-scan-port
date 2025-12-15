@@ -65,7 +65,14 @@ function countDataFiles(type = 'events', maxScan = 10000) {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           stack.push(path.join(dir, entry.name));
-        } else if (entry.name.includes(`${type}-`) && (entry.name.endsWith('.jsonl') || entry.name.endsWith('.jsonl.gz') || entry.name.endsWith('.jsonl.zst'))) {
+        } else if (
+          entry.name.includes(`${type}-`) && 
+          (entry.name.endsWith('.jsonl') || 
+           entry.name.endsWith('.jsonl.gz') || 
+           entry.name.endsWith('.jsonl.zst') ||
+           entry.name.endsWith('.pb.zst'))
+        ) {
+          count++;  // Fixed: was missing this increment
           if (count >= maxScan) break;
         }
       }
@@ -83,7 +90,10 @@ function findDataFiles(type = 'events') {
 }
 
 function hasDataFiles(type = 'events') {
-  return hasFileType(type, '.jsonl') || hasFileType(type, '.jsonl.gz') || hasFileType(type, '.jsonl.zst');
+  return hasFileType(type, '.jsonl') || 
+         hasFileType(type, '.jsonl.gz') || 
+         hasFileType(type, '.jsonl.zst') ||
+         hasFileType(type, '.pb.zst');
 }
 
 // Helper to run queries
