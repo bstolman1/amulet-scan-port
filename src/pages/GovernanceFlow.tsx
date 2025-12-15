@@ -63,7 +63,7 @@ interface Topic {
 interface LifecycleItem {
   id: string;
   primaryId: string;
-  type: 'cip' | 'featured-app' | 'validator' | 'outcome' | 'other';
+  type: 'cip' | 'featured-app' | 'validator' | 'protocol-upgrade' | 'outcome' | 'other';
   network?: 'testnet' | 'mainnet' | null;
   stages: Record<string, Topic[]>;
   topics: Topic[];
@@ -92,6 +92,7 @@ const WORKFLOW_STAGES = {
   cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
   'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
   validator: ['tokenomics', 'sv-announce'],
+  'protocol-upgrade': ['tokenomics', 'sv-announce'],
   outcome: ['sv-announce'],
   other: ['tokenomics', 'sv-announce'],
 };
@@ -112,6 +113,7 @@ const TYPE_CONFIG = {
   cip: { label: 'CIP', color: 'bg-primary/20 text-primary' },
   'featured-app': { label: 'Featured App', color: 'bg-emerald-500/20 text-emerald-400' },
   validator: { label: 'Validator', color: 'bg-orange-500/20 text-orange-400' },
+  'protocol-upgrade': { label: 'Protocol Upgrade', color: 'bg-cyan-500/20 text-cyan-400' },
   outcome: { label: 'Tokenomics Outcomes', color: 'bg-amber-500/20 text-amber-400' },
   other: { label: 'Other', color: 'bg-muted text-muted-foreground' },
 };
@@ -327,8 +329,10 @@ const GovernanceFlow = () => {
     const subjectTrimmed = topic.subject.trim();
     const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
     const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
+    const isProtocolUpgrade = /\b(?:synchronizer\s+migration|splice\s+\d+\.\d+|protocol\s+upgrade|network\s+upgrade|hard\s*fork|migration\s+to\s+splice)\b/i.test(subjectTrimmed);
     
     if (isOutcome) return 'outcome';
+    if (isProtocolUpgrade) return 'protocol-upgrade';
     if (topic.flow === 'cip') return 'cip';
     if (topic.flow === 'featured-app') return 'featured-app';
     if (topic.flow === 'shared') {
@@ -594,6 +598,12 @@ const GovernanceFlow = () => {
                 <div className="text-xs text-muted-foreground">Validators</div>
               </CardContent>
             </Card>
+            <Card className="bg-cyan-500/10 border-cyan-500/20">
+              <CardContent className="p-4">
+                <div className="text-2xl font-bold text-cyan-400">{data.stats.byType['protocol-upgrade'] || 0}</div>
+                <div className="text-xs text-muted-foreground">Protocol Upgrades</div>
+              </CardContent>
+            </Card>
             <Card className="bg-muted/30">
               <CardContent className="p-4">
                 <div className="text-2xl font-bold">{Object.keys(data.groups).length}</div>
@@ -668,7 +678,7 @@ const GovernanceFlow = () => {
             <Filter className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Type:</span>
             <div className="flex gap-1">
-              {['all', 'cip', 'featured-app', 'validator', 'outcome', 'other'].map(type => (
+              {['all', 'cip', 'featured-app', 'validator', 'protocol-upgrade', 'outcome', 'other'].map(type => (
                 <Button
                   key={type}
                   variant={typeFilter === type ? 'default' : 'outline'}

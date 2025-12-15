@@ -41,6 +41,7 @@ const WORKFLOW_STAGES = {
   cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
   'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
   validator: ['tokenomics', 'sv-announce'],
+  'protocol-upgrade': ['tokenomics', 'sv-announce'],
   outcome: ['sv-announce'],
   other: ['tokenomics', 'sv-announce'], // Fallback
 };
@@ -591,6 +592,8 @@ function correlateTopics(allTopics) {
     const isValidatorOperations = /\bValidator\s+Operations\b/i.test(subjectTrimmed);
     // "Vote Proposal" patterns are typically CIP-related votes, not validator applications
     const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
+    // Protocol upgrade patterns: "synchronizer migration", "Splice X.X", "protocol upgrade", "network upgrade"
+    const isProtocolUpgrade = /\b(?:synchronizer\s+migration|splice\s+\d+\.\d+|protocol\s+upgrade|network\s+upgrade|hard\s*fork|migration\s+to\s+splice)\b/i.test(subjectTrimmed);
     
     // TYPE DETERMINATION: Use group flow as primary signal
     // CIP groups (cip-discuss, cip-vote, cip-announce) -> cip type
@@ -600,6 +603,9 @@ function correlateTopics(allTopics) {
     if (isOutcome) {
       // Outcomes are a special case regardless of group
       type = 'outcome';
+    } else if (isProtocolUpgrade) {
+      // Protocol upgrades are a special type (migration, splice version upgrades)
+      type = 'protocol-upgrade';
     } else if (topic.flow === 'cip') {
       // CIP groups are always CIP type
       type = 'cip';
@@ -976,6 +982,7 @@ async function fetchFreshData() {
       cip: lifecycleItems.filter(i => i.type === 'cip').length,
       'featured-app': uniqueFeaturedApps.size,
       validator: uniqueValidators.size,
+      'protocol-upgrade': lifecycleItems.filter(i => i.type === 'protocol-upgrade').length,
       outcome: lifecycleItems.filter(i => i.type === 'outcome').length,
       other: lifecycleItems.filter(i => i.type === 'other').length,
     },
