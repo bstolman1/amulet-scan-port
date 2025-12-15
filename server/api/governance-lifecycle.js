@@ -2,7 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { inferStage } from '../inference/inferStage.js';
+import { inferStagesBatch } from '../inference/inferStage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -743,22 +743,27 @@ async function fetchFreshData() {
   console.log(`Total topics across all groups: ${allTopics.length}`);
   
   // ========== INFERENCE STEP (additive metadata only) ==========
-  // Run zero-shot NLI classification on each topic if inference is enabled
+  // Run zero-shot NLI classification on all topics in BATCH if inference is enabled
   // This adds postedStage, inferredStage, inferenceConfidence, effectiveStage
   // Does NOT change grouping, correlation, or UI behavior
   if (INFERENCE_ENABLED) {
-    console.log('🧠 Running inference classification on topics...');
-    let inferenceCount = 0;
-    let overrideCount = 0;
+    console.log('🧠 Running batch inference classification on topics...');
     
-    for (const topic of allTopics) {
-      try {
-        const result = await inferStage(topic.subject, topic.content);
-        
+    try {
+      // Run batch inference - loads model once, processes all topics
+      const inferenceResults = await inferStagesBatch(
+        allTopics.map(t => ({ id: t.id, subject: t.subject, content: t.content })),
+        (processed, total) => console.log(`🧠 Progress: ${processed}/${total} topics...`)
+      );
+      
+      let overrideCount = 0;
+      
+      // Apply results to topics
+      for (const topic of allTopics) {
+        const result = inferenceResults.get(topic.id);
         if (result) {
           topic.inferredStage = result.stage;
           topic.inferenceConfidence = result.confidence;
-          inferenceCount++;
           
           // Override effectiveStage only if confidence meets threshold
           if (result.confidence >= INFERENCE_THRESHOLD) {
@@ -766,13 +771,12 @@ async function fetchFreshData() {
             overrideCount++;
           }
         }
-      } catch (err) {
-        console.error(`[inference] Error for topic ${topic.id}:`, err.message);
-        // Leave inference fields as null on error
       }
+      
+      console.log(`🧠 Inference complete: ${inferenceResults.size}/${allTopics.length} classified, ${overrideCount} overrides (threshold: ${INFERENCE_THRESHOLD})`);
+    } catch (err) {
+      console.error('[inference] Batch inference failed:', err.message);
     }
-    
-    console.log(`🧠 Inference complete: ${inferenceCount}/${allTopics.length} classified, ${overrideCount} overrides (threshold: ${INFERENCE_THRESHOLD})`);
   } else {
     console.log('ℹ️ Inference disabled (set INFERENCE_ENABLED=true to enable)');
   }

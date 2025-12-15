@@ -5,10 +5,10 @@ Deterministic Local Governance Classification Engine
 Zero-shot NLI-based classification of governance messages into fixed lifecycle stages.
 Uses facebook/bart-large-mnli for deterministic, non-generative classification.
 
-Input: Plain text via stdin (subject + optional content)
-Output: JSON to stdout with {stage, confidence}
+Input: JSONL via stdin - each line is {"id": "...", "text": "..."}
+Output: JSONL to stdout - each line is {"id": "...", "stage": "...", "confidence": 0.XX}
 
-All logs go to stderr. Output is machine-parsable JSON only.
+All logs go to stderr. Output is machine-parsable JSONL only.
 """
 
 import sys
@@ -39,7 +39,7 @@ STAGE_DESCRIPTIONS = {
 
 def log(msg):
     """Log to stderr only - stdout is reserved for JSON output"""
-    print(msg, file=sys.stderr)
+    print(msg, file=sys.stderr, flush=True)
 
 def main():
     log("Loading NLI classification model...")
@@ -54,57 +54,75 @@ def main():
         )
     except Exception as e:
         log(f"Error loading model: {e}")
-        print(json.dumps({"stage": "other", "confidence": 0.0}))
         sys.exit(1)
     
-    log("Model loaded. Reading input from stdin...")
-    
-    # Read full text from stdin
-    text = sys.stdin.read().strip()
-    
-    if not text:
-        log("Empty input received")
-        print(json.dumps({"stage": "other", "confidence": 0.0}))
-        sys.exit(0)
-    
-    log(f"Classifying text ({len(text)} chars): {text[:100]}...")
+    log("Model loaded. Processing JSONL input from stdin...")
     
     # Create candidate labels with descriptions for better matching
     candidate_labels = [STAGE_DESCRIPTIONS[stage] for stage in ALLOWED_STAGES]
     
-    try:
-        # Run zero-shot classification
-        result = classifier(
-            text,
-            candidate_labels,
-            hypothesis_template="This message is about {}.",
-            multi_label=False  # Single best label only
-        )
+    # Process each line as a JSON object
+    processed = 0
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
         
-        # Map back from description to stage label
-        best_description = result["labels"][0]
-        best_score = result["scores"][0]
-        
-        # Find the stage that matches this description
-        best_stage = "other"
-        for stage, desc in STAGE_DESCRIPTIONS.items():
-            if desc == best_description:
-                best_stage = stage
-                break
-        
-        log(f"Classification result: {best_stage} (confidence: {best_score:.4f})")
-        
-        # Output strict JSON schema
-        output = {
-            "stage": best_stage,
-            "confidence": round(best_score, 4)
-        }
-        print(json.dumps(output))
-        
-    except Exception as e:
-        log(f"Classification error: {e}")
-        print(json.dumps({"stage": "other", "confidence": 0.0}))
-        sys.exit(1)
+        try:
+            item = json.loads(line)
+            item_id = item.get("id", "unknown")
+            text = item.get("text", "").strip()
+            
+            if not text:
+                # Empty text - return default
+                print(json.dumps({"id": item_id, "stage": "other", "confidence": 0.0}), flush=True)
+                continue
+            
+            # Run zero-shot classification
+            result = classifier(
+                text,
+                candidate_labels,
+                hypothesis_template="This message is about {}.",
+                multi_label=False  # Single best label only
+            )
+            
+            # Map back from description to stage label
+            best_description = result["labels"][0]
+            best_score = result["scores"][0]
+            
+            # Find the stage that matches this description
+            best_stage = "other"
+            for stage, desc in STAGE_DESCRIPTIONS.items():
+                if desc == best_description:
+                    best_stage = stage
+                    break
+            
+            # Output strict JSON schema
+            output = {
+                "id": item_id,
+                "stage": best_stage,
+                "confidence": round(best_score, 4)
+            }
+            print(json.dumps(output), flush=True)
+            
+            processed += 1
+            if processed % 50 == 0:
+                log(f"Processed {processed} items...")
+                
+        except json.JSONDecodeError as e:
+            log(f"Invalid JSON line: {e}")
+            continue
+        except Exception as e:
+            log(f"Classification error: {e}")
+            # Output error result for this item
+            try:
+                item_id = json.loads(line).get("id", "unknown")
+                print(json.dumps({"id": item_id, "stage": "other", "confidence": 0.0}), flush=True)
+            except:
+                pass
+            continue
+    
+    log(f"Inference complete. Processed {processed} items total.")
 
 if __name__ == "__main__":
     main()
