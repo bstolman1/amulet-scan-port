@@ -163,18 +163,28 @@ async function validateFile(filePath, quickScan = false) {
     // Full decode to validate all records
     const data = await readBinaryFile(filePath);
     
-    // Extract time range from records
+    // Extract time range from records without keeping records in memory
     // Use effective_at primarily (actual event time), fall back to recorded_at
     let minTime = null;
     let maxTime = null;
+    const sampleIds = []; // Keep only first few IDs for duplicate sampling
     
-    for (const record of data.records) {
+    for (let i = 0; i < data.records.length; i++) {
+      const record = data.records[i];
       const time = record.effective_at || record.recorded_at;
       if (time) {
         if (!minTime || time < minTime) minTime = time;
         if (!maxTime || time > maxTime) maxTime = time;
       }
+      // Only keep first 10 IDs for duplicate detection (memory-efficient sampling)
+      if (i < 10) {
+        const id = record.id || record.transaction_id || record.update_id;
+        if (id) sampleIds.push(id);
+      }
     }
+    
+    // Clear records from memory immediately
+    data.records = null;
     
     return {
       valid: true,
@@ -185,7 +195,7 @@ async function validateFile(filePath, quickScan = false) {
       chunks: data.chunksRead,
       minTime,
       maxTime,
-      records: data.records, // Keep for duplicate detection
+      sampleIds, // Only sample IDs, not full records
     };
     
   } catch (err) {
@@ -238,28 +248,23 @@ function detectGaps(timeRanges, thresholdMs) {
 }
 
 /**
- * Detect duplicate records across files
+ * Detect duplicate records across files using sample IDs (memory-efficient)
  */
-function detectDuplicates(allRecords, type) {
+function detectDuplicates(results) {
   const seen = new Map();
   const duplicates = [];
   
-  for (const { file, records } of allRecords) {
-    for (const record of records) {
-      const id = type === 'updates' 
-        ? record.id || record.transaction_id
-        : record.id || record.update_id;
-      
-      if (id) {
-        if (seen.has(id)) {
-          duplicates.push({
-            id,
-            firstFile: seen.get(id),
-            secondFile: file,
-          });
-        } else {
-          seen.set(id, file);
-        }
+  for (const { file, sampleIds } of results) {
+    if (!sampleIds) continue;
+    for (const id of sampleIds) {
+      if (seen.has(id)) {
+        duplicates.push({
+          id,
+          firstFile: seen.get(id),
+          secondFile: file,
+        });
+      } else {
+        seen.set(id, file);
       }
     }
   }
@@ -591,15 +596,10 @@ async function runValidation() {
       results.gapsFound = detectGaps(updateTimeRanges, GAP_THRESHOLD_MS);
     }
     
-    // Detect duplicates (sample-based for performance)
+    // Detect duplicates using sample IDs (memory-efficient)
     console.log('\n🔄 Checking for duplicates...');
     
-    const sampleSize = Math.min(50, updateResults.length);
-    const sampleResults = updateResults.slice(0, sampleSize);
-    const duplicates = detectDuplicates(
-      sampleResults.map(r => ({ file: r.file, records: r.records || [] })),
-      'updates'
-    );
+    const duplicates = detectDuplicates(updateResults);
     results.duplicatesFound = duplicates.length;
   }
   
