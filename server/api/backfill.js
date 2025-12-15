@@ -46,6 +46,9 @@ function readAllCursors() {
         started_at: data.started_at || data.updated_at || new Date().toISOString(),
         total_updates: data.total_updates || 0,
         total_events: data.total_events || 0,
+        pending_writes: data.pending_writes || 0,
+        buffered_records: data.buffered_records || 0,
+        error: data.error,
       });
     } catch (err) {
       console.error(`Error reading cursor file ${file}:`, err.message);
@@ -190,9 +193,11 @@ router.get('/shards', (req, res) => {
       }
       
       // Calculate progress
+      const hasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
       let progress = 0;
       if (cursor.complete) {
-        progress = 100;
+        // If cursor is marked complete but we still have pending writes/buffers, treat as "finalizing"
+        progress = hasPendingWork ? 99.9 : 100;
       } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
         const minMs = new Date(cursor.min_time).getTime();
         const maxMs = new Date(cursor.max_time).getTime();
@@ -201,7 +206,6 @@ router.get('/shards', (req, res) => {
         if (totalRange > 0) {
           let rawProgress = ((maxMs - currentMs) / totalRange) * 100;
           // Cap at 99.9% if not marked complete OR has pending writes
-          const hasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
           if ((rawProgress >= 99.5 || hasPendingWork) && !cursor.complete) {
             rawProgress = Math.min(rawProgress, 99.9);
           }
@@ -239,6 +243,8 @@ router.get('/shards', (req, res) => {
         complete: cursor.complete,
         totalUpdates: cursor.total_updates || 0,
         totalEvents: cursor.total_events || 0,
+        pendingWrites: cursor.pending_writes || 0,
+        bufferedRecords: cursor.buffered_records || 0,
         minTime: cursor.min_time,
         maxTime: cursor.max_time,
         lastBefore: cursor.last_before,
