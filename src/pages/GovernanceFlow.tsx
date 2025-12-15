@@ -815,13 +815,9 @@ const GovernanceFlow = () => {
               <ScrollArea className="h-[calc(100vh-450px)] pr-4">
                 <div className="space-y-2">
                   {filteredTopics.map((topic) => {
-                    // Determine item type for styling
-                    const isOutcome = /\bOutcomes\s*-/i.test(topic.subject.trim());
-                    const itemType = isOutcome ? 'outcome' :
-                                    topic.identifiers.cipNumber ? 'cip' :
-                                    topic.identifiers.appName ? 'featured-app' :
-                                    topic.identifiers.validatorName ? 'validator' : 'other';
-                    const typeConfig = TYPE_CONFIG[itemType];
+                    // Use the flow property from backend for correct type
+                    const itemType = (topic.flow as keyof typeof TYPE_CONFIG) || 'other';
+                    const typeConfig = TYPE_CONFIG[itemType] || TYPE_CONFIG.other;
                     const stageConfig = STAGE_CONFIG[topic.stage];
                     const StageIcon = stageConfig?.icon || FileText;
                     
