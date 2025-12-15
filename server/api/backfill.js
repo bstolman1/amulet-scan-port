@@ -3,6 +3,8 @@ import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import db from '../duckdb/connection.js';
+import { getLastGapDetection } from '../engine/gap-detector.js';
+import { triggerGapDetection } from '../engine/worker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -330,6 +332,44 @@ router.delete('/purge', (req, res) => {
     });
   } catch (err) {
     console.error('Error purging backfill data:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/backfill/gaps - Get detected time gaps
+router.get('/gaps', (req, res) => {
+  try {
+    const gapInfo = getLastGapDetection();
+    res.json({
+      data: gapInfo?.gaps || [],
+      totalGaps: gapInfo?.totalGaps || 0,
+      totalGapTime: gapInfo?.totalGapTime || '0ms',
+      detectedAt: gapInfo?.detectedAt || null,
+      autoRecoverEnabled: gapInfo?.autoRecoverEnabled || false,
+      recoveryAttempted: gapInfo?.recoveryAttempted || false,
+      transactionsRecovered: gapInfo?.transactionsRecovered || 0,
+    });
+  } catch (err) {
+    console.error('Error getting gap info:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/backfill/gaps/detect - Trigger gap detection manually
+router.post('/gaps/detect', async (req, res) => {
+  try {
+    const autoRecover = req.body?.autoRecover === true;
+    const result = await triggerGapDetection(autoRecover);
+    res.json({
+      success: true,
+      gaps: result.gaps?.length || 0,
+      totalGapTime: result.totalGapTime || '0ms',
+      message: result.gaps?.length > 0 
+        ? `Found ${result.gaps.length} gap(s)` 
+        : 'No gaps detected',
+    });
+  } catch (err) {
+    console.error('Error triggering gap detection:', err);
     res.status(500).json({ error: err.message });
   }
 });

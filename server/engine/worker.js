@@ -11,13 +11,17 @@ import { scanAndIndexFiles, getPendingFileCount } from './file-index.js';
 import { ingestNewFiles, getIngestionStats } from './ingest.js';
 import { updateAllAggregations, hasNewData } from './aggregations.js';
 import { initEngineSchema } from './schema.js';
+import { runGapDetection, getLastGapDetection } from './gap-detector.js';
 
 const WORKER_INTERVAL_MS = parseInt(process.env.ENGINE_INTERVAL_MS || '30000', 10);
 const FILES_PER_CYCLE = parseInt(process.env.ENGINE_FILES_PER_CYCLE || '3', 10);
+const GAP_CHECK_INTERVAL = parseInt(process.env.GAP_CHECK_INTERVAL || '10', 10); // Check gaps every N cycles
+const AUTO_RECOVER_GAPS = process.env.AUTO_RECOVER_GAPS !== 'false'; // Enable by default
 
 let running = false;
 let workerInterval = null;
 let lastStats = null;
+let cycleCount = 0;
 
 const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '300000', 10); // 5 min default
 
@@ -78,6 +82,24 @@ async function runCycle() {
       };
     }
     
+    // Step 4: Gap detection (periodic)
+    cycleCount++;
+    if (cycleCount % GAP_CHECK_INTERVAL === 0) {
+      console.log('🔍 Running periodic gap detection...');
+      try {
+        const gapResult = await withTimeout(
+          runGapDetection(AUTO_RECOVER_GAPS),
+          CYCLE_TIMEOUT_MS,
+          'Gap detection'
+        );
+        if (gapResult.gaps?.length > 0) {
+          console.log(`   ⚠️ TIME GAPS: Found ${gapResult.totalGaps} gap(s), total: ${gapResult.totalGapTime}`);
+        }
+      } catch (err) {
+        console.warn(`   ⚠️ Gap detection failed: ${err.message}`);
+      }
+    }
+    
     // Log progress
     const pending = await getPendingFileCount();
     console.log(`✅ Engine cycle complete: indexed=${newFiles}, ingested=${ingested} (${records} records), pending=${pending}, ${Date.now() - startTime}ms`);
@@ -96,6 +118,7 @@ async function runCycle() {
 export async function startEngineWorker() {
   console.log('⚙️ Starting warehouse engine worker...');
   console.log(`   Interval: ${WORKER_INTERVAL_MS}ms, Files/cycle: ${FILES_PER_CYCLE}`);
+  console.log(`   Gap check: every ${GAP_CHECK_INTERVAL} cycles, Auto-recover: ${AUTO_RECOVER_GAPS}`);
   
   // Initialize schema
   await initEngineSchema();
@@ -133,6 +156,7 @@ export async function triggerCycle() {
 export async function getEngineStatus() {
   const stats = await getIngestionStats();
   const pending = await getPendingFileCount();
+  const gapInfo = getLastGapDetection();
   
   return {
     running: !!workerInterval,
@@ -140,5 +164,13 @@ export async function getEngineStatus() {
     pendingFiles: pending,
     ...stats,
     lastStats,
+    gapDetection: gapInfo,
   };
+}
+
+/**
+ * Manually trigger gap detection
+ */
+export async function triggerGapDetection(autoRecover = false) {
+  return runGapDetection(autoRecover);
 }
