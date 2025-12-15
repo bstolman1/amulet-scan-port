@@ -22,7 +22,6 @@ const ExternalPartyRules = () => {
   const rulesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:ExternalPartyAmuletRules:ExternalPartyAmuletRules",
-    !!latestSnapshot,
   );
 
   const getField = (obj: any, fieldNames: string[]) => {

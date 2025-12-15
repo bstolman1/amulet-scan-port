@@ -22,7 +22,6 @@ const Elections = () => {
   const electionsQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
     "Splice:DsoRules:ElectionRequest",
-    !!latestSnapshot,
   );
 
   const getField = (obj: any, fieldNames: string[]) => {
