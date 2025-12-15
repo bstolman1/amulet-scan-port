@@ -101,6 +101,9 @@ router.get('/by-type/:type', async (req, res) => {
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
+        maxDays: 30,
+        maxFilesToScan: 200,
+        sortBy: 'effective_at',
         filter: (e) => e.event_type === type
       });
       return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
@@ -110,7 +113,7 @@ router.get('/by-type/:type', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE event_type = '${type}'
-      ORDER BY timestamp DESC
+      ORDER BY effective_at DESC
       LIMIT ${limit}
     `;
     
@@ -133,6 +136,9 @@ router.get('/by-template/:templateId', async (req, res) => {
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
+        maxDays: 30,
+        maxFilesToScan: 200,
+        sortBy: 'effective_at',
         filter: (e) => e.template_id?.includes(templateId)
       });
       return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
@@ -142,7 +148,7 @@ router.get('/by-template/:templateId', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%${templateId}%'
-      ORDER BY timestamp DESC
+      ORDER BY effective_at DESC
       LIMIT ${limit}
     `;
     
@@ -153,7 +159,7 @@ router.get('/by-template/:templateId', async (req, res) => {
   }
 });
 
-// GET /api/events/by-date - Get events for a specific date range
+// GET /api/events/by-date - Get events for a specific date range (filters by effective_at)
 router.get('/by-date', async (req, res) => {
   try {
     const { start, end } = req.query;
@@ -168,9 +174,12 @@ router.get('/by-date', async (req, res) => {
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
+        maxDays: 90, // Wider range for date queries
+        maxFilesToScan: 300,
+        sortBy: 'effective_at',
         filter: (e) => {
-          if (!e.timestamp) return false;
-          const ts = new Date(e.timestamp).getTime();
+          if (!e.effective_at) return false;
+          const ts = new Date(e.effective_at).getTime();
           return ts >= startDate && ts <= endDate;
         }
       });
@@ -178,14 +187,14 @@ router.get('/by-date', async (req, res) => {
     }
     
     let whereClause = '';
-    if (start) whereClause += ` AND timestamp >= '${start}'`;
-    if (end) whereClause += ` AND timestamp <= '${end}'`;
+    if (start) whereClause += ` AND effective_at >= '${start}'`;
+    if (end) whereClause += ` AND effective_at <= '${end}'`;
     
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE 1=1 ${whereClause}
-      ORDER BY timestamp DESC
+      ORDER BY effective_at DESC
       LIMIT ${limit}
     `;
     
