@@ -102,7 +102,6 @@ const BackfillProgress = () => {
     
     for (const cursor of allCursors) {
       if (cursor.complete) {
-        // Only count as 100% if explicitly marked complete
         totalProgress += 100;
         validCursors++;
       } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
@@ -112,8 +111,7 @@ const BackfillProgress = () => {
         const totalRange = maxTime - minTime;
         if (totalRange > 0) {
           const progressFromMax = maxTime - currentTime;
-          // Cap at 99% if not marked complete - position at min_time doesn't mean writes are done
-          totalProgress += Math.min(99, Math.max(0, (progressFromMax / totalRange) * 100));
+          totalProgress += Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
           validCursors++;
         }
       }
@@ -378,17 +376,15 @@ const BackfillProgress = () => {
                       <div className="space-y-3 pl-4 border-l-2 border-border/30">
                         {migrationCursors.map((cursor) => {
                           let progressPercent = 0;
-                          if (cursor.complete) {
-                            // Only show 100% if explicitly marked complete
-                            progressPercent = 100;
-                          } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
+                          if (cursor.min_time && cursor.max_time && cursor.last_before) {
                             const minTime = new Date(cursor.min_time).getTime();
                             const maxTime = new Date(cursor.max_time).getTime();
                             const currentTime = new Date(cursor.last_before).getTime();
                             const totalRange = maxTime - minTime;
                             const progressFromMax = maxTime - currentTime;
-                            // Cap at 99% if not marked complete - position at min_time doesn't mean writes are done
-                            progressPercent = Math.min(99, Math.max(0, (progressFromMax / totalRange) * 100));
+                            progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+                          } else if (cursor.complete) {
+                            progressPercent = 100;
                           }
 
                           const { eta, throughput } = calculateETA(cursor);
