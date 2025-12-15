@@ -808,7 +808,16 @@ async function fetchFreshData() {
   
   // Correlate topics into lifecycle items
   const lifecycleItems = correlateTopics(allTopics);
-  console.log(`Correlated into ${lifecycleItems.length} lifecycle items`);
+  
+  // Count topics in lifecycle items to verify none are dropped
+  const topicsInItems = lifecycleItems.reduce((sum, item) => sum + (item.topics?.length || 0), 0);
+  const standaloneItems = lifecycleItems.filter(item => (item.topics?.length || 0) === 1).length;
+  const groupedItems = lifecycleItems.filter(item => (item.topics?.length || 0) > 1).length;
+  
+  console.log(`📊 Correlated ${allTopics.length} topics → ${lifecycleItems.length} lifecycle items`);
+  console.log(`   ├─ ${topicsInItems}/${allTopics.length} topics accounted for ${topicsInItems === allTopics.length ? '✓' : '⚠️ MISMATCH'}`);
+  console.log(`   ├─ ${groupedItems} grouped items (multiple topics)`);
+  console.log(`   └─ ${standaloneItems} standalone items (single topic)`)
   
   // Summary stats
   const uniqueFeaturedApps = new Set(
