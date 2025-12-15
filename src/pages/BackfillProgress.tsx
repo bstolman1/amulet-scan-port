@@ -61,11 +61,21 @@ const BackfillProgress = () => {
   const [prevStats, setPrevStats] = useState<{ updates: number; events: number } | null>(null);
   const { toast } = useToast();
 
-  // Track if data is still being written (counts increasing)
+  // Calculate merged cursors list
+  const allCursors = useMemo(() => {
+    return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
+  }, [cursors, realtimeCursors]);
+
+  // Track if data is still being written (counts increasing OR pending writes/buffers)
+  const hasPendingWork = useMemo(() => {
+    return allCursors.some((c) => (c.pending_writes || 0) > 0 || (c.buffered_records || 0) > 0);
+  }, [allCursors]);
+
   const isStillWriting = useMemo(() => {
+    if (hasPendingWork) return true;
     if (!stats || !prevStats) return false;
     return stats.totalUpdates > prevStats.updates || stats.totalEvents > prevStats.events;
-  }, [stats, prevStats]);
+  }, [stats, prevStats, hasPendingWork]);
 
   // Update previous stats when stats change
   useEffect(() => {
@@ -83,11 +93,6 @@ const BackfillProgress = () => {
       });
     }
   }, [stats]);
-
-  // Calculate merged cursors list
-  const allCursors = useMemo(() => {
-    return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
-  }, [cursors, realtimeCursors]);
 
   // Group cursors by migration_id
   const cursorsByMigration = useMemo(() => {
@@ -125,13 +130,15 @@ const BackfillProgress = () => {
   // Calculate overall progress percentage
   const overallProgress = useMemo(() => {
     if (allCursors.length === 0) return 0;
-    
+
     let totalProgress = 0;
     let validCursors = 0;
-    
+
     for (const cursor of allCursors) {
+      const cursorHasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
+
       if (cursor.complete) {
-        totalProgress += 100;
+        totalProgress += cursorHasPendingWork ? 99.9 : 100;
         validCursors++;
       } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
         const minTime = new Date(cursor.min_time).getTime();
@@ -140,19 +147,20 @@ const BackfillProgress = () => {
         const totalRange = maxTime - minTime;
         if (totalRange > 0) {
           const progressFromMax = maxTime - currentTime;
-          totalProgress += Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+          const computed = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
+          totalProgress += cursorHasPendingWork ? Math.min(computed, 99.9) : computed;
           validCursors++;
         }
       }
     }
-    
+
     return validCursors > 0 ? totalProgress / validCursors : 0;
   }, [allCursors]);
 
   // While data is still being written, avoid showing a misleading 100%
   const displayOverallProgress = useMemo(() => {
     if (!isStillWriting) return overallProgress;
-    return overallProgress >= 100 ? 99.9 : overallProgress;
+    return overallProgress >= 99.95 ? 99.9 : overallProgress;
   }, [isStillWriting, overallProgress]);
 
   useEffect(() => {
@@ -397,6 +405,9 @@ const BackfillProgress = () => {
               ) : (
                 cursorsByMigration.map(({ migrationId, cursors: migrationCursors }) => {
                   const allComplete = migrationCursors.every(c => c.complete);
+                  const migrationHasPendingWork = migrationCursors.some(
+                    (c) => (c.pending_writes || 0) > 0 || (c.buffered_records || 0) > 0,
+                  );
                   const isActive = migrationId === activeMigrationId;
                   const completedCount = migrationCursors.filter(c => c.complete).length;
                   
@@ -406,10 +417,10 @@ const BackfillProgress = () => {
                       <div className="flex items-center justify-between border-b border-border/50 pb-2">
                         <div className="flex items-center gap-3">
                           <span className="text-lg font-semibold">Migration {migrationId}</span>
-                          {allComplete && !isStillWriting ? (
+                          {allComplete && !migrationHasPendingWork ? (
                             <Badge variant="default" className="bg-green-600">Complete</Badge>
-                          ) : allComplete && isStillWriting ? (
-                            <Badge variant="default" className="bg-blue-600 animate-pulse">Writing</Badge>
+                          ) : allComplete && migrationHasPendingWork ? (
+                            <Badge variant="default" className="bg-accent text-accent-foreground animate-pulse">Finalizing</Badge>
                           ) : isActive ? (
                             <Badge variant="default" className="bg-primary animate-pulse">Active</Badge>
                           ) : (
@@ -424,6 +435,8 @@ const BackfillProgress = () => {
                       {/* Cursors for this migration */}
                       <div className="space-y-3 pl-4 border-l-2 border-border/30">
                         {migrationCursors.map((cursor) => {
+                          const cursorHasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
+
                           let progressPercent = 0;
                           if (cursor.min_time && cursor.max_time && cursor.last_before) {
                             const minTime = new Date(cursor.min_time).getTime();
@@ -433,11 +446,13 @@ const BackfillProgress = () => {
                             const progressFromMax = maxTime - currentTime;
                             progressPercent = Math.min(100, Math.max(0, (progressFromMax / totalRange) * 100));
                           } else if (cursor.complete) {
-                            progressPercent = 100;
+                            progressPercent = cursorHasPendingWork ? 99.9 : 100;
                           }
 
                           // If we're still writing data, don't render a misleading 100%.
-                          const displayProgressPercent = isStillWriting && progressPercent >= 100 ? 99.9 : progressPercent;
+                          const displayProgressPercent = (isStillWriting || cursorHasPendingWork) && progressPercent >= 99.95
+                            ? 99.9
+                            : progressPercent;
 
                           const { eta, throughput } = calculateETA(cursor);
 
@@ -446,10 +461,10 @@ const BackfillProgress = () => {
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
-                                  {cursor.complete && !isStillWriting ? (
+                                  {cursor.complete && !cursorHasPendingWork ? (
                                     <Badge variant="default" className="text-xs bg-primary text-primary-foreground">Complete</Badge>
-                                  ) : cursor.complete && isStillWriting ? (
-                                    <Badge variant="default" className="text-xs bg-accent text-accent-foreground animate-pulse">Writing</Badge>
+                                  ) : cursor.complete && cursorHasPendingWork ? (
+                                    <Badge variant="default" className="text-xs bg-accent text-accent-foreground animate-pulse">Finalizing</Badge>
                                   ) : (
                                     <Badge variant="secondary" className="text-xs">In Progress</Badge>
                                   )}
