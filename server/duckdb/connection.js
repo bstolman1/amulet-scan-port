@@ -10,16 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
 const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
-// DATA_DIR should point to the base directory (e.g., C:\ledger_raw or /mnt/c/ledger_raw)
-// Binary files and ACS files are both in the 'raw' subdirectory
-// Auto-detect platform: Windows uses C:/ledger_raw, WSL uses /mnt/c/ledger_raw
-const PLATFORM_DEFAULT_DATA_DIR = process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw';
+// DATA_DIR should point to the base directory
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT_DATA_DIR = '/home/bstolz/canton-explorer/data';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
 // 2) repo-local data/ (if present)
-// 3) platform default
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : PLATFORM_DEFAULT_DATA_DIR);
+// 3) WSL default path
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WSL_DEFAULT_DATA_DIR);
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 

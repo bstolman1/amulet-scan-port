@@ -94,23 +94,66 @@ router.get('/overview', async (req, res) => {
     }
     
     if (sources.primarySource === 'binary') {
-      // For large datasets, don't load all records - just return counts from file system
+      // For large datasets, sample newest files to get time range
       const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
-      if (eventFiles.length > 1000) {
-        console.warn(`⚠️ Too many files (${eventFiles.length}), use streamRecords() instead`);
+      
+      if (eventFiles.length > 100) {
+        // Sort by data date (from partition path) to get newest files
+        eventFiles.sort((a, b) => {
+          const yearA = a.match(/year=(\d{4})/)?.[1] || '0';
+          const monthA = a.match(/month=(\d{2})/)?.[1] || '00';
+          const dayA = a.match(/day=(\d{2})/)?.[1] || '00';
+          const yearB = b.match(/year=(\d{4})/)?.[1] || '0';
+          const monthB = b.match(/month=(\d{2})/)?.[1] || '00';
+          const dayB = b.match(/day=(\d{2})/)?.[1] || '00';
+          return `${yearB}${monthB}${dayB}`.localeCompare(`${yearA}${monthA}${dayA}`);
+        });
+        
+        // Sample newest and oldest files to estimate time range
+        const newestFiles = eventFiles.slice(0, 10);
+        const oldestFiles = eventFiles.slice(-10);
+        
+        let earliest = null;
+        let latest = null;
+        
+        // Read a few records from newest files to find latest timestamp
+        for (const file of newestFiles.slice(0, 3)) {
+          try {
+            const result = await binaryReader.readBinaryFile(file);
+            for (const r of result.records) {
+              if (r.timestamp) {
+                if (!latest || r.timestamp > latest) latest = r.timestamp;
+              }
+            }
+          } catch (e) { /* ignore */ }
+        }
+        
+        // Read a few records from oldest files to find earliest timestamp
+        for (const file of oldestFiles.slice(0, 3)) {
+          try {
+            const result = await binaryReader.readBinaryFile(file);
+            for (const r of result.records) {
+              if (r.timestamp) {
+                if (!earliest || r.timestamp < earliest) earliest = r.timestamp;
+              }
+            }
+          } catch (e) { /* ignore */ }
+        }
+        
         return res.json({
-          total_events: 0,
+          total_events: eventFiles.length * 100, // ~100 records per file estimate
           unique_contracts: 0,
           unique_templates: 0,
-          earliest_event: null,
-          latest_event: null,
+          earliest_event: earliest,
+          latest_event: latest,
           data_source: 'binary',
           file_count: eventFiles.length,
-          warning: 'Dataset too large for overview stats. Enable ENGINE_ENABLED=true for streaming ingestion.'
+          estimated: true,
+          note: 'Large dataset - using estimates. Set ENGINE_ENABLED=true for precise stats.'
         });
       }
       
-      // Read from binary files (only for small datasets)
+      // For smaller datasets, load all records
       const events = await binaryReader.loadAllRecords(db.DATA_PATH, 'events');
       
       if (events.length === 0) {

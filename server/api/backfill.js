@@ -12,9 +12,10 @@ const __dirname = dirname(__filename);
 const router = Router();
 
 // Path to cursor directory - configurable via env var for WSL/cross-platform support
-// Defaults to: server/../data/cursors
-const CURSOR_DIR = process.env.CURSOR_DIR || join(__dirname, '../../data/cursors');
-const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+const CURSOR_DIR = process.env.CURSOR_DIR || join(DATA_DIR, 'cursors');
 
 /**
  * Read all cursor files from the cursors directory

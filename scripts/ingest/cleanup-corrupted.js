@@ -11,7 +11,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data/raw');
+// Default WSL path: /home/bstolz/canton-explorer/data/raw
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data/raw';
+const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WSL_DEFAULT;
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const VERBOSE = process.argv.includes('--verbose');

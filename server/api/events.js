@@ -218,20 +218,25 @@ router.get('/debug', async (req, res) => {
     const sources = getDataSources();
     const files = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
-    // Get the 5 newest files by timestamp in filename
-    const sortedFiles = files.slice().sort((a, b) => {
-      const matchA = a.match(/events-(\d+)-/);
-      const matchB = b.match(/events-(\d+)-/);
-      const tsA = matchA ? parseInt(matchA[1]) : 0;
-      const tsB = matchB ? parseInt(matchB[1]) : 0;
-      return tsB - tsA;
-    }).slice(0, 5);
+    // Sort by DATA date (from partition path), not write time
+    const sortedByDataDate = files.slice().sort((a, b) => {
+      const yearA = a.match(/year=(\d{4})/)?.[1] || '0';
+      const monthA = a.match(/month=(\d{2})/)?.[1] || '00';
+      const dayA = a.match(/day=(\d{2})/)?.[1] || '00';
+      const yearB = b.match(/year=(\d{4})/)?.[1] || '0';
+      const monthB = b.match(/month=(\d{2})/)?.[1] || '00';
+      const dayB = b.match(/day=(\d{2})/)?.[1] || '00';
+      return `${yearB}${monthB}${dayB}`.localeCompare(`${yearA}${monthA}${dayA}`);
+    });
     
-    // Sample first record from newest file
+    const newestByDataDate = sortedByDataDate.slice(0, 5);
+    const oldestByDataDate = sortedByDataDate.slice(-5);
+    
+    // Sample first record from newest file (by data date)
     let sampleRecord = null;
-    if (sortedFiles.length > 0) {
+    if (newestByDataDate.length > 0) {
       try {
-        const result = await binaryReader.readBinaryFile(sortedFiles[0]);
+        const result = await binaryReader.readBinaryFile(newestByDataDate[0]);
         sampleRecord = result.records[0] || null;
       } catch (e) {
         sampleRecord = { error: e.message };
@@ -242,14 +247,29 @@ router.get('/debug', async (req, res) => {
       dataPath: db.DATA_PATH,
       sources,
       totalBinaryFiles: files.length,
-      newestFiles: sortedFiles.map(f => ({
+      newestByDataDate: newestByDataDate.map(f => ({
         path: f,
-        timestamp: (() => {
+        dataDate: (() => {
+          const y = f.match(/year=(\d{4})/)?.[1];
+          const m = f.match(/month=(\d{2})/)?.[1];
+          const d = f.match(/day=(\d{2})/)?.[1];
+          return y && m && d ? `${y}-${m}-${d}` : null;
+        })(),
+        writeTimestamp: (() => {
           const match = f.match(/events-(\d+)-/);
           return match ? new Date(parseInt(match[1])).toISOString() : null;
         })()
       })),
-      sampleRecord,
+      oldestByDataDate: oldestByDataDate.map(f => ({
+        path: f,
+        dataDate: (() => {
+          const y = f.match(/year=(\d{4})/)?.[1];
+          const m = f.match(/month=(\d{2})/)?.[1];
+          const d = f.match(/day=(\d{2})/)?.[1];
+          return y && m && d ? `${y}-${m}-${d}` : null;
+        })()
+      })),
+      sampleNewestRecord: sampleRecord,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
