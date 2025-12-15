@@ -504,114 +504,119 @@ function decodeInMainThread(tx, migrationId) {
 }
 
 /**
- * Parallel fetch with sliding window - fetches multiple pages concurrently
- * Maintains full parallelism by refilling slots as requests complete
- * Now accepts dynamic concurrency for auto-tuning
+ * Sequential fetch with proper page chaining
  * 
- * OPTIMIZED: Deduplication to prevent double-writes, safe empty handling
+ * FIXED ISSUES:
+ * 1. Uses oldest timestamp from response as next 'before' (proper chaining)
+ * 2. Empty response = entire range from 'before' to 'at_or_after' is empty (done)
+ * 3. No overlapping requests - sequential is safer for correctness
+ * 4. Deduplication resets per batch cycle to prevent memory bloat
+ * 
+ * The API returns transactions in descending order (newest first).
+ * To page backwards: use the oldest record_time from current page as next 'before'.
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
   const results = [];
-  const pending = new Map();
-  const seenUpdateIds = new Set(); // Track by update_id to prevent duplicates
-  let nextBefore = startBefore;
-  let fetched = 0;
-  let reachedEnd = false;
+  const seenUpdateIds = new Set(); // Dedup within this batch cycle
+  let currentBefore = startBefore;
+  let batchesFetched = 0;
+  let consecutiveEmpty = 0;
+  const MAX_CONSECUTIVE_EMPTY = 3; // If 3 empties in a row, we've hit a gap
   
-  const startFetch = (before) => {
-    if (reachedEnd) return false;
-    
-    const fetchId = fetched++;
-    pending.set(fetchId, {
-      before,
-      promise: fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter)
-        .then(data => ({ fetchId, before, data, error: null }))
-        .catch(error => ({ fetchId, before, data: null, error }))
-    });
-    return true;
-  };
-  
-  // Fill initial parallel slots
-  startFetch(nextBefore);
-  
-  while (pending.size > 0 && !reachedEnd) {
-    const completed = await Promise.race(
-      Array.from(pending.values()).map(p => p.promise)
-    );
-    
-    pending.delete(completed.fetchId);
-    
-    if (completed.error) {
-      throw completed.error;
+  while (batchesFetched < maxBatches) {
+    // Check if we've passed the lower bound
+    if (new Date(currentBefore).getTime() <= new Date(atOrAfter).getTime()) {
+      return { results, reachedEnd: true };
     }
     
-    const txs = completed.data?.transactions || [];
+    let response;
+    try {
+      response = await fetchBackfillBefore(migrationId, synchronizerId, currentBefore, atOrAfter);
+    } catch (err) {
+      throw err;
+    }
+    
+    const txs = response?.transactions || [];
+    batchesFetched++;
     
     if (txs.length === 0) {
-      // Empty response with at_or_after means NO data in the entire range
-      // This is the correct termination - the API already checked the full range
-      if (completed.before <= atOrAfter) {
-        reachedEnd = true;
-        break;
+      consecutiveEmpty++;
+      
+      // The API searches the ENTIRE range from 'before' down to 'at_or_after'
+      // Empty means NO transactions exist in that entire range - we're done!
+      console.log(`   ℹ️ Empty response (${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY}): no data from ${currentBefore} to ${atOrAfter}`);
+      
+      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+        // Multiple empty responses confirms the range is truly empty
+        return { results, reachedEnd: true };
       }
       
-      // Conservative skip: 100ms instead of 1ms (100x faster, still safe)
-      const d = new Date(completed.before);
-      d.setTime(d.getTime() - 100);
+      // Try a small jump to handle edge cases (API might have hiccups)
+      const d = new Date(currentBefore);
+      d.setTime(d.getTime() - 1000); // Jump 1 second
       
       if (d.getTime() <= new Date(atOrAfter).getTime()) {
-        reachedEnd = true;
-        break;
+        return { results, reachedEnd: true };
       }
       
-      nextBefore = d.toISOString();
+      currentBefore = d.toISOString();
       continue;
     }
     
-    // Deduplicate transactions by update_id to prevent double-writes
+    // Reset consecutive empty counter on success
+    consecutiveEmpty = 0;
+    
+    // Deduplicate transactions
     const uniqueTxs = [];
     for (const tx of txs) {
       const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
-      if (updateId && !seenUpdateIds.has(updateId)) {
-        seenUpdateIds.add(updateId);
-        uniqueTxs.push(tx);
-      } else if (!updateId) {
-        // No update_id, include anyway (shouldn't happen but be safe)
+      if (updateId) {
+        if (!seenUpdateIds.has(updateId)) {
+          seenUpdateIds.add(updateId);
+          uniqueTxs.push(tx);
+        }
+        // else: duplicate, skip
+      } else {
+        // No update_id (shouldn't happen), include anyway
         uniqueTxs.push(tx);
       }
-      // Skip if already seen (duplicate)
     }
     
     if (uniqueTxs.length > 0) {
-      results.push({ transactions: uniqueTxs, before: completed.before });
+      results.push({ transactions: uniqueTxs, before: currentBefore });
     }
     
-    let earliest = null;
-    for (const tx of uniqueTxs) {
+    // Find the OLDEST timestamp to use as next 'before'
+    let oldestTime = null;
+    for (const tx of txs) {
       const t = getEventTime(tx);
-      if (t && (!earliest || t < earliest)) earliest = t;
+      if (t && (!oldestTime || t < oldestTime)) {
+        oldestTime = t;
+      }
     }
     
-    if (earliest && earliest <= atOrAfter) {
-      reachedEnd = true;
-      break;
+    // Check if we've reached the lower bound
+    if (oldestTime && new Date(oldestTime).getTime() <= new Date(atOrAfter).getTime()) {
+      return { results, reachedEnd: true };
     }
     
-    if (earliest && earliest < nextBefore) {
-      nextBefore = earliest;
-    }
-    
-    // Refill slots based on *current* dynamic concurrency
-    while (pending.size < concurrency && fetched < maxBatches && !reachedEnd) {
-      if (!startFetch(nextBefore)) break;
-      // Small decrement to get next page
-      const d = new Date(nextBefore);
+    // Use oldest time as next before (proper paging)
+    if (oldestTime) {
+      currentBefore = oldestTime;
+    } else {
+      // Fallback: shouldn't happen, but decrement by 1ms
+      const d = new Date(currentBefore);
       d.setMilliseconds(d.getMilliseconds() - 1);
-      nextBefore = d.toISOString();
+      currentBefore = d.toISOString();
+    }
+    
+    // Limit dedup set size to prevent memory bloat
+    if (seenUpdateIds.size > 100000) {
+      seenUpdateIds.clear();
     }
   }
   
-  return { results, reachedEnd };
+  return { results, reachedEnd: false };
 }
 
 /**
