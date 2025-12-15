@@ -40,35 +40,68 @@ STAGE_DESCRIPTIONS = {
 }
 
 # High-confidence pattern matching for unambiguous subject lines
+# Order matters - more specific patterns should come first
 PATTERN_RULES = [
-    # CIP Discussion patterns
-    (r'cip\s*discuss', 'cip-discuss', 0.95),
-    (r'cip[-\s]*\d+.*discuss', 'cip-discuss', 0.95),
-    (r'discussion.*cip[-\s]*\d+', 'cip-discuss', 0.90),
+    # ========== TOKENOMICS ANNOUNCE (most specific first) ==========
+    # Validator/Operator approvals
+    (r'validator\s+operators?\s+approved', 'tokenomics-announce', 0.98),
+    (r'validators?\s+approved', 'tokenomics-announce', 0.95),
+    (r'operators?\s+approved', 'tokenomics-announce', 0.95),
+    (r'featured\s+apps?\s+approved', 'tokenomics-announce', 0.95),
     
-    # CIP Vote patterns  
-    (r'vote\s*proposal', 'cip-vote', 0.95),
-    (r'cip\s*vote', 'cip-vote', 0.95),
-    (r'cip[-\s]*\d+.*vote', 'cip-vote', 0.90),
-    (r'voting\s+on\s+cip', 'cip-vote', 0.90),
+    # Tokenomics outcomes
+    (r'tokenomics\s+outcomes?', 'tokenomics-announce', 0.98),
+    (r'outcome.*tokenomics', 'tokenomics-announce', 0.90),
     
-    # CIP Announcement patterns
-    (r'approved\s+by\s+sv', 'cip-announce', 0.95),
-    (r'rights\s*owners.*approved', 'cip-announce', 0.95),
+    # Weight/reward announcements
+    (r'weight\s+(change|update|assigned|approved)', 'tokenomics-announce', 0.90),
+    (r'reward.*approved', 'tokenomics-announce', 0.85),
+    
+    # ========== TOKENOMICS DISCUSSION ==========
+    # Featured app requests
+    (r'new\s+featured\s+app\s+request', 'tokenomics', 0.98),
+    (r'featured\s+app\s+request', 'tokenomics', 0.95),
+    (r'featured\s+app.*discuss', 'tokenomics', 0.90),
+    
+    # Validator requests
+    (r'new\s+validator\s+request', 'tokenomics', 0.95),
+    (r'validator\s+operator\s+request', 'tokenomics', 0.95),
+    (r'validator.*application', 'tokenomics', 0.85),
+    
+    # Weight discussions
+    (r'weight.*request', 'tokenomics', 0.85),
+    (r'setting\s+weights?\s+on', 'tokenomics', 0.90),
+    
+    # ========== CIP ANNOUNCE ==========
+    (r'approved\s+by\s+sv', 'cip-announce', 0.98),
+    (r'sv\s+rights?\s+owners?.*approved', 'cip-announce', 0.98),
     (r'cip[-\s]*\d+.*approved', 'cip-announce', 0.95),
     (r'cip\s*announcement', 'cip-announce', 0.95),
     (r'cip[-\s]*\d+.*announcement', 'cip-announce', 0.90),
     
-    # SV Announcement patterns
+    # ========== CIP VOTE ==========
+    (r'vote\s+proposal\s+to\s+add', 'cip-vote', 0.95),  # "Vote Proposal to add X weight" is CIP vote
+    (r'vote\s+proposal', 'cip-vote', 0.95),
+    (r'cip[-\s]*\d+\s*:?\s*vote', 'cip-vote', 0.95),
+    (r'cip\s+vote', 'cip-vote', 0.95),
+    (r'voting\s+on\s+cip', 'cip-vote', 0.90),
+    (r'cip[-\s]*\d+.*\bvote\b', 'cip-vote', 0.85),
+    
+    # ========== CIP DISCUSS ==========
+    # Must come after vote/announce to not override them
+    (r'cip[-\s]*discuss', 'cip-discuss', 0.98),
+    (r'cip\s+discussion', 'cip-discuss', 0.95),
+    (r'draft\s+cip', 'cip-discuss', 0.95),
+    (r'cip[-\s]*tbd', 'cip-discuss', 0.90),  # CIP-TBD is discussion stage
+    (r'cip[-\s]*00xx', 'cip-discuss', 0.90),  # CIP-00XX is discussion stage
+    (r'cip[-\s]*xxxx', 'cip-discuss', 0.90),  # CIP-XXXX is discussion stage
+    (r'cip\s*-\s*\d+\s*:', 'cip-discuss', 0.70),  # "CIP-0037:" without other keywords defaults to discuss
+    
+    # ========== SV ANNOUNCE ==========
     (r'sv\s+announcement', 'sv-announce', 0.95),
     (r'super\s*validator.*announc', 'sv-announce', 0.90),
-    (r'add.*weight.*to.*sv', 'sv-announce', 0.85),
-    
-    # Tokenomics patterns
-    (r'featured\s*app.*discuss', 'tokenomics', 0.90),
-    (r'tokenomics.*discuss', 'tokenomics', 0.90),
-    (r'featured\s*app.*announc', 'tokenomics-announce', 0.90),
-    (r'tokenomics.*announc', 'tokenomics-announce', 0.90),
+    (r'add.*weight.*to.*gsf\s*sv', 'sv-announce', 0.90),
+    (r'sv\s+weight\s+assignment', 'sv-announce', 0.90),
 ]
 
 def quick_classify(text):
