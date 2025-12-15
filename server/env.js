@@ -4,7 +4,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '.env') });
+const envPath = path.join(__dirname, '.env');
+console.log('📁 Loading .env from:', envPath);
+const result = dotenv.config({ path: envPath });
+if (result.error) {
+  console.error('❌ Failed to load .env:', result.error.message);
+}
 
 console.log('📁 DATA_DIR:', process.env.DATA_DIR || 'NOT SET');
 console.log('📁 CURSOR_DIR:', process.env.CURSOR_DIR || 'NOT SET');
