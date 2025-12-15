@@ -36,6 +36,7 @@ export async function inferStagesBatch(topics, onProgress = null) {
   return new Promise((resolve, reject) => {
     const results = new Map();
     let processedCount = 0;
+    let stdinClosed = false;
     
     const proc = spawn(PYTHON_EXECUTABLE, [PYTHON_SCRIPT], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -48,6 +49,16 @@ export async function inferStagesBatch(topics, onProgress = null) {
       console.error(`[inferStage] Batch process timeout after 5 minutes`);
       resolve(results); // Return partial results
     }, 300000);
+    
+    // Handle stdin errors (EPIPE if Python exits early)
+    proc.stdin.on('error', (err) => {
+      if (err.code === 'EPIPE') {
+        console.error('[inferStage] Python process exited before receiving all input (EPIPE)');
+      } else {
+        console.error('[inferStage] stdin error:', err.message);
+      }
+      stdinClosed = true;
+    });
     
     // Read results line by line as they stream back
     const rl = createInterface({ input: proc.stdout });
@@ -96,15 +107,30 @@ export async function inferStagesBatch(topics, onProgress = null) {
       resolve(results); // Return empty/partial results
     });
     
-    // Write all topics as JSONL to stdin
-    for (const topic of topics) {
-      const text = `${topic.subject}\n${topic.content || ''}`.trim();
-      const jsonLine = JSON.stringify({ id: topic.id, text }) + '\n';
-      proc.stdin.write(jsonLine);
-    }
+    // Write all topics as JSONL to stdin (handle EPIPE gracefully)
+    const writeTopics = () => {
+      for (const topic of topics) {
+        if (stdinClosed) {
+          console.warn('[inferStage] Stopping writes - stdin closed');
+          break;
+        }
+        const text = `${topic.subject}\n${topic.content || ''}`.trim();
+        const jsonLine = JSON.stringify({ id: topic.id, text }) + '\n';
+        try {
+          proc.stdin.write(jsonLine);
+        } catch (e) {
+          console.error('[inferStage] Write error:', e.message);
+          break;
+        }
+      }
+      
+      // Close stdin to signal end of input
+      if (!stdinClosed) {
+        proc.stdin.end();
+      }
+    };
     
-    // Close stdin to signal end of input
-    proc.stdin.end();
+    writeTopics();
   });
 }
 
