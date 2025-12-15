@@ -659,7 +659,7 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
  * Each slice STREAMS its transactions to processBackfillItems immediately to avoid OOM.
  * Returns aggregated stats instead of raw transactions.
  */
-async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
+async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency, cursorCallback = null) {
   const startMs = new Date(atOrAfter).getTime();
   const endMs = new Date(startBefore).getTime();
   const rangeMs = endMs - startMs;
@@ -694,6 +694,11 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       const throughput = Math.round(totalUpdates / elapsed);
       const stats = getBufferStats();
       console.log(`   📥 Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | Q: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`);
+      
+      // Save cursor every 100 pages for UI visibility
+      if (cursorCallback && pageCount % 100 === 0) {
+        cursorCallback(totalUpdates, totalEvents, earliestTime);
+      }
     }
   };
   
@@ -869,10 +874,21 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       // Use current dynamic concurrency values
       const localParallel = dynamicParallelFetches;
       
+      // Cursor callback for streaming progress updates
+      const cursorCallback = (streamUpdates, streamEvents, streamEarliest) => {
+        saveCursor(migrationId, synchronizerId, {
+          last_before: streamEarliest || before,
+          total_updates: totalUpdates + streamUpdates,
+          total_events: totalEvents + streamEvents,
+          updated_at: new Date().toISOString(),
+        }, minTime, maxTime, shardIndex);
+      };
+      
       const fetchResult = await parallelFetchBatch(
         migrationId, synchronizerId, before, atOrAfter, 
         localParallel * 2,  // maxBatches per cycle
-        localParallel       // actual concurrency
+        localParallel,      // actual concurrency
+        cursorCallback      // pass cursor callback for streaming updates
       );
       
       const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents } = fetchResult;
