@@ -432,7 +432,11 @@ const SnapshotProgress = () => {
           </div>
         )}
 
-        {filteredSnapshots.map((snapshot) => (
+        {filteredSnapshots.map((snapshot, index) => {
+          // For the first (latest) snapshot, use fresh localStats data
+          const isLatestSnapshot = index === 0;
+          
+          return (
           <Card key={snapshot.id} className="glass-card">
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -480,7 +484,7 @@ const SnapshotProgress = () => {
                     className={`h-2 ${isStillWriting ? '[&>div]:animate-pulse' : ''}`}
                   />
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{snapshot.entry_count?.toLocaleString() || 0} contracts indexed</span>
+                    <span>{(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0} contracts indexed</span>
                     {isStillWriting && (
                       <span className="text-blue-500">Data still being written...</span>
                     )}
@@ -504,7 +508,9 @@ const SnapshotProgress = () => {
                       <Database className="w-4 h-4" />
                       Contracts
                     </div>
-                    <p className="text-2xl font-bold">{snapshot.entry_count?.toLocaleString() || 0}</p>
+                    <p className="text-2xl font-bold">
+                      {(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0}
+                    </p>
                   </div>
 
                   <div className="space-y-1">
@@ -512,7 +518,9 @@ const SnapshotProgress = () => {
                       <FileText className="w-4 h-4" />
                       Templates
                     </div>
-                    <p className="text-2xl font-bold">{snapshot.template_count?.toLocaleString() || 0}</p>
+                    <p className="text-2xl font-bold">
+                      {(isLatestSnapshot ? localStats?.total_templates : snapshot.template_count)?.toLocaleString() || 0}
+                    </p>
                   </div>
 
                   <div className="space-y-1">
@@ -663,7 +671,8 @@ const SnapshotProgress = () => {
               )}
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
 
         {filteredSnapshots.length === 0 && (
           <Card className="glass-card">
