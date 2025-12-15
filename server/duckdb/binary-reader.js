@@ -242,7 +242,7 @@ export function hasBinaryFiles(dirPath, type = 'events') {
 
 // Stream records with pagination (memory efficient for large datasets)
 export async function streamRecords(dirPath, type = 'events', options = {}) {
-  const { limit = 100, offset = 0, filter = null } = options;
+  const { limit = 100, offset = 0, filter = null, sortBy = 'effective_at' } = options;
   
   const files = findBinaryFiles(dirPath, type);
   
@@ -255,17 +255,16 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
   files.sort((a, b) => {
     const tsA = extractTimestampFromPath(a);
     const tsB = extractTimestampFromPath(b);
-    return tsB - tsA; // Descending order (newest first)
+    return tsB - tsA; // Descending order (newest written first)
   });
   
-  const records = [];
-  let skipped = 0;
-  let totalScanned = 0;
+  // For effective_at sorting, we need to read more files and sort globally
+  // because file write order doesn't match event effective_at order
+  const allRecords = [];
+  const maxFilesToScan = Math.min(files.length, 200); // Cap to prevent memory issues
   
-  // Process files one at a time until we have enough records
-  for (const file of files) {
-    if (records.length >= limit) break;
-    
+  for (let i = 0; i < maxFilesToScan; i++) {
+    const file = files[i];
     try {
       const result = await readBinaryFile(file);
       let fileRecords = result.records;
@@ -275,35 +274,33 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
         fileRecords = fileRecords.filter(filter);
       }
       
-      // Sort by timestamp descending within file
-      fileRecords.sort((a, b) => 
-        new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
-      );
+      allRecords.push(...fileRecords);
       
-      for (const record of fileRecords) {
-        totalScanned++;
-        
-        if (skipped < offset) {
-          skipped++;
-          continue;
-        }
-        
-        if (records.length < limit) {
-          records.push(record);
-        }
-        
-        if (records.length >= limit) break;
+      // If we have enough records and sortBy is timestamp (write order), we can stop early
+      if (sortBy === 'timestamp' && allRecords.length >= offset + limit + 1000) {
+        break;
       }
     } catch (err) {
       console.error(`Failed to read ${file}: ${err.message}`);
     }
   }
   
+  // Sort all collected records by the requested field (default: effective_at descending)
+  allRecords.sort((a, b) => {
+    const dateA = new Date(a[sortBy] || a.effective_at || a.timestamp || 0).getTime();
+    const dateB = new Date(b[sortBy] || b.effective_at || b.timestamp || 0).getTime();
+    return dateB - dateA; // Descending (newest first)
+  });
+  
+  // Apply pagination
+  const paginatedRecords = allRecords.slice(offset, offset + limit);
+  
   return { 
-    records, 
-    total: files.length * 100, // Estimated total (rough approximation)
-    hasMore: records.length === limit,
-    source: 'binary'
+    records: paginatedRecords, 
+    total: allRecords.length,
+    hasMore: offset + limit < allRecords.length,
+    source: 'binary',
+    filesScanned: maxFilesToScan,
   };
 }
 
