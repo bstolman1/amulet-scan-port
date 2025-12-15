@@ -26,10 +26,10 @@ import { readBinaryFile, getFileStats } from './read-binary.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Configuration
-const BASE_DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
+// Configuration - defaults to WSL paths, can override with env vars
+const BASE_DATA_DIR = process.env.DATA_DIR || '/home/bstolz/canton-explorer/data';
 const CURSOR_DIR = process.env.CURSOR_DIR || path.join(BASE_DATA_DIR, 'cursors');
-const RAW_DIR = path.join(BASE_DATA_DIR, 'raw');
+const RAW_DIR = process.env.RAW_DIR || path.join(BASE_DATA_DIR, 'raw');
 
 // Gap detection threshold (gaps larger than this are reported)
 const GAP_THRESHOLD_MS = parseInt(process.env.GAP_THRESHOLD_MS) || 60000; // 1 minute default
