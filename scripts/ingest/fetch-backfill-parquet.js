@@ -927,29 +927,60 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   const atOrAfter = minTime;
   
   // CRITICAL: Check if cursor.last_before is already at or before minTime
-  // This means we've already processed everything and should be marked complete
+  // This means we've already processed everything.
+  // HOWEVER: we must not present as "fully complete" while writes are still draining.
   if (cursor && cursor.last_before) {
     const lastBeforeMs = new Date(cursor.last_before).getTime();
     const minTimeMs = new Date(minTime).getTime();
-    
+
     if (lastBeforeMs <= minTimeMs) {
       console.log(`   ⚠️ Cursor last_before (${cursor.last_before}) is at or before minTime (${minTime})`);
-      console.log(`   ⚠️ This synchronizer appears complete. Marking and skipping.`);
-      
-      // Mark complete if not already
-      if (!cursor.complete) {
-        saveCursor(migrationId, synchronizerId, {
-          ...cursor,
-          complete: true,
-          updated_at: new Date().toISOString(),
-        }, minTime, maxTime, shardIndex);
+      console.log(`   ⚠️ This synchronizer appears complete. Ensuring writer queues are drained before marking complete.`);
+
+      // Flush any in-memory buffers and wait for pending writes.
+      // This prevents the UI from showing 100% while data is still being written.
+      try {
+        await flushAll();
+      } catch {}
+
+      try {
+        await waitForWrites();
+      } catch {}
+
+      const finalStats = getBufferStats();
+      const pendingWrites = Number(finalStats.pendingWrites || 0);
+      const bufferedRecords = Number((finalStats.updatesBuffered || 0) + (finalStats.eventsBuffered || 0));
+      const hasPendingWork = pendingWrites > 0 || bufferedRecords > 0;
+
+      // Mark complete, but keep pending fields accurate so UI can show "Finalizing" if needed.
+      if (!cursor.complete || hasPendingWork) {
+        saveCursor(
+          migrationId,
+          synchronizerId,
+          {
+            ...cursor,
+            pending_writes: pendingWrites,
+            buffered_records: bufferedRecords,
+            complete: !hasPendingWork,
+            updated_at: new Date().toISOString(),
+          },
+          minTime,
+          maxTime,
+          shardIndex,
+        );
+
+        if (hasPendingWork) {
+          console.log(`   ⏳ Writes still pending (pending_writes=${pendingWrites}, buffered_records=${bufferedRecords}). Cursor left in finalizing state.`);
+        }
       }
-      
+
       return { updates: cursor.total_updates || 0, events: cursor.total_events || 0 };
     }
-    
+
     // Also log cursor state for debugging
-    console.log(`   📍 Resuming from cursor: last_before=${cursor.last_before}, updates=${cursor.total_updates || 0}, complete=${cursor.complete || false}`);
+    console.log(
+      `   📍 Resuming from cursor: last_before=${cursor.last_before}, updates=${cursor.total_updates || 0}, complete=${cursor.complete || false}`,
+    );
   }
   
   let totalUpdates = cursor?.total_updates || 0;
