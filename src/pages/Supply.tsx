@@ -517,17 +517,20 @@ const Supply = () => {
             )}
           </div>
 
-          {/* Closed Rounds */}
+          {/* Closed Rounds (Pending Archive) */}
           <div>
             <h4 className="text-xl font-bold mb-4 flex items-center">
               <CheckCircle className="h-5 w-5 mr-2 text-success" />
-              Recently Closed Rounds ({miningRoundsData?.counts?.closed || 0} total)
+              Closed Rounds - Pending Archive ({miningRoundsData?.counts?.closed || 0})
             </h4>
+            <p className="text-sm text-muted-foreground mb-4">
+              These rounds are closed but still exist as active contracts awaiting archival. For historical round data, see the Round Statistics page.
+            </p>
             {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
             ) : closedRounds.length === 0 ? (
               <Card className="glass-card p-6">
-                <p className="text-muted-foreground text-center">No closed rounds available</p>
+                <p className="text-muted-foreground text-center">No closed rounds pending archive</p>
               </Card>
             ) : (
               <div className="space-y-4">
