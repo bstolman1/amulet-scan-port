@@ -33,7 +33,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '../../data');
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 
 // Track state
 let lastTimestamp = null;

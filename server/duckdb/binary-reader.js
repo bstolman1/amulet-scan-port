@@ -120,8 +120,9 @@ function tryParseJson(str) {
 
 /**
  * Extract timestamp from filename pattern: events-{timestamp}-{random}.pb.zst
+ * This is the WRITE timestamp (when the file was created)
  */
-function extractTimestampFromPath(filePath) {
+function extractWriteTimestampFromPath(filePath) {
   const basename = path.basename(filePath);
   const match = basename.match(/(?:events|updates)-(\d+)-/);
   if (match) {
@@ -134,6 +135,29 @@ function extractTimestampFromPath(filePath) {
     return 0;
   }
 }
+
+/**
+ * Extract DATA date from partition path: .../year=YYYY/month=MM/day=DD/...
+ * Returns epoch ms representing the DATA date, not write date
+ */
+function extractDataDateFromPath(filePath) {
+  const yearMatch = filePath.match(/year=(\d{4})/);
+  const monthMatch = filePath.match(/month=(\d{2})/);
+  const dayMatch = filePath.match(/day=(\d{2})/);
+  
+  if (yearMatch && monthMatch && dayMatch) {
+    const year = parseInt(yearMatch[1], 10);
+    const month = parseInt(monthMatch[1], 10) - 1; // JS months are 0-indexed
+    const day = parseInt(dayMatch[1], 10);
+    return new Date(year, month, day).getTime();
+  }
+  
+  // Fallback to write timestamp
+  return extractWriteTimestampFromPath(filePath);
+}
+
+// Alias for backward compatibility
+const extractTimestampFromPath = extractWriteTimestampFromPath;
 
 /**
  * Read and decode a single .pb.zst file
@@ -240,6 +264,9 @@ export function hasBinaryFiles(dirPath, type = 'events') {
   }
 }
 
+// Configurable scan limit via env var (default 500, up from 200)
+const MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_MAX_FILES) || 500;
+
 // Stream records with pagination (memory efficient for large datasets)
 export async function streamRecords(dirPath, type = 'events', options = {}) {
   const { limit = 100, offset = 0, filter = null, sortBy = 'effective_at' } = options;
@@ -250,18 +277,28 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     return { records: [], total: 0, hasMore: false };
   }
   
-  // Sort files by timestamp embedded in filename (descending = newest first)
-  // Filename pattern: events-{timestamp}-{random}.pb.zst
+  // CRITICAL FIX: Sort files by DATA date (from partition path), not write timestamp
+  // This ensures we read files containing the most recent DATA first
+  // Backfill runs backwards (newest→oldest), so write order ≠ data order
   files.sort((a, b) => {
-    const tsA = extractTimestampFromPath(a);
-    const tsB = extractTimestampFromPath(b);
-    return tsB - tsA; // Descending order (newest written first)
+    const dataDateA = extractDataDateFromPath(a);
+    const dataDateB = extractDataDateFromPath(b);
+    
+    // Primary sort: data date descending (newest data first)
+    if (dataDateA !== dataDateB) {
+      return dataDateB - dataDateA;
+    }
+    
+    // Secondary sort: write timestamp descending (newest written first for same date)
+    const writeA = extractWriteTimestampFromPath(a);
+    const writeB = extractWriteTimestampFromPath(b);
+    return writeB - writeA;
   });
   
   // For effective_at sorting, we need to read more files and sort globally
   // because file write order doesn't match event effective_at order
   const allRecords = [];
-  const maxFilesToScan = Math.min(files.length, 200); // Cap to prevent memory issues
+  const maxFilesToScan = Math.min(files.length, MAX_FILES_TO_SCAN);
   
   for (let i = 0; i < maxFilesToScan; i++) {
     const file = files[i];
@@ -301,6 +338,7 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     hasMore: offset + limit < allRecords.length,
     source: 'binary',
     filesScanned: maxFilesToScan,
+    totalFiles: files.length,
   };
 }
 
