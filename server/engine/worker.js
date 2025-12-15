@@ -19,6 +19,20 @@ let running = false;
 let workerInterval = null;
 let lastStats = null;
 
+const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '300000', 10); // 5 min default
+
+/**
+ * Promise with timeout wrapper
+ */
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    )
+  ]);
+}
+
 /**
  * Single worker cycle
  */
@@ -32,15 +46,31 @@ async function runCycle() {
   const startTime = Date.now();
   
   try {
-    // Step 1: Index new files
-    const { newFiles } = await scanAndIndexFiles();
+    // Step 1: Index new files (with timeout)
+    console.log('🔍 Scanning for new files...');
+    const { newFiles } = await withTimeout(
+      scanAndIndexFiles(), 
+      CYCLE_TIMEOUT_MS, 
+      'File scan'
+    );
+    console.log(`📁 Found ${newFiles} new files`);
     
-    // Step 2: Ingest files (small batch)
-    const { ingested, records } = await ingestNewFiles(FILES_PER_CYCLE);
+    // Step 2: Ingest files (small batch, with timeout)
+    console.log(`📥 Ingesting up to ${FILES_PER_CYCLE} files...`);
+    const { ingested, records } = await withTimeout(
+      ingestNewFiles(FILES_PER_CYCLE),
+      CYCLE_TIMEOUT_MS,
+      'File ingestion'
+    );
     
     // Step 3: Update aggregations if new data
     if (ingested > 0) {
-      const aggResults = await updateAllAggregations();
+      console.log('📊 Updating aggregations...');
+      const aggResults = await withTimeout(
+        updateAllAggregations(),
+        CYCLE_TIMEOUT_MS,
+        'Aggregation update'
+      );
       lastStats = {
         ...aggResults,
         lastCycle: new Date().toISOString(),
@@ -50,12 +80,11 @@ async function runCycle() {
     
     // Log progress
     const pending = await getPendingFileCount();
-    if (ingested > 0 || newFiles > 0) {
-      console.log(`⚙️ Engine cycle: indexed=${newFiles}, ingested=${ingested} (${records} records), pending=${pending}, ${Date.now() - startTime}ms`);
-    }
+    console.log(`✅ Engine cycle complete: indexed=${newFiles}, ingested=${ingested} (${records} records), pending=${pending}, ${Date.now() - startTime}ms`);
     
   } catch (err) {
     console.error('❌ Engine worker error:', err.message);
+    if (err.stack) console.error(err.stack);
   } finally {
     running = false;
   }
