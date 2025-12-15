@@ -164,11 +164,12 @@ async function validateFile(filePath, quickScan = false) {
     const data = await readBinaryFile(filePath);
     
     // Extract time range from records
+    // Use effective_at primarily (actual event time), fall back to recorded_at
     let minTime = null;
     let maxTime = null;
     
     for (const record of data.records) {
-      const time = record.recorded_at || record.effective_at;
+      const time = record.effective_at || record.recorded_at;
       if (time) {
         if (!minTime || time < minTime) minTime = time;
         if (!maxTime || time > maxTime) maxTime = time;

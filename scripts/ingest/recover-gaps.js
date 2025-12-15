@@ -182,7 +182,8 @@ async function extractFileTimeRange(filePath) {
     let synchronizer = null;
     
     for (const record of data.records) {
-      const time = record.recorded_at || record.effective_at;
+      // Use effective_at primarily (actual event time) for accurate gap detection
+      const time = record.effective_at || record.recorded_at;
       if (time) {
         if (!minTime || time < minTime) minTime = time;
         if (!maxTime || time > maxTime) maxTime = time;
@@ -289,10 +290,11 @@ function findMigrationForSynchronizer(synchronizerId, cursors) {
 }
 
 /**
- * Fetch backfill data for a gap
+ * Fetch backfill data for a gap with deduplication
  */
 async function fetchGapData(migrationId, synchronizerId, gapStart, gapEnd) {
   const allTransactions = [];
+  const seenUpdateIds = new Set(); // Deduplication
   let currentBefore = gapEnd;
   const atOrAfter = gapStart;
   let consecutiveEmpty = 0;
@@ -335,7 +337,19 @@ async function fetchGapData(migrationId, synchronizerId, gapStart, gapEnd) {
     }
     
     consecutiveEmpty = 0;
-    allTransactions.push(...txs);
+    
+    // Deduplicate transactions
+    for (const tx of txs) {
+      const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+      if (updateId) {
+        if (!seenUpdateIds.has(updateId)) {
+          seenUpdateIds.add(updateId);
+          allTransactions.push(tx);
+        }
+      } else {
+        allTransactions.push(tx);
+      }
+    }
     
     // Find oldest timestamp
     let oldestTime = null;
