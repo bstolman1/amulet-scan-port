@@ -542,15 +542,17 @@ function decodeInMainThread(tx, migrationId) {
 }
 
 /**
- * Fetch a single time slice sequentially (used by parallel partitioned fetch)
- * Returns all transactions in the slice using proper page chaining.
+ * Fetch a single time slice with STREAMING processing
+ * Instead of accumulating all transactions, process them immediately to avoid OOM.
+ * Returns stats only, not the raw transactions.
  */
-async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex) {
-  const results = [];
+async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex, processCallback) {
   const seenUpdateIds = new Set();
   let currentBefore = sliceBefore;
   let consecutiveEmpty = 0;
   const MAX_CONSECUTIVE_EMPTY = 2;
+  let totalTxs = 0;
+  let earliestTime = sliceBefore;
   
   while (true) {
     // Check if we've passed the lower bound of this slice
@@ -571,11 +573,9 @@ async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAft
       consecutiveEmpty++;
       
       if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
-        // Range is confirmed empty after multiple attempts
         break;
       }
       
-      // Use exponential backoff for empty jumps (10ms, 100ms, 1s)
       const jumpMs = Math.min(10 * Math.pow(10, consecutiveEmpty), 1000);
       const d = new Date(currentBefore);
       d.setTime(d.getTime() - jumpMs);
@@ -604,8 +604,16 @@ async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAft
       }
     }
     
+    // STREAM: Process immediately instead of accumulating
     if (uniqueTxs.length > 0) {
-      results.push(...uniqueTxs);
+      await processCallback(uniqueTxs);
+      totalTxs += uniqueTxs.length;
+    }
+    
+    // Track earliest time for cursor
+    for (const tx of txs) {
+      const t = getEventTime(tx);
+      if (t && t < earliestTime) earliestTime = t;
     }
     
     // Find oldest timestamp for next page
@@ -622,9 +630,6 @@ async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAft
     }
     
     if (oldestTime) {
-      // CRITICAL: Subtract 1ms to avoid fetching the same record again
-      // The API's "before" parameter is exclusive, but returning the same timestamp
-      // would cause an infinite loop fetching the same records
       const d = new Date(oldestTime);
       d.setMilliseconds(d.getMilliseconds() - 1);
       currentBefore = d.toISOString();
@@ -640,18 +645,15 @@ async function fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAft
     }
   }
   
-  return { sliceIndex, transactions: results };
+  return { sliceIndex, totalTxs, earliestTime };
 }
 
 /**
- * Parallel fetch with TIME-RANGE PARTITIONING
+ * Parallel fetch with STREAMING processing
  * 
  * Divides the time range into N non-overlapping slices and fetches each in parallel.
- * This ensures no overlapping requests while maximizing throughput.
- * 
- * Example with concurrency=4:
- *   |----slice0----|----slice1----|----slice2----|----slice3----|
- *   maxTime                                                    minTime
+ * Each slice STREAMS its transactions to processBackfillItems immediately to avoid OOM.
+ * Returns aggregated stats instead of raw transactions.
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency) {
   const startMs = new Date(atOrAfter).getTime();
@@ -660,27 +662,37 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   
   // Don't parallelize tiny ranges
   if (rangeMs < 60000 * concurrency) {
-    // Less than 1 minute per slice - use sequential
     return sequentialFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches);
   }
   
   // Divide into non-overlapping time slices
   const sliceMs = rangeMs / concurrency;
-  const slicePromises = [];
   
   console.log(`   🔀 Parallel fetch: ${concurrency} slices of ${Math.round(sliceMs / 1000)}s each`);
   
+  // Shared stats across all slices
+  let totalUpdates = 0;
+  let totalEvents = 0;
+  let earliestTime = startBefore;
+  
+  // Process callback that handles transactions immediately
+  const processCallback = async (transactions) => {
+    const { updates, events } = await processBackfillItems(transactions, migrationId);
+    totalUpdates += updates;
+    totalEvents += events;
+  };
+  
+  // Launch all slices in parallel with streaming
+  const slicePromises = [];
   for (let i = 0; i < concurrency; i++) {
-    // Slice i covers: [sliceAfter, sliceBefore)
-    // Slice 0 = most recent, Slice N-1 = oldest
     const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
     const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
     
     slicePromises.push(
-      fetchTimeSlice(migrationId, synchronizerId, sliceBefore, sliceAfter, i)
+      fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, i, processCallback)
         .catch(err => {
           console.error(`   ❌ Slice ${i} failed: ${err.message}`);
-          return { sliceIndex: i, transactions: [], error: err };
+          return { sliceIndex: i, totalTxs: 0, earliestTime: sliceBefore, error: err };
         })
     );
   }
@@ -688,39 +700,28 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   // Wait for all slices to complete
   const sliceResults = await Promise.all(slicePromises);
   
-  // Merge results and deduplicate across slices (edge cases at boundaries)
-  const seenUpdateIds = new Set();
-  const allTransactions = [];
-  let hasError = false;
-  
-  // Process in order (newest to oldest)
-  for (const slice of sliceResults.sort((a, b) => a.sliceIndex - b.sliceIndex)) {
-    if (slice.error) {
-      hasError = true;
-      continue;
-    }
-    
-    for (const tx of slice.transactions) {
-      const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
-      if (updateId) {
-        if (!seenUpdateIds.has(updateId)) {
-          seenUpdateIds.add(updateId);
-          allTransactions.push(tx);
-        }
-      } else {
-        allTransactions.push(tx);
-      }
+  // Find earliest time across all slices
+  for (const slice of sliceResults) {
+    if (slice.earliestTime && slice.earliestTime < earliestTime) {
+      earliestTime = slice.earliestTime;
     }
   }
   
-  // Return in format expected by caller
-  if (allTransactions.length === 0) {
-    return { results: [], reachedEnd: !hasError };
-  }
+  const totalTxs = sliceResults.reduce((sum, s) => sum + (s.totalTxs || 0), 0);
+  const hasError = sliceResults.some(s => s.error);
   
+  // Return stats-only result (transactions already processed via streaming)
   return { 
-    results: [{ transactions: allTransactions, before: startBefore }], 
-    reachedEnd: true  // We processed the entire range
+    results: totalTxs > 0 ? [{ 
+      transactions: [], // Already processed
+      processedUpdates: totalUpdates,
+      processedEvents: totalEvents,
+      before: earliestTime 
+    }] : [], 
+    reachedEnd: !hasError,
+    earliestTime,
+    totalUpdates,
+    totalEvents
   };
 }
 
@@ -853,41 +854,28 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       // Use current dynamic concurrency values
       const localParallel = dynamicParallelFetches;
       
-      const { results, reachedEnd } = await parallelFetchBatch(
+      const fetchResult = await parallelFetchBatch(
         migrationId, synchronizerId, before, atOrAfter, 
         localParallel * 2,  // maxBatches per cycle
         localParallel       // actual concurrency
       );
       
-      if (results.length === 0) {
+      const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents } = fetchResult;
+      
+      if (results.length === 0 && !batchUpdates) {
         console.log(`   ✅ No more transactions. Marking complete.${shardLabel}`);
         break;
       }
       
-      // Process all fetched batches
-      let batchUpdates = 0;
-      let batchEvents = 0;
-      let earliestTime = before;
-      
-      for (const { transactions } of results) {
-        const { updates, events } = await processBackfillItems(transactions, migrationId);
-        batchUpdates += updates;
-        batchEvents += events;
-        
-        // Track earliest timestamp
-        for (const tx of transactions) {
-          const t = getEventTime(tx);
-          if (t && t < earliestTime) earliestTime = t;
-        }
-      }
-      
-      totalUpdates += batchUpdates;
-      totalEvents += batchEvents;
+      // Streaming mode: transactions already processed, just use stats
+      totalUpdates += batchUpdates || 0;
+      totalEvents += batchEvents || 0;
       batchCount++;
       
-      // Update cursor position - subtract 1ms to prevent re-fetching same record
-      if (earliestTime !== before) {
-        const d = new Date(earliestTime);
+      // Update cursor position from streaming result
+      const newEarliestTime = resultEarliestTime || (results[0]?.before);
+      if (newEarliestTime && newEarliestTime !== before) {
+        const d = new Date(newEarliestTime);
         d.setMilliseconds(d.getMilliseconds() - 1);
         before = d.toISOString();
       } else {
@@ -910,8 +898,6 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }, minTime, maxTime, shardIndex);
       
       const stats = getBufferStats();
-      const writeSpeed = String(stats.mbPerSec ?? '0.00');
-      const compression = String(stats.compressionRatio ?? '---');
       const queuedJobs = Number(stats.queuedJobs ?? 0);
       const activeWorkers = Number(stats.activeWorkers ?? 0);
       
@@ -925,7 +911,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       await maybeTuneDecodeWorkers(shardLabel);
       
       // Main progress line with current tuning values
-      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates} upd, +${batchEvents} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
+      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || new Date(before).getTime() <= new Date(atOrAfter).getTime()) {
         console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
