@@ -95,9 +95,10 @@ function calculateProgress(cursor) {
   const completed = maxMs - currentMs;
   let rawProgress = (completed / totalRange) * 100;
   
-  // Cap at 99.9% if not marked complete (still flushing writes)
-  if (rawProgress >= 100 && !cursor.complete) {
-    rawProgress = 99.9;
+  // Cap at 99.9% if not marked complete OR has pending writes
+  const hasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
+  if ((rawProgress >= 99.5 || hasPendingWork) && !cursor.complete) {
+    rawProgress = Math.min(rawProgress, 99.9);
   }
   
   return Math.min(100, Math.max(0, rawProgress));

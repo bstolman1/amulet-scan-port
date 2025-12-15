@@ -991,11 +991,15 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const elapsed = (Date.now() - startTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
       
-      // Save cursor and log progress
+      // Save cursor and log progress (include pending write state)
+      const stats = getBufferStats();
       saveCursor(migrationId, synchronizerId, {
         last_before: before,
         total_updates: totalUpdates,
         total_events: totalEvents,
+        pending_writes: stats.pendingWrites || 0,
+        buffered_records: (stats.updatesBuffered || 0) + (stats.eventsBuffered || 0),
+        complete: false, // Explicitly mark as not complete during loop
         updated_at: new Date().toISOString(),
       }, minTime, maxTime, shardIndex);
       
