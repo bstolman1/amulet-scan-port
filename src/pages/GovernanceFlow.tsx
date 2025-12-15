@@ -36,6 +36,7 @@ interface TopicIdentifiers {
   appName: string | null;
   validatorName: string | null;
   keywords: string[];
+  isCipDiscussion?: boolean;
 }
 
 interface Topic {
@@ -321,15 +322,36 @@ const GovernanceFlow = () => {
     });
   }, [regularItems]);
 
+  // Determine the lifecycle type for a topic - should match backend logic
+  const getTopicType = (topic: Topic): string => {
+    const subjectTrimmed = topic.subject.trim();
+    const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
+    const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
+    
+    if (isOutcome) return 'outcome';
+    if (topic.flow === 'cip') return 'cip';
+    if (topic.flow === 'featured-app') return 'featured-app';
+    if (topic.flow === 'shared') {
+      // Shared groups need subject-line disambiguation (matching backend logic)
+      if (isVoteProposal || topic.identifiers.cipNumber || topic.identifiers.isCipDiscussion) {
+        return 'cip';
+      }
+      if (/\bValidator\s+Operations\b/i.test(subjectTrimmed) || topic.identifiers.validatorName) {
+        return 'validator';
+      }
+      if (topic.identifiers.appName) {
+        return 'featured-app';
+      }
+      return 'featured-app'; // Default for shared
+    }
+    return 'featured-app'; // Fallback
+  };
+
   const filteredTopics = useMemo(() => {
     if (!data) return [];
     return data.allTopics.filter(topic => {
       if (typeFilter !== 'all') {
-        const isOutcome = /\bOutcomes\s*-/i.test(topic.subject.trim());
-        const itemType = isOutcome ? 'outcome' :
-                        topic.identifiers.cipNumber ? 'cip' :
-                        topic.identifiers.appName ? 'featured-app' :
-                        topic.identifiers.validatorName ? 'validator' : 'other';
+        const itemType = getTopicType(topic);
         if (itemType !== typeFilter) return false;
       }
       if (stageFilter !== 'all' && topic.stage !== stageFilter) return false;
