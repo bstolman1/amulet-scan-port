@@ -645,6 +645,18 @@ function correlateTopics(allTopics) {
     lifecycleItems.push(item);
   }
   
+  // Diagnostic: find topics that weren't correlated
+  const unaccounted = sortedTopics.filter(t => !used.has(t.id));
+  if (unaccounted.length > 0) {
+    console.log(`⚠️ ${unaccounted.length} topics not in any lifecycle item:`);
+    for (const t of unaccounted.slice(0, 10)) {
+      console.log(`   - ID: ${t.id} | Group: ${t.groupName} | Subject: "${t.subject.slice(0, 50)}..."`);
+    }
+    if (unaccounted.length > 10) {
+      console.log(`   ... and ${unaccounted.length - 10} more`);
+    }
+  }
+  
   // Sort lifecycle items by CIP number descending (highest first)
   // CIP-00XX (TBD/unassigned) should come first
   lifecycleItems.sort((a, b) => {
