@@ -297,7 +297,10 @@ function loadCursor(migrationId, synchronizerId, shardIndex = null) {
  */
 function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime, shardIndex = null) {
   try {
-    mkdirSync(CURSOR_DIR, { recursive: true });
+    if (!existsSync(CURSOR_DIR)) {
+      console.log(`   📁 Creating cursor directory: ${CURSOR_DIR}`);
+      mkdirSync(CURSOR_DIR, { recursive: true });
+    }
     
     const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
     const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
@@ -316,7 +319,8 @@ function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime, shard
     };
     writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
   } catch (err) {
-    console.error(`   [saveCursor] ❌ FAILED: ${err.message}`);
+    console.error(`   [saveCursor] ❌ FAILED to save cursor: ${err.message}`);
+    console.error(`   [saveCursor] CURSOR_DIR: ${CURSOR_DIR}`);
   }
 }
 
