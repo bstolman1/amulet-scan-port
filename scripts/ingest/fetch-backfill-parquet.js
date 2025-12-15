@@ -688,6 +688,12 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     totalEvents += events;
     pageCount++;
     
+    // Track earliest time from transactions for progress tracking
+    for (const tx of transactions) {
+      const t = getEventTime(tx);
+      if (t && t < earliestTime) earliestTime = t;
+    }
+    
     // Log progress every 10 pages
     if (pageCount % 10 === 0) {
       const elapsed = (Date.now() - streamStartTime) / 1000;
