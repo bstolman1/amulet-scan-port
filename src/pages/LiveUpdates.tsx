@@ -66,9 +66,12 @@ const LiveUpdates = () => {
       return sum + (Array.isArray(events) ? events.length : 0);
     }, 0);
 
-    // Get latest update time
+    // Get latest update time - prefer effective_at (actual transaction time)
     const latestUpdate = updates.length > 0 
-      ? new Date(Math.max(...updates.map(u => new Date(u.timestamp).getTime())))
+      ? new Date(Math.max(...updates.map(u => {
+          const effectiveAt = (u as any).effective_at;
+          return new Date(effectiveAt || u.timestamp).getTime();
+        })))
       : null;
 
     // Sort templates by count
@@ -273,7 +276,12 @@ const LiveUpdates = () => {
 
                       <div className="text-xs text-muted-foreground">
                         <Clock className="w-3 h-3 inline mr-1" />
-                        {new Date(update.timestamp).toLocaleString()}
+                        {new Date((update as any).effective_at || update.timestamp).toLocaleString()}
+                        {(update as any).effective_at && (update as any).effective_at !== update.timestamp && (
+                          <span className="ml-2 text-muted-foreground/60" title="When the file was written">
+                            (written {new Date(update.timestamp).toLocaleString()})
+                          </span>
+                        )}
                       </div>
                     </div>
 

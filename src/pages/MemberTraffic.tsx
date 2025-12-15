@@ -281,7 +281,7 @@ const MemberTraffic = () => {
                           {event.payload?.member || event.payload?.synchronizerId || "-"}
                         </TableCell>
                         <TableCell className="text-xs">
-                          {format(new Date(event.timestamp), "MMM d, yyyy HH:mm")}
+                          {format(new Date(event.effective_at || event.timestamp), "MMM d, yyyy HH:mm")}
                         </TableCell>
                         <TableCell>
                           <Collapsible>
