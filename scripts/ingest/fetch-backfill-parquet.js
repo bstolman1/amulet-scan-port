@@ -26,7 +26,7 @@ import Piscina from 'piscina';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
 
 // Use binary writer (Protobuf + ZSTD) instead of JSONL
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, purgeMigrationData, shutdown } from './write-binary.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, shutdown } from './write-binary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -39,7 +39,6 @@ const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.networ
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 const BASE_DATA_DIR = process.env.DATA_DIR || join(__dirname, '../../data');
 const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
-const PURGE_AFTER_MIGRATION = process.env.PURGE_AFTER_MIGRATION === 'true';
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5;
 
 // Sharding configuration
@@ -969,7 +968,7 @@ async function runBackfill() {
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   PARALLEL_FETCHES:", `${dynamicParallelFetches} (auto-tuning: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
   console.log("   DECODE_WORKERS:", `${dynamicDecodeWorkers} (auto-tuning: ${MIN_DECODE_WORKERS}-${MAX_DECODE_WORKERS})`);
-  console.log("   PURGE_AFTER_MIGRATION:", PURGE_AFTER_MIGRATION);
+  console.log("   FLUSH_EVERY_BATCHES:", FLUSH_EVERY_BATCHES);
   if (isSharded) {
     console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL} (0-indexed)`);
   }
@@ -1054,13 +1053,6 @@ async function runBackfill() {
     }
     
     console.log(`✅ Completed migration ${migrationId}${shardLabel}`);
-    
-    // Purge migration data to free disk space before next migration (only if not sharded)
-    if (PURGE_AFTER_MIGRATION && !isSharded) {
-      console.log(`\n🗑️ Purging migration ${migrationId} data to free disk space...`);
-      await waitForWrites(); // Ensure all writes are complete
-      purgeMigrationData(migrationId);
-    }
   }
   
   const grandTotalTime = ((Date.now() - grandStartTime) / 1000).toFixed(1);
