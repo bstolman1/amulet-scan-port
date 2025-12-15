@@ -58,7 +58,31 @@ const BackfillProgress = () => {
   const { data: stats, refetch: refetchStats } = useBackfillStats();
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
+  const [prevStats, setPrevStats] = useState<{ updates: number; events: number } | null>(null);
   const { toast } = useToast();
+
+  // Track if data is still being written (counts increasing)
+  const isStillWriting = useMemo(() => {
+    if (!stats || !prevStats) return false;
+    return stats.totalUpdates > prevStats.updates || stats.totalEvents > prevStats.events;
+  }, [stats, prevStats]);
+
+  // Update previous stats when stats change
+  useEffect(() => {
+    if (stats) {
+      setPrevStats(prev => {
+        // Only update after we've had a chance to compare
+        if (prev === null) {
+          return { updates: stats.totalUpdates, events: stats.totalEvents };
+        }
+        // Delay update to allow comparison
+        setTimeout(() => {
+          setPrevStats({ updates: stats.totalUpdates, events: stats.totalEvents });
+        }, 100);
+        return prev;
+      });
+    }
+  }, [stats]);
 
   // Calculate merged cursors list
   const allCursors = useMemo(() => {
@@ -79,14 +103,18 @@ const BackfillProgress = () => {
       .map(([id, cursors]) => ({ migrationId: Number(id), cursors }));
   }, [allCursors]);
 
-  // Determine current active migration (first non-complete migration)
+  // Determine current active migration (first non-complete migration OR one still writing data)
   const activeMigrationId = useMemo(() => {
     for (const { migrationId, cursors } of cursorsByMigration) {
       const allComplete = cursors.every(c => c.complete);
       if (!allComplete) return migrationId;
     }
+    // If all complete but still writing, return the last migration
+    if (isStillWriting && cursorsByMigration.length > 0) {
+      return cursorsByMigration[cursorsByMigration.length - 1].migrationId;
+    }
     return null;
-  }, [cursorsByMigration]);
+  }, [cursorsByMigration, isStillWriting]);
 
   // Calculate cursor stats from allCursors (derived, not in useEffect)
   const cursorStats = useMemo(() => ({
@@ -267,12 +295,21 @@ const BackfillProgress = () => {
                 <div className="flex items-center gap-2">
                   <Activity className="w-4 h-4 text-primary" />
                   <span className="font-semibold">Overall Backfill Progress</span>
+                  {isStillWriting && (
+                    <Badge variant="default" className="gap-1 bg-blue-600 animate-pulse">
+                      <Activity className="w-3 h-3" />
+                      Writing Data
+                    </Badge>
+                  )}
                 </div>
                 <span className="text-lg font-bold text-primary">{overallProgress.toFixed(1)}%</span>
               </div>
               <Progress value={overallProgress} className="h-3" />
               <div className="flex justify-between mt-2 text-xs text-muted-foreground">
-                <span>{cursorStats.completedCursors} of {cursorStats.totalCursors} migrations complete</span>
+                <span>
+                  {cursorStats.completedCursors} of {cursorStats.totalCursors} migrations complete
+                  {isStillWriting && " (data still being written)"}
+                </span>
                 <span>{stats?.totalUpdates?.toLocaleString() || 0} updates • {stats?.totalEvents?.toLocaleString() || 0} events</span>
               </div>
             </CardContent>
@@ -363,8 +400,10 @@ const BackfillProgress = () => {
                       <div className="flex items-center justify-between border-b border-border/50 pb-2">
                         <div className="flex items-center gap-3">
                           <span className="text-lg font-semibold">Migration {migrationId}</span>
-                          {allComplete ? (
+                          {allComplete && !isStillWriting ? (
                             <Badge variant="default" className="bg-green-600">Complete</Badge>
+                          ) : allComplete && isStillWriting ? (
+                            <Badge variant="default" className="bg-blue-600 animate-pulse">Writing</Badge>
                           ) : isActive ? (
                             <Badge variant="default" className="bg-primary animate-pulse">Active</Badge>
                           ) : (
@@ -398,9 +437,13 @@ const BackfillProgress = () => {
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
-                                  <Badge variant={cursor.complete ? "default" : "secondary"} className="text-xs">
-                                    {cursor.complete ? "Complete" : "In Progress"}
-                                  </Badge>
+                                  {cursor.complete && !isStillWriting ? (
+                                    <Badge variant="default" className="text-xs bg-green-600">Complete</Badge>
+                                  ) : cursor.complete && isStillWriting ? (
+                                    <Badge variant="default" className="text-xs bg-blue-600 animate-pulse">Writing</Badge>
+                                  ) : (
+                                    <Badge variant="secondary" className="text-xs">In Progress</Badge>
+                                  )}
                                 </div>
                               <div className="flex items-center gap-3 text-sm text-muted-foreground">
                                   {throughput && (

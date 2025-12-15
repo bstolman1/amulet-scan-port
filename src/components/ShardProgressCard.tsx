@@ -23,7 +23,7 @@ interface Shard {
   error?: string;
 }
 
-interface ShardGroup {
+interface ShardGroupStats {
   migrationId: number;
   synchronizerId: string;
   shards: Shard[];
@@ -35,6 +35,26 @@ interface ShardGroup {
   overallProgress: number;
   combinedEta: number | null;
 }
+
+// Track previous totals to detect if data is still being written
+const previousTotals = new Map<string, { updates: number; events: number; timestamp: number }>();
+
+function isDataStillWriting(group: ShardGroupStats): boolean {
+  const key = `${group.migrationId}-${group.synchronizerId}`;
+  const prev = previousTotals.get(key);
+  const now = Date.now();
+  
+  if (!prev) {
+    previousTotals.set(key, { updates: group.totalUpdates, events: group.totalEvents, timestamp: now });
+    return false;
+  }
+  
+  const isWriting = group.totalUpdates > prev.updates || group.totalEvents > prev.events;
+  previousTotals.set(key, { updates: group.totalUpdates, events: group.totalEvents, timestamp: now });
+  
+  return isWriting;
+}
+
 
 interface ShardProgressCardProps {
   refreshInterval?: number;
@@ -49,7 +69,7 @@ function formatEta(ms: number | null): string {
 }
 
 export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardProps) {
-  const [shardData, setShardData] = useState<ShardGroup[]>([]);
+  const [shardData, setShardData] = useState<ShardGroupStats[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -212,6 +232,11 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
             const syncShort = group.synchronizerId.length > 30 
               ? group.synchronizerId.substring(0, 30) + "..." 
               : group.synchronizerId;
+            
+            // Check if data is still being written even if "complete"
+            const stillWriting = isDataStillWriting(group);
+            const allComplete = group.completedShards === group.totalShards;
+            const displayComplete = allComplete && !stillWriting;
 
             return (
               <Collapsible key={key} open={isExpanded} onOpenChange={() => toggleGroup(key)}>
@@ -227,9 +252,15 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
                         )}
                         <span className="font-medium">Migration {group.migrationId}</span>
                         <span className="text-xs text-muted-foreground font-mono">{syncShort}</span>
+                        {stillWriting && (
+                          <Badge variant="default" className="text-xs bg-blue-600 animate-pulse">
+                            <Activity className="w-3 h-3 mr-1" />
+                            Writing
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
-                        <Badge variant={group.completedShards === group.totalShards ? "default" : "secondary"}>
+                        <Badge variant={displayComplete ? "default" : "secondary"} className={displayComplete ? "bg-green-600" : ""}>
                           {group.completedShards}/{group.totalShards} shards
                         </Badge>
                         <span className="text-sm font-medium text-primary">{group.overallProgress.toFixed(1)}%</span>
@@ -252,9 +283,11 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
 
                         return (
                           <div key={idx} className="flex items-center gap-3 p-2 rounded bg-muted/30">
-                            <div className="w-20 flex items-center gap-2">
-                              {shard.complete ? (
+                            <div className="w-24 flex items-center gap-2">
+                              {shard.complete && !stillWriting ? (
                                 <Badge variant="default" className="text-xs bg-green-600">Done</Badge>
+                              ) : shard.complete && stillWriting ? (
+                                <Badge variant="default" className="text-xs bg-blue-600 animate-pulse">Writing</Badge>
                               ) : isFinalizing ? (
                                 <Badge variant="default" className="text-xs bg-yellow-600 animate-pulse">Finalizing</Badge>
                               ) : isActive ? (
