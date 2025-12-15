@@ -693,7 +693,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       const elapsed = (Date.now() - streamStartTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
       const stats = getBufferStats();
-      console.log(`   📥 Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | Q: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`);
+      console.log(`   📥 M${migrationId} Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | Q: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`);
       
       // Save cursor every 100 pages for UI visibility
       if (cursorCallback && pageCount % 100 === 0) {
