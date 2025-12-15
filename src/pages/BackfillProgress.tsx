@@ -149,6 +149,12 @@ const BackfillProgress = () => {
     return validCursors > 0 ? totalProgress / validCursors : 0;
   }, [allCursors]);
 
+  // While data is still being written, avoid showing a misleading 100%
+  const displayOverallProgress = useMemo(() => {
+    if (!isStillWriting) return overallProgress;
+    return overallProgress >= 100 ? 99.9 : overallProgress;
+  }, [isStillWriting, overallProgress]);
+
   useEffect(() => {
     const channel = supabase
       .channel("backfill-progress")
@@ -296,15 +302,15 @@ const BackfillProgress = () => {
                   <Activity className="w-4 h-4 text-primary" />
                   <span className="font-semibold">Overall Backfill Progress</span>
                   {isStillWriting && (
-                    <Badge variant="default" className="gap-1 bg-blue-600 animate-pulse">
+                    <Badge variant="default" className="gap-1 bg-accent text-accent-foreground animate-pulse">
                       <Activity className="w-3 h-3" />
                       Writing Data
                     </Badge>
                   )}
                 </div>
-                <span className="text-lg font-bold text-primary">{overallProgress.toFixed(1)}%</span>
+                <span className="text-lg font-bold text-primary">{displayOverallProgress.toFixed(1)}%</span>
               </div>
-              <Progress value={overallProgress} className="h-3" />
+              <Progress value={displayOverallProgress} className="h-3" />
               <div className="flex justify-between mt-2 text-xs text-muted-foreground">
                 <span>
                   {cursorStats.completedCursors} of {cursorStats.totalCursors} migrations complete
@@ -430,6 +436,9 @@ const BackfillProgress = () => {
                             progressPercent = 100;
                           }
 
+                          // If we're still writing data, don't render a misleading 100%.
+                          const displayProgressPercent = isStillWriting && progressPercent >= 100 ? 99.9 : progressPercent;
+
                           const { eta, throughput } = calculateETA(cursor);
 
                           return (
@@ -438,9 +447,9 @@ const BackfillProgress = () => {
                                 <div className="flex items-center gap-3">
                                   <span className="font-mono text-sm font-medium">{cursor.cursor_name}</span>
                                   {cursor.complete && !isStillWriting ? (
-                                    <Badge variant="default" className="text-xs bg-green-600">Complete</Badge>
+                                    <Badge variant="default" className="text-xs bg-primary text-primary-foreground">Complete</Badge>
                                   ) : cursor.complete && isStillWriting ? (
-                                    <Badge variant="default" className="text-xs bg-blue-600 animate-pulse">Writing</Badge>
+                                    <Badge variant="default" className="text-xs bg-accent text-accent-foreground animate-pulse">Writing</Badge>
                                   ) : (
                                     <Badge variant="secondary" className="text-xs">In Progress</Badge>
                                   )}
@@ -472,16 +481,16 @@ const BackfillProgress = () => {
                                       <span className="text-primary font-semibold">
                                         Position: {format(new Date(cursor.last_before), "MMM d, yyyy HH:mm:ss")}
                                       </span>
-                                      <span className="text-primary font-semibold">{progressPercent.toFixed(1)}%</span>
+                                      <span className="text-primary font-semibold">{displayProgressPercent.toFixed(1)}%</span>
                                     </div>
                                   )}
                                   <div className="relative">
-                                    <Progress value={progressPercent} className="h-2" />
+                                    <Progress value={displayProgressPercent} className="h-2" />
                                     {/* Direction arrow indicator */}
                                     <div className="absolute inset-0 flex items-center pointer-events-none">
                                       <div 
                                         className="w-0 h-0 border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent border-r-[6px] border-r-primary transition-all duration-300"
-                                        style={{ marginLeft: `calc(${Math.min(progressPercent, 98)}% - 3px)` }}
+                                        style={{ marginLeft: `calc(${Math.min(displayProgressPercent, 98)}% - 3px)` }}
                                       />
                                     </div>
                                   </div>
