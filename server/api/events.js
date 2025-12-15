@@ -52,12 +52,13 @@ router.get('/latest', async (req, res) => {
     
     if (sources.primarySource === 'binary') {
       // For huge datasets, keep this endpoint snappy by scanning only recent partitions
+      // Sort by effective_at to show most recent ACTUAL transactions, not write order
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
-        maxDays: 14,
-        maxFilesToScan: 120,
-        sortBy: 'timestamp',
+        maxDays: 30, // Scan more days since effective_at != partition date during backfill
+        maxFilesToScan: 200,
+        sortBy: 'effective_at',
       });
       return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
@@ -70,11 +71,12 @@ router.get('/latest', async (req, res) => {
         template_id,
         package_name,
         timestamp,
+        effective_at,
         signatories,
         observers,
         payload
       FROM ${getEventsSource()}
-      ORDER BY timestamp DESC
+      ORDER BY effective_at DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
