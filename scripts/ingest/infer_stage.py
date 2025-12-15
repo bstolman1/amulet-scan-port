@@ -52,13 +52,12 @@ def main():
     log("Loading NLI classification model...")
     
     # Load zero-shot classification pipeline
-    # Using BART-large-MNLI for deterministic classification
+    # Using DistilBERT-MNLI for memory efficiency (~250MB vs ~1.6GB)
     try:
         classifier = pipeline(
             "zero-shot-classification",
-            model="facebook/bart-large-mnli",
+            model="typeform/distilbert-base-uncased-mnli",
             device=-1,  # CPU for determinism
-            torch_dtype="float32",  # Explicit dtype
         )
     except Exception as e:
         log(f"Error loading model: {e}")
