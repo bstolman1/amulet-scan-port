@@ -52,6 +52,8 @@ interface TemplateStats {
   updated_at?: string;
 }
 
+const AUTO_REFRESH_INTERVAL = 10000; // 10 seconds for local mode
+
 const SnapshotProgress = () => {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [templateStats, setTemplateStats] = useState<Record<string, TemplateStats[]>>({});
@@ -61,9 +63,12 @@ const SnapshotProgress = () => {
   const [localStats, setLocalStats] = useState<{ total_contracts: number; total_templates: number } | null>(null);
   const [selectedMigration, setSelectedMigration] = useState<string>('all');
   const [prevContractCount, setPrevContractCount] = useState<number | null>(null);
-  const [isStillWriting, setIsStillWriting] = useState(false);
+  const [stableCheckCount, setStableCheckCount] = useState(0); // Count consecutive checks with no change
   const { toast } = useToast();
   const useDuckDB = useDuckDBForLedger();
+
+  // Data is "still writing" until we've seen 2 consecutive refreshes with the same count
+  const isStillWriting = stableCheckCount < 2;
 
   // Get unique migrations from snapshots
   const uniqueMigrations = [...new Set(snapshots.map(s => s.migration_id))]
@@ -92,6 +97,17 @@ const SnapshotProgress = () => {
     
     checkMode();
   }, [useDuckDB]);
+
+  // Auto-refresh for local mode to detect if data is still being written
+  useEffect(() => {
+    if (!isLocalMode) return;
+
+    const interval = setInterval(() => {
+      fetchLocalSnapshots();
+    }, AUTO_REFRESH_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [isLocalMode]);
 
   // Set up Supabase realtime subscriptions only when not in local mode
   useEffect(() => {
@@ -157,10 +173,11 @@ const SnapshotProgress = () => {
       
       // Detect if data is still being written by comparing to previous count
       if (prevContractCount !== null && currentCount > prevContractCount) {
-        setIsStillWriting(true);
+        // Count increased - data is still being written, reset stable counter
+        setStableCheckCount(0);
       } else if (prevContractCount !== null && currentCount === prevContractCount) {
-        // Count hasn't changed - data writing may have stopped
-        setIsStillWriting(false);
+        // Count hasn't changed - increment stable counter
+        setStableCheckCount(prev => prev + 1);
       }
       setPrevContractCount(currentCount);
 
