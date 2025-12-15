@@ -936,18 +936,18 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
 
 /**
  * Calculate time slice for a shard
- * Divides the time range into equal parts
+ * Divides the time range into equal parts using integer math to avoid floating point issues
  */
 function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
   const minMs = new Date(minTime).getTime();
   const maxMs = new Date(maxTime).getTime();
   const rangeMs = maxMs - minMs;
-  const sliceMs = rangeMs / shardTotal;
   
+  // Use integer division to avoid floating point precision issues
   // Shards work backwards in time (maxTime to minTime)
   // Shard 0 gets the most recent slice, shard N-1 gets the oldest
-  const shardMaxMs = maxMs - (shardIndex * sliceMs);
-  const shardMinMs = maxMs - ((shardIndex + 1) * sliceMs);
+  const shardMaxMs = maxMs - Math.floor((shardIndex * rangeMs) / shardTotal);
+  const shardMinMs = maxMs - Math.floor(((shardIndex + 1) * rangeMs) / shardTotal);
   
   return {
     minTime: new Date(shardMinMs).toISOString(),
