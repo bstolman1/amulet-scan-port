@@ -187,8 +187,35 @@ router.get('/stats', async (req, res) => {
     let updatesCount = 0;
     let eventsCount = 0;
     let activeMigrations = 0;
+    
+    // First, check for migrations in the raw directory structure (binary files)
+    // This handles the case where data is in migration=X/year=YYYY/... format
+    const rawDir = join(DATA_DIR, 'raw');
+    const migrationsFromDirs = new Set();
+    
+    if (existsSync(rawDir)) {
+      try {
+        const entries = readdirSync(rawDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            // Check for migration=X format
+            const migrationMatch = entry.name.match(/^migration[=_]?(\d+)$/i);
+            if (migrationMatch) {
+              migrationsFromDirs.add(parseInt(migrationMatch[1]));
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error scanning raw directory for migrations:', e.message);
+      }
+    }
+    
+    // Use directory-based migration count as primary source
+    if (migrationsFromDirs.size > 0) {
+      activeMigrations = migrationsFromDirs.size;
+    }
 
-    // Try Parquet first, then JSONL
+    // Try Parquet first, then JSONL for counts
     if (hasParquetUpdates) {
       try {
         const result = await db.safeQuery(`
@@ -196,13 +223,15 @@ router.get('/stats', async (req, res) => {
         `);
         updatesCount = Number(result[0]?.count || 0);
         
-        // Get unique migrations from parquet
-        const migrationsResult = await db.safeQuery(`
-          SELECT COUNT(DISTINCT migration_id) as count 
-          FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
-          WHERE migration_id IS NOT NULL
-        `).catch(() => [{ count: 0 }]);
-        activeMigrations = Number(migrationsResult[0]?.count || 0);
+        // Only query parquet for migrations if we don't have directory-based count
+        if (activeMigrations === 0) {
+          const migrationsResult = await db.safeQuery(`
+            SELECT COUNT(DISTINCT migration_id) as count 
+            FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
+            WHERE migration_id IS NOT NULL
+          `).catch(() => [{ count: 0 }]);
+          activeMigrations = Number(migrationsResult[0]?.count || 0);
+        }
       } catch (e) {
         console.warn('Parquet updates query failed:', e.message);
       }
@@ -237,13 +266,18 @@ router.get('/stats', async (req, res) => {
     const cursors = readAllCursors();
     const totalCursors = cursors.length;
     const completedCursors = cursors.filter(c => c.complete).length;
+    
+    // Also count from raw binary files if we have them
+    const fileCounts = countRawFiles();
 
     res.json({
       totalUpdates: updatesCount,
       totalEvents: eventsCount,
       activeMigrations,
+      migrationsFromDirs: Array.from(migrationsFromDirs).sort((a, b) => a - b),
       totalCursors,
       completedCursors,
+      rawFileCounts: fileCounts,
     });
   } catch (err) {
     console.error('Error getting backfill stats:', err);

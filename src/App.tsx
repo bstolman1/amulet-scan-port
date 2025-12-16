@@ -27,6 +27,7 @@ import ValidatorLicenses from "./pages/ValidatorLicenses";
 import ExternalPartySetup from "./pages/ExternalPartySetup";
 import BackfillProgress from "./pages/BackfillProgress";
 import LiveUpdates from "./pages/LiveUpdates";
+import IngestionDashboard from "./pages/IngestionDashboard";
 
 import Elections from "./pages/Elections";
 import TransferCounters from "./pages/TransferCounters";
@@ -83,6 +84,7 @@ const App = () => (
           <Route path="/external-party-rules" element={<ExternalPartyRules />} />
           <Route path="/backfill-progress" element={<BackfillProgress />} />
           <Route path="/live-updates" element={<LiveUpdates />} />
+          <Route path="/ingestion" element={<IngestionDashboard />} />
           <Route path="/governance-flow" element={<GovernanceFlow />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

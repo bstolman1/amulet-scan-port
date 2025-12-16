@@ -351,9 +351,10 @@ const BackfillProgress = () => {
                   <span className="text-foreground/80">{stats.activeMigrations}</span>
                 </div>
               )}
-              {typeof stats?.activeMigrations === "number" && migrationsInCursors.length > 0 && stats.activeMigrations !== migrationsInCursors.length && (
-                <div className="text-xs">
-                  Mismatch: your data contains {stats.activeMigrations} migration(s) but only {migrationsInCursors.length} have cursor files. Migration 4 won’t show until its cursor JSON exists in the cursor dir.
+              {(stats as any)?.rawFileCounts && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Raw binary files</span>
+                  <span className="text-foreground/80">{(stats as any).rawFileCounts.events?.toLocaleString() || 0} events, {(stats as any).rawFileCounts.updates?.toLocaleString() || 0} updates</span>
                 </div>
               )}
             </CardContent>
