@@ -13,6 +13,8 @@ export interface LedgerUpdate {
   migration_id?: number | null;
   synchronizer_id?: string | null;
   update_id?: string | null;
+  contract_id?: string | null;
+  template_id?: string | null;
 }
 
 /**
@@ -28,17 +30,25 @@ export function useLedgerUpdates(limit: number = 50) {
         // Use DuckDB API
         try {
           const response = await getLatestEvents(limit, 0);
-          // Transform DuckDB events to LedgerUpdate format
+          // Transform DuckDB events to LedgerUpdate format with richer data
           return response.data.map((event: DuckDBEvent) => ({
             id: event.event_id,
             timestamp: event.timestamp,
             effective_at: event.effective_at,
             update_type: event.event_type,
-            update_data: event.payload,
+            update_data: {
+              payload: event.payload,
+              contract_id: event.contract_id,
+              template_id: event.template_id,
+              signatories: event.signatories || [],
+              observers: event.observers || [],
+            },
             created_at: event.timestamp,
             migration_id: null,
             synchronizer_id: null,
             update_id: event.event_id,
+            contract_id: event.contract_id,
+            template_id: event.template_id,
           })) as LedgerUpdate[];
         } catch (error) {
           console.warn("DuckDB API unavailable, falling back to Supabase:", error);
