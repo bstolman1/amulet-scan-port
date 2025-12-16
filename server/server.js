@@ -8,6 +8,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import eventsRouter from './api/events.js';
+import updatesRouter from './api/updates.js';
 import partyRouter from './api/party.js';
 import contractsRouter from './api/contracts.js';
 import statsRouter from './api/stats.js';
@@ -129,6 +130,7 @@ app.post('/api/refresh-aggregations', async (req, res) => {
 
 // API routes
 app.use('/api/events', eventsRouter);
+app.use('/api/updates', updatesRouter);
 app.use('/api/party', partyRouter);
 app.use('/api/contracts', contractsRouter);
 app.use('/api/stats', statsRouter);

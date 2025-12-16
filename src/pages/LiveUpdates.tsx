@@ -30,6 +30,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useLedgerUpdates, type LedgerUpdate } from "@/hooks/use-ledger-updates";
+import { useLatestUpdates } from "@/hooks/use-latest-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
 import { useDuckDBForLedger } from "@/lib/backend-config";
 import { getLiveStatus, purgeLiveCursor, type LiveStatus } from "@/lib/duckdb-api-client";
@@ -86,7 +87,9 @@ const JsonViewer = ({ data, label }: { data: any; label: string }) => {
 };
 
 const LiveUpdates = () => {
+  const [viewMode, setViewMode] = useState<"events" | "updates">("events");
   const { data: updates = [], isLoading, dataUpdatedAt, refetch } = useLedgerUpdates(100);
+  const { data: latestUpdates = [], isLoading: isLoadingUpdates, refetch: refetchUpdates } = useLatestUpdates(100);
   const { data: isDuckDBAvailable } = useDuckDBHealth();
   const usingDuckDB = useDuckDBForLedger();
   const [searchTerm, setSearchTerm] = useState("");
@@ -113,7 +116,11 @@ const LiveUpdates = () => {
 
   // Manual refresh handler
   const handleRefresh = () => {
-    refetch();
+    if (viewMode === "updates") {
+      refetchUpdates();
+    } else {
+      refetch();
+    }
     toast({ title: "Refreshing data..." });
   };
 
@@ -136,54 +143,65 @@ const LiveUpdates = () => {
     }
   };
 
-  const filteredUpdates = updates.filter((update) => {
+  const filteredUpdates = (viewMode === "updates" ? latestUpdates : updates).filter((update: any) => {
+    const id = viewMode === "updates" ? (update.update_id || "") : update.id;
+    const type = viewMode === "updates" ? (update.update_type || "") : update.update_type;
+
     const matchesSearch =
       !searchTerm ||
-      update.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      update.update_type?.toLowerCase().includes(searchTerm.toLowerCase());
+      String(id).toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(type).toLowerCase().includes(searchTerm.toLowerCase());
 
     return matchesSearch;
   });
 
   // Calculate statistics
   const stats = useMemo(() => {
-    const updatesByType = updates.reduce((acc, u) => {
-      const type = u.update_type || "unknown";
+    const active = viewMode === "updates" ? (latestUpdates as any[]) : (updates as any[]);
+
+    const updatesByType = active.reduce((acc, u) => {
+      const type = u.update_type || u.update_type || "unknown";
       acc[type] = (acc[type] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
-    // Extract templates from update data
-    const templateCounts = updates.reduce((acc, u) => {
-      const data = u.update_data as any;
-      // Look for template IDs in events array within update_data
-      const events = data?.events || data?.transaction?.events || [];
-      events.forEach((event: any) => {
-        const templateId = event?.template_id || event?.templateId;
-        if (templateId) {
-          const shortName = templateId.split(":").pop() || templateId;
-          acc[shortName] = (acc[shortName] || 0) + 1;
-        }
-      });
-      return acc;
-    }, {} as Record<string, number>);
+    // Extract templates from update data (events view only)
+    const templateCounts = viewMode === "updates"
+      ? {}
+      : (active as any[]).reduce((acc, u) => {
+          const data = u.update_data as any;
+          const events = data?.events || data?.transaction?.events || [];
+          events.forEach((event: any) => {
+            const templateId = event?.template_id || event?.templateId;
+            if (templateId) {
+              const shortName = templateId.split(":").pop() || templateId;
+              acc[shortName] = (acc[shortName] || 0) + 1;
+            }
+          });
+          return acc;
+        }, {} as Record<string, number>);
 
-    // Count total events
-    const totalEvents = updates.reduce((sum, u) => {
-      const data = u.update_data as any;
-      const events = data?.events || data?.transaction?.events || [];
-      return sum + (Array.isArray(events) ? events.length : 0);
-    }, 0);
+    const totalEvents = viewMode === "updates"
+      ? 0
+      : (active as any[]).reduce((sum, u) => {
+          const data = u.update_data as any;
+          const events = data?.events || data?.transaction?.events || [];
+          return sum + (Array.isArray(events) ? events.length : 0);
+        }, 0);
 
-    // Get latest update time - prefer effective_at (actual transaction time)
-    const latestUpdate = updates.length > 0 
-      ? new Date(Math.max(...updates.map(u => {
-          const effectiveAt = (u as any).effective_at;
-          return new Date(effectiveAt || u.timestamp).getTime();
-        })))
+    // Get latest update time
+    const latestUpdate = active.length > 0
+      ? new Date(
+          Math.max(
+            ...active.map((u: any) => {
+              const effectiveAt = u.effective_at;
+              const timestamp = u.timestamp || u.record_time;
+              return new Date(effectiveAt || timestamp || 0).getTime();
+            }),
+          ),
+        )
       : null;
 
-    // Sort templates by count
     const topTemplates = (Object.entries(templateCounts) as Array<[string, number]> )
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5);
@@ -195,7 +213,7 @@ const LiveUpdates = () => {
       latestUpdate,
       totalTypes: Object.keys(updatesByType).length,
     };
-  }, [updates]);
+  }, [updates, latestUpdates, viewMode]);
 
   // Calculate type distribution for visual breakdown
   const typeDistribution = useMemo(() => {
@@ -228,7 +246,7 @@ const LiveUpdates = () => {
     });
   }, [stats.latestUpdate?.getTime()]);
 
-  if (isLoading) {
+  if (isLoading || (viewMode === "updates" && isLoadingUpdates)) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
@@ -241,9 +259,27 @@ const LiveUpdates = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold mb-2">Live Ledger Updates</h1>
-          <p className="text-muted-foreground">Ledger updates from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">Live Ledger Updates</h1>
+            <p className="text-muted-foreground">Ledger data from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={viewMode === "events" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setViewMode("events")}
+            >
+              Events
+            </Button>
+            <Button
+              variant={viewMode === "updates" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setViewMode("updates")}
+            >
+              Updates
+            </Button>
+          </div>
         </div>
 
         {/* Backend Status & Refresh Indicator */}
@@ -619,19 +655,26 @@ const LiveUpdates = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-h-[600px] overflow-y-auto">
-              {filteredUpdates.map((update) => {
-                // Extract additional fields from update_data
-                const data = update.update_data as any;
+              {filteredUpdates.map((update: any) => {
+                const isUpdatesView = viewMode === "updates";
+
+                const rowId: string = isUpdatesView ? String(update.update_id || "") : String(update.id || "");
+                const rowType: string = String(update.update_type || "unknown");
+
+                // Extract additional fields from update_data (events view uses full event payload; updates view uses update_data JSON)
+                const data = (update.update_data ?? update.update_data ?? update.update_data) as any;
 
                 const contractIdRaw =
-                  (update as any).contract_id ??
+                  update.contract_id ??
                   data?.contract_id ??
                   data?.created_event?.contract_id ??
+                  data?.contractId ??
                   null;
                 const templateIdRaw =
-                  (update as any).template_id ??
+                  update.template_id ??
                   data?.template_id ??
                   data?.created_event?.template_id ??
+                  data?.templateId ??
                   null;
 
                 const contractId = typeof contractIdRaw === "string" ? contractIdRaw : null;
@@ -640,21 +683,27 @@ const LiveUpdates = () => {
                 const templateShort = templateId ? templateId.split(":").pop() : null;
                 const signatories = data?.signatories || data?.created_event?.signatories || [];
                 const payload = data?.payload || data?.create_arguments || null;
-                
+
+                const effectiveAtIso = update.effective_at || update.record_time || update.timestamp;
+                const createdAtIso = update.created_at || update.timestamp || update.record_time || update.effective_at;
+
                 return (
                   <div
-                    key={update.id}
+                    key={rowId}
                     className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="space-y-2 flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="outline">{update.update_type}</Badge>
+                          <Badge variant="outline">{rowType}</Badge>
                           <span className="font-mono text-xs text-muted-foreground">
                             Migration {update.migration_id ?? liveStatus?.live_cursor?.migration_id ?? "N/A"}
                           </span>
-                          <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]" title={update.id}>
-                            {update.id.substring(0, 30)}...
+                          <span
+                            className="font-mono text-xs text-muted-foreground truncate max-w-[200px]"
+                            title={rowId}
+                          >
+                            {rowId ? `${rowId.substring(0, 30)}...` : "(missing id)"}
                           </span>
                         </div>
 
@@ -675,7 +724,7 @@ const LiveUpdates = () => {
                         )}
 
                         {/* Signatories */}
-                        {signatories.length > 0 && (
+                        {!isUpdatesView && signatories.length > 0 && (
                           <div className="flex items-center gap-1 flex-wrap text-xs text-muted-foreground">
                             <span>👤</span>
                             {signatories.slice(0, 2).map((s: string, i: number) => (
@@ -689,23 +738,18 @@ const LiveUpdates = () => {
 
                         <div className="text-xs text-muted-foreground">
                           <Clock className="w-3 h-3 inline mr-1" />
-                          {new Date((update as any).effective_at || update.timestamp).toLocaleString()}
-                          {(update as any).effective_at && (update as any).effective_at !== update.timestamp && (
-                            <span className="ml-2 text-muted-foreground/60" title="When the file was written">
-                              (written {new Date(update.timestamp).toLocaleString()})
-                            </span>
-                          )}
+                          {effectiveAtIso ? new Date(effectiveAtIso).toLocaleString() : "(no time)"}
                         </div>
 
                         {/* Full JSON Data - Expandable */}
                         <div className="flex flex-wrap gap-2 pt-1">
-                          <JsonViewer data={payload} label="View Payload" />
-                          <JsonViewer data={data} label="View Full Data" />
+                          {!isUpdatesView && <JsonViewer data={payload} label="View Payload" />}
+                          <JsonViewer data={isUpdatesView ? update.update_data : data} label={isUpdatesView ? "View Update Data" : "View Full Data"} />
                         </div>
                       </div>
 
                       <div className="text-xs text-muted-foreground whitespace-nowrap">
-                        {formatDistanceToNow(new Date(update.created_at), { addSuffix: true })}
+                        {createdAtIso ? formatDistanceToNow(new Date(createdAtIso), { addSuffix: true }) : ""}
                       </div>
                     </div>
                   </div>
