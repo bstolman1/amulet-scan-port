@@ -3,7 +3,6 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { DataPreloader } from "@/components/DataPreloader";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import Validators from "./pages/Validators";
@@ -37,14 +36,13 @@ import AmuletRules from "./pages/AmuletRules";
 import GovernanceFlow from "./pages/GovernanceFlow";
 import NotFound from "./pages/NotFound";
 
-// Create query client with aggressive caching for instant loads
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 2,
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 3000),
-      staleTime: 5 * 60_000, // 5 minutes - data considered fresh
-      gcTime: 30 * 60_000, // 30 minutes - keep in memory cache
+      staleTime: 60_000,
+      gcTime: 5 * 60_000,
       refetchOnWindowFocus: false,
       networkMode: "offlineFirst",
     },
@@ -53,7 +51,6 @@ const queryClient = new QueryClient({
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <DataPreloader />
     <TooltipProvider>
       <Toaster />
       <Sonner />
