@@ -122,10 +122,16 @@ const LiveUpdates = () => {
 
   // Freshness indicators
   const freshness = useMemo(() => {
-    const latestEventTime = events.length > 0
-      ? Math.max(...(events as any[]).map((e) => new Date(e.effective_at || e.timestamp || 0).getTime()))
+    // For "up to date" we care about ingest/write time (timestamp).
+    // Ledger time (effective_at) can legitimately be older (e.g., backfill or late-arriving txs).
+    const latestEventIngestMs = events.length > 0
+      ? Math.max(...(events as any[]).map((e) => new Date(e.timestamp || 0).getTime()))
       : null;
-    const latestUpdateTime = rawUpdates.length > 0
+    const latestEventLedgerMs = events.length > 0
+      ? Math.max(...(events as any[]).map((e) => new Date(e.effective_at || 0).getTime()))
+      : null;
+
+    const latestUpdateMs = rawUpdates.length > 0
       ? Math.max(...(rawUpdates as any[]).map((u) => new Date(u.record_time || u.timestamp || 0).getTime()))
       : null;
 
@@ -135,13 +141,14 @@ const LiveUpdates = () => {
     return {
       events: {
         count: events.length,
-        latestTime: latestEventTime ? new Date(latestEventTime) : null,
-        isStale: latestEventTime ? (now - latestEventTime) > fiveMinutes : true,
+        latestIngestTime: latestEventIngestMs ? new Date(latestEventIngestMs) : null,
+        latestLedgerTime: latestEventLedgerMs ? new Date(latestEventLedgerMs) : null,
+        isStale: latestEventIngestMs ? (now - latestEventIngestMs) > fiveMinutes : true,
       },
       updates: {
         count: rawUpdates.length,
-        latestTime: latestUpdateTime ? new Date(latestUpdateTime) : null,
-        isStale: latestUpdateTime ? (now - latestUpdateTime) > fiveMinutes : true,
+        latestTime: latestUpdateMs ? new Date(latestUpdateMs) : null,
+        isStale: latestUpdateMs ? (now - latestUpdateMs) > fiveMinutes : true,
       },
     };
   }, [events, rawUpdates]);
@@ -286,13 +293,21 @@ const LiveUpdates = () => {
           </div>
           {/* Freshness Indicators */}
           <div className="flex items-center gap-3">
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.events.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}>
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.events.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}
+              title={freshness.events.latestLedgerTime ? `Ledger time: ${freshness.events.latestLedgerTime.toISOString()}` : undefined}
+            >
               <Zap className={`w-4 h-4 ${freshness.events.isStale ? 'text-amber-500' : 'text-emerald-500'}`} />
               <div className="text-xs">
                 <div className="font-medium">Events ({freshness.events.count})</div>
                 <div className="text-muted-foreground">
-                  {freshness.events.latestTime ? formatDistanceToNow(freshness.events.latestTime, { addSuffix: true }) : 'No data'}
+                  {freshness.events.latestIngestTime ? `Ingested ${formatDistanceToNow(freshness.events.latestIngestTime, { addSuffix: false })} ago` : 'No data'}
                 </div>
+                {freshness.events.latestLedgerTime && (
+                  <div className="text-muted-foreground/70">
+                    Ledger {formatDistanceToNow(freshness.events.latestLedgerTime, { addSuffix: true })}
+                  </div>
+                )}
               </div>
             </div>
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.updates.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}>
