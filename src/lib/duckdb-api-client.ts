@@ -7,8 +7,10 @@
 
 // Configure your API URL
 // Local development: http://localhost:3001
-// Cloudflare Tunnel: https://your-tunnel.trycloudflare.com
-const API_BASE_URL = import.meta.env.VITE_DUCKDB_API_URL || 'http://localhost:3001';
+// NOTE: Lovable preview can't access localhost; this will only work when running locally.
+import { getDuckDBApiUrl } from "@/lib/backend-config";
+
+const API_BASE_URL = getDuckDBApiUrl();
 
 interface ApiResponse<T> {
   data: T;

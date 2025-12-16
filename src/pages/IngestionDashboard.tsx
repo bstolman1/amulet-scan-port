@@ -6,9 +6,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  Activity, Database, FileText, Radio, Circle, Clock, 
-  CheckCircle2, AlertCircle, Zap, RefreshCw, Layers, Timer
+import {
+  Activity,
+  Database,
+  FileText,
+  Radio,
+  Circle,
+  Clock,
+  CheckCircle2,
+  AlertCircle,
+  Zap,
+  RefreshCw,
+  Layers,
+  Timer,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { useBackfillCursors, useBackfillStats, useWriteActivity, BackfillCursor } from "@/hooks/use-backfill-cursors";
