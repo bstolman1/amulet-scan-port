@@ -732,4 +732,120 @@ router.get('/ccview-comparison', async (req, res) => {
   }
 });
 
+// GET /api/stats/live-status - Live ingestion status
+router.get('/live-status', async (req, res) => {
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const DATA_DIR = process.env.DATA_DIR || db.DATA_PATH;
+    const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
+    const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
+    
+    let liveCursor = null;
+    let backfillCursors = [];
+    let latestFileTimestamp = null;
+    let earliestFileTimestamp = null;
+    
+    // Read live cursor if exists
+    if (fs.existsSync(LIVE_CURSOR_FILE)) {
+      try {
+        liveCursor = JSON.parse(fs.readFileSync(LIVE_CURSOR_FILE, 'utf8'));
+      } catch (e) { /* ignore */ }
+    }
+    
+    // Read all backfill cursors
+    if (fs.existsSync(CURSOR_DIR)) {
+      const cursorFiles = fs.readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json') && f !== 'live-cursor.json');
+      for (const file of cursorFiles) {
+        try {
+          const cursor = JSON.parse(fs.readFileSync(path.join(CURSOR_DIR, file), 'utf8'));
+          if (cursor.migration_id !== undefined) {
+            backfillCursors.push({
+              file,
+              ...cursor
+            });
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+    
+    // Check if all backfill cursors are complete
+    const allBackfillComplete = backfillCursors.length > 0 && backfillCursors.every(c => c.complete === true);
+    
+    // Find latest file timestamp from raw directory
+    const rawDir = path.join(DATA_DIR, 'raw');
+    if (fs.existsSync(rawDir)) {
+      const findLatestFiles = (dir, files = []) => {
+        const items = fs.readdirSync(dir);
+        for (const item of items) {
+          const itemPath = path.join(dir, item);
+          const stat = fs.statSync(itemPath);
+          if (stat.isDirectory()) {
+            findLatestFiles(itemPath, files);
+          } else if (item.endsWith('.pb.zst')) {
+            files.push({ path: itemPath, mtime: stat.mtime });
+          }
+        }
+        return files;
+      };
+      
+      try {
+        const files = findLatestFiles(rawDir);
+        if (files.length > 0) {
+          files.sort((a, b) => b.mtime - a.mtime);
+          latestFileTimestamp = files[0].mtime.toISOString();
+          earliestFileTimestamp = files[files.length - 1].mtime.toISOString();
+        }
+      } catch (e) {
+        console.warn('Failed to scan raw directory:', e.message);
+      }
+    }
+    
+    // Determine ingestion mode
+    let mode = 'unknown';
+    let status = 'stopped';
+    let currentRecordTime = null;
+    
+    if (liveCursor && liveCursor.updated_at) {
+      const lastUpdate = new Date(liveCursor.updated_at);
+      const ageMs = Date.now() - lastUpdate.getTime();
+      if (ageMs < 60000) { // Updated within last minute
+        status = 'running';
+        mode = 'live';
+        currentRecordTime = liveCursor.record_time;
+      } else if (ageMs < 300000) { // Within 5 minutes
+        status = 'idle';
+        mode = 'live';
+        currentRecordTime = liveCursor.record_time;
+      }
+    }
+    
+    // Check if backfill is still running based on cursor files
+    const latestBackfill = backfillCursors.sort((a, b) => (b.migration_id || 0) - (a.migration_id || 0))[0];
+    if (latestBackfill && !latestBackfill.complete) {
+      mode = 'backfill';
+      currentRecordTime = latestBackfill.max_time || latestBackfill.last_before;
+    }
+    
+    res.json({
+      mode,
+      status,
+      live_cursor: liveCursor,
+      backfill_cursors: backfillCursors,
+      all_backfill_complete: allBackfillComplete,
+      latest_file_write: latestFileTimestamp,
+      earliest_file_write: earliestFileTimestamp,
+      current_record_time: currentRecordTime,
+      suggestion: !allBackfillComplete 
+        ? 'Backfill not complete. Run backfill scripts or mark cursors as complete.'
+        : !liveCursor
+          ? 'Backfill complete! Run: node scripts/ingest/fetch-updates-parquet.js --live'
+          : null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

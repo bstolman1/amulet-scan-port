@@ -412,6 +412,39 @@ export async function getACSMiningRounds(params: { closedLimit?: number } = {}):
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Live Status API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface LiveCursor {
+  migration_id: number;
+  record_time: string;
+  updated_at: string;
+  mode: string;
+}
+
+export interface LiveStatus {
+  mode: 'live' | 'backfill' | 'unknown';
+  status: 'running' | 'idle' | 'stopped';
+  live_cursor: LiveCursor | null;
+  backfill_cursors: Array<{
+    file: string;
+    migration_id: number;
+    min_time?: string;
+    max_time?: string;
+    complete?: boolean;
+  }>;
+  all_backfill_complete: boolean;
+  latest_file_write: string | null;
+  earliest_file_write: string | null;
+  current_record_time: string | null;
+  suggestion: string | null;
+}
+
+export async function getLiveStatus(): Promise<LiveStatus> {
+  return apiFetch('/api/stats/live-status');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
 
