@@ -36,12 +36,18 @@ export async function getEncoders() {
 /**
  * Map a raw event object to protobuf-compatible format
  * NOTE: protobufjs uses camelCase field names internally
+ * 
+ * IMPORTANT per Scan API docs:
+ * - event_id should be original API value (format: <update_id>:<event_index>)
+ * - child_event_ids is critical for tree traversal
+ * - Many fields are optional (signatories only on created, etc.)
  */
 export function mapEvent(r) {
   return {
     id: String(r.id ?? r.event_id ?? ''),
     updateId: String(r.update_id ?? ''),
     type: String(r.type ?? r.event_type ?? ''),
+    typeOriginal: String(r.type_original ?? r.event_type_original ?? ''),
     synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? ''),
     effectiveAt: safeTimestamp(r.effective_at),
     recordedAt: safeTimestamp(r.recorded_at ?? r.timestamp),
@@ -50,6 +56,7 @@ export function mapEvent(r) {
     template: String(r.template ?? r.template_id ?? ''),
     packageName: String(r.package_name ?? ''),
     migrationId: safeInt64(r.migration_id),
+    // Optional arrays - may be null/undefined for certain event types
     signatories: safeStringArray(r.signatories),
     observers: safeStringArray(r.observers),
     actingParties: safeStringArray(r.acting_parties),
@@ -69,6 +76,7 @@ export function mapEvent(r) {
     unassignId: String(r.unassign_id ?? ''),
     submitter: String(r.submitter ?? ''),
     reassignmentCounter: safeInt64(r.reassignment_counter),
+    // CRITICAL: Complete original event for recovery/future-proofing
     rawJson: r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
     // Deprecated
     party: String(r.party ?? ''),

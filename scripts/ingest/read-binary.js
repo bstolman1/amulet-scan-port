@@ -93,37 +93,74 @@ export async function readBinaryFile(filePath) {
 
 /**
  * Convert protobuf message to plain object with readable timestamps
+ * Preserves all fields including tree structure (child_event_ids, root_event_ids)
  */
 function toPlainObject(record, isEvent) {
   if (isEvent) {
     return {
-      id: record.id || null,
+      event_id: record.id || null,
       update_id: record.updateId || record.update_id || null,
-      type: record.type || null,
-      synchronizer: record.synchronizer || null,
+      event_type: record.type || null,
+      event_type_original: record.typeOriginal || record.type_original || null,
+      synchronizer_id: record.synchronizer || null,
       effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
       recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
+      created_at_ts: record.createdAtTs ? new Date(Number(record.createdAtTs)).toISOString() : null,
       contract_id: record.contractId || record.contract_id || null,
-      party: record.party || null,
-      template: record.template || null,
-      payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
-      signatories: record.signatories || [],
-      observers: record.observers || [],
+      template_id: record.template || null,
       package_name: record.packageName || null,
+      migration_id: record.migrationId ? Number(record.migrationId) : null,
+      // Arrays - may be empty or null depending on event type
+      signatories: record.signatories?.length ? record.signatories : null,
+      observers: record.observers?.length ? record.observers : null,
+      acting_parties: record.actingParties?.length ? record.actingParties : null,
+      witness_parties: record.witnessParties?.length ? record.witnessParties : null,
+      // Payload and other JSON fields
+      payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
+      contract_key: record.contractKeyJson ? tryParseJson(record.contractKeyJson) : null,
+      // Exercised event fields
+      choice: record.choice || null,
+      consuming: record.consuming ?? null,
+      interface_id: record.interfaceId || null,
+      child_event_ids: record.childEventIds?.length ? record.childEventIds : null,
+      exercise_result: record.exerciseResultJson ? tryParseJson(record.exerciseResultJson) : null,
+      // Reassignment fields
+      source_synchronizer: record.sourceSynchronizer || null,
+      target_synchronizer: record.targetSynchronizer || null,
+      unassign_id: record.unassignId || null,
+      submitter: record.submitter || null,
+      reassignment_counter: record.reassignmentCounter ? Number(record.reassignmentCounter) : null,
+      // Original raw data
       raw_json: record.rawJson ? tryParseJson(record.rawJson) : null,
+      // Deprecated
+      party: record.party || null,
     };
   }
   
   // Update record
   return {
-    id: record.id || null,
-    synchronizer: record.synchronizer || null,
+    update_id: record.id || null,
+    update_type: record.type || null,
+    synchronizer_id: record.synchronizer || null,
+    migration_id: record.migrationId ? Number(record.migrationId) : null,
+    workflow_id: record.workflowId || record.workflow_id || null,
+    command_id: record.commandId || record.command_id || null,
+    offset: record.offset ? Number(record.offset) : null,
+    record_time: record.recordTime ? new Date(Number(record.recordTime)).toISOString() : null,
     effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
     recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
-    transaction_id: record.transactionId || record.transaction_id || null,
-    command_id: record.commandId || record.command_id || null,
-    workflow_id: record.workflowId || record.workflow_id || null,
-    status: record.status || null,
+    kind: record.kind || null,
+    root_event_ids: record.rootEventIds?.length ? record.rootEventIds : null,
+    event_count: record.eventCount || 0,
+    // Reassignment fields
+    source_synchronizer: record.sourceSynchronizer || null,
+    target_synchronizer: record.targetSynchronizer || null,
+    unassign_id: record.unassignId || null,
+    submitter: record.submitter || null,
+    reassignment_counter: record.reassignmentCounter ? Number(record.reassignmentCounter) : null,
+    // JSON fields
+    trace_context: record.traceContextJson ? tryParseJson(record.traceContextJson) : null,
+    update_data: record.updateDataJson ? tryParseJson(record.updateDataJson) : null,
   };
 }
 

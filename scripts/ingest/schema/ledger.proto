@@ -6,7 +6,7 @@ package ledger;
 message Event {
   string id = 1;
   string update_id = 2;
-  string type = 3;  // 'created', 'archived', 'exercised', 'reassign_create', 'reassign_archive'
+  string type = 3;  // Normalized: 'created', 'archived', 'exercised', etc.
   string synchronizer = 4;
 
   int64 effective_at = 5;  // Unix epoch millis
@@ -18,21 +18,21 @@ message Event {
   string package_name = 10;
   int64 migration_id = 11;
 
-  repeated string signatories = 12;
-  repeated string observers = 13;
-  repeated string acting_parties = 14;  // For exercised events
-  repeated string witness_parties = 15; // Parties that witnessed the event
+  repeated string signatories = 12;  // Optional - only for created events
+  repeated string observers = 13;    // Optional - only for created events
+  repeated string acting_parties = 14;  // Optional - only for exercised events
+  repeated string witness_parties = 15; // Optional - parties that witnessed the event
 
   string payload_json = 16;  // create_arguments or choice_argument as JSON
   
   // Created event specific fields
-  string contract_key_json = 17;  // Contract key if defined
+  string contract_key_json = 17;  // Optional - contract key if defined
   
   // Exercised event specific fields
   string choice = 18;
   bool consuming = 19;
   string interface_id = 20;
-  repeated string child_event_ids = 21;
+  repeated string child_event_ids = 21;  // CRITICAL for tree traversal
   string exercise_result_json = 22;
   
   // Reassignment event specific fields
@@ -42,10 +42,13 @@ message Event {
   string submitter = 26;
   int64 reassignment_counter = 27;
   
-  string raw_json = 28;  // Complete original event as JSON
+  string raw_json = 28;  // Complete original event as JSON - CANONICAL SOURCE
   
   // Deprecated/unused - kept for backwards compatibility
   string party = 29;
+  
+  // Added fields - use higher numbers to not conflict
+  string type_original = 30;  // Original API type: 'created_event', 'archived_event', etc.
 }
 
 // Represent a single update
