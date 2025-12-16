@@ -140,7 +140,7 @@ router.get('/snapshots', async (req, res) => {
     }
 
     // Check cache first
-    const cacheKey = 'acs:snapshots';
+    const cacheKey = 'acs:v2:snapshots';
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
@@ -161,7 +161,7 @@ router.get('/snapshots', async (req, res) => {
       SELECT 
         snapshot_time,
         migration_id,
-        COUNT(*) as contract_count,
+        COUNT(DISTINCT contract_id) as contract_count,
         COUNT(DISTINCT template_id) as template_count,
         MIN(record_time) as record_time
       FROM ${getACSSource()}
@@ -203,7 +203,7 @@ router.get('/latest', async (req, res) => {
     }
 
     // Check cache
-    const cacheKey = 'acs:latest';
+    const cacheKey = 'acs:v2:latest';
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
@@ -216,7 +216,7 @@ router.get('/latest', async (req, res) => {
       SELECT 
         acs.snapshot_time,
         acs.migration_id,
-        COUNT(*) as contract_count,
+        COUNT(DISTINCT acs.contract_id) as contract_count,
         COUNT(DISTINCT template_id) as template_count,
         MIN(record_time) as record_time
       FROM ${acsSource} acs
@@ -238,10 +238,15 @@ router.get('/latest', async (req, res) => {
     // Calculate supply metrics from Amulet and LockedAmulet contracts
     const supplySql = `
       WITH latest_contracts AS (
-        SELECT template_id, entity_name, payload
+        SELECT
+          contract_id,
+          any_value(template_id) as template_id,
+          any_value(entity_name) as entity_name,
+          any_value(payload) as payload
         FROM ${acsSource}
         WHERE migration_id = ${migrationId}
           AND snapshot_time = '${snapshotTime}'
+        GROUP BY contract_id
       ),
       amulet_totals AS (
         SELECT 
@@ -326,7 +331,7 @@ router.get('/templates', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
     
     // Check cache
-    const cacheKey = `acs:templates:${limit}`;
+    const cacheKey = `acs:v2:templates:${limit}`;
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
@@ -339,7 +344,7 @@ router.get('/templates', async (req, res) => {
         template_id,
         entity_name,
         module_name,
-        COUNT(*) as contract_count,
+        COUNT(DISTINCT contract_id) as contract_count,
         COUNT(DISTINCT contract_id) as unique_contracts
       FROM ${acsSource} acs
       WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
@@ -890,7 +895,7 @@ router.get('/stats', async (req, res) => {
     }
 
     // Check cache
-    const cacheKey = 'acs:stats';
+    const cacheKey = 'acs:v2:stats';
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
@@ -898,7 +903,7 @@ router.get('/stats', async (req, res) => {
 
     const sql = `
       SELECT 
-        COUNT(*) as total_contracts,
+        COUNT(DISTINCT contract_id) as total_contracts,
         COUNT(DISTINCT template_id) as total_templates,
         COUNT(DISTINCT snapshot_time) as total_snapshots,
         MAX(snapshot_time) as latest_snapshot,
