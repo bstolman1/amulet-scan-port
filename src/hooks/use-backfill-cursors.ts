@@ -33,8 +33,13 @@ export interface BackfillStats {
   totalUpdates: number;
   totalEvents: number;
   activeMigrations: number;
+  migrationsFromDirs?: number[];
   totalCursors: number;
   completedCursors: number;
+  rawFileCounts?: {
+    events: number;
+    updates: number;
+  };
 }
 
 export interface WriteActivityState {
@@ -42,14 +47,6 @@ export interface WriteActivityState {
   eventFiles: number;
   updateFiles: number;
   message: string;
-}
-
-export interface BackfillStats {
-  totalUpdates: number;
-  totalEvents: number;
-  activeMigrations: number;
-  totalCursors: number;
-  completedCursors: number;
 }
 
 export function useBackfillCursors() {
