@@ -54,6 +54,7 @@ const navigation = [
   { name: "Subscriptions", href: "/subscriptions", icon: Package },
   { name: "DSO State", href: "/dso-state", icon: Users },
   { name: "ACS Snapshot", href: "/snapshot-progress", icon: Upload },
+  { name: "Ingestion", href: "/ingestion", icon: Database },
   { name: "Backfill Progress", href: "/backfill-progress", icon: Clock },
   { name: "Live Updates", href: "/live-updates", icon: TrendingUp },
   { name: "Admin", href: "/admin", icon: Shield },
