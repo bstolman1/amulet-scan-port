@@ -971,6 +971,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   // Load existing cursor state
   const cursorData = integrityCursor.load();
   
+  // Ensure the cursor file exists on disk even before the first confirmed write
+  // (cursor position still only advances on confirmWrite).
+  if (!cursorData) {
+    integrityCursor.persistSnapshot();
+  }
+  
   // Determine starting position - use CONFIRMED position, not pending
   let before = cursorData?.last_confirmed_before || cursorData?.last_before || maxTime;
   const atOrAfter = minTime;
