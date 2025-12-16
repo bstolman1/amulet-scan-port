@@ -67,6 +67,14 @@ export class IntegrityCursor {
   }
 
   /**
+   * Persist the current cursor snapshot without advancing it.
+   * Safe to call at startup so the cursor file always exists.
+   */
+  persistSnapshot() {
+    this._persist();
+  }
+
+  /**
    * Record pending data (not yet written to disk)
    * DO NOT advance cursor position yet
    */
