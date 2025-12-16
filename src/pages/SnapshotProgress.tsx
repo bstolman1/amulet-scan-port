@@ -5,13 +5,12 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
 import { Clock, Database, FileText, Activity, CheckCircle, XCircle, Trash2, Server, Filter, Calendar, Timer } from "lucide-react";
 import { formatDistanceToNow, differenceInMinutes, differenceInSeconds } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
-import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
-import { getACSSnapshots, getACSTemplates, getACSStats, type ACSSnapshot as LocalACSSnapshot, type ACSTemplateStats as LocalACSTemplateStats } from "@/lib/duckdb-api-client";
+import { checkDuckDBConnection } from "@/lib/backend-config";
+import { getACSSnapshots, getACSTemplates, getACSStats, apiFetch, type ACSSnapshot as LocalACSSnapshot, type ACSTemplateStats as LocalACSTemplateStats } from "@/lib/duckdb-api-client";
 
 interface Snapshot {
   id: string;
@@ -181,20 +180,19 @@ const SchedulerStatusCard = ({ latestSnapshotTime }: { latestSnapshotTime?: stri
   );
 };
 
-const AUTO_REFRESH_INTERVAL = 10000; // 10 seconds for local mode
+const AUTO_REFRESH_INTERVAL = 10000; // 10 seconds
 
 const SnapshotProgress = () => {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [templateStats, setTemplateStats] = useState<Record<string, TemplateStats[]>>({});
   const [loading, setLoading] = useState(true);
   const [isPurging, setIsPurging] = useState(false);
-  const [isLocalMode, setIsLocalMode] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   const [localStats, setLocalStats] = useState<{ total_contracts: number; total_templates: number } | null>(null);
   const [selectedMigration, setSelectedMigration] = useState<string>('all');
   const [prevContractCount, setPrevContractCount] = useState<number | null>(null);
-  const [isCountIncreasing, setIsCountIncreasing] = useState(false); // True only if count actively increased
+  const [isCountIncreasing, setIsCountIncreasing] = useState(false);
   const { toast } = useToast();
-  const useDuckDB = useDuckDBForLedger();
 
   // Data is "still writing" only if the count is actively increasing between refreshes
   const isStillWriting = isCountIncreasing;
@@ -210,85 +208,34 @@ const SnapshotProgress = () => {
     : snapshots.filter(s => String(s.migration_id) === selectedMigration);
 
   useEffect(() => {
-    // Check if we should use local mode
-    const checkMode = async () => {
-      if (useDuckDB) {
-        const isConnected = await checkDuckDBConnection();
-        setIsLocalMode(isConnected);
-        if (isConnected) {
-          fetchLocalSnapshots();
-          return;
-        }
+    const init = async () => {
+      const connected = await checkDuckDBConnection();
+      setIsConnected(connected);
+      if (connected) {
+        fetchLocalSnapshots();
+      } else {
+        setLoading(false);
+        toast({
+          title: "DuckDB not connected",
+          description: "Make sure your local DuckDB server is running",
+          variant: "destructive",
+        });
       }
-      // Fall back to Supabase
-      fetchSnapshots();
     };
     
-    checkMode();
-  }, [useDuckDB]);
+    init();
+  }, []);
 
-  // Auto-refresh for local mode to detect if data is still being written
+  // Auto-refresh to detect if data is still being written
   useEffect(() => {
-    if (!isLocalMode) return;
+    if (!isConnected) return;
 
     const interval = setInterval(() => {
       fetchLocalSnapshots();
     }, AUTO_REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [isLocalMode]);
-
-  // Set up Supabase realtime subscriptions only when not in local mode
-  useEffect(() => {
-    if (isLocalMode) return;
-
-    // Subscribe to realtime updates for snapshots
-    const snapshotChannel = supabase
-      .channel("snapshot-progress")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "acs_snapshots",
-        },
-        (payload) => {
-          console.log("Snapshot update:", payload);
-          if (payload.eventType === "INSERT") {
-            setSnapshots((prev) => [payload.new as Snapshot, ...prev]);
-          } else if (payload.eventType === "UPDATE") {
-            setSnapshots((prev) => prev.map((s) => (s.id === payload.new.id ? (payload.new as Snapshot) : s)));
-          }
-        },
-      )
-      .subscribe();
-
-    // Subscribe to template stats updates
-    const templateChannel = supabase
-      .channel("template-stats")
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "acs_template_stats",
-        },
-        (payload) => {
-          console.log("Template stats update:", payload);
-          const newStat = payload.new as TemplateStats;
-          setTemplateStats((prev) => ({
-            ...prev,
-            [newStat.snapshot_id]: [...(prev[newStat.snapshot_id] || []), newStat],
-          }));
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(snapshotChannel);
-      supabase.removeChannel(templateChannel);
-    };
-  }, [isLocalMode]);
+  }, [isConnected]);
 
   const fetchLocalSnapshots = async () => {
     try {
@@ -352,48 +299,6 @@ const SnapshotProgress = () => {
     }
   };
 
-  const fetchSnapshots = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("acs_snapshots")
-        .select("*")
-        .order("timestamp", { ascending: false })
-        .limit(10);
-
-      if (error) throw error;
-      setSnapshots(data || []);
-
-      // Fetch template stats for each snapshot
-      for (const snapshot of data || []) {
-        fetchTemplateStats(snapshot.id);
-      }
-    } catch (error) {
-      console.error("Error fetching snapshots:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchTemplateStats = async (snapshotId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("acs_template_stats")
-        .select("*")
-        .eq("snapshot_id", snapshotId)
-        .order("updated_at", { ascending: false });
-
-      if (error) throw error;
-      if (data) {
-        setTemplateStats((prev) => ({
-          ...prev,
-          [snapshotId]: data,
-        }));
-      }
-    } catch (error) {
-      console.error("Error fetching template stats:", error);
-    }
-  };
-
   const getStatusBadge = (status: string | null) => {
     switch (status) {
       case "completed":
@@ -439,7 +344,7 @@ const SnapshotProgress = () => {
   const handlePurgeAll = async () => {
     if (
       !confirm(
-        "Are you sure you want to purge ALL ACS data? This will delete all snapshots, template stats, and storage files. This action cannot be undone.",
+        "Are you sure you want to purge ALL ACS data? This will delete all local ACS parquet files. This action cannot be undone.",
       )
     ) {
       return;
@@ -447,19 +352,17 @@ const SnapshotProgress = () => {
 
     setIsPurging(true);
     try {
-      const { data, error } = await supabase.functions.invoke("purge-acs-storage", {
-        body: { purge_all: true },
-      });
-
-      if (error) throw error;
+      const response = await apiFetch('/api/acs/purge', { method: 'POST' }) as { success?: boolean; error?: string; message?: string };
+      
+      if (!response.success) throw new Error(response.error || 'Purge failed');
 
       toast({
         title: "Purge complete",
-        description: `Deleted ${data.deleted_files} files and ${data.deleted_stats} stats`,
+        description: response.message || "ACS data purged successfully",
       });
 
       // Refresh the snapshots list
-      fetchSnapshots();
+      fetchLocalSnapshots();
     } catch (error: any) {
       console.error("Purge error:", error);
       toast({ title: "Purge failed", description: error.message || "Unknown error", variant: "destructive" });
@@ -490,36 +393,27 @@ const SnapshotProgress = () => {
           <div>
             <h1 className="text-3xl font-bold mb-2">ACS Snapshot</h1>
             <p className="text-muted-foreground">
-              {isLocalMode ? (
-                <span className="flex items-center gap-2">
-                  <Server className="w-4 h-4 text-green-500" />
-                  Using local DuckDB data
-                </span>
-              ) : (
-                "Monitor live ACS snapshot uploads and template processing"
-              )}
+              <span className="flex items-center gap-2">
+                <Server className={`w-4 h-4 ${isConnected ? 'text-green-500' : 'text-red-500'}`} />
+                {isConnected ? 'Using local DuckDB data' : 'DuckDB not connected'}
+              </span>
             </p>
           </div>
           <div className="flex gap-2">
-            {isLocalMode ? (
-              <Button onClick={refreshLocalData} variant="outline" size="sm">
-                <Activity className="h-4 w-4 mr-2" />
-                Refresh
-              </Button>
-            ) : (
-              <>
-                <TriggerACSSnapshotButton />
-                <Button onClick={handlePurgeAll} disabled={isPurging} variant="destructive" size="sm">
-                  <Trash2 className={`h-4 w-4 mr-2 ${isPurging ? "animate-spin" : ""}`} />
-                  {isPurging ? "Purging..." : "Purge All ACS Data"}
-                </Button>
-              </>
-            )}
+            <Button onClick={refreshLocalData} variant="outline" size="sm" disabled={!isConnected}>
+              <Activity className="h-4 w-4 mr-2" />
+              Refresh
+            </Button>
+            <TriggerACSSnapshotButton />
+            <Button onClick={handlePurgeAll} disabled={isPurging || !isConnected} variant="destructive" size="sm">
+              <Trash2 className={`h-4 w-4 mr-2 ${isPurging ? "animate-spin" : ""}`} />
+              {isPurging ? "Purging..." : "Purge All ACS Data"}
+            </Button>
           </div>
         </div>
 
-        {/* Local Mode Stats Summary */}
-        {isLocalMode && localStats && (
+        {/* Stats Summary */}
+        {localStats && (
           <Card className="glass-card border-green-500/20 bg-green-500/5">
             <CardContent className="py-4">
               <div className="grid grid-cols-3 gap-4">
@@ -540,10 +434,8 @@ const SnapshotProgress = () => {
           </Card>
         )}
 
-        {/* Scheduler Status Card - Only show in local mode */}
-        {isLocalMode && (
-          <SchedulerStatusCard latestSnapshotTime={snapshots[0]?.timestamp} />
-        )}
+        {/* Scheduler Status Card */}
+        <SchedulerStatusCard latestSnapshotTime={snapshots[0]?.timestamp} />
 
         {/* Migration Filter */}
         {uniqueMigrations.length > 0 && (
@@ -599,164 +491,69 @@ const SnapshotProgress = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Progress Bar */}
-              {isLocalMode ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Overall Progress</span>
-                    <span className="font-medium">
-                      {isStillWriting ? (
-                        <span className="text-blue-500">Writing data...</span>
-                      ) : prevContractCount === null ? (
-                        <span className="text-muted-foreground">Checking...</span>
-                      ) : (
-                        <span className="text-green-500">100%</span>
-                      )}
-                    </span>
-                  </div>
-                  <Progress 
-                    value={isStillWriting ? 75 : (prevContractCount === null ? 0 : 100)} 
-                    className={`h-2 ${isStillWriting ? '[&>div]:animate-pulse' : ''}`}
-                  />
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0} contracts indexed</span>
-                    {isStillWriting && (
-                      <span className="text-blue-500">Data still being written...</span>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Overall Progress</span>
+                  <span className="font-medium">
+                    {isStillWriting ? (
+                      <span className="text-blue-500">Writing data...</span>
+                    ) : prevContractCount === null ? (
+                      <span className="text-muted-foreground">Checking...</span>
+                    ) : (
+                      <span className="text-green-500">100%</span>
                     )}
-                  </div>
+                  </span>
                 </div>
-              ) : snapshot.status === "completed" ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Overall Progress</span>
-                    <span className="font-medium">100%</span>
-                  </div>
-                  <Progress value={100} className="h-2" />
+                <Progress 
+                  value={isStillWriting ? 75 : (prevContractCount === null ? 0 : 100)} 
+                  className={`h-2 ${isStillWriting ? '[&>div]:animate-pulse' : ''}`}
+                />
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0} contracts indexed</span>
+                  {isStillWriting && (
+                    <span className="text-blue-500">Data still being written...</span>
+                  )}
                 </div>
-              ) : null}
+              </div>
 
-              {/* Stats Grid - Show different stats for local vs remote */}
-              {isLocalMode ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Database className="w-4 h-4" />
-                      Contracts
-                    </div>
-                    <p className="text-2xl font-bold">
-                      {(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0}
-                    </p>
+              {/* Stats Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Database className="w-4 h-4" />
+                    Contracts
                   </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <FileText className="w-4 h-4" />
-                      Templates
-                    </div>
-                    <p className="text-2xl font-bold">
-                      {(isLatestSnapshot ? localStats?.total_templates : snapshot.template_count)?.toLocaleString() || 0}
-                    </p>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Clock className="w-4 h-4" />
-                      Snapshot Time
-                    </div>
-                    <p className="text-lg font-medium">
-                      {new Date(snapshot.timestamp).toLocaleDateString()}
-                    </p>
-                  </div>
+                  <p className="text-2xl font-bold">
+                    {(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0}
+                  </p>
                 </div>
-              ) : (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <FileText className="w-4 h-4" />
-                      Pages Processed
-                    </div>
-                    <p className="text-2xl font-bold">{snapshot.processed_pages?.toLocaleString() || 0}</p>
-                  </div>
 
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Activity className="w-4 h-4" />
-                      Events Processed
-                    </div>
-                    <p className="text-2xl font-bold">{snapshot.processed_events?.toLocaleString() || 0}</p>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <FileText className="w-4 h-4" />
+                    Templates
                   </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Clock className="w-4 h-4" />
-                      Elapsed Time
-                    </div>
-                    <p className="text-2xl font-bold">{formatDuration(snapshot.elapsed_time_ms || 0)}</p>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Activity className="w-4 h-4" />
-                      Pages/Min
-                    </div>
-                    <p className="text-2xl font-bold">{Number(snapshot.pages_per_minute ?? 0).toFixed(1)}</p>
-                  </div>
+                  <p className="text-2xl font-bold">
+                    {(isLatestSnapshot ? localStats?.total_templates : snapshot.template_count)?.toLocaleString() || 0}
+                  </p>
                 </div>
-              )}
 
-              {/* Activity Metrics - Only for Supabase mode */}
-              {!isLocalMode && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-lg bg-primary/5 border border-primary/10">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Database className="w-4 h-4" />
-                      Total Contracts
-                    </div>
-                    <p className="text-2xl font-bold text-primary">
-                      {templateStats[snapshot.id]
-                        ?.reduce((sum, stat) => sum + stat.contract_count, 0)
-                        ?.toLocaleString() || 0}
-                    </p>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Clock className="w-4 h-4" />
+                    Snapshot Time
                   </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Activity className="w-4 h-4" />
-                      Template Updates
-                    </div>
-                    <p className="text-2xl font-bold text-primary">{snapshot.template_batch_updates || 0}</p>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <FileText className="w-4 h-4" />
-                      Unique Templates
-                    </div>
-                    <p className="text-2xl font-bold text-primary">{templateStats[snapshot.id]?.length || 0}</p>
-                  </div>
+                  <p className="text-lg font-medium">
+                    {new Date(snapshot.timestamp).toLocaleDateString()}
+                  </p>
                 </div>
-              )}
+              </div>
 
-              {/* Last Batch Info - Only for Supabase mode */}
-              {!isLocalMode && snapshot.last_batch_info && (
-                <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-green-600 dark:text-green-400 font-medium">
-                      Last batch: {snapshot.last_batch_info.templates_updated} templates, +
-                      {snapshot.last_batch_info.contracts_added.toLocaleString()} contracts
-                    </span>
-                    <span className="text-muted-foreground text-xs">
-                      {formatDistanceToNow(new Date(snapshot.last_batch_info.timestamp), { addSuffix: true })}
-                    </span>
-                  </div>
-                </div>
-              )}
 
               {/* Template Stats */}
               {templateStats[snapshot.id] && templateStats[snapshot.id].length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-sm font-medium">
-                    {isLocalMode ? "Top Templates" : "Template Activity"}
-                  </h4>
+                  <h4 className="text-sm font-medium">Top Templates</h4>
                   <div className="max-h-64 overflow-y-auto space-y-2">
                     {templateStats[snapshot.id].slice(0, 20).map((stat, idx) => {
                       const isRecent = stat.updated_at && new Date(stat.updated_at).getTime() > Date.now() - 5 * 60 * 1000;
@@ -813,11 +610,9 @@ const SnapshotProgress = () => {
             <CardContent className="flex flex-col items-center justify-center py-12">
               <Database className="w-12 h-12 text-muted-foreground mb-4" />
               <p className="text-muted-foreground">
-                {isLocalMode 
-                  ? selectedMigration !== 'all' 
-                    ? `No snapshots found for Migration #${selectedMigration}`
-                    : "No local ACS data found. Run fetch-acs-parquet.js to populate data."
-                  : "No snapshots found. Trigger a snapshot to see real-time progress."
+                {selectedMigration !== 'all' 
+                  ? `No snapshots found for Migration #${selectedMigration}`
+                  : "No local ACS data found. Run fetch-acs-parquet.js to populate data."
                 }
               </p>
             </CardContent>
