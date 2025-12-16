@@ -848,4 +848,35 @@ router.get('/live-status', async (req, res) => {
   }
 });
 
+// DELETE /api/stats/live-cursor - Purge live cursor to stop live ingestion tracking
+router.delete('/live-cursor', async (req, res) => {
+  try {
+    const path = await import('path');
+    const fs = await import('fs');
+    
+    const DATA_DIR = process.env.DATA_DIR || db.DATA_PATH;
+    const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
+    const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
+    
+    if (fs.existsSync(LIVE_CURSOR_FILE)) {
+      fs.unlinkSync(LIVE_CURSOR_FILE);
+      console.log('🗑️ Deleted live cursor file:', LIVE_CURSOR_FILE);
+      res.json({ 
+        success: true, 
+        message: 'Live cursor deleted. The live ingestion script will need to be restarted.',
+        deleted_file: LIVE_CURSOR_FILE 
+      });
+    } else {
+      res.json({ 
+        success: true, 
+        message: 'No live cursor file found.',
+        deleted_file: null 
+      });
+    }
+  } catch (err) {
+    console.error('Error deleting live cursor:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
