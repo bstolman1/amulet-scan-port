@@ -25,23 +25,31 @@ function readAllCursors() {
     return [];
   }
 
-  const files = readdirSync(CURSOR_DIR).filter(f => f.startsWith('cursor-') && f.endsWith('.json'));
+  // Cursor files may be named differently across environments (e.g. cursor-*.json, backfill-*.json).
+  // Read all JSON files and only keep those that look like backfill cursors.
+  const files = readdirSync(CURSOR_DIR).filter((f) => f.endsWith('.json'));
   const cursors = [];
-
   for (const file of files) {
     try {
-      const filePath = join(CURSOR_DIR, file);
-      const data = JSON.parse(readFileSync(filePath, 'utf-8'));
-      
-      // Detect if cursor is stale (not updated in 5+ minutes but marked complete with old timestamp)
-      const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-      const isRecentlyUpdated = Date.now() - updatedAt < 5 * 60 * 1000; // 5 minutes
-      
-      // If marked complete but has pending writes, it's still finalizing
-      const hasPendingWork = (data.pending_writes || 0) > 0 || (data.buffered_records || 0) > 0;
-      const effectiveComplete = data.complete && !hasPendingWork;
-      
-      cursors.push({
+       const filePath = join(CURSOR_DIR, file);
+       const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+
+       // Skip non-cursor JSON files
+       const looksLikeCursor =
+         typeof data === 'object' &&
+         data &&
+         (data.migration_id !== undefined || data.cursor_name !== undefined || data.last_before !== undefined);
+       if (!looksLikeCursor) continue;
+
+       // Detect if cursor is stale (not updated in 5+ minutes but marked complete with old timestamp)
+       const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+       const isRecentlyUpdated = Date.now() - updatedAt < 5 * 60 * 1000; // 5 minutes
+
+       // If marked complete but has pending writes, it's still finalizing
+       const hasPendingWork = (data.pending_writes || 0) > 0 || (data.buffered_records || 0) > 0;
+       const effectiveComplete = data.complete && !hasPendingWork;
+
+       cursors.push({
         id: data.id || file.replace('.json', ''),
         cursor_name: data.cursor_name || `migration-${data.migration_id}-${data.synchronizer_id?.substring(0, 20)}`,
         migration_id: data.migration_id,
