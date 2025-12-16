@@ -127,6 +127,19 @@ function extractMigrationIdFromPath(filePath) {
 }
 
 /**
+ * Convert Long object to number (protobufjs returns int64 as Long)
+ */
+function toLong(val) {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'object' && 'low' in val) {
+    // Long object from protobufjs
+    return val.toNumber ? val.toNumber() : Number(val.low);
+  }
+  return Number(val);
+}
+
+/**
  * Convert protobuf record to plain object with readable timestamps
  */
 function toPlainObject(record, isEvent, filePath) {
@@ -135,7 +148,7 @@ function toPlainObject(record, isEvent, filePath) {
 
   if (isEvent) {
     // Use protobuf migration_id if available, else fall back to path
-    const migrationId = record.migrationId ?? record.migration_id ?? pathMigrationId;
+    const migrationId = toLong(record.migrationId ?? record.migration_id) ?? pathMigrationId;
     
     return {
       event_id: record.id || null,
@@ -168,14 +181,14 @@ function toPlainObject(record, isEvent, filePath) {
       target_synchronizer: record.targetSynchronizer || record.target_synchronizer || null,
       unassign_id: record.unassignId || record.unassign_id || null,
       submitter: record.submitter || null,
-      reassignment_counter: record.reassignmentCounter || record.reassignment_counter || null,
+      reassignment_counter: toLong(record.reassignmentCounter || record.reassignment_counter),
       // Complete original event
       raw: record.rawJson ? tryParseJson(record.rawJson) : null,
     };
   }
 
   // Update record
-  const migrationId = record.migrationId ?? record.migration_id ?? pathMigrationId;
+  const migrationId = toLong(record.migrationId ?? record.migration_id) ?? pathMigrationId;
   
   return {
     update_id: record.id || null,
