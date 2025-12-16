@@ -1,8 +1,11 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { DataPreloader } from "@/components/DataPreloader";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import Validators from "./pages/Validators";
@@ -36,21 +39,42 @@ import AmuletRules from "./pages/AmuletRules";
 import GovernanceFlow from "./pages/GovernanceFlow";
 import NotFound from "./pages/NotFound";
 
+// Create query client with aggressive caching for instant loads
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 2,
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 3000),
-      staleTime: 60_000,
-      gcTime: 5 * 60_000,
+      staleTime: 5 * 60_000, // 5 minutes - data considered fresh
+      gcTime: 24 * 60 * 60_000, // 24 hours - keep in cache for persistence
       refetchOnWindowFocus: false,
       networkMode: "offlineFirst",
     },
   },
 });
 
+// Persist cache to localStorage for instant loads like Etherscan
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+  key: "canton-explorer-cache",
+  // Serialize/deserialize with size limit
+  throttleTime: 1000,
+});
+
 const App = () => (
-  <QueryClientProvider client={queryClient}>
+  <PersistQueryClientProvider
+    client={queryClient}
+    persistOptions={{
+      persister,
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      buster: "v1", // Increment to invalidate old cache
+    }}
+    onSuccess={() => {
+      // Resume any paused mutations after hydration
+      queryClient.resumePausedMutations();
+    }}
+  >
+    <DataPreloader />
     <TooltipProvider>
       <Toaster />
       <Sonner />
@@ -91,7 +115,7 @@ const App = () => (
         </Routes>
       </BrowserRouter>
     </TooltipProvider>
-  </QueryClientProvider>
+  </PersistQueryClientProvider>
 );
 
 export default App;
