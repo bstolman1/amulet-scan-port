@@ -707,17 +707,28 @@ router.post('/validate-integrity', async (req, res) => {
             
             for (const r of sampleRecords) {
               // Check for update_data_json field
-              const hasUpdateData = r.update_data_json || r.updateDataJson || r.data;
-              if (!hasUpdateData) {
+              // NOTE: value may be null/empty string depending on encoder; presence matters here.
+              const hasUpdateDataField =
+                Object.prototype.hasOwnProperty.call(r, 'update_data_json') ||
+                Object.prototype.hasOwnProperty.call(r, 'updateDataJson') ||
+                Object.prototype.hasOwnProperty.call(r, 'update_data') ||
+                Object.prototype.hasOwnProperty.call(r, 'data');
+
+              const hasUpdateDataValue = r.update_data_json || r.updateDataJson || r.update_data || r.data;
+              if (!hasUpdateDataField && !hasUpdateDataValue) {
                 hasMissing = true;
                 if (!detail.missingFields.includes('update_data_json')) {
                   detail.missingFields.push('update_data_json');
                 }
               }
-              
+
               // NEW: Check for root_event_ids (for tree structure)
-              const rootEventIds = r.root_event_ids || r.rootEventIds;
-              if (rootEventIds !== undefined) {
+              // root_event_ids may be null if empty; treat field presence as compliant for this check.
+              const hasRootEventIdsField =
+                Object.prototype.hasOwnProperty.call(r, 'root_event_ids') ||
+                Object.prototype.hasOwnProperty.call(r, 'rootEventIds');
+
+              if (hasRootEventIdsField) {
                 results.schemaCompliance.updatesWithRootEventIds++;
               } else {
                 results.schemaCompliance.updatesWithoutRootEventIds++;
