@@ -504,6 +504,17 @@ router.get('/rich-list', async (req, res) => {
     const acsSource = getACSSource();
     const sql = `
       WITH ${getLatestSnapshotCTE(acsSource)},
+      latest_contracts AS (
+        SELECT
+          contract_id,
+          any_value(template_id) as template_id,
+          any_value(entity_name) as entity_name,
+          any_value(payload) as payload
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        GROUP BY contract_id
+      ),
       amulet_balances AS (
         SELECT 
           json_extract_string(payload, '$.owner') as owner,
@@ -511,17 +522,15 @@ router.get('/rich-list', async (req, res) => {
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) as amount
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (
-            entity_name = 'Amulet'
-            OR (
-              (template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
-              AND template_id NOT LIKE '%:LockedAmulet:%'
-              AND template_id NOT LIKE '%:LockedAmulet'
-            )
+        FROM latest_contracts
+        WHERE (
+          entity_name = 'Amulet'
+          OR (
+            (template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+            AND template_id NOT LIKE '%:LockedAmulet:%'
+            AND template_id NOT LIKE '%:LockedAmulet'
           )
+        )
           AND json_extract_string(payload, '$.owner') IS NOT NULL
       ),
       locked_balances AS (
@@ -535,10 +544,8 @@ router.get('/rich-list', async (req, res) => {
             json_extract_string(payload, '$.amount.initialAmount'),
             '0'
           ) AS DOUBLE) as amount
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
+        FROM latest_contracts
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
           AND (json_extract_string(payload, '$.amulet.owner') IS NOT NULL 
                OR json_extract_string(payload, '$.owner') IS NOT NULL)
       ),
@@ -569,6 +576,17 @@ router.get('/rich-list', async (req, res) => {
     // Get total supply and holder count (using same acsSource)
     const statsSql = `
       WITH ${getLatestSnapshotCTE(acsSource)},
+      latest_contracts AS (
+        SELECT
+          contract_id,
+          any_value(template_id) as template_id,
+          any_value(entity_name) as entity_name,
+          any_value(payload) as payload
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        GROUP BY contract_id
+      ),
       amulet_total AS (
         SELECT COALESCE(SUM(
           CAST(COALESCE(
@@ -576,42 +594,36 @@ router.get('/rich-list', async (req, res) => {
             '0'
           ) AS DOUBLE)
         ), 0) as total
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (
-            entity_name = 'Amulet'
-            OR (
-              template_id LIKE '%:Amulet:%'
-              AND template_id NOT LIKE '%:LockedAmulet:%'
-            )
+        FROM latest_contracts
+        WHERE (
+          entity_name = 'Amulet'
+          OR (
+            template_id LIKE '%:Amulet:%'
+            AND template_id NOT LIKE '%:LockedAmulet:%'
           )
-       ),
-       locked_total AS (
-         SELECT COALESCE(SUM(
-           CAST(COALESCE(
-             json_extract_string(payload, '$.amulet.amount.initialAmount'),
-             json_extract_string(payload, '$.amount.initialAmount'),
-             '0'
-           ) AS DOUBLE)
-         ), 0) as total
-         FROM ${acsSource} acs
-         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-           AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
-       ),
-       holder_count AS (
-         SELECT COUNT(DISTINCT COALESCE(
-           json_extract_string(payload, '$.amulet.owner'),
-           json_extract_string(payload, '$.owner')
-         )) as count
-         FROM ${acsSource} acs
-         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-           AND (entity_name IN ('Amulet', 'LockedAmulet') 
-                OR (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
-                OR template_id LIKE '%:LockedAmulet:%')
-       )
+        )
+      ),
+      locked_total AS (
+        SELECT COALESCE(SUM(
+          CAST(COALESCE(
+            json_extract_string(payload, '$.amulet.amount.initialAmount'),
+            json_extract_string(payload, '$.amount.initialAmount'),
+            '0'
+          ) AS DOUBLE)
+        ), 0) as total
+        FROM latest_contracts
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+      ),
+      holder_count AS (
+        SELECT COUNT(DISTINCT COALESCE(
+          json_extract_string(payload, '$.amulet.owner'),
+          json_extract_string(payload, '$.owner')
+        )) as count
+        FROM latest_contracts
+        WHERE (entity_name IN ('Amulet', 'LockedAmulet') 
+             OR (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
+             OR template_id LIKE '%:LockedAmulet:%')
+      )
       SELECT 
         amulet_total.total + locked_total.total as total_supply,
         amulet_total.total as unlocked_supply,
