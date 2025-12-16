@@ -148,6 +148,40 @@ export function clearBuffers() {
   currentMigrationId = null;
 }
 
+/**
+ * Write a completion marker file for a snapshot
+ * This file indicates the snapshot is complete and safe to use
+ */
+export async function writeCompletionMarker(snapshotTime, migrationId, stats = {}) {
+  const timestamp = snapshotTime || currentSnapshotTime || new Date();
+  const migration = migrationId ?? currentMigrationId;
+  const partition = getACSPartitionPath(timestamp, migration);
+  const partitionDir = join(DATA_DIR, partition);
+  
+  ensureDir(partitionDir);
+  
+  const markerPath = join(partitionDir, '_COMPLETE');
+  const markerData = {
+    completed_at: new Date().toISOString(),
+    snapshot_time: timestamp instanceof Date ? timestamp.toISOString() : timestamp,
+    migration_id: migration,
+    ...stats,
+  };
+  
+  await writeJsonLines([markerData], markerPath);
+  console.log(`✅ Wrote completion marker to ${markerPath}`);
+  return markerPath;
+}
+
+/**
+ * Check if a snapshot partition is complete
+ */
+export function isSnapshotComplete(snapshotTime, migrationId) {
+  const partition = getACSPartitionPath(snapshotTime, migrationId);
+  const markerPath = join(DATA_DIR, partition, '_COMPLETE');
+  return existsSync(markerPath);
+}
+
 export default {
   setSnapshotTime,
   bufferContracts,
@@ -155,4 +189,6 @@ export default {
   flushAll,
   getBufferStats,
   clearBuffers,
+  writeCompletionMarker,
+  isSnapshotComplete,
 };
