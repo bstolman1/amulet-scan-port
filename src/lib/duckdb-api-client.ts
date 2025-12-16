@@ -543,14 +543,40 @@ export async function checkHealth(): Promise<{ status: string; timestamp: string
   return apiFetch('/health');
 }
 
+// Cache the API availability check to avoid repeated health checks
+let apiAvailableCache: { available: boolean; timestamp: number } | null = null;
+const API_CACHE_TTL = 30_000; // 30 seconds
+
 /**
- * Check if the DuckDB API is available
+ * Check if the DuckDB API is available (cached for 30s)
  */
 export async function isApiAvailable(): Promise<boolean> {
+  // Return cached result if fresh
+  if (apiAvailableCache && Date.now() - apiAvailableCache.timestamp < API_CACHE_TTL) {
+    return apiAvailableCache.available;
+  }
+
   try {
     await checkHealth();
+    apiAvailableCache = { available: true, timestamp: Date.now() };
     return true;
   } catch {
+    apiAvailableCache = { available: false, timestamp: Date.now() };
     return false;
   }
+}
+
+/**
+ * Optimistic API check - returns true immediately if cached, otherwise checks async
+ * Use this for non-blocking initial renders
+ */
+export function isApiAvailableCached(): boolean {
+  return apiAvailableCache?.available ?? false;
+}
+
+/**
+ * Force refresh the API availability cache
+ */
+export function invalidateApiCache(): void {
+  apiAvailableCache = null;
 }
