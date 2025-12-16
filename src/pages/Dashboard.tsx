@@ -25,18 +25,22 @@ const Dashboard = () => {
   const { data: acsAvailable } = useLocalACSAvailable();
   const { data: acsTemplates, isLoading: acsTemplatesLoading } = useLocalACSTemplates(10);
   
-  // Real-time supply from ACS + v2/updates
+  // Real-time supply from ACS + v2/updates - longer cache for instant loads
   const { data: realtimeSupply, isLoading: realtimeSupplyLoading } = useQuery({
     queryKey: ["dashboard-realtime-supply"],
     queryFn: () => getRealtimeSupply(),
-    staleTime: 30_000,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 30 * 60 * 1000, // Keep in cache
+    refetchOnWindowFocus: false,
     enabled: !!acsAvailable,
   });
   
-  // Fetch real data from Canton Scan API
+  // Fetch real data from Canton Scan API - cache for faster reloads
   const { data: latestRound } = useQuery({
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
+    staleTime: 60 * 1000, // 1 minute
+    refetchOnWindowFocus: false,
   });
   const {
     data: totalBalance,
@@ -47,16 +51,22 @@ const Dashboard = () => {
     queryFn: () => scanApi.fetchTotalBalance(),
     retry: 2,
     retryDelay: 1000,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
   const { data: topValidators, isError: validatorsError } = useQuery({
     queryKey: ["topValidators"],
     queryFn: () => scanApi.fetchTopValidators(),
     retry: 1,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
   });
   const { data: topProviders } = useQuery({
     queryKey: ["topProviders"],
     queryFn: () => scanApi.fetchTopProviders(),
     retry: 1,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
   const { data: transactions } = useQuery({
     queryKey: ["recentTransactions"],
@@ -65,6 +75,8 @@ const Dashboard = () => {
         page_size: 5,
         sort_order: "desc",
       }),
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
   });
   const { data: configData } = useQuery({
     queryKey: ["sv-config"],
