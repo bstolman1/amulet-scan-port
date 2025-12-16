@@ -519,31 +519,40 @@ router.get('/reconciliation', async (req, res) => {
     }
     
     // Estimate file totals using actual batch sizes from bulletproof-backfill.js
-    // Updates use BATCH_SIZE=5000, Events use ~7500 average (varies based on transaction complexity)
+    // Updates use BATCH_SIZE=5000
+    // Events vary significantly - use higher estimate based on validation sampling:
+    //   avg ~8,400, min ~5,000, max ~19,000
     const UPDATES_PER_FILE = 5000;
-    const EVENTS_PER_FILE = 7500; // Average, events vary more than updates
+    const EVENTS_PER_FILE = 8500; // Adjusted based on actual validation sampling
     const estimatedFileUpdates = fileCounts.updates * UPDATES_PER_FILE;
     const estimatedFileEvents = fileCounts.events * EVENTS_PER_FILE;
     
-    const updatesDiff = Math.max(0, cursorUpdates - estimatedFileUpdates);
-    const eventsDiff = Math.max(0, cursorEvents - estimatedFileEvents);
+    // Calculate differences - can be negative (more in files than cursors = good, means re-fetching worked)
+    const updatesDiff = cursorUpdates - estimatedFileUpdates;
+    const eventsDiff = cursorEvents - estimatedFileEvents;
+    
+    // Determine if data is missing or if there's extra data (from re-fetching)
+    const updatesStatus = updatesDiff > 0 ? 'missing' : (updatesDiff < 0 ? 'extra' : 'match');
+    const eventsStatus = eventsDiff > 0 ? 'missing' : (eventsDiff < 0 ? 'extra' : 'match');
     
     res.json({
       updates: {
         cursorTotal: cursorUpdates,
         fileTotal: estimatedFileUpdates,
         fileCount: fileCounts.updates,
-        difference: updatesDiff,
-        percentMissing: cursorUpdates > 0 ? (updatesDiff / cursorUpdates) * 100 : 0,
+        difference: Math.abs(updatesDiff),
+        status: updatesStatus,
+        percentDiff: cursorUpdates > 0 ? (Math.abs(updatesDiff) / cursorUpdates) * 100 : 0,
       },
       events: {
         cursorTotal: cursorEvents,
         fileTotal: estimatedFileEvents,
         fileCount: fileCounts.events,
-        difference: eventsDiff,
-        percentMissing: cursorEvents > 0 ? (eventsDiff / cursorEvents) * 100 : 0,
+        difference: Math.abs(eventsDiff),
+        status: eventsStatus,
+        percentDiff: cursorEvents > 0 ? (Math.abs(eventsDiff) / cursorEvents) * 100 : 0,
       },
-      note: 'File totals are estimates (~5000 updates/file, ~7500 events/file). Run validate-backfill.js for exact counts.',
+      note: 'File totals are estimates (~5000 updates/file, ~8500 events/file). Run validate-backfill.js for exact counts. "Extra" data from gap traversal re-fetching is normal.',
     });
   } catch (err) {
     console.error('Error getting reconciliation data:', err);

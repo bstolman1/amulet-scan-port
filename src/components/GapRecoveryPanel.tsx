@@ -52,14 +52,17 @@ interface ReconciliationData {
     cursorTotal: number;
     fileTotal: number;
     difference: number;
-    percentMissing: number;
+    status: 'missing' | 'extra' | 'match';
+    percentDiff: number;
   };
   events: {
     cursorTotal: number;
     fileTotal: number;
     difference: number;
-    percentMissing: number;
+    status: 'missing' | 'extra' | 'match';
+    percentDiff: number;
   };
+  note?: string;
 }
 
 interface GapRecoveryPanelProps {
@@ -268,7 +271,7 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
 
   const hasGaps = gapInfo && gapInfo.totalGaps > 0;
   const hasMissingData = reconciliation && 
-    (reconciliation.updates.difference > 0 || reconciliation.events.difference > 0);
+    (reconciliation.updates.status === 'missing' || reconciliation.events.status === 'missing');
   const isRecovering = recovery.status === 'recovering';
   const overallProgress = recovery.totalGaps > 0 
     ? ((recovery.gapIndex + 1) / recovery.totalGaps) * 100 
@@ -302,11 +305,17 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
         {reconciliation && (
           <>
             <div className="text-xs text-muted-foreground mb-2 px-1">
-              <strong>Cursor vs File Reconciliation:</strong> Cursors track total records fetched from API. Files are what's actually stored.
-              Large differences indicate data loss during write (fixed in bulletproof-backfill). Re-run backfill for affected time ranges.
+              <strong>Cursor vs File Reconciliation:</strong> File totals are <em>estimates</em> (~5k updates/file, ~8.5k events/file).
+              "Extra" data means gap traversal re-fetched some records (normal). Run <code>validate-backfill.js</code> for exact counts.
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className={`p-3 rounded-lg ${reconciliation.updates.difference > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-success/10 border border-success/30'}`}>
+              <div className={`p-3 rounded-lg ${
+                reconciliation.updates.status === 'missing' 
+                  ? 'bg-warning/10 border border-warning/30' 
+                  : reconciliation.updates.status === 'extra'
+                    ? 'bg-blue-500/10 border border-blue-500/30'
+                    : 'bg-success/10 border border-success/30'
+              }`}>
                 <div className="flex items-center gap-2 text-sm font-medium mb-1">
                   <Database className="w-4 h-4" />
                   Updates
@@ -314,16 +323,26 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
                 <div className="text-2xl font-bold">
                   {reconciliation.updates.fileTotal.toLocaleString()}
                 </div>
-                {reconciliation.updates.difference > 0 ? (
+                {reconciliation.updates.status === 'missing' ? (
                   <div className="text-xs text-warning mt-1">
-                    ⚠️ {reconciliation.updates.difference.toLocaleString()} missing ({reconciliation.updates.percentMissing.toFixed(1)}%)
+                    ⚠️ {reconciliation.updates.difference.toLocaleString()} missing ({reconciliation.updates.percentDiff.toFixed(1)}%)
+                  </div>
+                ) : reconciliation.updates.status === 'extra' ? (
+                  <div className="text-xs text-blue-500 mt-1">
+                    ✓ {reconciliation.updates.difference.toLocaleString()} extra (re-fetching)
                   </div>
                 ) : (
                   <div className="text-xs text-success mt-1">✓ Matches cursor</div>
                 )}
               </div>
               
-              <div className={`p-3 rounded-lg ${reconciliation.events.difference > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-success/10 border border-success/30'}`}>
+              <div className={`p-3 rounded-lg ${
+                reconciliation.events.status === 'missing' 
+                  ? 'bg-warning/10 border border-warning/30' 
+                  : reconciliation.events.status === 'extra'
+                    ? 'bg-blue-500/10 border border-blue-500/30'
+                    : 'bg-success/10 border border-success/30'
+              }`}>
                 <div className="flex items-center gap-2 text-sm font-medium mb-1">
                   <FileWarning className="w-4 h-4" />
                   Events
@@ -331,9 +350,13 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
                 <div className="text-2xl font-bold">
                   {reconciliation.events.fileTotal.toLocaleString()}
                 </div>
-                {reconciliation.events.difference > 0 ? (
+                {reconciliation.events.status === 'missing' ? (
                   <div className="text-xs text-warning mt-1">
-                    ⚠️ {reconciliation.events.difference.toLocaleString()} missing ({reconciliation.events.percentMissing.toFixed(1)}%)
+                    ⚠️ {reconciliation.events.difference.toLocaleString()} missing ({reconciliation.events.percentDiff.toFixed(1)}%)
+                  </div>
+                ) : reconciliation.events.status === 'extra' ? (
+                  <div className="text-xs text-blue-500 mt-1">
+                    ✓ {reconciliation.events.difference.toLocaleString()} extra (re-fetching)
                   </div>
                 ) : (
                   <div className="text-xs text-success mt-1">✓ Matches cursor</div>
