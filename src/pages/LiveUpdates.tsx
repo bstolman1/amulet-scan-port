@@ -420,6 +420,88 @@ const LiveUpdates = () => {
           </div>
         )}
 
+        {/* Backfill→Live Gap Card */}
+        {liveStatus && (
+          <Card className="glass-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                <Clock className="w-4 h-4" />
+                Backfill → Live Gap
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const backfills = liveStatus.backfill_cursors ?? [];
+                const m4Backfill = [...backfills]
+                  .filter((c) => c.migration_id === 4)
+                  .sort((a, b) => {
+                    const at = a.max_time ? new Date(a.max_time).getTime() : 0;
+                    const bt = b.max_time ? new Date(b.max_time).getTime() : 0;
+                    return bt - at;
+                  })[0];
+
+                const m4Time = m4Backfill?.max_time ? new Date(m4Backfill.max_time).getTime() : null;
+                const liveTime = stats.latestUpdate ? stats.latestUpdate.getTime() : null;
+
+                if (!m4Time) {
+                  return <p className="text-muted-foreground text-sm">No migration 4 checkpoint</p>;
+                }
+                if (!liveTime) {
+                  return <p className="text-muted-foreground text-sm">No live data yet</p>;
+                }
+
+                const gapMs = liveTime - m4Time;
+                const absGap = Math.abs(gapMs);
+
+                // Format gap nicely
+                const formatGap = (ms: number) => {
+                  if (ms < 1000) return `${ms}ms`;
+                  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+                  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+                  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+                };
+
+                const isCaughtUp = gapMs >= 0;
+                const isClose = absGap < 60000; // within 1 minute
+
+                return (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-2xl font-bold ${
+                          isCaughtUp
+                            ? "text-emerald-500"
+                            : isClose
+                            ? "text-amber-500"
+                            : "text-destructive"
+                        }`}
+                      >
+                        {isCaughtUp ? "+" : "-"}{formatGap(absGap)}
+                      </span>
+                      <Badge
+                        variant={isCaughtUp ? "default" : isClose ? "secondary" : "destructive"}
+                        className="text-xs"
+                      >
+                        {isCaughtUp ? "Caught up" : isClose ? "Slightly behind" : "Behind"}
+                      </Badge>
+                    </div>
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      <div className="flex justify-between">
+                        <span>M4 checkpoint:</span>
+                        <span className="font-mono">{m4Backfill.max_time?.substring(11, 23)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Live data:</span>
+                        <span className="font-mono">{stats.latestUpdate?.toISOString().substring(11, 23)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Stats Grid - Row 1 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card className="glass-card">
