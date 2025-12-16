@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { Vote, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -16,9 +17,10 @@ const Elections = () => {
   const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
   const itemsPerPage = 20;
 
-  // Fetch from updates data (no snapshot required)
+  const { data: latestSnapshot } = useLatestACSSnapshot();
+
   const electionsQuery = useAggregatedTemplateData(
-    undefined,
+    latestSnapshot?.id,
     "Splice:DsoRules:ElectionRequest",
   );
 
@@ -145,9 +147,9 @@ const Elections = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={latestSnapshot?.id}
           templateSuffixes={["Splice:DsoRules:ElectionRequest"]}
-          isProcessing={false}
+          isProcessing={latestSnapshot?.status === "processing"}
         />
       </div>
     </DashboardLayout>

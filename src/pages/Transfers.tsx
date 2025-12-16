@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowRightLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { PaginationControls } from "@/components/PaginationControls";
@@ -17,17 +18,18 @@ const Transfers = () => {
   const [instructionsPage, setInstructionsPage] = useState(1);
   const pageSize = 50;
 
-  // Fetch from updates data (no snapshot required)
+  const { data: snapshot } = useLatestACSSnapshot();
+
   const preapprovalsQuery = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:AmuletRules:TransferPreapproval",
   );
   const commandsQuery = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:ExternalPartyAmuletRules:TransferCommand",
   );
   const instructionsQuery = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:AmuletTransferInstruction:AmuletTransferInstruction",
   );
 
@@ -271,7 +273,7 @@ const Transfers = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={snapshot?.id}
           templateSuffixes={[
             "Splice:AmuletRules:TransferPreapproval",
             "Splice:ExternalPartyAmuletRules:TransferCommand",

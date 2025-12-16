@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Award, Users, TrendingUp, Search, Code, History } from "lucide-react";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useRewardClaimEvents } from "@/hooks/use-governance-events";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -23,29 +24,30 @@ interface ValidatorInfo {
 const UnclaimedSVRewards = () => {
   const [searchTerm, setSearchTerm] = useState("");
 
+  const { data: snapshot } = useLatestACSSnapshot();
   const { data: rewardEvents, isLoading: eventsLoading } = useRewardClaimEvents();
 
   // Fetch ValidatorRewardCoupon contracts - the actual unclaimed rewards
   const { data: rewardCouponsData, isLoading: couponsLoading } = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:Amulet:ValidatorRewardCoupon",
   );
 
   // Fetch SvRewardCoupon contracts
   const { data: svRewardCouponsData, isLoading: svCouponsLoading } = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:Amulet:SvRewardCoupon",
   );
 
   // Fetch AppRewardCoupon contracts
   const { data: appRewardCouponsData, isLoading: appCouponsLoading } = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:Amulet:AppRewardCoupon",
   );
 
   // Fetch UnclaimedReward contracts
   const { data: unclaimedRewardsData, isLoading: unclaimedLoading } = useAggregatedTemplateData(
-    undefined,
+    snapshot?.id,
     "Splice:Amulet:UnclaimedReward",
   );
 
@@ -420,7 +422,7 @@ const UnclaimedSVRewards = () => {
         </Tabs>
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={snapshot?.id}
           templateSuffixes={[
             "Splice:Amulet:ValidatorRewardCoupon",
             "Splice:Amulet:SvRewardCoupon",

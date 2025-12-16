@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, Activity, Code, History } from "lucide-react";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useMemberTrafficEvents } from "@/hooks/use-member-traffic-events";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -19,10 +20,11 @@ const MemberTraffic = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 100;
 
+  const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: trafficEvents, isLoading: eventsLoading } = useMemberTrafficEvents();
 
   const trafficQuery = useAggregatedTemplateData(
-    undefined,
+    latestSnapshot?.id,
     "Splice:DecentralizedSynchronizer:MemberTraffic",
   );
 
@@ -307,7 +309,7 @@ const MemberTraffic = () => {
     </Card>
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={latestSnapshot?.id}
           templateSuffixes={["Splice:DecentralizedSynchronizer:MemberTraffic"]}
           isProcessing={false}
         />

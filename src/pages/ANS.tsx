@@ -1,29 +1,27 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Search, Globe, Database } from "lucide-react";
+import { Search, Globe } from "lucide-react";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { PaginationControls } from "@/components/PaginationControls";
-import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const ANS = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
-  const { data: dataAvailable } = useLocalACSAvailable();
 
-  // Fetch from updates data (no snapshot required)
-  const ansEntriesQuery = useAggregatedTemplateData(undefined, "Splice:Ans:AnsEntry");
-  const ansContextsQuery = useAggregatedTemplateData(undefined, "Splice:Ans:AnsEntryContext");
+  const { data: snapshot } = useLatestACSSnapshot();
+
+  const ansEntriesQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntry");
+  const ansContextsQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntryContext");
 
   const isLoading = ansEntriesQuery.isLoading || ansContextsQuery.isLoading;
   const ansEntries = ansEntriesQuery.data?.data || [];
   const ansContexts = ansContextsQuery.data?.data || [];
-  const dataSource = ansEntriesQuery.data?.source || "unknown";
 
   const enrichedEntries = ansEntries.map((entry: any) => {
     const context = ansContexts.find(
@@ -53,16 +51,10 @@ const ANS = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <h2 className="text-3xl font-bold mb-2 flex items-center gap-2">
             <Globe className="h-8 w-8 text-primary" />
-            <h2 className="text-3xl font-bold">Amulet Name Service (ANS)</h2>
-            {dataAvailable && (
-              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
-                <Database className="h-3 w-3 mr-1" />
-                {dataSource === "updates" ? "Updates" : dataSource === "acs-fallback" ? "ACS" : "Local"}
-              </Badge>
-            )}
-          </div>
+            Amulet Name Service (ANS)
+          </h2>
           <p className="text-muted-foreground">Human-readable names for Canton Network parties</p>
         </div>
 
@@ -135,7 +127,7 @@ const ANS = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={snapshot?.id}
           templateSuffixes={["Splice:Ans:AnsEntry", "Splice:Ans:AnsEntryContext"]}
           isProcessing={false}
         />

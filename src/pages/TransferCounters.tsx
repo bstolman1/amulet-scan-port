@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { Hash, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -16,8 +17,10 @@ const TransferCounters = () => {
   const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
   const itemsPerPage = 20;
 
+  const { data: latestSnapshot } = useLatestACSSnapshot();
+
   const countersQuery = useAggregatedTemplateData(
-    undefined,
+    latestSnapshot?.id,
     "Splice:ExternalPartyAmuletRules:TransferCommandCounter",
   );
 
@@ -144,9 +147,9 @@ const TransferCounters = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={latestSnapshot?.id}
           templateSuffixes={["Splice:ExternalPartyAmuletRules:TransferCommandCounter"]}
-          isProcessing={false}
+          isProcessing={latestSnapshot?.status === "processing"}
         />
       </div>
     </DashboardLayout>

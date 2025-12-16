@@ -5,34 +5,34 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Search, Package, Code, Database } from "lucide-react";
+import { Search, Package, Code } from "lucide-react";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const Subscriptions = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedRequests, setExpandedRequests] = useState<Set<number>>(new Set());
   const pageSize = 100;
-  const { data: dataAvailable } = useLocalACSAvailable();
 
-  // Fetch from updates data (no snapshot required)
+  const { data: latestSnapshot } = useLatestACSSnapshot();
+
   const subscriptionsQuery = useAggregatedTemplateData(
-    undefined,
+    latestSnapshot?.id,
     "Wallet:Subscriptions:Subscription",
   );
 
   const idleStatesQuery = useAggregatedTemplateData(
-    undefined,
+    latestSnapshot?.id,
     "Wallet:Subscriptions:SubscriptionIdleState",
   );
 
   const requestsQuery = useAggregatedTemplateData(
-    undefined,
+    latestSnapshot?.id,
     "Wallet:Subscriptions:SubscriptionRequest",
   );
 
@@ -40,7 +40,6 @@ const Subscriptions = () => {
   const idleStatesData = idleStatesQuery.data?.data || [];
   const requestsData = requestsQuery.data?.data || [];
   const isLoading = subscriptionsQuery.isLoading || idleStatesQuery.isLoading || requestsQuery.isLoading;
-  const dataSource = subscriptionsQuery.data?.source || "unknown";
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -107,16 +106,10 @@ const Subscriptions = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
             <Package className="h-8 w-8 text-primary" />
-            <h1 className="text-3xl font-bold">Wallet Subscriptions</h1>
-            {dataAvailable && (
-              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
-                <Database className="h-3 w-3 mr-1" />
-                {dataSource === "updates" ? "Updates" : dataSource === "acs-fallback" ? "ACS" : "Local"}
-              </Badge>
-            )}
-          </div>
+            Wallet Subscriptions
+          </h1>
           <p className="text-muted-foreground">
             View active subscriptions, idle states, and pending subscription requests.
           </p>
@@ -384,7 +377,7 @@ const Subscriptions = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={latestSnapshot?.id}
           templateSuffixes={[
             "Wallet:Subscriptions:Subscription",
             "Wallet:Subscriptions:SubscriptionIdleState",

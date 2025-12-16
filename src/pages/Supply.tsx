@@ -17,7 +17,7 @@ import {
   ChevronRight,
   Database,
 } from "lucide-react";
-import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useQueryClient, useQuery, keepPreviousData } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -26,6 +26,7 @@ import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { PaginationControls } from "@/components/PaginationControls";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { scanApi } from "@/lib/api-client";
+import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { toCC } from "@/lib/amount-utils";
 import { getACSRichList, getACSAllocations, getACSMiningRounds } from "@/lib/duckdb-api-client";
 
@@ -56,7 +57,7 @@ const Supply = () => {
     }
   };
 
-  // No longer need latestSnapshot - data comes from updates
+  const { data: latestSnapshot } = useLatestACSSnapshot();
 
   // Fetch supply stats from server-side aggregation (uses same endpoint as rich-list)
   const { data: supplyStats, isLoading: supplyLoading } = useQuery({
@@ -126,11 +127,11 @@ const Supply = () => {
               {localAcsAvailable && (
                 <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                   <Database className="h-3 w-3 mr-1" />
-                  Updates
+                  Local ACS
                 </Badge>
               )}
             </div>
-            <p className="text-muted-foreground">Track supply, allocations, and mining rounds from updates data</p>
+            <p className="text-muted-foreground">Track supply, allocations, and mining rounds from ACS snapshots</p>
           </div>
           <Button onClick={handleForceRefresh} variant="outline" size="sm" className="gap-2" disabled={isRefreshing}>
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
@@ -344,6 +345,11 @@ const Supply = () => {
           <div>
             <h3 className="text-2xl font-bold mb-2">Mining Rounds</h3>
             <p className="text-muted-foreground">Track open, issuing, and closed mining rounds</p>
+            {latestSnapshot?.timestamp && (
+              <p className="text-xs text-muted-foreground mt-1">
+                ACS Snapshot: {new Date(latestSnapshot.timestamp).toLocaleString()}
+              </p>
+            )}
           </div>
 
           {/* Current Round Info - from LIVE scan API */}
@@ -580,7 +586,7 @@ const Supply = () => {
         </div>
 
         <DataSourcesFooter
-          snapshotId={undefined}
+          snapshotId={latestSnapshot?.id}
           templateSuffixes={[
             "Splice:Amulet:Amulet",
             "Splice:Amulet:LockedAmulet",
