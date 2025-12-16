@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
-import { getACSContracts as getLocalACSContracts } from "@/lib/duckdb-api-client";
+import { getActiveContractsByTemplate } from "@/lib/duckdb-api-client";
 
 // Cached DuckDB availability check
 let duckDBAvailable: boolean | null = null;
@@ -28,7 +28,7 @@ interface ChunkManifest {
 }
 
 /**
- * Helper function to fetch template data, handling both chunked and direct formats
+ * Helper function to fetch template data from Supabase storage (fallback only)
  */
 async function fetchTemplateData(storagePath: string): Promise<any[]> {
   const { data: fileData, error: downloadError } = await supabase.storage.from("acs-data").download(storagePath);
@@ -113,7 +113,11 @@ async function fetchTemplateData(storagePath: string): Promise<any[]> {
 }
 
 /**
- * Fetch and aggregate data across all templates matching a suffix
+ * Fetch and aggregate data across all templates matching a suffix.
+ * 
+ * PRIMARY SOURCE: Updates/backfill data (computed active contracts from created - archived)
+ * FALLBACK: Supabase ACS snapshots (for redundancy only)
+ * 
  * For example, all templates ending in "Splice:Amulet:Amulet" regardless of package hash
  */
 export function useAggregatedTemplateData(
@@ -124,45 +128,51 @@ export function useAggregatedTemplateData(
   const useDuckDB = useDuckDBForLedger();
 
   return useQuery({
-    queryKey: ["aggregated-template-data", snapshotId, templateSuffix, useDuckDB ? "duckdb" : "supabase"],
+    queryKey: ["aggregated-template-data", templateSuffix, useDuckDB ? "duckdb" : "supabase"],
     queryFn: async () => {
       if (!templateSuffix) {
         throw new Error("Missing templateSuffix");
       }
 
-      // Try DuckDB first if configured and available (doesn't require snapshotId)
+      // PRIMARY: Use DuckDB/updates data (computes active contracts from created - archived)
       if (useDuckDB && await isDuckDBAvailable()) {
         try {
-          // Use the full templateSuffix for template matching (e.g., "Splice:AmuletRules:AmuletRules")
-          // This provides more precise matching than just entity name
-          console.log(`[useAggregatedTemplateData] Using DuckDB for template=${templateSuffix}`);
+          // Extract the entity name from the template suffix for the API call
+          // e.g., "Splice:Amulet:Amulet" -> "Amulet" or use full suffix
+          const parts = templateSuffix.split(":");
+          const entityName = parts[parts.length - 1] || templateSuffix;
           
-          // Pass template suffix for precise matching via template_id LIKE query
-          const response = await getLocalACSContracts({ 
-            template: templateSuffix,
-            limit: 100000 
-          });
+          console.log(`[useAggregatedTemplateData] Fetching active contracts from updates for template=${templateSuffix} (entity=${entityName})`);
           
-          // Use count from response if available, otherwise fall back to data length
-          const totalCount = response.count ?? response.data?.length ?? 0;
+          // Use the contracts API which computes active = created - archived from updates
+          const response = await getActiveContractsByTemplate(entityName, 100000);
           
-          console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts (total: ${totalCount}) for template=${templateSuffix}`);
+          // Filter to exact template suffix match if needed
+          const filtered = response.data?.filter((c: any) => {
+            const tid = c.template_id || "";
+            return tid.endsWith(templateSuffix) || tid.includes(templateSuffix);
+          }) || [];
+          
+          const totalCount = filtered.length;
+          
+          console.log(`[useAggregatedTemplateData] Updates returned ${totalCount} active contracts for template=${templateSuffix}`);
           
           return {
-            data: response.data || [],
+            data: filtered,
             templateCount: 1,
             totalContracts: totalCount,
             templateIds: [templateSuffix],
-            source: "duckdb",
+            source: "updates",
           };
         } catch (error) {
-          console.warn("DuckDB aggregated data fetch failed, falling back to Supabase:", error);
+          console.warn("Updates-based data fetch failed, falling back to ACS:", error);
         }
       }
 
-      // Supabase fallback
+      // FALLBACK: Supabase ACS snapshots (redundancy only)
       if (!snapshotId) {
-        throw new Error("Missing snapshotId for Supabase query");
+        console.warn("[useAggregatedTemplateData] No snapshotId and DuckDB unavailable - returning empty");
+        return { data: [], templateCount: 0, totalContracts: 0, templateIds: [], source: "none" };
       }
 
       // Support both legacy and new template id separators in module path (":" vs ".")
@@ -181,7 +191,7 @@ export function useAggregatedTemplateData(
 
       if (statsError) throw statsError;
       if (!templateStats || templateStats.length === 0) {
-        return { data: [], templateCount: 0, totalContracts: 0 };
+        return { data: [], templateCount: 0, totalContracts: 0, source: "acs-fallback" };
       }
 
       // Fetch data from all matching templates
@@ -206,11 +216,11 @@ export function useAggregatedTemplateData(
         templateCount: templateStats.length,
         totalContracts,
         templateIds: templateStats.map((t) => t.template_id),
+        source: "acs-fallback",
       };
     },
-    // For DuckDB, snapshotId is optional - the server uses latest snapshot automatically
-    // For Supabase, we need snapshotId to query the correct data
-    enabled: enabled && !!templateSuffix && (useDuckDB || !!snapshotId),
+    // For DuckDB/updates, snapshotId is NOT required - active contracts computed from updates
+    enabled: enabled && !!templateSuffix,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
