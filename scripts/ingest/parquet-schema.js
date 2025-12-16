@@ -4,6 +4,14 @@
  * These schemas define the structure of parquet files for:
  * - ledger_updates: Transaction/reassignment updates
  * - ledger_events: Individual contract events (created, archived, etc.)
+ * 
+ * IMPORTANT: Per Scan API documentation:
+ * - record_time is the primary ordering key (monotonic within migration+synchronizer)
+ * - event_id format is "<update_id>:<event_index>" - DO NOT synthesize
+ * - Events form a tree structure via root_event_ids and child_event_ids
+ * - Unknown fields should be preserved, not rejected
+ * 
+ * @see https://docs.dev.sync.global
  */
 
 export const LEDGER_UPDATES_SCHEMA = {
@@ -11,16 +19,16 @@ export const LEDGER_UPDATES_SCHEMA = {
   update_type: 'STRING',  // 'transaction' or 'reassignment'
   migration_id: 'INT64',
   synchronizer_id: 'STRING',
-  workflow_id: 'STRING',
-  command_id: 'STRING',
+  workflow_id: 'STRING',       // Optional - may be empty
+  command_id: 'STRING',        // Optional - may be empty
   offset: 'INT64',
-  record_time: 'TIMESTAMP',
-  effective_at: 'TIMESTAMP',
-  recorded_at: 'TIMESTAMP',  // When we recorded this update
+  record_time: 'TIMESTAMP',    // PRIMARY ordering key per API docs
+  effective_at: 'TIMESTAMP',   // When ledger action takes effect
+  recorded_at: 'TIMESTAMP',    // When we recorded this update
   timestamp: 'TIMESTAMP',
-  kind: 'STRING',  // For reassignments: 'assign' or 'unassign'
-  root_event_ids: 'LIST<STRING>',  // Root event IDs for this transaction
-  event_count: 'INT32',  // Number of events in this update
+  kind: 'STRING',              // For reassignments: 'assign' or 'unassign'
+  root_event_ids: 'LIST<STRING>',  // Root event IDs for tree traversal
+  event_count: 'INT32',        // Number of events in this update
   // Reassignment-specific update fields
   source_synchronizer: 'STRING',
   target_synchronizer: 'STRING',
@@ -29,34 +37,35 @@ export const LEDGER_UPDATES_SCHEMA = {
   reassignment_counter: 'INT64',
   // Tracing
   trace_context: 'JSON',
-  update_data: 'JSON',  // Full update data as JSON string
+  update_data: 'JSON',  // Full update data as JSON string - CANONICAL SOURCE
 };
 
 export const LEDGER_EVENTS_SCHEMA = {
-  event_id: 'STRING',
+  event_id: 'STRING',          // MUST be original API value: "<update_id>:<event_index>"
   update_id: 'STRING',
-  event_type: 'STRING',  // 'created', 'archived', 'exercised', 'reassign_create', 'reassign_archive'
+  event_type: 'STRING',        // Normalized: 'created', 'archived', 'exercised', etc.
+  event_type_original: 'STRING', // Original API type: 'created_event', 'archived_event', etc.
   contract_id: 'STRING',
   template_id: 'STRING',
-  package_name: 'STRING',
+  package_name: 'STRING',      // Also provided by API - don't rely solely on extraction
   migration_id: 'INT64',
   synchronizer_id: 'STRING',
   effective_at: 'TIMESTAMP',
   recorded_at: 'TIMESTAMP',
   timestamp: 'TIMESTAMP',
   created_at_ts: 'TIMESTAMP',
-  signatories: 'LIST<STRING>',
-  observers: 'LIST<STRING>',
-  acting_parties: 'LIST<STRING>',  // For exercised events
-  witness_parties: 'LIST<STRING>', // Parties that witnessed the event
+  signatories: 'LIST<STRING>',     // Optional - only for created events
+  observers: 'LIST<STRING>',       // Optional - only for created events
+  acting_parties: 'LIST<STRING>',  // Optional - only for exercised events
+  witness_parties: 'LIST<STRING>', // Optional - parties that witnessed the event
   payload: 'JSON',  // Contract create_arguments or choice_argument
   // Created event specific fields
-  contract_key: 'JSON',  // Contract key if defined
+  contract_key: 'JSON',  // Optional - contract key if defined
   // Exercised event fields
   choice: 'STRING',
   consuming: 'BOOLEAN',
   interface_id: 'STRING',
-  child_event_ids: 'LIST<STRING>',
+  child_event_ids: 'LIST<STRING>', // CRITICAL for tree traversal
   exercise_result: 'JSON',
   // Reassignment event fields
   source_synchronizer: 'STRING',
@@ -95,6 +104,7 @@ export const EVENTS_COLUMNS = [
   'event_id',
   'update_id',
   'event_type',
+  'event_type_original',
   'contract_id',
   'template_id',
   'package_name',
@@ -124,19 +134,25 @@ export const EVENTS_COLUMNS = [
 
 /**
  * Normalize a ledger update for parquet storage
+ * 
+ * IMPORTANT: record_time is the canonical ordering key per API docs.
+ * It is monotonically increasing within a given migration_id + synchronizer_id.
+ * 
+ * @param {object} raw - Raw update from Scan API
+ * @returns {object} Normalized update object
  */
 export function normalizeUpdate(raw) {
   const update = raw.transaction || raw.reassignment || raw;
   const isReassignment = !!raw.reassignment;
   
-  // Extract root event IDs
+  // Extract root event IDs - CRITICAL for tree traversal
   const rootEventIds = update.root_event_ids || [];
   
-  // Count events
+  // Count events - handle both object and array formats
   const eventsById = update.events_by_id || {};
   const eventCount = Object.keys(eventsById).length;
   
-  // Reassignment-specific fields
+  // Reassignment-specific fields (all optional)
   const sourceSynchronizer = update.source || null;
   const targetSynchronizer = update.target || null;
   const unassignId = update.unassign_id || null;
@@ -148,9 +164,11 @@ export function normalizeUpdate(raw) {
     update_type: raw.transaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown',
     migration_id: parseInt(raw.migration_id) || null,
     synchronizer_id: update.synchronizer_id || null,
+    // These fields are optional per API docs
     workflow_id: update.workflow_id || null,
     command_id: update.command_id || null,
     offset: parseInt(update.offset) || null,
+    // record_time is PRIMARY ordering key
     record_time: update.record_time ? new Date(update.record_time) : null,
     effective_at: update.effective_at ? new Date(update.effective_at) : null,
     recorded_at: new Date(), // When we recorded this update
@@ -164,67 +182,124 @@ export function normalizeUpdate(raw) {
     unassign_id: unassignId,
     submitter: submitter,
     reassignment_counter: reassignmentCounter,
-    // Tracing
+    // Tracing (optional)
     trace_context: update.trace_context ? JSON.stringify(update.trace_context) : null,
+    // CRITICAL: Full original data for future-proofing
     update_data: JSON.stringify(update),
   };
 }
 
 /**
+ * Determine original event type name from event structure
+ * Returns the API's original type name (with _event suffix)
+ */
+function determineOriginalEventType(event) {
+  if (event.created_event) return 'created_event';
+  if (event.archived_event) return 'archived_event';
+  if (event.exercised_event) return 'exercised_event';
+  // For reassignment events, the type comes from update context
+  // The API doesn't wrap these in *_event objects
+  return event.event_type || null;
+}
+
+/**
+ * Determine normalized event type for internal use
+ * Maps API types to shorter internal names
+ */
+function determineNormalizedEventType(event) {
+  if (event.created_event) return 'created';
+  if (event.archived_event) return 'archived';
+  if (event.exercised_event) return 'exercised';
+  // Handle direct event_type strings from API
+  const originalType = event.event_type || '';
+  if (originalType.includes('created')) return 'created';
+  if (originalType.includes('archived')) return 'archived';
+  if (originalType.includes('exercised')) return 'exercised';
+  return originalType || 'unknown';
+}
+
+/**
  * Normalize a ledger event for parquet storage
+ * 
+ * IMPORTANT per Scan API docs:
+ * - event_id format is "<update_id>:<event_index>" - preserve original, don't synthesize
+ * - Events form a tree via root_event_ids and child_event_ids
+ * - Many fields are optional (signatories only on created, acting_parties only on exercised)
+ * 
+ * @param {object} event - Event object from Scan API
+ * @param {string} updateId - Parent update's ID
+ * @param {number} migrationId - Migration ID from backfill context
+ * @param {object} rawEvent - Original raw event for preservation
+ * @param {object} updateInfo - Parent update info (for synchronizer, timestamps)
+ * @returns {object} Normalized event object
  */
 export function normalizeEvent(event, updateId, migrationId, rawEvent = null, updateInfo = null) {
-  const templateId = event.template_id || 
-    event.created_event?.template_id || 
-    event.archived_event?.template_id ||
-    event.exercised_event?.template_id ||
+  // Unwrap nested event structure if present
+  const createdEvent = event.created_event;
+  const archivedEvent = event.archived_event;
+  const exercisedEvent = event.exercised_event;
+  const innerEvent = createdEvent || archivedEvent || exercisedEvent || event;
+  
+  // Template ID - check all possible sources
+  const templateId = innerEvent.template_id || 
+    event.template_id ||
     null;
   
-  const contractId = event.contract_id ||
-    event.created_event?.contract_id ||
-    event.archived_event?.contract_id ||
-    event.exercised_event?.contract_id ||
+  // Contract ID - check all possible sources
+  const contractId = innerEvent.contract_id ||
+    event.contract_id ||
     null;
   
-  const payload = event.created_event?.create_arguments ||
-    event.exercised_event?.choice_argument ||
+  // Payload - depends on event type
+  const payload = createdEvent?.create_arguments ||
+    exercisedEvent?.choice_argument ||
+    event.create_arguments ||
     event.choice_argument ||
     event.payload ||
-    event.create_arguments ||
     null;
   
-  // Determine event type
-  let eventType = 'unknown';
-  if (event.created_event) eventType = 'created';
-  else if (event.archived_event) eventType = 'archived';
-  else if (event.exercised_event) eventType = 'exercised';
-  else if (event.event_type) eventType = event.event_type;
+  // Package name - prefer API-provided value, fall back to extraction
+  const packageName = innerEvent.package_name || 
+    event.package_name ||
+    extractPackageName(templateId);
   
-  // Extract effective_at from multiple sources:
-  // 1. Event's own created_at (for created events)
-  // 2. Update's record_time (transaction level)
-  // 3. Update's effective_at
-  const createdAt = event.created_at || event.created_event?.created_at;
+  // Event types - preserve both original and normalized
+  const eventTypeOriginal = determineOriginalEventType(event);
+  const eventType = determineNormalizedEventType(event);
+  
+  // Event ID - CRITICAL: Use original API value only
+  // Per API docs, format is "<update_id>:<event_index>"
+  // DO NOT synthesize - if missing, leave as null and log warning
+  const eventId = event.event_id || innerEvent.event_id || null;
+  if (!eventId && contractId) {
+    console.warn(`Event missing event_id: update=${updateId}, contract=${contractId}`);
+  }
+  
+  // Timestamps - prefer created_at for created events, fall back to update's record_time
+  const createdAt = innerEvent.created_at || event.created_at;
   const effectiveAt = createdAt 
     ? new Date(createdAt) 
     : (updateInfo?.record_time ? new Date(updateInfo.record_time) : null);
   
-  // Get synchronizer from update info
+  // Synchronizer from update context
   const synchronizer = updateInfo?.synchronizer_id || null;
   
-  // Extract exercise-specific fields
-  const actingParties = event.acting_parties || event.exercised_event?.acting_parties || [];
-  const choice = event.choice || event.exercised_event?.choice || null;
-  const consuming = event.consuming ?? event.exercised_event?.consuming ?? null;
-  const interfaceId = event.interface_id || event.exercised_event?.interface_id || null;
-  const childEventIds = event.child_event_ids || event.exercised_event?.child_event_ids || [];
-  const exerciseResult = event.exercise_result || event.exercised_event?.exercise_result || null;
+  // Created event specific fields (optional for other event types)
+  const signatories = createdEvent?.signatories || event.signatories || null;
+  const observers = createdEvent?.observers || event.observers || null;
+  const witnessParties = createdEvent?.witness_parties || event.witness_parties || null;
+  const contractKey = createdEvent?.contract_key || event.contract_key || null;
   
-  // Extract created event specific fields
-  const contractKey = event.contract_key || event.created_event?.contract_key || null;
-  const witnessParties = event.witness_parties || event.created_event?.witness_parties || [];
+  // Exercised event specific fields (optional for other event types)
+  const actingParties = exercisedEvent?.acting_parties || event.acting_parties || null;
+  const choice = exercisedEvent?.choice || event.choice || null;
+  const consuming = exercisedEvent?.consuming ?? event.consuming ?? null;
+  const interfaceId = exercisedEvent?.interface_id || event.interface_id || null;
+  // CRITICAL: child_event_ids for tree traversal
+  const childEventIds = exercisedEvent?.child_event_ids || event.child_event_ids || null;
+  const exerciseResult = exercisedEvent?.exercise_result || event.exercise_result || null;
   
-  // Extract reassignment-specific fields
+  // Reassignment-specific fields (optional)
   const sourceSynchronizer = event.source || updateInfo?.source || null;
   const targetSynchronizer = event.target || updateInfo?.target || null;
   const unassignId = event.unassign_id || updateInfo?.unassign_id || null;
@@ -232,20 +307,22 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
   const reassignmentCounter = event.counter ?? updateInfo?.counter ?? null;
   
   return {
-    event_id: event.event_id || `${updateId}-${contractId}`,
+    event_id: eventId,
     update_id: updateId,
     event_type: eventType,
+    event_type_original: eventTypeOriginal,
     contract_id: contractId,
     template_id: templateId,
-    package_name: extractPackageName(templateId),
+    package_name: packageName,
     migration_id: parseInt(migrationId) || null,
     synchronizer_id: synchronizer,
     effective_at: effectiveAt,
-    recorded_at: new Date(), // When we recorded this event
+    recorded_at: new Date(),
     timestamp: new Date(),
     created_at_ts: effectiveAt,
-    signatories: event.signatories || event.created_event?.signatories || [],
-    observers: event.observers || event.created_event?.observers || [],
+    // Optional arrays - use null if not present (don't default to empty array)
+    signatories: signatories,
+    observers: observers,
     acting_parties: actingParties,
     witness_parties: witnessParties,
     payload: payload ? JSON.stringify(payload) : null,
@@ -261,12 +338,14 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     unassign_id: unassignId,
     submitter: submitter,
     reassignment_counter: reassignmentCounter,
-    raw: rawEvent || event, // Store complete original event
+    // CRITICAL: Store complete original event for recovery
+    raw: rawEvent || event,
   };
 }
 
 /**
  * Extract package name from template ID
+ * Note: API also provides package_name directly on events - prefer that when available
  */
 function extractPackageName(templateId) {
   if (!templateId) return null;
@@ -276,6 +355,9 @@ function extractPackageName(templateId) {
 
 /**
  * Get partition path for a timestamp and optional migration ID
+ * 
+ * Uses migration_id in path because record_time can overlap across migrations
+ * (per API docs, record_time is only monotonic within a migration+synchronizer)
  */
 export function getPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
@@ -288,4 +370,47 @@ export function getPartitionPath(timestamp, migrationId = null) {
     return `migration=${migrationId}/year=${year}/month=${month}/day=${day}`;
   }
   return `year=${year}/month=${month}/day=${day}`;
+}
+
+/**
+ * Flatten events from events_by_id maintaining tree order
+ * 
+ * Per API docs, events should be traversed in preorder using root_event_ids
+ * and child_event_ids. This function flattens while preserving order.
+ * 
+ * @param {object} eventsById - events_by_id object from update
+ * @param {string[]} rootEventIds - root_event_ids array
+ * @returns {object[]} Flattened array of events in tree order
+ */
+export function flattenEventsInTreeOrder(eventsById, rootEventIds) {
+  if (!eventsById || !rootEventIds) return [];
+  
+  const result = [];
+  const visited = new Set();
+  
+  function traverse(eventId) {
+    if (visited.has(eventId)) return;
+    visited.add(eventId);
+    
+    const event = eventsById[eventId];
+    if (!event) return;
+    
+    // Add event to result with its ID
+    result.push({ ...event, event_id: eventId });
+    
+    // Traverse children in order
+    const childIds = event.child_event_ids || 
+      event.exercised_event?.child_event_ids || 
+      [];
+    for (const childId of childIds) {
+      traverse(childId);
+    }
+  }
+  
+  // Start from root events
+  for (const rootId of rootEventIds) {
+    traverse(rootId);
+  }
+  
+  return result;
 }
