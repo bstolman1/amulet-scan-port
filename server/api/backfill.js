@@ -550,6 +550,7 @@ router.get('/reconciliation', async (req, res) => {
 });
 
 // POST /api/backfill/validate-integrity - Validate data integrity by sampling files
+// Now checks for new schema requirements: event_type_original, root_event_ids, child_event_ids, record_time, canonical event_id
 router.post('/validate-integrity', async (req, res) => {
   const sampleSize = Math.min(req.body?.sampleSize || 10, 50); // Max 50 files
   
@@ -591,6 +592,18 @@ router.post('/validate-integrity', async (req, res) => {
       sampledFiles: sampled.length,
       eventFiles: { checked: 0, valid: 0, missingRawJson: 0, emptyRecords: 0 },
       updateFiles: { checked: 0, valid: 0, missingUpdateDataJson: 0, emptyRecords: 0 },
+      // New schema validation results
+      schemaCompliance: {
+        eventsWithTypeOriginal: 0,
+        eventsWithoutTypeOriginal: 0,
+        eventsWithCanonicalId: 0,
+        eventsWithSynthesizedId: 0,
+        updatesWithRootEventIds: 0,
+        updatesWithoutRootEventIds: 0,
+        updatesWithRecordTime: 0,
+        updatesWithoutRecordTime: 0,
+        eventsWithChildEventIds: 0,
+      },
       errors: [],
       sampleDetails: [],
     };
@@ -610,6 +623,7 @@ router.post('/validate-integrity', async (req, res) => {
           recordCount: records.length,
           hasRequiredFields: true,
           missingFields: [],
+          schemaIssues: [],
         };
         
         if (records.length === 0) {
@@ -633,6 +647,34 @@ router.post('/validate-integrity', async (req, res) => {
                   detail.missingFields.push('raw_json');
                 }
               }
+              
+              // NEW: Check for event_type_original (new schema requirement)
+              const typeOriginal = r.event_type_original || r.typeOriginal || r.type_original;
+              if (typeOriginal) {
+                results.schemaCompliance.eventsWithTypeOriginal++;
+              } else {
+                results.schemaCompliance.eventsWithoutTypeOriginal++;
+                if (!detail.schemaIssues.includes('missing_type_original')) {
+                  detail.schemaIssues.push('missing_type_original');
+                }
+              }
+              
+              // NEW: Check for canonical event_id format (<update_id>:<event_index>)
+              const eventId = r.event_id || r.eventId;
+              if (eventId && eventId.includes(':')) {
+                results.schemaCompliance.eventsWithCanonicalId++;
+              } else if (eventId) {
+                results.schemaCompliance.eventsWithSynthesizedId++;
+                if (!detail.schemaIssues.includes('non_canonical_event_id')) {
+                  detail.schemaIssues.push('non_canonical_event_id');
+                }
+              }
+              
+              // NEW: Check for child_event_ids (for tree structure)
+              const childEventIds = r.child_event_ids || r.childEventIds;
+              if (childEventIds !== undefined) {
+                results.schemaCompliance.eventsWithChildEventIds++;
+              }
             }
             
             if (hasMissing) {
@@ -646,12 +688,34 @@ router.post('/validate-integrity', async (req, res) => {
             let hasMissing = false;
             
             for (const r of sampleRecords) {
-              // Check for update_data_json field (might be stored as different field)
+              // Check for update_data_json field
               const hasUpdateData = r.update_data_json || r.updateDataJson || r.data;
               if (!hasUpdateData) {
                 hasMissing = true;
                 if (!detail.missingFields.includes('update_data_json')) {
                   detail.missingFields.push('update_data_json');
+                }
+              }
+              
+              // NEW: Check for root_event_ids (for tree structure)
+              const rootEventIds = r.root_event_ids || r.rootEventIds;
+              if (rootEventIds !== undefined) {
+                results.schemaCompliance.updatesWithRootEventIds++;
+              } else {
+                results.schemaCompliance.updatesWithoutRootEventIds++;
+                if (!detail.schemaIssues.includes('missing_root_event_ids')) {
+                  detail.schemaIssues.push('missing_root_event_ids');
+                }
+              }
+              
+              // NEW: Check for record_time (primary ordering field)
+              const recordTime = r.record_time || r.recordTime;
+              if (recordTime) {
+                results.schemaCompliance.updatesWithRecordTime++;
+              } else {
+                results.schemaCompliance.updatesWithoutRecordTime++;
+                if (!detail.schemaIssues.includes('missing_record_time')) {
+                  detail.schemaIssues.push('missing_record_time');
                 }
               }
             }
@@ -671,10 +735,31 @@ router.post('/validate-integrity', async (req, res) => {
       }
     }
     
-    // Calculate integrity score
+    // Calculate integrity score (now includes schema compliance)
     const totalChecked = results.eventFiles.checked + results.updateFiles.checked;
     const totalValid = results.eventFiles.valid + results.updateFiles.valid;
-    results.integrityScore = totalChecked > 0 ? Math.round((totalValid / totalChecked) * 100) : 0;
+    const baseScore = totalChecked > 0 ? (totalValid / totalChecked) * 100 : 0;
+    
+    // Penalize for schema issues (new requirements)
+    const sc = results.schemaCompliance;
+    const totalEvents = sc.eventsWithTypeOriginal + sc.eventsWithoutTypeOriginal;
+    const totalUpdates = sc.updatesWithRecordTime + sc.updatesWithoutRecordTime;
+    
+    let schemaScore = 100;
+    if (totalEvents > 0) {
+      const typeOriginalRatio = sc.eventsWithTypeOriginal / totalEvents;
+      const canonicalIdRatio = sc.eventsWithCanonicalId / (sc.eventsWithCanonicalId + sc.eventsWithSynthesizedId || 1);
+      schemaScore = schemaScore * (0.5 + 0.25 * typeOriginalRatio + 0.25 * canonicalIdRatio);
+    }
+    if (totalUpdates > 0) {
+      const recordTimeRatio = sc.updatesWithRecordTime / totalUpdates;
+      const rootEventIdsRatio = sc.updatesWithRootEventIds / (sc.updatesWithRootEventIds + sc.updatesWithoutRootEventIds || 1);
+      schemaScore = schemaScore * (0.5 + 0.25 * recordTimeRatio + 0.25 * rootEventIdsRatio);
+    }
+    
+    // Combined score: 70% base integrity + 30% schema compliance
+    results.integrityScore = Math.round(baseScore * 0.7 + schemaScore * 0.3);
+    results.schemaComplianceScore = Math.round(schemaScore);
     results.success = true;
     
     res.json(results);
