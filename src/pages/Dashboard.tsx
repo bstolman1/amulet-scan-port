@@ -10,7 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfigData } from "@/lib/config-sync";
 import { useLocalOverviewStats, useLocalApiAvailable, useLocalDailyStats } from "@/hooks/use-local-stats";
 import { Badge } from "@/components/ui/badge";
-import { useLocalACSAvailable, useLocalACSStats, useLocalLatestACSSnapshot, useLocalACSTemplates } from "@/hooks/use-local-acs";
+import { useLocalACSAvailable, useLocalACSTemplates } from "@/hooks/use-local-acs";
+import { getRealtimeSupply } from "@/lib/duckdb-api-client";
 
 const Dashboard = () => {
   // Check if local API is available
@@ -22,9 +23,15 @@ const Dashboard = () => {
   
   // Local ACS snapshot data
   const { data: acsAvailable } = useLocalACSAvailable();
-  const { data: acsStats, isLoading: acsStatsLoading } = useLocalACSStats();
-  const { data: latestAcsSnapshot, isLoading: acsSnapshotLoading } = useLocalLatestACSSnapshot();
   const { data: acsTemplates, isLoading: acsTemplatesLoading } = useLocalACSTemplates(10);
+  
+  // Real-time supply from ACS + v2/updates
+  const { data: realtimeSupply, isLoading: realtimeSupplyLoading } = useQuery({
+    queryKey: ["dashboard-realtime-supply"],
+    queryFn: () => getRealtimeSupply(),
+    staleTime: 30_000,
+    enabled: !!acsAvailable,
+  });
   
   // Fetch real data from Canton Scan API
   const { data: latestRound } = useQuery({
@@ -72,24 +79,32 @@ const Dashboard = () => {
   const ccPrice = transactions?.transactions?.[0]?.amulet_price
     ? parseFloat(transactions.transactions[0].amulet_price)
     : undefined;
+  // Prefer ACS + v2/updates for supply, fallback to scan API
+  const acsRealtimeTotal = realtimeSupply?.data?.realtime?.total;
+  const effectiveTotalBalance = acsRealtimeTotal ?? (totalBalance?.total_balance ? parseFloat(totalBalance.total_balance) : undefined);
+  
   const marketCap =
-    totalBalance?.total_balance && ccPrice !== undefined
-      ? (parseFloat(totalBalance.total_balance) * ccPrice).toLocaleString(undefined, {
+    effectiveTotalBalance && ccPrice !== undefined
+      ? (effectiveTotalBalance * ccPrice).toLocaleString(undefined, {
           maximumFractionDigits: 0,
         })
       : "Loading...";
   const superValidatorCount = configData?.operators?.length || 0;
 
   const stats = {
-    totalBalance: balanceLoading
+    totalBalance: realtimeSupplyLoading
       ? "Loading..."
-      : balanceError
-        ? "Connection Failed"
-        : totalBalance?.total_balance
-          ? parseFloat(totalBalance.total_balance).toLocaleString(undefined, {
-              maximumFractionDigits: 2,
-            })
-          : "Loading...",
+      : acsRealtimeTotal !== undefined
+        ? acsRealtimeTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })
+        : balanceLoading
+          ? "Loading..."
+          : balanceError
+            ? "Connection Failed"
+            : totalBalance?.total_balance
+              ? parseFloat(totalBalance.total_balance).toLocaleString(undefined, {
+                  maximumFractionDigits: 2,
+                })
+              : "Loading...",
     marketCap: balanceLoading ? "Loading..." : balanceError ? "Connection Failed" : marketCap,
     superValidators: configData ? superValidatorCount.toString() : "Loading...",
     currentRound: latestRound?.round.toLocaleString() || "Loading...",
@@ -288,10 +303,15 @@ const Dashboard = () => {
           <div>
             <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <FileText className="h-5 w-5 text-primary" />
-              Active Contract Set (ACS)
-              {latestAcsSnapshot && (
+              Active Contract Set (ACS + v2/Updates)
+              {realtimeSupply?.data?.snapshot && (
                 <Badge variant="secondary" className="text-xs">
-                  Snapshot: {new Date(latestAcsSnapshot.record_time).toLocaleString()}
+                  Snapshot: {new Date(realtimeSupply.data.snapshot.record_time).toLocaleString()}
+                  {realtimeSupply.data.delta?.events && (realtimeSupply.data.delta.events.created + realtimeSupply.data.delta.events.archived > 0) && (
+                    <span className="ml-1 text-primary">
+                      (+{realtimeSupply.data.delta.events.created} / -{realtimeSupply.data.delta.events.archived} events)
+                    </span>
+                  )}
                 </Badge>
               )}
             </h3>
@@ -301,16 +321,16 @@ const Dashboard = () => {
               <Card className="glass-card">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
-                    <Package className="h-3 w-3" />
-                    Total Contracts
+                    <Coins className="h-3 w-3" />
+                    Real-time Total Supply
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {acsStatsLoading ? (
+                  {realtimeSupplyLoading ? (
                     <Skeleton className="h-8 w-24" />
                   ) : (
                     <p className="text-2xl font-bold text-primary">
-                      {acsStats?.total_contracts?.toLocaleString() || "0"}
+                      {realtimeSupply?.data?.realtime?.total?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || "0"} CC
                     </p>
                   )}
                 </CardContent>
@@ -319,16 +339,16 @@ const Dashboard = () => {
               <Card className="glass-card">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
-                    <FileText className="h-3 w-3" />
-                    Total Templates
+                    <Package className="h-3 w-3" />
+                    Unlocked (Circulating)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {acsStatsLoading ? (
+                  {realtimeSupplyLoading ? (
                     <Skeleton className="h-8 w-24" />
                   ) : (
-                    <p className="text-2xl font-bold">
-                      {acsStats?.total_templates?.toLocaleString() || "0"}
+                    <p className="text-2xl font-bold text-success">
+                      {realtimeSupply?.data?.realtime?.unlocked?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || "0"} CC
                     </p>
                   )}
                 </CardContent>
@@ -337,16 +357,16 @@ const Dashboard = () => {
               <Card className="glass-card">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
-                    <Coins className="h-3 w-3" />
-                    Migration ID
+                    <Lock className="h-3 w-3" />
+                    Locked
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {acsSnapshotLoading ? (
+                  {realtimeSupplyLoading ? (
                     <Skeleton className="h-8 w-24" />
                   ) : (
-                    <p className="text-2xl font-bold">
-                      {latestAcsSnapshot?.migration_id ?? "N/A"}
+                    <p className="text-2xl font-bold text-warning">
+                      {realtimeSupply?.data?.realtime?.locked?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || "0"} CC
                     </p>
                   )}
                 </CardContent>
@@ -356,15 +376,15 @@ const Dashboard = () => {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
                     <Clock className="h-3 w-3" />
-                    Entry Count
+                    Migration ID
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {acsSnapshotLoading ? (
+                  {realtimeSupplyLoading ? (
                     <Skeleton className="h-8 w-24" />
                   ) : (
                     <p className="text-2xl font-bold">
-                      {latestAcsSnapshot?.entry_count?.toLocaleString() ?? "0"}
+                      {realtimeSupply?.data?.snapshot?.migration_id ?? "N/A"}
                     </p>
                   )}
                 </CardContent>
