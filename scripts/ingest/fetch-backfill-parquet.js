@@ -31,8 +31,12 @@ import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, s
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// TLS config - must be set before any requests
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+// TLS config (secure by default)
+// Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
+const INSECURE_TLS = ['1', 'true', 'yes'].includes(String(process.env.INSECURE_TLS || '').toLowerCase());
+if (INSECURE_TLS) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 // Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
@@ -48,6 +52,17 @@ const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
 const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
 const TARGET_MIGRATION = process.env.TARGET_MIGRATION ? parseInt(process.env.TARGET_MIGRATION) : null;
 
+function assertConfig(condition, message) {
+  if (!condition) {
+    throw new Error(`[config] ${message}`);
+  }
+}
+
+// Basic config validation (fail fast)
+assertConfig(Number.isFinite(SHARD_TOTAL) && SHARD_TOTAL >= 1, `SHARD_TOTAL must be >= 1 (got ${process.env.SHARD_TOTAL})`);
+assertConfig(Number.isFinite(SHARD_INDEX) && SHARD_INDEX >= 0 && SHARD_INDEX < SHARD_TOTAL, `SHARD_INDEX must be between 0 and SHARD_TOTAL-1 (got ${process.env.SHARD_INDEX})`);
+assertConfig(Number.isFinite(BATCH_SIZE) && BATCH_SIZE >= 1 && BATCH_SIZE <= 1000, `BATCH_SIZE must be 1..1000 (got ${process.env.BATCH_SIZE})`);
+
 // ==========================================
 // AUTO-TUNING: PARALLEL FETCHES (Enhanced with Latency Tracking)
 // ==========================================
@@ -59,6 +74,10 @@ let dynamicParallelFetches = Math.min(
   Math.max(BASE_PARALLEL_FETCHES, MIN_PARALLEL_FETCHES),
   MAX_PARALLEL_FETCHES
 );
+
+assertConfig(Number.isFinite(BASE_PARALLEL_FETCHES) && BASE_PARALLEL_FETCHES >= 1, `PARALLEL_FETCHES must be >= 1 (got ${process.env.PARALLEL_FETCHES})`);
+assertConfig(Number.isFinite(MIN_PARALLEL_FETCHES) && MIN_PARALLEL_FETCHES >= 1, `MIN_PARALLEL_FETCHES must be >= 1 (got ${process.env.MIN_PARALLEL_FETCHES})`);
+assertConfig(Number.isFinite(MAX_PARALLEL_FETCHES) && MAX_PARALLEL_FETCHES >= MIN_PARALLEL_FETCHES, `MAX_PARALLEL_FETCHES must be >= MIN_PARALLEL_FETCHES`);
 
 // Latency thresholds (milliseconds)
 const LATENCY_LOW_MS = parseInt(process.env.LATENCY_LOW_MS) || 500;
@@ -140,7 +159,7 @@ const client = axios.create({
   httpsAgent: new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 60000,
-    rejectUnauthorized: false,
+    rejectUnauthorized: !INSECURE_TLS,
     maxSockets: MAX_PARALLEL_FETCHES * 4,
   }),
   timeout: 180000,
@@ -730,87 +749,106 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   const startMs = new Date(atOrAfter).getTime();
   const endMs = new Date(startBefore).getTime();
   const rangeMs = endMs - startMs;
-  
+
   // Don't parallelize tiny ranges
   if (rangeMs < 60000 * concurrency) {
     return sequentialFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches);
   }
-  
-  // Divide into non-overlapping time slices
+
+  // Divide into non-overlapping-ish time slices
   const sliceMs = rangeMs / concurrency;
-  
+
   console.log(`   🔀 Parallel fetch: ${concurrency} slices of ${Math.round(sliceMs / 1000)}s each`);
-  
+
   // Shared stats across all slices
   let totalUpdates = 0;
   let totalEvents = 0;
   let earliestTime = startBefore;
   let pageCount = 0;
   const streamStartTime = Date.now();
-  
+
+  // Global dedup across slices to avoid duplicates at slice boundaries
+  const globalSeenUpdateIds = new Set();
+
   // Process callback that handles transactions immediately with progress logging
   const processCallback = async (transactions) => {
     const { updates, events } = await processBackfillItems(transactions, migrationId);
     totalUpdates += updates;
     totalEvents += events;
     pageCount++;
-    
+
     // Track earliest time from transactions for progress tracking
     for (const tx of transactions) {
       const t = getEventTime(tx);
       if (t && t < earliestTime) earliestTime = t;
     }
-    
+
     // Log progress every 10 pages
     if (pageCount % 10 === 0) {
       const elapsed = (Date.now() - streamStartTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
       const stats = getBufferStats();
       console.log(`   📥 M${migrationId} Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | Q: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`);
-      
+
       // Save cursor every 100 pages for UI visibility
       if (cursorCallback && pageCount % 100 === 0) {
         cursorCallback(totalUpdates, totalEvents, earliestTime);
       }
     }
   };
-  
+
   // Launch all slices in parallel with streaming
   const slicePromises = [];
   for (let i = 0; i < concurrency; i++) {
     const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
     const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
-    
+
     slicePromises.push(
-      fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, i, processCallback)
+      fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, i, async (txs) => {
+        // Cross-slice dedup (cheap and safe)
+        const unique = [];
+        for (const tx of txs) {
+          const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+          if (!updateId) {
+            unique.push(tx);
+            continue;
+          }
+          if (globalSeenUpdateIds.has(updateId)) continue;
+          globalSeenUpdateIds.add(updateId);
+          unique.push(tx);
+        }
+        if (unique.length > 0) {
+          await processCallback(unique);
+        }
+      })
         .catch(err => {
           console.error(`   ❌ Slice ${i} failed: ${err.message}`);
           return { sliceIndex: i, totalTxs: 0, earliestTime: sliceBefore, error: err };
         })
     );
   }
-  
+
   // Wait for all slices to complete
   const sliceResults = await Promise.all(slicePromises);
-  
+
   // Find earliest time across all slices
   for (const slice of sliceResults) {
     if (slice.earliestTime && slice.earliestTime < earliestTime) {
       earliestTime = slice.earliestTime;
     }
   }
-  
+
   const totalTxs = sliceResults.reduce((sum, s) => sum + (s.totalTxs || 0), 0);
   const hasError = sliceResults.some(s => s.error);
-  
+
   // Return stats-only result (transactions already processed via streaming)
-  return { 
-    results: totalTxs > 0 ? [{ 
+  return {
+    results: totalTxs > 0 ? [{
       transactions: [], // Already processed
       processedUpdates: totalUpdates,
       processedEvents: totalEvents,
-      before: earliestTime 
-    }] : [], 
+      before: earliestTime
+    }] : [],
     reachedEnd: !hasError,
     earliestTime,
     totalUpdates,
@@ -950,9 +988,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       } catch {}
 
       const finalStats = getBufferStats();
-      const pendingWrites = Number(finalStats.pendingWrites || 0);
+      const pendingWritesAccurate =
+        Number(finalStats.pendingWrites || 0) +
+        Number(finalStats.queuedWrites ?? finalStats.queuedJobs ?? 0) +
+        Number(finalStats.activeWrites ?? finalStats.activeWorkers ?? 0);
       const bufferedRecords = Number((finalStats.updatesBuffered || 0) + (finalStats.eventsBuffered || 0));
-      const hasPendingWork = pendingWrites > 0 || bufferedRecords > 0;
+      const hasPendingWork = pendingWritesAccurate > 0 || bufferedRecords > 0;
 
       // Mark complete, but keep pending fields accurate so UI can show "Finalizing" if needed.
       if (!cursor.complete || hasPendingWork) {
@@ -961,11 +1002,15 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           synchronizerId,
           {
             ...cursor,
-            pending_writes: pendingWrites,
+            pending_writes: pendingWritesAccurate,
             buffered_records: bufferedRecords,
             complete: !hasPendingWork,
             updated_at: new Date().toISOString(),
           },
+          minTime,
+          maxTime,
+          shardIndex,
+        );
           minTime,
           maxTime,
           shardIndex,
@@ -1054,11 +1099,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       
       // Save cursor and log progress (include pending write state)
       const stats = getBufferStats();
+      const pendingWritesAccurate =
+        Number(stats.pendingWrites || 0) +
+        Number(stats.queuedWrites ?? stats.queuedJobs ?? 0) +
+        Number(stats.activeWrites ?? stats.activeWorkers ?? 0);
+
       saveCursor(migrationId, synchronizerId, {
         last_before: before,
         total_updates: totalUpdates,
         total_events: totalEvents,
-        pending_writes: stats.pendingWrites || 0,
+        pending_writes: pendingWritesAccurate,
         buffered_records: (stats.updatesBuffered || 0) + (stats.eventsBuffered || 0),
         complete: false, // Explicitly mark as not complete during loop
         updated_at: new Date().toISOString(),
@@ -1141,13 +1191,20 @@ function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
   const minMs = new Date(minTime).getTime();
   const maxMs = new Date(maxTime).getTime();
   const rangeMs = maxMs - minMs;
-  
-  // Use integer division to avoid floating point precision issues
+
+  if (!Number.isFinite(minMs) || !Number.isFinite(maxMs) || rangeMs <= 0) {
+    throw new Error(`[sharding] invalid time range: minTime=${minTime}, maxTime=${maxTime}`);
+  }
+
+  // Use integer division to avoid floating point precision issues.
   // Shards work backwards in time (maxTime to minTime)
-  // Shard 0 gets the most recent slice, shard N-1 gets the oldest
-  const shardMaxMs = maxMs - Math.floor((shardIndex * rangeMs) / shardTotal);
+  // Shard 0 gets the most recent slice, shard N-1 gets the oldest.
+  const shardMaxMsRaw = maxMs - Math.floor((shardIndex * rangeMs) / shardTotal);
   const shardMinMs = maxMs - Math.floor(((shardIndex + 1) * rangeMs) / shardTotal);
-  
+
+  // Avoid boundary duplicates between adjacent shards by making the upper bound exclusive-ish.
+  const shardMaxMs = shardIndex === 0 ? shardMaxMsRaw : Math.max(shardMinMs, shardMaxMsRaw - 1);
+
   return {
     minTime: new Date(shardMinMs).toISOString(),
     maxTime: new Date(shardMaxMs).toISOString(),
@@ -1205,11 +1262,12 @@ async function areAllMigrationsComplete() {
 async function runBackfill() {
   const isSharded = SHARD_TOTAL > 1;
   const shardLabel = isSharded ? ` [SHARD ${SHARD_INDEX}/${SHARD_TOTAL}]` : '';
-  
+
   console.log("\n" + "=".repeat(80));
   console.log(`🚀 Starting Canton ledger backfill (Auto-Tuning Mode)${shardLabel}`);
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
+  console.log("   INSECURE_TLS:", INSECURE_TLS ? 'ENABLED (unsafe)' : 'disabled');
   console.log("=".repeat(80));
   console.log("\n⚙️  Auto-Tuning Configuration:");
   console.log(`   Parallel Fetches: ${dynamicParallelFetches} (range: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
@@ -1222,89 +1280,100 @@ async function runBackfill() {
   if (TARGET_MIGRATION) {
     console.log(`   TARGET_MIGRATION: ${TARGET_MIGRATION} only`);
   }
-  console.log("   Processing: Migrations sequentially (1 → 2 → 3...)");
+  console.log("   Processing: Migrations sequentially (1 → 2 → 3...) ");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
-  
+
   // Ensure cursor directory exists
   mkdirSync(CURSOR_DIR, { recursive: true });
-  
-  // Detect migrations
-  let migrations = await detectMigrations();
-  const allDetectedMigrations = [...migrations]; // Keep a copy of ALL migrations
-  
-  // Filter to target migration if specified
-  if (TARGET_MIGRATION) {
-    migrations = migrations.filter(id => id === TARGET_MIGRATION);
-    if (!migrations.length) {
-      console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`);
-      return { success: false, allMigrationsComplete: false };
-    }
-  }
-  
-  if (!migrations.length) {
-    console.log("⚠️ No migrations found. Exiting.");
-    return { success: false, allMigrationsComplete: false };
-  }
-  
+
   let grandTotalUpdates = 0;
   let grandTotalEvents = 0;
   const grandStartTime = Date.now();
-  
-  for (const migrationId of migrations) {
-    console.log(`\n${"─".repeat(80)}`);
-    console.log(`📘 Migration ${migrationId}: fetching backfilling metadata${shardLabel}`);
-    console.log(`${"─".repeat(80)}`);
-    
-    const info = await getMigrationInfo(migrationId);
-    
-    if (!info) {
-      console.log("   ℹ️  No backfilling info; skipping this migration.");
-      continue;
-    }
-    
-    const ranges = info.record_time_range || [];
-    
-    if (!ranges.length) {
-      console.log("   ℹ️  No synchronizer ranges; skipping.");
-      continue;
-    }
-    
-    console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migrationId}`);
-    
-    for (const range of ranges) {
-      const synchronizerId = range.synchronizer_id;
-      let minTime = range.min;
-      let maxTime = range.max;
-      
-      // Apply sharding if enabled
-      if (isSharded) {
-        const shardRange = calculateShardTimeRange(minTime, maxTime, SHARD_INDEX, SHARD_TOTAL);
-        minTime = shardRange.minTime;
-        maxTime = shardRange.maxTime;
-        console.log(`   🔀 Shard ${SHARD_INDEX}: time slice ${minTime} to ${maxTime}`);
+
+  // If new migrations appear mid-run, loop and pick them up.
+  const processedMigrations = new Set();
+  const MAX_MIGRATION_RESCAN_ROUNDS = 10;
+
+  for (let round = 0; round < MAX_MIGRATION_RESCAN_ROUNDS; round++) {
+    let migrations = await detectMigrations();
+
+    // Filter to target migration if specified
+    if (TARGET_MIGRATION) {
+      migrations = migrations.filter(id => id === TARGET_MIGRATION);
+      if (!migrations.length) {
+        console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`);
+        return { success: false, allMigrationsComplete: false };
       }
-      
-      // Check if already complete (shard-aware)
-      const cursor = loadCursor(migrationId, synchronizerId, isSharded ? SHARD_INDEX : null);
-      if (cursor?.complete) {
-        console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)${shardLabel}`);
+    }
+
+    // Only process migrations we haven't processed yet
+    const pending = migrations.filter(id => !processedMigrations.has(id));
+    if (pending.length === 0) break;
+
+    for (const migrationId of pending) {
+      processedMigrations.add(migrationId);
+
+      console.log(`\n${"─".repeat(80)}`);
+      console.log(`📘 Migration ${migrationId}: fetching backfilling metadata${shardLabel}`);
+      console.log(`${"─".repeat(80)}`);
+
+      const info = await getMigrationInfo(migrationId);
+
+      if (!info) {
+        console.log("   ℹ️  No backfilling info; skipping this migration.");
         continue;
       }
-      
-      const { updates, events } = await backfillSynchronizer(
-        migrationId, synchronizerId, minTime, maxTime, 
-        isSharded ? SHARD_INDEX : null
-      );
-      grandTotalUpdates += updates;
-      grandTotalEvents += events;
+
+      const ranges = info.record_time_range || [];
+
+      if (!ranges.length) {
+        console.log("   ℹ️  No synchronizer ranges; skipping.");
+        continue;
+      }
+
+      console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migrationId}`);
+
+      for (const range of ranges) {
+        const synchronizerId = range.synchronizer_id;
+        let minTime = range.min;
+        let maxTime = range.max;
+
+        const minMs = new Date(minTime).getTime();
+        const maxMs = new Date(maxTime).getTime();
+        if (!Number.isFinite(minMs) || !Number.isFinite(maxMs) || minMs >= maxMs) {
+          throw new Error(`[range] Invalid time bounds for migration ${migrationId}: min=${minTime} max=${maxTime}`);
+        }
+
+        // Apply sharding if enabled
+        if (isSharded) {
+          const shardRange = calculateShardTimeRange(minTime, maxTime, SHARD_INDEX, SHARD_TOTAL);
+          minTime = shardRange.minTime;
+          maxTime = shardRange.maxTime;
+          console.log(`   🔀 Shard ${SHARD_INDEX}: time slice ${minTime} to ${maxTime}`);
+        }
+
+        // Check if already complete (shard-aware)
+        const cursor = loadCursor(migrationId, synchronizerId, isSharded ? SHARD_INDEX : null);
+        if (cursor?.complete) {
+          console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)${shardLabel}`);
+          continue;
+        }
+
+        const { updates, events } = await backfillSynchronizer(
+          migrationId, synchronizerId, minTime, maxTime,
+          isSharded ? SHARD_INDEX : null,
+        );
+        grandTotalUpdates += updates;
+        grandTotalEvents += events;
+      }
+
+      console.log(`✅ Completed migration ${migrationId}${shardLabel}`);
     }
-    
-    console.log(`✅ Completed migration ${migrationId}${shardLabel}`);
   }
-  
+
   const grandTotalTime = ((Date.now() - grandStartTime) / 1000).toFixed(1);
-  
+
   console.log(`\n${"═".repeat(80)}`);
   console.log(`🎉 Backfill complete!`);
   console.log(`   Total updates: ${grandTotalUpdates.toLocaleString()}`);
@@ -1312,10 +1381,10 @@ async function runBackfill() {
   console.log(`   Total time: ${grandTotalTime}s`);
   console.log(`   Average throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s`);
   console.log(`${"═".repeat(80)}\n`);
-  
-  // Check if ALL migrations are complete (not just the ones we processed)
+
+  // Check if ALL migrations are complete
   const completionStatus = await areAllMigrationsComplete();
-  
+
   if (!completionStatus.complete) {
     console.log(`\n⚠️ Not all migrations are complete yet:`);
     const pendingByMigration = {};
@@ -1328,10 +1397,10 @@ async function runBackfill() {
     }
     console.log(`\n   Live updates will NOT start until all migrations are backfilled.`);
   }
-  
-  return { 
-    success: true, 
-    totalUpdates: grandTotalUpdates, 
+
+  return {
+    success: true,
+    totalUpdates: grandTotalUpdates,
     totalEvents: grandTotalEvents,
     allMigrationsComplete: completionStatus.complete,
     pendingMigrations: completionStatus.pendingMigrations,

@@ -10,7 +10,7 @@
  */
 
 import { mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
-import { join, dirname, sep } from 'path';
+import { join, dirname, sep, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { getPartitionPath } from './parquet-schema.js';
@@ -21,7 +21,15 @@ const __dirname = dirname(__filename);
 
 // Configuration - Default WSL path: /home/bstolz/canton-explorer/data
 const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
-const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WSL_DEFAULT;
+
+// Safety: require an absolute path to avoid accidentally writing outside the intended directory.
+// (resolve() will make it absolute, but we still fail fast if a relative path was provided.)
+if (process.env.DATA_DIR && !isAbsolute(process.env.DATA_DIR)) {
+  throw new Error(`[write-binary] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
+}
+
+const BASE_DATA_DIR = resolve(BASE_DATA_DIR_RAW);
 const DATA_DIR = join(BASE_DATA_DIR, 'raw'); // Binary files go in raw/ subdirectory
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000; // Reduced to flush more often
 const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 1;
