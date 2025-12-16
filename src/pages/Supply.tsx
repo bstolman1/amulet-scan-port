@@ -28,7 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { toCC } from "@/lib/amount-utils";
-import { getRealtimeSupply, getACSAllocations, getACSMiningRounds } from "@/lib/duckdb-api-client";
+import { getRealtimeSupply, getACSAllocations, getACSMiningRounds, invalidateAcsCache } from "@/lib/duckdb-api-client";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -45,6 +45,15 @@ const Supply = () => {
     try {
       setIsRefreshing(true);
       toast.info("Refreshing data...");
+
+      // Bust server-side caches too (otherwise snapshot-based endpoints can stay stale).
+      try {
+        await invalidateAcsCache('acs:');
+      } catch (e) {
+        // Ignore in environments where the local API isn't reachable (e.g. hosted preview)
+        console.warn("[ForceRefresh] server cache invalidate failed", e);
+      }
+
       await queryClient.cancelQueries({ predicate: () => true });
       await queryClient.invalidateQueries({ predicate: () => true });
       await queryClient.refetchQueries({ predicate: () => true, type: "active" });

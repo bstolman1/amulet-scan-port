@@ -38,6 +38,17 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
   return response.json();
 }
 
+/**
+ * Invalidate server-side ACS cache (useful right after new snapshots are written).
+ */
+export async function invalidateAcsCache(prefix = 'acs:') {
+  return apiFetch('/api/acs/cache/invalidate', {
+    method: 'POST',
+    body: JSON.stringify({ prefix }),
+  });
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Events API
 // ─────────────────────────────────────────────────────────────────────────────
