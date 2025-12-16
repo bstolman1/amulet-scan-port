@@ -334,27 +334,58 @@ const IngestionDashboard = () => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  {cursors.map((cursor) => {
-                    const progress = cursor.complete ? 100 : 
-                      (cursor.min_time && cursor.max_time && cursor.last_before) ?
-                        Math.min(100, Math.max(0, ((new Date(cursor.max_time).getTime() - new Date(cursor.last_before).getTime()) / 
-                          (new Date(cursor.max_time).getTime() - new Date(cursor.min_time).getTime())) * 100)) : 0;
-                    
-                    return (
-                      <div key={cursor.id} className="flex items-center gap-3">
-                        <div className="w-24 text-sm font-medium">Migration {cursor.migration_id}</div>
-                        <Progress value={progress} className="flex-1 h-2" />
-                        <div className="w-20 text-right">
-                          {cursor.complete ? (
-                            <Badge variant="default" className="bg-green-500">Complete</Badge>
-                          ) : (
-                            <span className="text-sm text-muted-foreground">{progress.toFixed(0)}%</span>
-                          )}
-                        </div>
+                  {/* Backfill cursors - deduplicate by migration_id, keep the most progressed */}
+                  {(() => {
+                    const migrationMap = new Map<number, BackfillCursor>();
+                    for (const cursor of cursors) {
+                      const existing = migrationMap.get(cursor.migration_id ?? 0);
+                      if (!existing || cursor.complete || (cursor.max_time && (!existing.max_time || cursor.max_time > existing.max_time))) {
+                        migrationMap.set(cursor.migration_id ?? 0, cursor);
+                      }
+                    }
+                    return Array.from(migrationMap.values())
+                      .sort((a, b) => (a.migration_id ?? 0) - (b.migration_id ?? 0))
+                      .map((cursor) => {
+                        const progress = cursor.complete ? 100 : 
+                          (cursor.min_time && cursor.max_time && cursor.last_before) ?
+                            Math.min(100, Math.max(0, ((new Date(cursor.max_time).getTime() - new Date(cursor.last_before).getTime()) / 
+                              (new Date(cursor.max_time).getTime() - new Date(cursor.min_time).getTime())) * 100)) : 0;
+                        
+                        return (
+                          <div key={cursor.id} className="flex items-center gap-3">
+                            <div className="w-28 text-sm font-medium">Migration {cursor.migration_id}</div>
+                            <Progress value={progress} className="flex-1 h-2" />
+                            <div className="w-20 text-right">
+                              {cursor.complete ? (
+                                <Badge variant="default" className="bg-green-500">Complete</Badge>
+                              ) : (
+                                <span className="text-sm text-muted-foreground">{progress.toFixed(0)}%</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                  })()}
+                  
+                  {/* Live Updates row - shows continuation from latest backfill */}
+                  {liveStatus?.live_cursor && (
+                    <div className="flex items-center gap-3 pt-2 border-t">
+                      <div className="w-28 text-sm font-medium flex items-center gap-1">
+                        <Radio className="w-3 h-3 text-green-500 animate-pulse" />
+                        Live Updates
                       </div>
-                    );
-                  })}
-                  {cursors.length === 0 && (
+                      <div className="flex-1 text-xs text-muted-foreground">
+                        Continuing from m{liveStatus.live_cursor.migration_id} @ {liveStatus.live_cursor.record_time?.substring(0, 19)}
+                      </div>
+                      <div className="w-20 text-right">
+                        <Badge variant="outline" className="border-green-500/50 text-green-500">
+                          {liveStatus.status === 'running' ? 'Active' : 'Idle'}
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {cursors.length === 0 && !liveStatus?.live_cursor && (
                     <p className="text-muted-foreground text-sm">No backfill cursors found</p>
                   )}
                 </div>
