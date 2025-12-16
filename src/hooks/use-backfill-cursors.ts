@@ -1,5 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { getBackfillCursors, getBackfillStats, getWriteActivity, isApiAvailable } from "@/lib/duckdb-api-client";
+import {
+  getBackfillCursors,
+  getBackfillStats,
+  getWriteActivity,
+  getBackfillDebugInfo,
+  isApiAvailable,
+  type BackfillDebugInfo,
+} from "@/lib/duckdb-api-client";
 import { supabase } from "@/integrations/supabase/client";
 
 export interface BackfillCursor {
@@ -156,5 +163,18 @@ export function useBackfillCursorByName(cursorName: string | undefined) {
     },
     enabled: !!cursorName,
     staleTime: 10_000,
+  });
+}
+
+export function useBackfillDebugInfo() {
+  return useQuery({
+    queryKey: ["backfillDebugInfo"],
+    queryFn: async () => {
+      const duckdbAvailable = await isApiAvailable();
+      if (!duckdbAvailable) return null;
+      return await getBackfillDebugInfo();
+    },
+    staleTime: 5_000,
+    refetchInterval: 10_000,
   });
 }

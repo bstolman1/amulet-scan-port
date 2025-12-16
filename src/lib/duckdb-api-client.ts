@@ -222,6 +222,14 @@ export interface WriteActivity {
   message: string;
 }
 
+export interface BackfillDebugInfo {
+  cursorDir: string;
+  cursorDirExists: boolean;
+  cursorFiles: string[];
+  rawFileCounts: { events: number; updates: number };
+  dataDir: string;
+}
+
 export async function getBackfillCursors(): Promise<ApiResponse<BackfillCursor[]>> {
   return apiFetch('/api/backfill/cursors');
 }
@@ -232,6 +240,10 @@ export async function getBackfillStats(): Promise<BackfillStats> {
 
 export async function getWriteActivity(): Promise<WriteActivity> {
   return apiFetch('/api/backfill/write-activity');
+}
+
+export async function getBackfillDebugInfo(): Promise<BackfillDebugInfo> {
+  return apiFetch('/api/backfill/debug');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

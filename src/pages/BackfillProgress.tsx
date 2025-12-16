@@ -7,7 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { Database, Activity, Trash2, FileText, Layers, Zap, Clock, PlayCircle, PauseCircle, CheckCircle2 } from "lucide-react";
 import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
-import { useBackfillCursors, useBackfillStats, useWriteActivity, BackfillCursor } from "@/hooks/use-backfill-cursors";
+import { useBackfillCursors, useBackfillStats, useWriteActivity, useBackfillDebugInfo, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
 import { ShardProgressCard } from "@/components/ShardProgressCard";
 import { GapDetectionCard } from "@/components/GapDetectionCard";
@@ -57,6 +57,7 @@ const BackfillProgress = () => {
   const { data: cursors = [], isLoading, refetch } = useBackfillCursors();
   const { data: stats, refetch: refetchStats } = useBackfillStats();
   const { data: writeActivity } = useWriteActivity();
+  const { data: backfillDebug } = useBackfillDebugInfo();
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
   const { toast } = useToast();
@@ -117,6 +118,14 @@ const BackfillProgress = () => {
     return Object.entries(grouped)
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([id, cursors]) => ({ migrationId: Number(id), cursors }));
+  }, [allCursors]);
+
+  const migrationsInCursors = useMemo(() => {
+    const set = new Set<number>();
+    for (const c of allCursors) {
+      if (typeof c.migration_id === "number") set.add(c.migration_id);
+    }
+    return Array.from(set).sort((a, b) => a - b);
   }, [allCursors]);
 
   // Determine current active migration (first non-complete migration OR one still writing data)
@@ -311,6 +320,44 @@ const BackfillProgress = () => {
             </Button>
           </div>
         </div>
+
+        {/* Local backfill diagnostics (helps explain why a migration is missing) */}
+        {(backfillDebug || (stats?.activeMigrations && migrationsInCursors.length > 0)) && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Local Backfill Diagnostics</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0 text-sm text-muted-foreground space-y-1">
+              {backfillDebug && (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>Cursor dir</span>
+                    <span className="font-mono text-xs text-foreground/80 break-all">{backfillDebug.cursorDir}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>Cursor files</span>
+                    <span className="text-foreground/80">{backfillDebug.cursorFiles?.length ?? 0}</span>
+                  </div>
+                </>
+              )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>Migrations from cursor files</span>
+                <span className="text-foreground/80">{migrationsInCursors.length ? migrationsInCursors.join(", ") : "None"}</span>
+              </div>
+              {typeof stats?.activeMigrations === "number" && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Migrations seen in data files</span>
+                  <span className="text-foreground/80">{stats.activeMigrations}</span>
+                </div>
+              )}
+              {typeof stats?.activeMigrations === "number" && migrationsInCursors.length > 0 && stats.activeMigrations !== migrationsInCursors.length && (
+                <div className="text-xs">
+                  Mismatch: your data contains {stats.activeMigrations} migration(s) but only {migrationsInCursors.length} have cursor files. Migration 4 won’t show until its cursor JSON exists in the cursor dir.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Write Activity Status */}
         {writeActivity && (
