@@ -1,8 +1,11 @@
 /**
  * Worker Writer - Binary Protobuf + ZSTD Streaming
  * 
- * This worker receives batches of records, encodes them to Protobuf,
+ * This worker receives PRE-MAPPED records from write-binary.js, encodes them to Protobuf,
  * and streams them through ZSTD compression to disk.
+ * 
+ * IMPORTANT: Records are mapped ONCE by write-binary.js (mapEventRecord/mapUpdateRecord).
+ * This worker does NOT re-map - it uses records directly to avoid double-mapping bugs.
  * 
  * CHUNKED APPROACH:
  * - Encode 2000 records at a time (never a giant single message)
@@ -90,7 +93,7 @@ async function run() {
   // Dynamic imports with error handling
   console.log('[WORKER] Loading dependencies...');
   
-  let compress, getEncoders, mapEvent, mapUpdate;
+  let compress, getEncoders;
   
   try {
     const zstdModule = await import('@mongodb-js/zstd');
@@ -103,11 +106,10 @@ async function run() {
     return;
   }
   
+  // Load encoders for protobuf types only (no mapping functions needed - records are pre-mapped)
   try {
     const encodingModule = await import('./encoding.js');
     getEncoders = encodingModule.getEncoders;
-    mapEvent = encodingModule.mapEvent;
-    mapUpdate = encodingModule.mapUpdate;
     console.log('[WORKER] Encoding module loaded');
   } catch (err) {
     const msg = `Failed to load encoding.js: ${err.message}`;
@@ -133,7 +135,6 @@ async function run() {
 
   const FileBatchType = type === 'events' ? EventBatch : UpdateBatch;
   const RecordType = type === 'events' ? Event : Update;
-  const mapFn = type === 'events' ? mapEvent : mapUpdate;
   const fieldName = type === 'events' ? 'events' : 'updates';
 
   // Open file handle for sequential writes
@@ -157,64 +158,37 @@ async function run() {
   
   try {
     // Process records in chunks - never build giant buffers
+    // NOTE: Records are PRE-MAPPED by write-binary.js - no re-mapping needed here
     for (let i = 0; i < records.length; i += CHUNK_SIZE) {
       const slice = records.slice(i, Math.min(i + CHUNK_SIZE, records.length));
       const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
       const totalChunks = Math.ceil(records.length / CHUNK_SIZE);
       
-      // Map records with individual error handling
-      const mappedRecords = [];
+      // Create protobuf records directly (no mapping - already done by write-binary.js)
+      const protoRecords = [];
       for (let j = 0; j < slice.length; j++) {
         try {
-          const input = slice[j];
-          const mapped = mapFn(input);
-
-          // Sanity checks: warn if we appear to drop data during mapping
-          if (type === 'events') {
-            const hadRaw = !!(input?.raw || input?.raw_json || input?.rawJson);
-            if (hadRaw && !mapped?.rawJson) {
-              console.warn('[WORKER][SANITY] Event raw present but rawJson empty (mapping mismatch)');
-            }
-
-            const hadPayload = !!(input?.payload || input?.payload_json || input?.payloadJson);
-            if (hadPayload && !mapped?.payloadJson) {
-              console.warn('[WORKER][SANITY] Event payload present but payloadJson empty (mapping mismatch)');
-            }
-
-            const hadContractKey = !!(input?.contract_key || input?.contract_key_json || input?.contractKeyJson);
-            if (hadContractKey && !mapped?.contractKeyJson) {
-              console.warn('[WORKER][SANITY] Event contract_key present but contractKeyJson empty (mapping mismatch)');
-            }
-
-            const hadExerciseResult = !!(input?.exercise_result || input?.exercise_result_json || input?.exerciseResultJson);
-            if (hadExerciseResult && !mapped?.exerciseResultJson) {
-              console.warn('[WORKER][SANITY] Event exercise_result present but exerciseResultJson empty (mapping mismatch)');
+          const record = slice[j];
+          
+          // Sanity check: warn if critical JSON fields are unexpectedly empty
+          if (type === 'events' && !record.rawJson && record.id) {
+            // Only warn once per chunk to avoid log spam
+            if (j === 0) {
+              console.warn(`[WORKER][SANITY] Chunk ${chunkNum}: Event records have empty rawJson - data may be incomplete`);
             }
           }
-
-          if (type === 'updates') {
-            const hadUpdateData = !!(input?.update_data || input?.update_data_json || input?.updateDataJson);
-            if (hadUpdateData && !mapped?.updateDataJson) {
-              console.warn('[WORKER][SANITY] Update update_data present but updateDataJson empty (mapping mismatch)');
-            }
-
-            const hadTrace = !!(input?.trace_context || input?.trace_context_json || input?.traceContextJson);
-            if (hadTrace && !mapped?.traceContextJson) {
-              console.warn('[WORKER][SANITY] Update trace_context present but traceContextJson empty (mapping mismatch)');
-            }
-          }
-
-          const created = RecordType.create(mapped);
-          mappedRecords.push(created);
-        } catch (mapErr) {
-          console.error(`[WORKER] Skipping record ${i + j}: ${mapErr.message}`);
+          
+          const created = RecordType.create(record);
+          protoRecords.push(created);
+        } catch (createErr) {
+          console.error(`[WORKER] Skipping record ${i + j}: ${createErr.message}`);
           // Log the problematic record (truncated)
           const recordStr = JSON.stringify(slice[j]).substring(0, 200);
           console.error(`[WORKER] Problematic record: ${recordStr}...`);
         }
       }
       
-      if (mappedRecords.length === 0) {
+      if (protoRecords.length === 0) {
         console.warn(`[WORKER] Chunk ${chunkNum}/${totalChunks}: all records skipped`);
         continue;
       }
@@ -222,7 +196,7 @@ async function run() {
       // Create batch message
       let message;
       try {
-        message = FileBatchType.create({ [fieldName]: mappedRecords });
+        message = FileBatchType.create({ [fieldName]: protoRecords });
       } catch (err) {
         console.error(`[WORKER] Chunk ${chunkNum}: Failed to create batch: ${err.message}`);
         continue;

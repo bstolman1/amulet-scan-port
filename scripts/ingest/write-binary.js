@@ -98,6 +98,7 @@ function generateFileName(prefix) {
 /**
  * Map records to protobuf-compatible format
  * CRITICAL: These mappings must preserve ALL fields from the Scan API
+ * NOTE: This is the ONLY mapping step - worker-writer.js uses these directly (no re-mapping)
  */
 function mapUpdateRecord(r) {
   // Helper for safe timestamp conversion
