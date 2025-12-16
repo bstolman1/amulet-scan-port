@@ -4,6 +4,10 @@
  * 
  * Fetches ledger updates from Canton Scan API and writes to partitioned parquet files.
  * This replaces the Supabase/Postgres ingestion with local file storage.
+ * 
+ * Usage:
+ *   node fetch-updates-parquet.js          # Resume from backfill cursor
+ *   node fetch-updates-parquet.js --live   # Start from current API time (live mode)
  */
 
 import dotenv from 'dotenv';
@@ -14,6 +18,10 @@ import https from 'https';
 import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
 // Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+const LIVE_MODE = args.includes('--live') || args.includes('-l');
 
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
@@ -45,13 +53,91 @@ let isRunning = true;
 
 // Cursor directory (same as backfill script)
 const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
+const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
+
+/**
+ * Get current time from the Scan API (latest available record time)
+ */
+async function getCurrentAPITime() {
+  try {
+    const response = await client.post('/v2/updates', {
+      page_size: 1,
+      daml_value_encoding: 'compact_json',
+    });
+    
+    const transactions = response.data?.transactions || [];
+    if (transactions.length > 0) {
+      const latest = transactions[0];
+      return {
+        recordTime: latest.record_time,
+        migrationId: latest.migration_id
+      };
+    }
+    return null;
+  } catch (err) {
+    console.error('Failed to get current API time:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Load live cursor if it exists
+ */
+function loadLiveCursor() {
+  if (!fs.existsSync(LIVE_CURSOR_FILE)) {
+    return null;
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(LIVE_CURSOR_FILE, 'utf8'));
+    console.log(`📍 Loaded live cursor: migration=${data.migration_id}, record_time=${data.record_time}`);
+    return data;
+  } catch (err) {
+    console.warn(`⚠️ Failed to read live cursor: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Save live cursor state
+ */
+function saveLiveCursor(migrationId, recordTime) {
+  if (!fs.existsSync(CURSOR_DIR)) {
+    fs.mkdirSync(CURSOR_DIR, { recursive: true });
+  }
+  const cursor = {
+    migration_id: migrationId,
+    record_time: recordTime,
+    updated_at: new Date().toISOString(),
+    mode: 'live'
+  };
+  fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
+}
 
 /**
  * Find the latest timestamp from backfill cursor files
  * This is the authoritative source for where backfill stopped
  */
 async function findLatestTimestamp() {
-  // First, check cursor files from backfill (most reliable)
+  // In live mode, check live cursor first
+  if (LIVE_MODE) {
+    const liveCursor = loadLiveCursor();
+    if (liveCursor) {
+      lastMigrationId = liveCursor.migration_id;
+      return liveCursor.record_time;
+    }
+    
+    // No live cursor - start from current API time
+    console.log('🔴 LIVE MODE: Getting current API time...');
+    const current = await getCurrentAPITime();
+    if (current) {
+      console.log(`📍 Starting live ingestion from: migration=${current.migrationId}, record_time=${current.recordTime}`);
+      lastMigrationId = current.migrationId;
+      return current.recordTime;
+    }
+    console.warn('⚠️ Could not get current API time, falling back to backfill cursor');
+  }
+  
+  // Check cursor files from backfill (most reliable)
   const cursorResult = findLatestFromCursors();
   if (cursorResult) {
     return cursorResult;
@@ -292,7 +378,8 @@ async function processUpdates(items) {
  * Main ingestion loop
  */
 async function runIngestion() {
-  console.log('🚀 Starting Canton ledger ingestion (v2/updates mode)\n');
+  const modeLabel = LIVE_MODE ? '🔴 LIVE MODE' : '📜 RESUME MODE';
+  console.log(`🚀 Starting Canton ledger ingestion (v2/updates mode) - ${modeLabel}\n`);
   
   // Check for existing data from backfill first (sets lastMigrationId if found)
   lastTimestamp = await findLatestTimestamp();
@@ -305,7 +392,7 @@ async function runIngestion() {
   let afterRecordTime = lastTimestamp;
   
   if (afterRecordTime) {
-    console.log(`📍 Resuming from: migration=${afterMigrationId}, record_time=${afterRecordTime}`);
+    console.log(`📍 ${LIVE_MODE ? 'Live ingestion' : 'Resuming'} from: migration=${afterMigrationId}, record_time=${afterRecordTime}`);
   } else {
     console.log('📍 Starting fresh (no existing data found)');
     afterMigrationId = null; // Start from beginning
@@ -329,12 +416,16 @@ async function runIngestion() {
           if (flushed.length > 0) {
             console.log(`💾 Flushed ${flushed.length} files`);
           }
+          // Save live cursor after flush
+          if (LIVE_MODE && afterRecordTime) {
+            saveLiveCursor(afterMigrationId, afterRecordTime);
+          }
         }
         
         // Log status periodically
         if (emptyPolls % 12 === 0) { // Every minute at 5s intervals
           const stats = getBufferStats();
-          console.log(`⏳ Waiting for new updates... (buffered: ${stats.updates} updates, ${stats.events} events)`);
+          console.log(`⏳ ${LIVE_MODE ? '[LIVE]' : ''} Waiting for new updates... (buffered: ${stats.updates} updates, ${stats.events} events)`);
         }
         
         await sleep(POLL_INTERVAL);
@@ -355,8 +446,14 @@ async function runIngestion() {
         afterRecordTime = data.lastRecordTime;
       }
       
+      // Periodically save live cursor (every 10 batches)
+      if (LIVE_MODE && totalUpdates % (BATCH_SIZE * 10) < BATCH_SIZE) {
+        saveLiveCursor(afterMigrationId, afterRecordTime);
+      }
+      
       const stats = getBufferStats();
-      console.log(`📦 Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Cursor: m${afterMigrationId}@${afterRecordTime?.substring(0, 19) || 'start'}`);
+      const modePrefix = LIVE_MODE ? '🔴' : '📦';
+      console.log(`${modePrefix} Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Cursor: m${afterMigrationId}@${afterRecordTime?.substring(0, 19) || 'start'}`);
       
     } catch (err) {
       console.error('❌ Error during ingestion:', err.message);
@@ -383,6 +480,12 @@ async function shutdown() {
   const flushed = await flushAll();
   if (flushed.length > 0) {
     console.log(`💾 Flushed ${flushed.length} files on shutdown`);
+  }
+  
+  // Save final live cursor state
+  if (LIVE_MODE && lastTimestamp) {
+    saveLiveCursor(lastMigrationId || migrationId, lastTimestamp);
+    console.log('💾 Saved live cursor state');
   }
   
   process.exit(0);

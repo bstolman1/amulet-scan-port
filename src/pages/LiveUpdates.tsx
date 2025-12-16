@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -6,11 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Activity, Clock, Search, Database, Wifi, WifiOff, FileText, RefreshCw, Zap, Timer, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
+import { Activity, Clock, Search, Database, Wifi, WifiOff, FileText, RefreshCw, Zap, Timer, ChevronDown, ChevronRight, Copy, Check, Radio, Circle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useLedgerUpdates, LedgerUpdate } from "@/hooks/use-ledger-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
 import { useDuckDBForLedger } from "@/lib/backend-config";
+import { getLiveStatus, type LiveStatus } from "@/lib/duckdb-api-client";
 import { useToast } from "@/hooks/use-toast";
 
 // JSON Viewer Component with copy functionality
@@ -70,6 +72,14 @@ const LiveUpdates = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
   const { toast } = useToast();
+
+  // Fetch live status from backend
+  const { data: liveStatus } = useQuery({
+    queryKey: ["liveStatus"],
+    queryFn: getLiveStatus,
+    refetchInterval: 10000, // Refresh every 10 seconds
+    retry: false,
+  });
 
   // Update seconds since last refresh
   useEffect(() => {
@@ -189,6 +199,21 @@ const LiveUpdates = () => {
                 {isDuckDBAvailable ? "Connected" : "Disconnected"}
               </Badge>
             )}
+            {/* Live/Backfill Mode Indicator */}
+            {liveStatus && (
+              <Badge 
+                variant={liveStatus.mode === 'live' ? "default" : "secondary"} 
+                className={`flex items-center gap-1 ${liveStatus.mode === 'live' && liveStatus.status === 'running' ? 'animate-pulse' : ''}`}
+              >
+                {liveStatus.mode === 'live' ? (
+                  <Radio className="w-3 h-3" />
+                ) : (
+                  <Circle className="w-3 h-3" />
+                )}
+                {liveStatus.mode === 'live' ? 'Live' : liveStatus.mode === 'backfill' ? 'Backfill' : 'Unknown'}
+                {liveStatus.status === 'running' && ' (Active)'}
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
             <Button variant="outline" size="sm" onClick={handleRefresh} className="h-7 px-2">
@@ -196,7 +221,22 @@ const LiveUpdates = () => {
               Refresh
             </Button>
             <span>Updated {secondsSinceRefresh}s ago</span>
-            {stats.latestUpdate && (
+            {/* Show actual file timestamp if available */}
+            {liveStatus?.latest_file_write && (
+              <div className="flex items-center gap-1" title="Last file written to disk">
+                <FileText className="w-4 h-4" />
+                <span>File: {formatDistanceToNow(new Date(liveStatus.latest_file_write), { addSuffix: true })}</span>
+              </div>
+            )}
+            {/* Show record time from cursor */}
+            {liveStatus?.current_record_time && (
+              <div className="flex items-center gap-1" title="Latest record time from ledger">
+                <Timer className="w-4 h-4" />
+                <span>Ledger: {formatDistanceToNow(new Date(liveStatus.current_record_time), { addSuffix: true })}</span>
+              </div>
+            )}
+            {/* Fallback to calculated latest */}
+            {!liveStatus?.current_record_time && stats.latestUpdate && (
               <div className="flex items-center gap-1" title="Effective time of latest record in dataset">
                 <Timer className="w-4 h-4" />
                 <span>Data from: {formatDistanceToNow(stats.latestUpdate, { addSuffix: true })}</span>
@@ -204,6 +244,13 @@ const LiveUpdates = () => {
             )}
           </div>
         </div>
+
+        {/* Suggestion Banner */}
+        {liveStatus?.suggestion && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-sm text-amber-600 dark:text-amber-400">
+            💡 {liveStatus.suggestion}
+          </div>
+        )}
 
         {/* Stats Grid - Row 1 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
