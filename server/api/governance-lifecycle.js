@@ -727,6 +727,45 @@ function correlateTopics(allTopics) {
           continue;
         }
         
+        // CRITICAL: Determine candidate's type and only correlate if types match
+        // This prevents CIP topics from being grouped with featured-app items just because
+        // they share an entity name
+        const candidateSubject = candidate.subject.trim();
+        const candidateIsOutcome = /\bTokenomics\s+Outcomes\b/i.test(candidateSubject);
+        const candidateIsProtocolUpgrade = /\b(?:synchronizer\s+migration|splice\s+\d+\.\d+|protocol\s+upgrade|network\s+upgrade|hard\s*fork|migration\s+to\s+splice)\b/i.test(candidateSubject);
+        const candidateIsVoteProposal = /\bVote\s+Proposal\b/i.test(candidateSubject);
+        const candidateIsValidatorOperations = /\bValidator\s+Operations\b/i.test(candidateSubject);
+        const candidateHasCip = !!candidate.identifiers.cipNumber;
+        const candidateIsCipDiscussion = !!candidate.identifiers.isCipDiscussion;
+        
+        let candidateType;
+        if (candidateIsOutcome) {
+          candidateType = 'outcome';
+        } else if (candidateIsProtocolUpgrade) {
+          candidateType = 'protocol-upgrade';
+        } else if (candidate.flow === 'cip') {
+          candidateType = 'cip';
+        } else if (candidate.flow === 'featured-app') {
+          candidateType = 'featured-app';
+        } else if (candidate.flow === 'shared') {
+          if (candidateIsVoteProposal || candidateHasCip || candidateIsCipDiscussion) {
+            candidateType = 'cip';
+          } else if (candidateIsValidatorOperations || candidate.identifiers.validatorName) {
+            candidateType = 'validator';
+          } else if (candidate.identifiers.appName) {
+            candidateType = 'featured-app';
+          } else {
+            candidateType = 'featured-app';
+          }
+        } else {
+          candidateType = 'featured-app';
+        }
+        
+        // Only correlate if types match
+        if (candidateType !== item.type) {
+          continue;
+        }
+        
         // Use fuzzy matching function (handles normalization, substrings, Levenshtein distance)
         if (!entitiesMatch(topicEntityName, candidateEntity)) {
           continue;
