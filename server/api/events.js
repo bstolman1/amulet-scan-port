@@ -378,4 +378,45 @@ router.get('/rewards', async (req, res) => {
   }
 });
 
+// GET /api/events/member-traffic - Get member traffic events
+router.get('/member-traffic', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const sources = getDataSources();
+    
+    if (sources.primarySource === 'binary') {
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        maxDays: 90,
+        maxFilesToScan: 300,
+        sortBy: 'effective_at',
+        filter: (e) => e.template_id?.includes('MemberTraffic')
+      });
+      return res.json({ 
+        data: result.records, 
+        count: result.records.length, 
+        hasMore: result.hasMore, 
+        source: 'binary' 
+      });
+    }
+    
+    const sql = `
+      SELECT *
+      FROM ${getEventsSource()}
+      WHERE template_id LIKE '%MemberTraffic%'
+      ORDER BY effective_at DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+  } catch (err) {
+    console.error('Error fetching member traffic events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

@@ -1,6 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import { useDuckDBForLedger } from "@/lib/backend-config";
 import { getLatestUpdates, type LedgerUpdateRecord as DuckDBUpdate } from "@/lib/duckdb-api-client";
 
 export interface LedgerUpdateRecord {
@@ -21,24 +19,11 @@ export interface LedgerUpdateRecord {
 }
 
 export function useLatestUpdates(limit: number = 100) {
-  const useDuckDB = useDuckDBForLedger();
-
   return useQuery({
-    queryKey: ["latestUpdates", limit, useDuckDB ? "duckdb" : "supabase"],
-    queryFn: async () => {
-      if (useDuckDB) {
-        const res = await getLatestUpdates(limit, 0);
-        return res.data as DuckDBUpdate[];
-      }
-
-      const { data, error } = await supabase
-        .from("ledger_updates")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(limit);
-
-      if (error) throw error;
-      return (data ?? []) as LedgerUpdateRecord[];
+    queryKey: ["latestUpdates", limit],
+    queryFn: async (): Promise<LedgerUpdateRecord[]> => {
+      const res = await getLatestUpdates(limit, 0);
+      return res.data as DuckDBUpdate[];
     },
     staleTime: 5_000,
     refetchInterval: 10_000,
