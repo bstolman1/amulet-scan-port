@@ -33,6 +33,14 @@ function readAllCursors() {
       const filePath = join(CURSOR_DIR, file);
       const data = JSON.parse(readFileSync(filePath, 'utf-8'));
       
+      // Detect if cursor is stale (not updated in 5+ minutes but marked complete with old timestamp)
+      const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+      const isRecentlyUpdated = Date.now() - updatedAt < 5 * 60 * 1000; // 5 minutes
+      
+      // If marked complete but has pending writes, it's still finalizing
+      const hasPendingWork = (data.pending_writes || 0) > 0 || (data.buffered_records || 0) > 0;
+      const effectiveComplete = data.complete && !hasPendingWork;
+      
       cursors.push({
         id: data.id || file.replace('.json', ''),
         cursor_name: data.cursor_name || `migration-${data.migration_id}-${data.synchronizer_id?.substring(0, 20)}`,
@@ -41,7 +49,7 @@ function readAllCursors() {
         min_time: data.min_time,
         max_time: data.max_time,
         last_before: data.last_before,
-        complete: data.complete || false,
+        complete: effectiveComplete,
         last_processed_round: data.last_processed_round || 0,
         updated_at: data.updated_at || new Date().toISOString(),
         started_at: data.started_at || data.updated_at || new Date().toISOString(),
@@ -49,6 +57,7 @@ function readAllCursors() {
         total_events: data.total_events || 0,
         pending_writes: data.pending_writes || 0,
         buffered_records: data.buffered_records || 0,
+        is_recently_updated: isRecentlyUpdated,
         error: data.error,
       });
     } catch (err) {
@@ -59,16 +68,80 @@ function readAllCursors() {
   return cursors;
 }
 
+// Track file counts over time to detect active writes
+let lastFileCounts = { events: 0, updates: 0, timestamp: 0 };
+
+function countRawFiles() {
+  const rawDir = join(DATA_DIR, 'raw');
+  let events = 0;
+  let updates = 0;
+  
+  function scanDir(dir) {
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          scanDir(join(dir, entry.name));
+        } else if (entry.name.endsWith('.pb.zst')) {
+          if (entry.name.startsWith('events-')) events++;
+          else if (entry.name.startsWith('updates-')) updates++;
+        }
+      }
+    } catch {}
+  }
+  
+  if (existsSync(rawDir)) {
+    scanDir(rawDir);
+  }
+  
+  return { events, updates };
+}
+
 // GET /api/backfill/debug - Debug endpoint to check paths
 router.get('/debug', (req, res) => {
   const cursorExists = existsSync(CURSOR_DIR);
   const cursorFiles = cursorExists ? readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json')) : [];
+  const fileCounts = countRawFiles();
   
   res.json({
     cursorDir: CURSOR_DIR,
     cursorDirExists: cursorExists,
     cursorFiles,
+    rawFileCounts: fileCounts,
+    dataDir: DATA_DIR,
   });
+});
+
+// GET /api/backfill/write-activity - Check if files are actively being written
+router.get('/write-activity', (req, res) => {
+  try {
+    const now = Date.now();
+    const currentCounts = countRawFiles();
+    
+    // Compare with last counts (if within last 30 seconds)
+    const isActive = now - lastFileCounts.timestamp < 30000 && 
+      (currentCounts.events > lastFileCounts.events || currentCounts.updates > lastFileCounts.updates);
+    
+    const delta = {
+      events: currentCounts.events - (lastFileCounts.events || 0),
+      updates: currentCounts.updates - (lastFileCounts.updates || 0),
+      seconds: Math.round((now - lastFileCounts.timestamp) / 1000),
+    };
+    
+    // Update last counts
+    lastFileCounts = { ...currentCounts, timestamp: now };
+    
+    res.json({
+      isWriting: isActive,
+      currentCounts,
+      delta,
+      message: isActive 
+        ? `+${delta.events} event files, +${delta.updates} update files in last ${delta.seconds}s` 
+        : 'No new files detected since last check',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/backfill/cursors - Get all backfill cursors

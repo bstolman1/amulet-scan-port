@@ -198,6 +198,13 @@ export interface BackfillCursor {
   complete: boolean;
   last_processed_round: number;
   updated_at: string;
+  started_at?: string;
+  total_updates?: number;
+  total_events?: number;
+  pending_writes?: number;
+  buffered_records?: number;
+  is_recently_updated?: boolean;
+  error?: string;
 }
 
 export interface BackfillStats {
@@ -208,12 +215,23 @@ export interface BackfillStats {
   completedCursors: number;
 }
 
+export interface WriteActivity {
+  isWriting: boolean;
+  currentCounts: { events: number; updates: number };
+  delta: { events: number; updates: number; seconds: number };
+  message: string;
+}
+
 export async function getBackfillCursors(): Promise<ApiResponse<BackfillCursor[]>> {
   return apiFetch('/api/backfill/cursors');
 }
 
 export async function getBackfillStats(): Promise<BackfillStats> {
   return apiFetch('/api/backfill/stats');
+}
+
+export async function getWriteActivity(): Promise<WriteActivity> {
+  return apiFetch('/api/backfill/write-activity');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

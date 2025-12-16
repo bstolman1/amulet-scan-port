@@ -7,7 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { Database, Activity, Trash2, FileText, Layers, Zap, Clock, PlayCircle, PauseCircle, CheckCircle2 } from "lucide-react";
 import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
-import { useBackfillCursors, useBackfillStats, BackfillCursor } from "@/hooks/use-backfill-cursors";
+import { useBackfillCursors, useBackfillStats, useWriteActivity, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
 import { ShardProgressCard } from "@/components/ShardProgressCard";
 import { GapDetectionCard } from "@/components/GapDetectionCard";
@@ -56,6 +56,7 @@ function calculateETA(cursor: BackfillCursor): { eta: string | null; throughput:
 const BackfillProgress = () => {
   const { data: cursors = [], isLoading, refetch } = useBackfillCursors();
   const { data: stats, refetch: refetchStats } = useBackfillStats();
+  const { data: writeActivity } = useWriteActivity();
   const [realtimeCursors, setRealtimeCursors] = useState<BackfillCursor[]>([]);
   const [isPurging, setIsPurging] = useState(false);
   const { toast } = useToast();
@@ -65,9 +66,18 @@ const BackfillProgress = () => {
     return [...realtimeCursors, ...cursors.filter((c) => !realtimeCursors.some((rc) => rc.id === c.id))];
   }, [cursors, realtimeCursors]);
 
-  // Track if data is still being written (cursor buffers OR counts increasing)
+  // Track if data is still being written (cursor buffers OR counts increasing OR file activity)
   const hasPendingWork = useMemo(() => {
     return allCursors.some((c) => (c.pending_writes || 0) > 0 || (c.buffered_records || 0) > 0);
+  }, [allCursors]);
+
+  // Check if any cursor was recently updated (within last 2 minutes)
+  const hasRecentActivity = useMemo(() => {
+    const twoMinutesAgo = Date.now() - 2 * 60 * 1000;
+    return allCursors.some(c => {
+      const updated = c.updated_at ? new Date(c.updated_at).getTime() : 0;
+      return updated > twoMinutesAgo && !c.complete;
+    });
   }, [allCursors]);
 
   const [prevStats, setPrevStats] = useState<{ updates: number; events: number } | null>(null);
@@ -90,9 +100,10 @@ const BackfillProgress = () => {
     });
   }, [stats]);
 
+  // Use multiple signals to detect writing activity
   const isStillWriting = useMemo(() => {
-    return hasPendingWork || isStatsIncreasing;
-  }, [hasPendingWork, isStatsIncreasing]);
+    return hasPendingWork || isStatsIncreasing || writeActivity?.isWriting || hasRecentActivity;
+  }, [hasPendingWork, isStatsIncreasing, writeActivity?.isWriting, hasRecentActivity]);
 
   // Group cursors by migration_id
   const cursorsByMigration = useMemo(() => {
@@ -300,6 +311,32 @@ const BackfillProgress = () => {
             </Button>
           </div>
         </div>
+
+        {/* Write Activity Status */}
+        {writeActivity && (
+          <Card className={`border-2 ${writeActivity.isWriting ? "border-blue-500/50 bg-blue-500/5" : "border-muted"}`}>
+            <CardContent className="p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {writeActivity.isWriting ? (
+                    <>
+                      <Zap className="w-4 h-4 text-blue-500 animate-pulse" />
+                      <span className="font-medium text-blue-500">Actively Writing Files</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">No active writes detected</span>
+                    </>
+                  )}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {writeActivity.eventFiles.toLocaleString()} event files • {writeActivity.updateFiles.toLocaleString()} update files
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Overall Progress Bar */}
         {allCursors.length > 0 && (

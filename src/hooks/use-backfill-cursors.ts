@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getBackfillCursors, getBackfillStats, isApiAvailable } from "@/lib/duckdb-api-client";
+import { getBackfillCursors, getBackfillStats, getWriteActivity, isApiAvailable } from "@/lib/duckdb-api-client";
 import { supabase } from "@/integrations/supabase/client";
 
 export interface BackfillCursor {
@@ -18,7 +18,23 @@ export interface BackfillCursor {
   started_at?: string | null;
   pending_writes?: number | null;
   buffered_records?: number | null;
+  is_recently_updated?: boolean | null;
   error?: string | null;
+}
+
+export interface BackfillStats {
+  totalUpdates: number;
+  totalEvents: number;
+  activeMigrations: number;
+  totalCursors: number;
+  completedCursors: number;
+}
+
+export interface WriteActivityState {
+  isWriting: boolean;
+  eventFiles: number;
+  updateFiles: number;
+  message: string;
 }
 
 export interface BackfillStats {
@@ -93,6 +109,33 @@ export function useBackfillStats() {
     },
     staleTime: 10_000,
     refetchInterval: 30_000, // Auto-refresh every 30s
+  });
+}
+
+export function useWriteActivity() {
+  return useQuery({
+    queryKey: ["writeActivity"],
+    queryFn: async () => {
+      const duckdbAvailable = await isApiAvailable();
+      
+      if (duckdbAvailable) {
+        try {
+          const result = await getWriteActivity();
+          return {
+            isWriting: result.isWriting,
+            eventFiles: result.currentCounts.events,
+            updateFiles: result.currentCounts.updates,
+            message: result.message,
+          } as WriteActivityState;
+        } catch (e) {
+          console.warn("Write activity check failed:", e);
+        }
+      }
+      
+      return { isWriting: false, eventFiles: 0, updateFiles: 0, message: "API unavailable" } as WriteActivityState;
+    },
+    staleTime: 5_000,
+    refetchInterval: 5_000, // Check every 5 seconds
   });
 }
 
