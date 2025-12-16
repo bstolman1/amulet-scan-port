@@ -27,7 +27,7 @@ import {
   Trash2,
   Wifi,
   WifiOff,
-  Wifi,
+  Zap,
 } from "lucide-react";
 import { useLatestUpdates } from "@/hooks/use-latest-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
