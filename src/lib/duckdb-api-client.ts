@@ -396,6 +396,52 @@ export async function getACSRichList(params: { limit?: number; search?: string }
   return apiFetch(`/api/acs/rich-list?${queryParams}`);
 }
 
+// Real-time supply (snapshot + v2/updates delta)
+export interface RealtimeSupplyData {
+  snapshot: {
+    timestamp: string;
+    migration_id: number;
+    record_time: string;
+    unlocked: number;
+    locked: number;
+    total: number;
+  };
+  delta: {
+    since: string;
+    unlocked: number;
+    locked: number;
+    total: number;
+    events: {
+      created: number;
+      archived: number;
+    };
+  };
+  realtime: {
+    unlocked: number;
+    locked: number;
+    total: number;
+    circulating: number;
+  };
+  calculated_at: string;
+}
+
+export async function getRealtimeSupply(): Promise<{ data: RealtimeSupplyData | null }> {
+  return apiFetch('/api/acs/realtime-supply');
+}
+
+// Real-time rich list (snapshot + v2/updates delta)
+export interface RealtimeRichListResponse extends RichListResponse {
+  snapshotRecordTime: string;
+  isRealtime: boolean;
+}
+
+export async function getRealtimeRichList(params: { limit?: number; search?: string } = {}): Promise<RealtimeRichListResponse> {
+  const queryParams = new URLSearchParams();
+  if (params.limit) queryParams.set('limit', params.limit.toString());
+  if (params.search) queryParams.set('search', params.search);
+  return apiFetch(`/api/acs/realtime-rich-list?${queryParams}`);
+}
+
 // Allocations
 export interface AllocationData {
   contract_id: string;

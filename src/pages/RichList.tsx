@@ -8,23 +8,23 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { useQuery } from "@tanstack/react-query";
-import { getACSRichList, isApiAvailable } from "@/lib/duckdb-api-client";
+import { getRealtimeRichList, isApiAvailable } from "@/lib/duckdb-api-client";
 
 const RichList = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const { data: localAcsAvailable } = useLocalACSAvailable();
 
-  // Use server-side aggregated rich list endpoint
+  // Use real-time rich list endpoint (snapshot + v2/updates delta)
   const { data: richListData, isLoading, error } = useQuery({
-    queryKey: ["acs-rich-list", searchTerm],
+    queryKey: ["acs-realtime-rich-list", searchTerm],
     queryFn: async () => {
       const available = await isApiAvailable();
       if (!available) {
         throw new Error("DuckDB API not available");
       }
-      return getACSRichList({ limit: 100, search: searchTerm || undefined });
+      return getRealtimeRichList({ limit: 100, search: searchTerm || undefined });
     },
-    staleTime: 60_000,
+    staleTime: 30_000, // Shorter stale time for real-time data
     enabled: true,
   });
 
@@ -49,16 +49,23 @@ const RichList = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <div className="flex items-center gap-2 mb-2">
-            <h2 className="text-3xl font-bold">Rich List</h2>
-            {localAcsAvailable && (
-              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
-                <Database className="h-3 w-3 mr-1" />
-                Local ACS
-              </Badge>
-            )}
-          </div>
-          <p className="text-muted-foreground">Top CC holders and balance distribution</p>
+        <div className="flex items-center gap-2 mb-2">
+          <h2 className="text-3xl font-bold">Rich List</h2>
+          {localAcsAvailable && (
+            <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+              <Database className="h-3 w-3 mr-1" />
+              {richListData?.isRealtime ? "Real-time" : "Snapshot"}
+            </Badge>
+          )}
+        </div>
+        <p className="text-muted-foreground">
+          Top CC holders and balance distribution
+          {richListData?.snapshotRecordTime && (
+            <span className="text-xs ml-2">
+              (Snapshot + updates since {new Date(richListData.snapshotRecordTime).toLocaleString()})
+            </span>
+          )}
+        </p>
         </div>
 
         {/* Summary Cards */}
