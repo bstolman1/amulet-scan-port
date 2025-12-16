@@ -1013,7 +1013,17 @@ function getEventsSource() {
   const hasZstd = db.hasFileType('events', '.jsonl.zst');
 
   if (!hasJsonl && !hasGzip && !hasZstd) {
-    return `(SELECT NULL::VARCHAR as event_id WHERE false)`;
+    // Return empty table with expected schema
+    return `(
+      SELECT
+        NULL::VARCHAR as event_id,
+        NULL::VARCHAR as event_type,
+        NULL::VARCHAR as template_id,
+        NULL::JSON as payload,
+        NULL::TIMESTAMP as effective_at,
+        NULL::TIMESTAMP as timestamp
+      WHERE false
+    )`;
   }
 
   const basePath = db.DATA_PATH.replace(/\\/g, '/');
@@ -1128,7 +1138,7 @@ router.get('/realtime-supply', async (req, res) => {
               '0'
             ) AS DOUBLE) as amount
           FROM ${eventsSource}
-          WHERE effective_at > '${recordTime}'::TIMESTAMP
+          WHERE COALESCE(effective_at, timestamp) > '${recordTime}'::TIMESTAMP
             AND (
               template_id LIKE '%:Amulet:%' 
               AND template_id NOT LIKE '%:LockedAmulet:%'
@@ -1145,7 +1155,7 @@ router.get('/realtime-supply', async (req, res) => {
               '0'
             ) AS DOUBLE) as amount
           FROM ${eventsSource}
-          WHERE effective_at > '${recordTime}'::TIMESTAMP
+          WHERE COALESCE(effective_at, timestamp) > '${recordTime}'::TIMESTAMP
             AND template_id LIKE '%:LockedAmulet:%'
             AND event_type IN ('created', 'archived')
         ),
@@ -1337,7 +1347,7 @@ router.get('/realtime-rich-list', async (req, res) => {
             json_extract_string(payload, '$.owner') as owner,
             CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE) as amount
           FROM ${eventsSource}
-          WHERE effective_at > '${recordTime}'::TIMESTAMP
+          WHERE COALESCE(effective_at, timestamp) > '${recordTime}'::TIMESTAMP
             AND (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
             AND event_type IN ('created', 'archived')
             AND json_extract_string(payload, '$.owner') IS NOT NULL
@@ -1352,7 +1362,7 @@ router.get('/realtime-rich-list', async (req, res) => {
               '0'
             ) AS DOUBLE) as amount
           FROM ${eventsSource}
-          WHERE effective_at > '${recordTime}'::TIMESTAMP
+          WHERE COALESCE(effective_at, timestamp) > '${recordTime}'::TIMESTAMP
             AND template_id LIKE '%:LockedAmulet:%'
             AND event_type IN ('created', 'archived')
         )
