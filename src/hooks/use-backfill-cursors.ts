@@ -49,19 +49,55 @@ export function useBackfillCursors() {
   return useQuery({
     queryKey: ["backfillCursors"],
     queryFn: async () => {
-      // Try DuckDB API first (reads from local cursor file)
       const duckdbAvailable = await isApiAvailable();
-      
+
+      // If DuckDB API is available, still also fetch Supabase cursors.
+      // This prevents the UI from "missing" migrations that exist in Supabase but
+      // haven't been written to local cursor files yet (common during transitions).
       if (duckdbAvailable) {
-        try {
-          const result = await getBackfillCursors();
-          return result.data as BackfillCursor[];
-        } catch (e) {
-          console.warn("DuckDB API cursor fetch failed, falling back to Supabase:", e);
+        const [duckdbResult, supabaseResult] = await Promise.all([
+          getBackfillCursors().catch((e) => {
+            console.warn("DuckDB API cursor fetch failed:", e);
+            return { data: [] as BackfillCursor[] } as any;
+          }),
+          (async () => {
+            try {
+              const { data, error } = await supabase
+                .from("backfill_cursors")
+                .select("*")
+                .order("updated_at", { ascending: false });
+              if (error) throw error;
+              return (data || []) as BackfillCursor[];
+            } catch (e) {
+              console.warn("Supabase cursor fetch failed:", e);
+              return [] as BackfillCursor[];
+            }
+          })(),
+        ]);
+
+        const duckdbCursors = (duckdbResult?.data || []) as BackfillCursor[];
+        const supabaseCursors = supabaseResult as BackfillCursor[];
+
+        // Merge by a stable key (cursor_name is consistent across backends)
+        const byName = new Map<string, BackfillCursor>();
+        for (const c of supabaseCursors) {
+          if (c?.cursor_name) byName.set(c.cursor_name, c);
         }
+        for (const c of duckdbCursors) {
+          if (c?.cursor_name) byName.set(c.cursor_name, { ...byName.get(c.cursor_name), ...c });
+        }
+
+        const merged = Array.from(byName.values());
+        merged.sort((a, b) => {
+          const at = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+          const bt = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+          return bt - at;
+        });
+
+        return merged;
       }
 
-      // Fallback to Supabase
+      // DuckDB API not available: Supabase-only
       const { data, error } = await supabase
         .from("backfill_cursors")
         .select("*")
