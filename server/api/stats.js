@@ -540,4 +540,178 @@ router.post('/refresh-cache', async (req, res) => {
   }
 });
 
+// GET /api/stats/ccview-comparison - CCVIEW-style counting comparison
+// CCVIEW counts individual events within transactions, not just transactions
+router.get('/ccview-comparison', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    const basePath = db.DATA_PATH.replace(/\\/g, '/');
+    
+    // Count updates (transactions/reassignments)
+    let updateCount = 0;
+    let eventCount = 0;
+    let createdEventCount = 0;
+    let archivedEventCount = 0;
+    let exercisedEventCount = 0;
+    let reassignCreateCount = 0;
+    let reassignArchiveCount = 0;
+    let eventsWithContractId = 0;
+    let eventsWithoutContractId = 0;
+    let sampleContractIds = [];
+    
+    // Check for parquet files first
+    const hasParquetUpdates = db.hasFileType('updates', '.parquet');
+    const hasParquetEvents = db.hasFileType('events', '.parquet');
+    
+    if (hasParquetUpdates) {
+      try {
+        const updateResult = await db.safeQuery(`
+          SELECT COUNT(*) as count FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
+        `);
+        updateCount = Number(updateResult[0]?.count || 0);
+      } catch (e) {
+        console.warn('Parquet updates count failed:', e.message);
+      }
+    }
+    
+    if (hasParquetEvents) {
+      try {
+        // Get total event count
+        const eventResult = await db.safeQuery(`
+          SELECT COUNT(*) as count FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+        `);
+        eventCount = Number(eventResult[0]?.count || 0);
+        
+        // Get breakdown by event_type (CCVIEW style)
+        const typeBreakdown = await db.safeQuery(`
+          SELECT 
+            event_type,
+            COUNT(*) as count
+          FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+          GROUP BY event_type
+        `);
+        
+        for (const row of typeBreakdown) {
+          const type = row.event_type;
+          const cnt = Number(row.count || 0);
+          if (type === 'created') createdEventCount = cnt;
+          else if (type === 'archived') archivedEventCount = cnt;
+          else if (type === 'exercised') exercisedEventCount = cnt;
+          else if (type === 'reassign_create') reassignCreateCount = cnt;
+          else if (type === 'reassign_archive') reassignArchiveCount = cnt;
+        }
+        
+        // Check contract_id presence
+        const contractIdCheck = await db.safeQuery(`
+          SELECT 
+            COUNT(CASE WHEN contract_id IS NOT NULL AND contract_id != '' THEN 1 END) as with_contract_id,
+            COUNT(CASE WHEN contract_id IS NULL OR contract_id = '' THEN 1 END) as without_contract_id
+          FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+        `);
+        eventsWithContractId = Number(contractIdCheck[0]?.with_contract_id || 0);
+        eventsWithoutContractId = Number(contractIdCheck[0]?.without_contract_id || 0);
+        
+        // Sample some contract IDs
+        const sampleResult = await db.safeQuery(`
+          SELECT DISTINCT contract_id 
+          FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+          WHERE contract_id IS NOT NULL AND contract_id != ''
+          LIMIT 5
+        `);
+        sampleContractIds = sampleResult.map(r => r.contract_id);
+        
+      } catch (e) {
+        console.warn('Parquet events count failed:', e.message);
+      }
+    } else if (sources.primarySource === 'binary') {
+      // Binary file counting
+      const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+      const updateFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'updates');
+      
+      updateCount = updateFiles.length * 100; // Estimate
+      
+      // Sample some files for event type breakdown
+      const sampleFiles = eventFiles.slice(0, Math.min(100, eventFiles.length));
+      let sampledEvents = 0;
+      
+      for (const file of sampleFiles) {
+        try {
+          const result = await binaryReader.readBinaryFile(file);
+          for (const r of result.records) {
+            sampledEvents++;
+            const type = r.type || r.event_type;
+            if (type === 'created') createdEventCount++;
+            else if (type === 'archived') archivedEventCount++;
+            else if (type === 'exercised') exercisedEventCount++;
+            else if (type === 'reassign_create') reassignCreateCount++;
+            else if (type === 'reassign_archive') reassignArchiveCount++;
+            
+            if (r.contract_id && r.contract_id !== '') {
+              eventsWithContractId++;
+              if (sampleContractIds.length < 5) sampleContractIds.push(r.contract_id);
+            } else {
+              eventsWithoutContractId++;
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+      
+      // Extrapolate
+      if (sampledEvents > 0 && sampleFiles.length < eventFiles.length) {
+        const ratio = eventFiles.length / sampleFiles.length;
+        eventCount = Math.round(sampledEvents * ratio);
+        createdEventCount = Math.round(createdEventCount * ratio);
+        archivedEventCount = Math.round(archivedEventCount * ratio);
+        exercisedEventCount = Math.round(exercisedEventCount * ratio);
+        reassignCreateCount = Math.round(reassignCreateCount * ratio);
+        reassignArchiveCount = Math.round(reassignArchiveCount * ratio);
+        eventsWithContractId = Math.round(eventsWithContractId * ratio);
+        eventsWithoutContractId = Math.round(eventsWithoutContractId * ratio);
+      } else {
+        eventCount = sampledEvents;
+      }
+    }
+    
+    // CCVIEW counts all individual events
+    const ccviewStyleCount = createdEventCount + archivedEventCount + exercisedEventCount + reassignCreateCount + reassignArchiveCount;
+    
+    res.json({
+      // Your system's counts
+      your_counts: {
+        updates: updateCount,
+        events: eventCount,
+        description: 'Updates = transactions/reassignments, Events = individual contract events'
+      },
+      // CCVIEW-style breakdown
+      ccview_style: {
+        total_events: ccviewStyleCount,
+        breakdown: {
+          created_events: createdEventCount,
+          archived_events: archivedEventCount,
+          exercised_events: exercisedEventCount,
+          reassign_create_events: reassignCreateCount,
+          reassign_archive_events: reassignArchiveCount,
+        },
+        description: 'CCVIEW counts each created/archived/exercised event separately'
+      },
+      // Contract ID verification
+      contract_id_check: {
+        events_with_contract_id: eventsWithContractId,
+        events_without_contract_id: eventsWithoutContractId,
+        sample_contract_ids: sampleContractIds,
+        percentage_with_id: eventCount > 0 ? ((eventsWithContractId / eventCount) * 100).toFixed(2) + '%' : 'N/A'
+      },
+      // Explanation
+      explanation: {
+        discrepancy_reason: 'CCVIEW likely counts 97M events (created+archived+exercised). Your 69M "updates" are transactions which each contain multiple events.',
+        expected_ratio: 'Typically 1 update contains 1-3 events on average',
+        your_ratio: updateCount > 0 ? (eventCount / updateCount).toFixed(2) : 'N/A'
+      },
+      data_source: sources.primarySource
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

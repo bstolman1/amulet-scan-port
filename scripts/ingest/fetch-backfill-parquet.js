@@ -662,11 +662,16 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
     if (txs.length === 0) {
       consecutiveEmpty++;
       
-      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+      // Use much more conservative jumps to avoid skipping sparse data
+      // Maximum jump: 1ms per empty response, up to 5ms total
+      // This is MUCH safer than the previous exponential jump which could skip seconds of data
+      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY * 3) {
+        // After 6 consecutive empty responses with tiny jumps, we're likely in a true gap
         break;
       }
       
-      const jumpMs = Math.min(10 * Math.pow(10, consecutiveEmpty), 1000);
+      // Jump by only 1ms to avoid skipping sparse data
+      const jumpMs = 1;
       const d = new Date(currentBefore);
       d.setTime(d.getTime() - jumpMs);
       
@@ -885,12 +890,14 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
     if (txs.length === 0) {
       consecutiveEmpty++;
       
-      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
+      // Use conservative jumps to avoid skipping sparse data
+      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY * 3) {
         return { results, reachedEnd: true };
       }
       
+      // Jump by only 1ms to avoid skipping sparse data
       const d = new Date(currentBefore);
-      d.setTime(d.getTime() - 1000);
+      d.setTime(d.getTime() - 1);
       
       if (d.getTime() <= new Date(atOrAfter).getTime()) {
         return { results, reachedEnd: true };
@@ -1011,13 +1018,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           maxTime,
           shardIndex,
         );
-          minTime,
-          maxTime,
-          shardIndex,
-        );
 
         if (hasPendingWork) {
-          console.log(`   ⏳ Writes still pending (pending_writes=${pendingWrites}, buffered_records=${bufferedRecords}). Cursor left in finalizing state.`);
+          console.log(`   ⏳ Writes still pending (pending_writes=${pendingWritesAccurate}, buffered_records=${bufferedRecords}). Cursor left in finalizing state.`);
         }
       }
 
