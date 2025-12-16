@@ -1439,7 +1439,63 @@ router.get('/realtime-rich-list', async (req, res) => {
     setCache(cacheKey, result, 30 * 1000);
     res.json(result);
   } catch (err) {
-    console.error('Realtime rich-list error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/acs/realtime-debug - Debug info for snapshot+delta wiring
+router.get('/realtime-debug', async (req, res) => {
+  try {
+    const acsSource = getACSSource();
+    const eventsSource = getEventsSource();
+
+    // Snapshot side
+    let snapshot = null;
+    try {
+      const rows = await db.safeQuery(`
+        WITH ${getLatestSnapshotCTE(acsSource)}
+        SELECT
+          (SELECT migration_id FROM latest_migration) as migration_id,
+          (SELECT snapshot_time FROM latest_snapshot) as snapshot_time,
+          MIN(record_time) as record_time,
+          COUNT(DISTINCT contract_id) as distinct_contracts
+        FROM ${acsSource}
+        WHERE migration_id = (SELECT migration_id FROM latest_migration)
+          AND snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      `);
+      snapshot = rows?.[0] || null;
+    } catch (e) {
+      snapshot = { error: e.message };
+    }
+
+    // Events side (schema sample)
+    let eventSample = null;
+    let eventColumns = [];
+    try {
+      const sampleRows = await db.safeQuery(`SELECT * FROM ${eventsSource} LIMIT 1`);
+      eventSample = sampleRows?.[0] || null;
+      eventColumns = eventSample ? Object.keys(eventSample) : [];
+    } catch (e) {
+      eventSample = { error: e.message };
+      eventColumns = [];
+    }
+
+    const result = serializeBigInt({
+      data: {
+        snapshot,
+        events: {
+          columns: eventColumns,
+          has_effective_at: eventColumns.includes('effective_at'),
+          has_timestamp: eventColumns.includes('timestamp'),
+          has_event_type: eventColumns.includes('event_type'),
+          sample: eventSample,
+        },
+      },
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('ACS realtime-debug error:', err);
     res.status(500).json({ error: err.message });
   }
 });
