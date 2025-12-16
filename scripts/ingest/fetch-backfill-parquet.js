@@ -648,8 +648,7 @@ function decodeInMainThread(tx, migrationId) {
 async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex, processCallback) {
   const seenUpdateIds = new Set();
   let currentBefore = sliceBefore;
-  let consecutiveEmpty = 0;
-  const MAX_CONSECUTIVE_EMPTY = 2;
+  const emptyHandler = new EmptyResponseHandler();
   let totalTxs = 0;
   let earliestTime = sliceBefore;
   
@@ -669,31 +668,21 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
     const txs = response?.transactions || [];
     
     if (txs.length === 0) {
-      consecutiveEmpty++;
-      
-      // BULLETPROOF: Only step back by 1ms, NEVER jump forward or skip
-      // This ensures we never miss sparse data
-      // After many empty responses, log but continue stepping back carefully
-      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY * 3) {
-        // Log warning but DON'T break - keep stepping back 1ms at a time
-        if (consecutiveEmpty % 100 === 0) {
-          console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses. Still stepping back 1ms at a time.`);
-        }
-      }
-      
-      // CRITICAL: Always step back exactly 1ms - NEVER more
-      const d = new Date(currentBefore);
-      d.setTime(d.getTime() - 1); // Exactly 1 millisecond
-      
-      if (d.getTime() <= new Date(sliceAfter).getTime()) {
+      const { action, newBefore, consecutiveEmpty, stepMs } = emptyHandler.handleEmpty(currentBefore, sliceAfter);
+      if (action === 'done' || !newBefore) {
         break;
       }
-      
-      currentBefore = d.toISOString();
+
+      // Keep logs accurate (step size may increase across gaps)
+      if (consecutiveEmpty % 100 === 0) {
+        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses. Stepping back ${stepMs}ms at a time.`);
+      }
+
+      currentBefore = newBefore;
       continue;
     }
     
-    consecutiveEmpty = 0;
+    emptyHandler.resetOnData();
     
     // Deduplicate within this slice
     const uniqueTxs = [];
@@ -879,8 +868,7 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
   const seenUpdateIds = new Set();
   let currentBefore = startBefore;
   let batchesFetched = 0;
-  let consecutiveEmpty = 0;
-  const MAX_CONSECUTIVE_EMPTY = 3;
+  const emptyHandler = new EmptyResponseHandler();
   
   while (batchesFetched < maxBatches) {
     if (new Date(currentBefore).getTime() <= new Date(atOrAfter).getTime()) {
@@ -898,27 +886,20 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
     batchesFetched++;
     
     if (txs.length === 0) {
-      consecutiveEmpty++;
-      
-      // BULLETPROOF: NEVER break on empty responses - always step back 1ms
-      // Empty responses don't mean "no data" - they might mean we're in a sparse period
+      const { action, newBefore, consecutiveEmpty, stepMs } = emptyHandler.handleEmpty(currentBefore, atOrAfter);
+      if (action === 'done' || !newBefore) {
+        return { results, reachedEnd: true };
+      }
+
       if (consecutiveEmpty % 100 === 0) {
-        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses in sequential mode. Continuing.`);
+        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses in sequential mode. Stepping back ${stepMs}ms at a time.`);
       }
-      
-      // CRITICAL: Always step back exactly 1ms - NEVER more, NEVER break early
-      const d = new Date(currentBefore);
-      d.setTime(d.getTime() - 1); // Exactly 1 millisecond
-      
-      if (d.getTime() <= new Date(atOrAfter).getTime()) {
-        return { results, reachedEnd: true }; // Only break when we reach the actual lower bound
-      }
-      
-      currentBefore = d.toISOString();
+
+      currentBefore = newBefore;
       continue;
     }
     
-    consecutiveEmpty = 0;
+    emptyHandler.resetOnData();
     
     const uniqueTxs = [];
     for (const tx of txs) {
