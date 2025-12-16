@@ -52,13 +52,14 @@ router.get('/latest', async (req, res) => {
     
     if (sources.primarySource === 'binary') {
       // For huge datasets, keep this endpoint snappy by scanning only recent partitions
-      // Sort by effective_at to show most recent ACTUAL transactions, not write order
+      // Sort by timestamp (record_time when event was written) to show recently ingested data
+      // NOT effective_at, which during backfill can be old historical times
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
-        maxDays: 30, // Scan more days since effective_at != partition date during backfill
+        maxDays: 7, // Recent partitions only
         maxFilesToScan: 200,
-        sortBy: 'effective_at',
+        sortBy: 'timestamp', // Use write time, not effective_at
       });
       return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
     }
