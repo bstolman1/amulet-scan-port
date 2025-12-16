@@ -27,9 +27,8 @@ import { PaginationControls } from "@/components/PaginationControls";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { toCC } from "@/lib/amount-utils";
 import { getRealtimeSupply, getACSAllocations, getACSMiningRounds } from "@/lib/duckdb-api-client";
-import { useMultiTemplateEventDelta } from "@/hooks/use-template-event-delta";
-import { DeltaIndicator } from "@/components/DeltaIndicator";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -61,50 +60,38 @@ const Supply = () => {
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
   // Fetch real-time supply stats (snapshot + v2/updates delta)
-  // Use longer staleTime and show cached data immediately
-  const { data: realtimeSupply, isLoading: supplyLoading, isFetching: supplyFetching } = useQuery({
+  const { data: realtimeSupply, isLoading: supplyLoading } = useQuery({
     queryKey: ["realtime-supply"],
     queryFn: () => getRealtimeSupply(),
-    staleTime: 5 * 60 * 1000, // 5 minutes - match server cache
-    gcTime: 30 * 60 * 1000, // Keep in cache for 30 minutes
-    refetchOnWindowFocus: false,
+    staleTime: 30000,
   });
 
   // Fetch allocations from server-side
-  const { data: allocationsData, isLoading: allocationsLoading, isFetching: allocationsFetching } = useQuery({
+  const { data: allocationsData, isLoading: allocationsLoading } = useQuery({
     queryKey: ["allocations", searchTerm, currentPage],
     queryFn: () => getACSAllocations({ 
       limit: itemsPerPage, 
       offset: (currentPage - 1) * itemsPerPage,
       search: searchTerm || undefined 
     }),
-    staleTime: 5 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    placeholderData: keepPreviousData,
-    refetchOnWindowFocus: false,
+    staleTime: 30000,
+    placeholderData: keepPreviousData, // Keep old data while fetching new page
   });
 
   // Fetch mining rounds from server-side
-  const { data: miningRoundsData, isLoading: miningRoundsLoading, isFetching: miningRoundsFetching } = useQuery({
+  const { data: miningRoundsData, isLoading: miningRoundsLoading } = useQuery({
     queryKey: ["mining-rounds"],
     queryFn: () => getACSMiningRounds({ closedLimit: 20 }),
-    staleTime: 5 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
+    staleTime: 30000,
   });
 
-  // Fetch latest round from scan API (lightweight - keep shorter cache)
+  // Fetch latest round from scan API
   const { data: latestRound, isLoading: latestRoundLoading } = useQuery({
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
-    staleTime: 60 * 1000, // 1 minute
-    refetchOnWindowFocus: false,
   });
 
-  // Show loading only on initial load, not background refetch
-  const isInitialLoading = supplyLoading || allocationsLoading || miningRoundsLoading || latestRoundLoading;
-  const isFetching = supplyFetching || allocationsFetching || miningRoundsFetching;
-  const isLoading = isInitialLoading; // Alias for template compatibility
+  const isLoading = supplyLoading || allocationsLoading || miningRoundsLoading || latestRoundLoading;
 
   // Use real-time supply metrics (snapshot + delta)
   const supplyData = realtimeSupply?.data;
@@ -127,13 +114,6 @@ const Supply = () => {
   const openRounds = miningRoundsData?.openRounds || [];
   const issuingRounds = miningRoundsData?.issuingRounds || [];
   const closedRounds = miningRoundsData?.closedRounds || [];
-
-  // Get delta indicators for mining round templates
-  const miningRoundTemplates = ["OpenMiningRound", "IssuingMiningRound", "ClosedMiningRound"];
-  const { data: miningRoundDeltas } = useMultiTemplateEventDelta(
-    snapshotInfo?.record_time,
-    miningRoundTemplates
-  );
 
   const formatAmount = (amount: number) => {
     return amount.toLocaleString(undefined, {
@@ -171,18 +151,10 @@ const Supply = () => {
               )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button onClick={handleForceRefresh} variant="outline" size="sm" className="gap-2" disabled={isRefreshing}>
-              <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-              {isRefreshing ? "Refreshing..." : "Force Refresh"}
-            </Button>
-            {isFetching && !isRefreshing && (
-              <Badge variant="outline" className="animate-pulse">
-                <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-                Updating...
-              </Badge>
-            )}
-          </div>
+          <Button onClick={handleForceRefresh} variant="outline" size="sm" className="gap-2" disabled={isRefreshing}>
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            {isRefreshing ? "Refreshing..." : "Force Refresh"}
+          </Button>
         </div>
 
         {/* Supply Stats */}
@@ -427,16 +399,10 @@ const Supply = () => {
 
           {/* Open Rounds - from ACS snapshot */}
           <div>
-            <h4 className="text-xl font-bold mb-4 flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-warning" />
+            <h4 className="text-xl font-bold mb-4 flex items-center">
+              <AlertCircle className="h-5 w-5 mr-2 text-warning" />
               Open Rounds ({miningRoundsData?.counts?.open || 0})
-              <DeltaIndicator 
-                created={miningRoundDeltas?.["OpenMiningRound"]?.created_count || 0}
-                archived={miningRoundDeltas?.["OpenMiningRound"]?.archived_count || 0}
-                since={snapshotInfo?.record_time}
-                compact
-              />
-              <Badge variant="outline" className="text-xs">ACS + Delta</Badge>
+              <Badge variant="outline" className="ml-2 text-xs">ACS Snapshot</Badge>
             </h4>
             {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
@@ -504,16 +470,9 @@ const Supply = () => {
 
           {/* Issuing Rounds */}
           <div>
-            <h4 className="text-xl font-bold mb-4 flex items-center gap-2">
-              <Clock className="h-5 w-5 text-primary" />
+            <h4 className="text-xl font-bold mb-4 flex items-center">
+              <Clock className="h-5 w-5 mr-2 text-primary" />
               Issuing Rounds ({miningRoundsData?.counts?.issuing || 0})
-              <DeltaIndicator 
-                created={miningRoundDeltas?.["IssuingMiningRound"]?.created_count || 0}
-                archived={miningRoundDeltas?.["IssuingMiningRound"]?.archived_count || 0}
-                since={snapshotInfo?.record_time}
-                compact
-              />
-              <Badge variant="outline" className="text-xs">ACS + Delta</Badge>
             </h4>
             {miningRoundsLoading ? (
               <Skeleton className="h-48 w-full" />
@@ -578,16 +537,9 @@ const Supply = () => {
 
           {/* Closed Rounds (Pending Archive) */}
           <div>
-            <h4 className="text-xl font-bold mb-4 flex items-center gap-2">
-              <CheckCircle className="h-5 w-5 text-success" />
+            <h4 className="text-xl font-bold mb-4 flex items-center">
+              <CheckCircle className="h-5 w-5 mr-2 text-success" />
               Closed Rounds - Pending Archive ({miningRoundsData?.counts?.closed || 0})
-              <DeltaIndicator 
-                created={miningRoundDeltas?.["ClosedMiningRound"]?.created_count || 0}
-                archived={miningRoundDeltas?.["ClosedMiningRound"]?.archived_count || 0}
-                since={snapshotInfo?.record_time}
-                compact
-              />
-              <Badge variant="outline" className="text-xs">ACS + Delta</Badge>
             </h4>
             <p className="text-sm text-muted-foreground mb-4">
               These rounds are closed but still exist as active contracts awaiting archival. For historical round data, see the Round Statistics page.

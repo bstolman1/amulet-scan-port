@@ -15,8 +15,7 @@ const RichList = () => {
   const { data: localAcsAvailable } = useLocalACSAvailable();
 
   // Use real-time rich list endpoint (snapshot + v2/updates delta)
-  // Longer cache times to avoid slow reloads - data refreshes in background
-  const { data: richListData, isLoading, isFetching, error } = useQuery({
+  const { data: richListData, isLoading, error } = useQuery({
     queryKey: ["acs-realtime-rich-list", searchTerm],
     queryFn: async () => {
       const available = await isApiAvailable();
@@ -25,9 +24,7 @@ const RichList = () => {
       }
       return getRealtimeRichList({ limit: 100, search: searchTerm || undefined });
     },
-    staleTime: 5 * 60 * 1000, // 5 minutes - match server cache
-    gcTime: 30 * 60 * 1000, // Keep in cache for 30 minutes
-    refetchOnWindowFocus: false,
+    staleTime: 30_000, // Shorter stale time for real-time data
     enabled: true,
   });
 

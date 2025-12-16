@@ -13,8 +13,6 @@ import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
-import { DeltaIndicator } from "@/components/DeltaIndicator";
-import { useMultiTemplateEventDelta } from "@/hooks/use-template-event-delta";
 
 const ValidatorLicenses = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -43,15 +41,6 @@ const ValidatorLicenses = () => {
     latestSnapshot?.id,
     "Splice:Amulet:ValidatorRight",
   );
-
-  // Get event deltas since snapshot
-  const templateSuffixes = [
-    "Splice:ValidatorLicense:ValidatorLicense",
-    "Splice:ValidatorLicense:ValidatorFaucetCoupon",
-    "Splice:ValidatorLicense:ValidatorLivenessActivityRecord",
-    "Splice:Amulet:ValidatorRight"
-  ];
-  const { data: deltas } = useMultiTemplateEventDelta(latestSnapshot?.record_time, templateSuffixes);
 
   const licensesData = licensesQuery.data?.data || [];
   const couponsData = couponsQuery.data?.data || [];
@@ -120,15 +109,7 @@ const ValidatorLicenses = () => {
 
         <div className="grid gap-4 md:grid-cols-2">
           <Card className="p-6">
-            <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-sm font-medium text-muted-foreground">Active Licenses</h3>
-              <DeltaIndicator 
-                created={deltas?.["Splice:ValidatorLicense:ValidatorLicense"]?.created_count}
-                archived={deltas?.["Splice:ValidatorLicense:ValidatorLicense"]?.archived_count}
-                since={latestSnapshot?.record_time}
-                compact
-              />
-            </div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Active Licenses</h3>
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
@@ -137,15 +118,7 @@ const ValidatorLicenses = () => {
           </Card>
 
           <Card className="p-6">
-            <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-sm font-medium text-muted-foreground">Faucet Coupons</h3>
-              <DeltaIndicator 
-                created={deltas?.["Splice:ValidatorLicense:ValidatorFaucetCoupon"]?.created_count}
-                archived={deltas?.["Splice:ValidatorLicense:ValidatorFaucetCoupon"]?.archived_count}
-                since={latestSnapshot?.record_time}
-                compact
-              />
-            </div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Faucet Coupons</h3>
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
