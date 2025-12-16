@@ -5,24 +5,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Shield, CheckCircle, AlertCircle, Code } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 
 const DSOState = () => {
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-
-  const nodeStatesQuery = useAggregatedTemplateData(latestSnapshot?.id, "DSO:SvState:SvNodeState");
+  const nodeStatesQuery = useAggregatedTemplateData(undefined, "DSO:SvState:SvNodeState");
 
   const statusReportsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "DSO:SvState:SvStatusReport",
   );
 
   const rewardStatesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "DSO:SvState:SvRewardState",
   );
 
@@ -287,7 +284,7 @@ const DSOState = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={["DSO:SvState:SvNodeState", "DSO:SvState:SvStatusReport", "DSO:SvState:SvRewardState"]}
           isProcessing={false}
         />

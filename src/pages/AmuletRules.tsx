@@ -9,7 +9,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 
@@ -225,19 +224,17 @@ const truncateIdentifier = (value?: string) =>
   value && value.length > 24 ? `${value.slice(0, 18)}…${value.slice(-6)}` : value || "—";
 
 const AmuletRules = () => {
-  const { data: latestSnapshot, isLoading: snapshotLoading } = useLatestACSSnapshot();
   const amuletRulesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:AmuletRules:AmuletRules",
   );
+  const isLoading = amuletRulesQuery.isLoading;
 
   const normalizedRule = useMemo(() => normalizeAmuletRule(amuletRulesQuery.data?.data?.[0]), [amuletRulesQuery.data]);
 
   const transferConfig = normalizedRule?.transferConfig;
   const issuanceCurve = normalizedRule?.issuanceCurve;
   const synchronizer = normalizedRule?.decentralizedSynchronizer;
-
-  const isLoading = snapshotLoading || amuletRulesQuery.isLoading;
   const hasData = !!normalizedRule;
 
   return (
@@ -589,9 +586,9 @@ const AmuletRules = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={["Splice:AmuletRules:AmuletRules"]}
-          isProcessing={latestSnapshot?.status === "processing"}
+          isProcessing={false}
         />
       </div>
     </DashboardLayout>
