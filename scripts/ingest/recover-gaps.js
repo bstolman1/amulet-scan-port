@@ -13,22 +13,23 @@
  *   node recover-gaps.js --threshold 300000  # Set gap threshold to 5 minutes
  */
 
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-dotenv.config();
+
+// Load .env from the script's directory, not cwd
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import Piscina from 'piscina';
 import { readBinaryFile } from './read-binary.js';
 import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
 import { bufferUpdates, bufferEvents, flushAll, waitForWrites, shutdown } from './write-binary.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // TLS config (secure by default)
 // Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
