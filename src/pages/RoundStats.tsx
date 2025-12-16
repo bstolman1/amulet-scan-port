@@ -41,15 +41,17 @@ const StatCard = ({
 const RoundStats = () => {
   const { data: snapshot } = useLatestACSSnapshot();
 
-  // Fetch mining rounds from local ACS
-  const { data: miningRoundsData, isLoading } = useQuery({
+  // Fetch mining rounds from local ACS - longer cache for instant page loads
+  const { data: miningRoundsData, isLoading, isFetching } = useQuery({
     queryKey: ["localMiningRounds"],
     queryFn: async () => {
       const available = await isApiAvailable();
       if (!available) return null;
       return getACSMiningRounds({ closedLimit: 20 });
     },
-    staleTime: 30_000,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 30 * 60 * 1000, // Keep in cache
+    refetchOnWindowFocus: false,
   });
 
   const openRounds = miningRoundsData?.openRounds || [];
