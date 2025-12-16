@@ -17,6 +17,11 @@ interface SchemaCompliance {
   updatesWithRecordTime: number;
   updatesWithoutRecordTime: number;
   eventsWithChildEventIds: number;
+  // Contract ID tracking
+  eventsWithContractId: number;
+  eventsWithoutContractId: number;
+  updatesWithContractId: number;
+  updatesWithoutContractId: number;
 }
 
 interface ValidationResult {
@@ -225,6 +230,12 @@ export function DataIntegrityValidator() {
                       <span>child_event_ids:</span>
                       <span>{result.schemaCompliance.eventsWithChildEventIds}</span>
                     </div>
+                    <div className="flex justify-between">
+                      <span>contract_id:</span>
+                      <span className={result.schemaCompliance.eventsWithContractId > 0 ? "text-green-500" : "text-yellow-500"}>
+                        {result.schemaCompliance.eventsWithContractId}/{result.schemaCompliance.eventsWithContractId + result.schemaCompliance.eventsWithoutContractId}
+                      </span>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <div className="font-medium text-muted-foreground">Updates</div>
@@ -238,6 +249,12 @@ export function DataIntegrityValidator() {
                       <span>root_event_ids:</span>
                       <span className={result.schemaCompliance.updatesWithRootEventIds > 0 ? "text-green-500" : "text-yellow-500"}>
                         {result.schemaCompliance.updatesWithRootEventIds}/{result.schemaCompliance.updatesWithRootEventIds + result.schemaCompliance.updatesWithoutRootEventIds}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>contract_id (in events):</span>
+                      <span className={result.schemaCompliance.updatesWithContractId > 0 ? "text-green-500" : "text-yellow-500"}>
+                        {result.schemaCompliance.updatesWithContractId}/{result.schemaCompliance.updatesWithContractId + result.schemaCompliance.updatesWithoutContractId}
                       </span>
                     </div>
                   </div>

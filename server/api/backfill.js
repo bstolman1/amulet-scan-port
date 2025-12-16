@@ -603,6 +603,11 @@ router.post('/validate-integrity', async (req, res) => {
         updatesWithRecordTime: 0,
         updatesWithoutRecordTime: 0,
         eventsWithChildEventIds: 0,
+        // Contract ID tracking
+        eventsWithContractId: 0,
+        eventsWithoutContractId: 0,
+        updatesWithContractId: 0,
+        updatesWithoutContractId: 0,
       },
       errors: [],
       sampleDetails: [],
@@ -675,6 +680,17 @@ router.post('/validate-integrity', async (req, res) => {
               if (childEventIds !== undefined) {
                 results.schemaCompliance.eventsWithChildEventIds++;
               }
+              
+              // Check for contract_id
+              const contractId = r.contract_id || r.contractId;
+              if (contractId) {
+                results.schemaCompliance.eventsWithContractId++;
+              } else {
+                results.schemaCompliance.eventsWithoutContractId++;
+                if (!detail.schemaIssues.includes('missing_contract_id')) {
+                  detail.schemaIssues.push('missing_contract_id');
+                }
+              }
             }
             
             if (hasMissing) {
@@ -716,6 +732,18 @@ router.post('/validate-integrity', async (req, res) => {
                 results.schemaCompliance.updatesWithoutRecordTime++;
                 if (!detail.schemaIssues.includes('missing_record_time')) {
                   detail.schemaIssues.push('missing_record_time');
+                }
+              }
+              
+              // Check for contract_id in update events (from events_by_id)
+              const eventsById = r.events_by_id || r.eventsById;
+              if (eventsById && typeof eventsById === 'object') {
+                const eventValues = Object.values(eventsById);
+                const hasContractIds = eventValues.some(e => e && (e.contract_id || e.contractId));
+                if (hasContractIds) {
+                  results.schemaCompliance.updatesWithContractId++;
+                } else if (eventValues.length > 0) {
+                  results.schemaCompliance.updatesWithoutContractId++;
                 }
               }
             }
