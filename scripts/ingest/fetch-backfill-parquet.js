@@ -952,8 +952,6 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
 /**
  * Backfill a single synchronizer with parallel fetching (shard-aware)
  * Uses auto-tuning for parallel fetches and decode workers
- * 
- * BULLETPROOF MODE: Cursor only advances AFTER writes are confirmed to disk.
  */
 async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime, shardIndex = null) {
   const shardLabel = shardIndex !== null ? ` [shard ${shardIndex}/${SHARD_TOTAL}]` : '';
@@ -961,45 +959,25 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   console.log(`   Range: ${minTime} to ${maxTime}`);
   console.log(`   Parallel fetches (auto-tuned): ${dynamicParallelFetches} (min=${MIN_PARALLEL_FETCHES}, max=${MAX_PARALLEL_FETCHES})`);
   console.log(`   Decode workers (auto-tuned): ${dynamicDecodeWorkers} (min=${MIN_DECODE_WORKERS}, max=${MAX_DECODE_WORKERS})`);
-  console.log(`   🛡️ BULLETPROOF MODE: Cursor advances only after confirmed writes`);
   
-  // Initialize bulletproof components
-  const runStartedAt = new Date().toISOString();
-  const integrityCursor = new IntegrityCursor(
-    migrationId,
-    synchronizerId,
-    shardIndex,
-    CURSOR_DIR,
-    minTime,
-    maxTime,
-    runStartedAt,
-  );
-  const writeVerifier = new WriteVerifier();
-  const batchTracker = new BatchIntegrityTracker();
-  
-  // Load existing cursor state
-  const cursorData = integrityCursor.load();
-  
-  // Ensure the cursor file exists on disk even before the first confirmed write
-  // (cursor position still only advances on confirmWrite).
-  if (!cursorData) {
-    integrityCursor.persistSnapshot();
-  }
-  
-  // Determine starting position - use CONFIRMED position, not pending
-  let before = cursorData?.last_confirmed_before || cursorData?.last_before || maxTime;
+  // Load existing cursor (shard-aware)
+  let cursor = loadCursor(migrationId, synchronizerId, shardIndex);
+  let before = cursor?.last_before || maxTime;
   const atOrAfter = minTime;
   
-  // CRITICAL: Check if cursor.last_confirmed_before is already at or before minTime
-  if (cursorData && cursorData.last_confirmed_before) {
-    const lastConfirmedMs = new Date(cursorData.last_confirmed_before).getTime();
+  // CRITICAL: Check if cursor.last_before is already at or before minTime
+  // This means we've already processed everything.
+  // HOWEVER: we must not present as "fully complete" while writes are still draining.
+  if (cursor && cursor.last_before) {
+    const lastBeforeMs = new Date(cursor.last_before).getTime();
     const minTimeMs = new Date(minTime).getTime();
 
-    if (lastConfirmedMs <= minTimeMs) {
-      console.log(`   ⚠️ Cursor last_confirmed_before (${cursorData.last_confirmed_before}) is at or before minTime (${minTime})`);
+    if (lastBeforeMs <= minTimeMs) {
+      console.log(`   ⚠️ Cursor last_before (${cursor.last_before}) is at or before minTime (${minTime})`);
       console.log(`   ⚠️ This synchronizer appears complete. Ensuring writer queues are drained before marking complete.`);
 
       // Flush any in-memory buffers and wait for pending writes.
+      // This prevents the UI from showing 100% while data is still being written.
       try {
         await flushAll();
       } catch {}
@@ -1016,46 +994,66 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const bufferedRecords = Number((finalStats.updatesBuffered || 0) + (finalStats.eventsBuffered || 0));
       const hasPendingWork = pendingWritesAccurate > 0 || bufferedRecords > 0;
 
-      if (!hasPendingWork) {
-        try {
-          integrityCursor.markComplete();
-        } catch (e) {
-          console.log(`   ⚠️ Could not mark complete: ${e.message}`);
+      // Mark complete, but keep pending fields accurate so UI can show "Finalizing" if needed.
+      if (!cursor.complete || hasPendingWork) {
+        saveCursor(
+          migrationId,
+          synchronizerId,
+          {
+            ...cursor,
+            pending_writes: pendingWritesAccurate,
+            buffered_records: bufferedRecords,
+            complete: !hasPendingWork,
+            updated_at: new Date().toISOString(),
+          },
+          minTime,
+          maxTime,
+          shardIndex,
+        );
+
+        if (hasPendingWork) {
+          console.log(`   ⏳ Writes still pending (pending_writes=${pendingWritesAccurate}, buffered_records=${bufferedRecords}). Cursor left in finalizing state.`);
         }
       }
 
-      return { updates: integrityCursor.confirmedUpdates || 0, events: integrityCursor.confirmedEvents || 0 };
+      return { updates: cursor.total_updates || 0, events: cursor.total_events || 0 };
     }
 
     // Also log cursor state for debugging
     console.log(
-      `   📍 Resuming from CONFIRMED cursor: last_confirmed_before=${cursorData.last_confirmed_before}, confirmed_updates=${integrityCursor.confirmedUpdates}, pending_updates=${integrityCursor.pendingUpdates}`,
+      `   📍 Resuming from cursor: last_before=${cursor.last_before}, updates=${cursor.total_updates || 0}, complete=${cursor.complete || false}`,
     );
   }
   
-  let totalUpdates = integrityCursor.confirmedUpdates || 0;
-  let totalEvents = integrityCursor.confirmedEvents || 0;
-  let pendingUpdates = 0;
-  let pendingEvents = 0;
-  let pendingEarliestTime = before;
+  let totalUpdates = cursor?.total_updates || 0;
+  let totalEvents = cursor?.total_events || 0;
   let batchCount = 0;
   const startTime = Date.now();
+  
+  // Save initial cursor only if this is a fresh start
+  if (!cursor) {
+    saveCursor(migrationId, synchronizerId, {
+      last_before: before,
+      total_updates: 0,
+      total_events: 0,
+      started_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, minTime, maxTime, shardIndex);
+  }
   
   while (true) {
     try {
       // Use current dynamic concurrency values
       const localParallel = dynamicParallelFetches;
       
-      // Track pending data (NOT confirmed yet) for streaming progress
+      // Cursor callback for streaming progress updates
       const cursorCallback = (streamUpdates, streamEvents, streamEarliest) => {
-        pendingUpdates += streamUpdates;
-        pendingEvents += streamEvents;
-        if (streamEarliest && streamEarliest < pendingEarliestTime) {
-          pendingEarliestTime = streamEarliest;
-        }
-        // Record pending (not confirmed yet)
-        integrityCursor.recordPending(streamUpdates, streamEvents);
-        batchTracker.recordBatch(`stream-${batchCount}`, streamUpdates, streamEvents, { before: streamEarliest });
+        saveCursor(migrationId, synchronizerId, {
+          last_before: streamEarliest || before,
+          total_updates: totalUpdates + streamUpdates,
+          total_events: totalEvents + streamEvents,
+          updated_at: new Date().toISOString(),
+        }, minTime, maxTime, shardIndex);
       };
       
       const fetchResult = await parallelFetchBatch(
@@ -1068,22 +1066,21 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents } = fetchResult;
       
       if (results.length === 0 && !batchUpdates) {
-        console.log(`   ✅ No more transactions. Confirming writes and marking complete.${shardLabel}`);
+        console.log(`   ✅ No more transactions. Marking complete.${shardLabel}`);
         break;
       }
       
-      // Track this batch (still pending until writes confirmed)
-      pendingUpdates += batchUpdates || 0;
-      pendingEvents += batchEvents || 0;
+      // Streaming mode: transactions already processed, just use stats
+      totalUpdates += batchUpdates || 0;
+      totalEvents += batchEvents || 0;
       batchCount++;
       
-      // Update pending position from streaming result
+      // Update cursor position from streaming result
       const newEarliestTime = resultEarliestTime || (results[0]?.before);
       if (newEarliestTime && newEarliestTime !== before) {
         const d = new Date(newEarliestTime);
         d.setMilliseconds(d.getMilliseconds() - 1);
         before = d.toISOString();
-        pendingEarliestTime = before;
       } else {
         // No new data found, small step back
         const d = new Date(before);
@@ -1093,42 +1090,42 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       
       // Calculate throughput
       const elapsed = (Date.now() - startTime) / 1000;
-      const throughput = Math.round((totalUpdates + pendingUpdates) / elapsed);
+      const throughput = Math.round(totalUpdates / elapsed);
       
-      // Get buffer stats
+      // Save cursor and log progress (include pending write state)
       const stats = getBufferStats();
+      const pendingWritesAccurate =
+        Number(stats.pendingWrites || 0) +
+        Number(stats.queuedWrites ?? stats.queuedJobs ?? 0) +
+        Number(stats.activeWrites ?? stats.activeWorkers ?? 0);
+
+      saveCursor(migrationId, synchronizerId, {
+        last_before: before,
+        total_updates: totalUpdates,
+        total_events: totalEvents,
+        pending_writes: pendingWritesAccurate,
+        buffered_records: (stats.updatesBuffered || 0) + (stats.eventsBuffered || 0),
+        complete: false, // Explicitly mark as not complete during loop
+        updated_at: new Date().toISOString(),
+      }, minTime, maxTime, shardIndex);
+      
       const queuedJobs = Number(stats.queuedJobs ?? 0);
       const activeWorkers = Number(stats.activeWorkers ?? 0);
       
       // Force flush periodically to prevent memory buildup
       if (batchCount % FLUSH_EVERY_BATCHES === 0) {
         await flushAll();
-        
-        // BULLETPROOF: Wait for writes and THEN confirm cursor advance
-        console.log(`   🛡️ Confirming writes before advancing cursor...${shardLabel}`);
-        await waitForWrites();
-        
-        // NOW it's safe to advance cursor - writes are confirmed
-        integrityCursor.confirmWrite(pendingUpdates, pendingEvents, pendingEarliestTime);
-        totalUpdates += pendingUpdates;
-        totalEvents += pendingEvents;
-        
-        console.log(`   ✅ Cursor advanced to ${pendingEarliestTime} (confirmed: ${totalUpdates} updates, ${totalEvents} events)${shardLabel}`);
-        
-        // Reset pending counters
-        pendingUpdates = 0;
-        pendingEvents = 0;
       }
       
       // Auto-tune after processing this wave
       maybeTuneParallelFetches(shardLabel);
       await maybeTuneDecodeWorkers(shardLabel);
       
-      // Main progress line with current tuning values (show both confirmed + pending)
-      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Confirmed: ${totalUpdates.toLocaleString()} Pending: ${pendingUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
+      // Main progress line with current tuning values
+      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || new Date(before).getTime() <= new Date(atOrAfter).getTime()) {
-        console.log(`   ✅ Reached lower bound. Confirming final writes.${shardLabel}`);
+        console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
         break;
       }
       
@@ -1137,24 +1134,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const msg = err.response?.data?.error || err.message;
       console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}): ${msg}${shardLabel}`);
       
-      // On transient errors, flush and confirm what we have, then retry
+      // Save cursor and retry for transient errors
       if ([429, 500, 502, 503, 504].includes(status)) {
-        console.log(`   ⏳ Transient error, confirming pending writes before retry...${shardLabel}`);
-        
-        try {
-          await flushAll();
-          await waitForWrites();
-          if (pendingUpdates > 0 || pendingEvents > 0) {
-            integrityCursor.confirmWrite(pendingUpdates, pendingEvents, pendingEarliestTime);
-            totalUpdates += pendingUpdates;
-            totalEvents += pendingEvents;
-            pendingUpdates = 0;
-            pendingEvents = 0;
-          }
-        } catch (flushErr) {
-          console.error(`   ⚠️ Flush failed during error recovery: ${flushErr.message}`);
-        }
-        
+        console.log(`   ⏳ Transient error, backing off...${shardLabel}`);
+        saveCursor(migrationId, synchronizerId, {
+          last_before: before,
+          total_updates: totalUpdates,
+          total_events: totalEvents,
+          error: msg,
+          updated_at: new Date().toISOString(),
+        }, minTime, maxTime, shardIndex);
         await sleep(5000);
         continue;
       }
@@ -1163,35 +1152,25 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     }
   }
   
-  // Final flush and confirmation
-  console.log(`   🛡️ Final flush and write confirmation...${shardLabel}`);
+  // Flush remaining data
   await flushAll();
+  
+  // CRITICAL: Wait for all writes to complete before marking as done
+  console.log(`   ⏳ Waiting for all pending writes to complete...${shardLabel}`);
   await waitForWrites();
-  
-  // Confirm any remaining pending writes
-  if (pendingUpdates > 0 || pendingEvents > 0) {
-    integrityCursor.confirmWrite(pendingUpdates, pendingEvents, pendingEarliestTime);
-    totalUpdates += pendingUpdates;
-    totalEvents += pendingEvents;
-  }
-  
-  // Verify batch totals match
-  const verification = batchTracker.verify(totalUpdates, totalEvents);
-  if (!verification.match) {
-    console.warn(`   ⚠️ Batch integrity check: expected ${verification.expected.updates}/${verification.expected.events}, got ${verification.actual.updates}/${verification.actual.events}`);
-  }
   
   // Get final write stats
   const finalStats = getBufferStats();
-  console.log(`   ✅ All writes confirmed. Final queue: ${finalStats.queuedJobs || 0} pending, ${finalStats.activeWorkers || 0} active${shardLabel}`);
+  console.log(`   ✅ All writes complete. Final queue: ${finalStats.queuedJobs || 0} pending, ${finalStats.activeWorkers || 0} active${shardLabel}`);
   
-  // Now safe to mark as complete - all data is written and confirmed
-  try {
-    integrityCursor.markComplete();
-  } catch (e) {
-    console.warn(`   ⚠️ Could not mark complete (may have pending): ${e.message}`);
-    // Save final state even if not marked complete
-  }
+  // Now safe to mark as complete - all data is written
+  saveCursor(migrationId, synchronizerId, {
+    last_before: before,
+    total_updates: totalUpdates,
+    total_events: totalEvents,
+    complete: true,
+    updated_at: new Date().toISOString(),
+  }, minTime, maxTime, shardIndex);
   
   const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`   ⏱️ Completed in ${totalTime}s (${Math.round(totalUpdates / parseFloat(totalTime))}/s avg)${shardLabel}`);
