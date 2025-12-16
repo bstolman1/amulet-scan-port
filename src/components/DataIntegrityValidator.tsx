@@ -256,10 +256,20 @@ export function DataIntegrityValidator() {
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span>contract_id (in events):</span>
-                      <span className={result.schemaCompliance.updatesWithContractId > 0 ? "text-green-500" : "text-yellow-500"}>
-                        {result.schemaCompliance.updatesWithContractId}/{result.schemaCompliance.updatesWithContractId + result.schemaCompliance.updatesWithoutContractId}
-                      </span>
+                      <span>contract_id (embedded in updates):</span>
+                      {(() => {
+                        const withId = result.schemaCompliance.updatesWithContractId;
+                        const withoutId = result.schemaCompliance.updatesWithoutContractId;
+                        const total = withId + withoutId;
+                        if (total === 0) {
+                          return <span className="text-muted-foreground">N/A</span>;
+                        }
+                        return (
+                          <span className={withId > 0 ? "text-green-500" : "text-yellow-500"}>
+                            {withId}/{total}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
