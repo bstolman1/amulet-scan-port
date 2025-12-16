@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { useBackfillCursors, useBackfillStats, useWriteActivity, BackfillCursor } from "@/hooks/use-backfill-cursors";
-import { getLiveStatus, type LiveStatus } from "@/lib/duckdb-api-client";
+import { getLiveStatus, purgeLiveCursor, type LiveStatus } from "@/lib/duckdb-api-client";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -38,6 +38,49 @@ const IngestionDashboard = () => {
     refetchLiveStatus();
     toast({ title: "Refreshing data..." });
   };
+
+  const handlePurgeLiveCursor = async () => {
+    try {
+      const result = await purgeLiveCursor();
+      toast({
+        title: result.success ? "Live cursor purged" : "No live cursor to purge",
+        description: result.message,
+      });
+      refetchLiveStatus();
+    } catch (e: any) {
+      toast({
+        title: "Failed to purge live cursor",
+        description: e?.message ?? "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const latestBackfillCursor = useMemo(() => {
+    const list = liveStatus?.backfill_cursors ?? [];
+    if (list.length === 0) return null;
+
+    // prefer highest migration, then newest max_time
+    return [...list].sort((a, b) => {
+      if (a.migration_id !== b.migration_id) return b.migration_id - a.migration_id;
+      const at = a.max_time ? new Date(a.max_time).getTime() : 0;
+      const bt = b.max_time ? new Date(b.max_time).getTime() : 0;
+      return bt - at;
+    })[0];
+  }, [liveStatus?.backfill_cursors]);
+
+  const isLiveCursorBehindBackfill = useMemo(() => {
+    const live = liveStatus?.live_cursor;
+    const backfill = latestBackfillCursor;
+    if (!live || !backfill) return false;
+
+    if (backfill.migration_id > live.migration_id) return true;
+    if (backfill.migration_id < live.migration_id) return false;
+
+    const liveTs = live.record_time ? new Date(live.record_time).getTime() : 0;
+    const backfillTs = backfill.max_time ? new Date(backfill.max_time).getTime() : 0;
+    return backfillTs > liveTs;
+  }, [liveStatus?.live_cursor, latestBackfillCursor]);
 
   // Calculate backfill progress
   const backfillProgress = useMemo(() => {
@@ -236,10 +279,23 @@ const IngestionDashboard = () => {
             {liveStatus?.live_cursor && (
               <Card className="border-green-500/30 bg-green-500/5">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <Radio className="w-4 h-4 text-green-500" />
-                    Live Cursor
-                  </CardTitle>
+                  <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Radio className="w-4 h-4 text-green-500" />
+                      Live Cursor
+                    </CardTitle>
+                    {isLiveCursorBehindBackfill && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handlePurgeLiveCursor}
+                        className="h-7 px-2"
+                        title="Delete live-cursor.json so live mode can resume from latest backfill"
+                      >
+                        Purge
+                      </Button>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <div className="flex justify-between">
@@ -254,6 +310,19 @@ const IngestionDashboard = () => {
                     <span className="text-muted-foreground">Last Updated</span>
                     <span>{formatDistanceToNow(new Date(liveStatus.live_cursor.updated_at), { addSuffix: true })}</span>
                   </div>
+
+                  {latestBackfillCursor && (
+                    <div className="pt-2 border-t text-xs text-muted-foreground">
+                      Latest backfill: m{latestBackfillCursor.migration_id}
+                      {latestBackfillCursor.max_time ? ` @ ${latestBackfillCursor.max_time.substring(0, 19)}` : ""}
+                    </div>
+                  )}
+
+                  {isLiveCursorBehindBackfill && (
+                    <div className="rounded-md border border-border bg-muted/40 p-2 text-xs">
+                      This live cursor is behind the latest backfill cursor. Purge it (button above) and restart live ingestion to resume from migration {latestBackfillCursor?.migration_id}.
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
