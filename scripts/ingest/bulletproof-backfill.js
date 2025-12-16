@@ -35,10 +35,11 @@ const VERIFY_INTERVAL = 100; // Verify counts every N batches
  * Integrity-checked cursor operations
  */
 export class IntegrityCursor {
-  constructor(migrationId, synchronizerId, shardIndex = null) {
+  constructor(migrationId, synchronizerId, shardIndex = null, cursorDir = null) {
     this.migrationId = migrationId;
     this.synchronizerId = synchronizerId;
     this.shardIndex = shardIndex;
+    this.cursorDir = cursorDir || CURSOR_DIR;
     this.cursorPath = this._getCursorPath();
     this.pendingUpdates = 0;
     this.pendingEvents = 0;
@@ -51,7 +52,7 @@ export class IntegrityCursor {
   _getCursorPath() {
     const shardSuffix = this.shardIndex !== null ? `-shard${this.shardIndex}` : '';
     const sanitized = this.synchronizerId.replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 50);
-    return join(CURSOR_DIR, `cursor-${this.migrationId}-${sanitized}${shardSuffix}.json`);
+    return join(this.cursorDir, `cursor-${this.migrationId}-${sanitized}${shardSuffix}.json`);
   }
 
   load() {
@@ -95,8 +96,8 @@ export class IntegrityCursor {
    */
   _persist() {
     try {
-      if (!existsSync(CURSOR_DIR)) {
-        mkdirSync(CURSOR_DIR, { recursive: true });
+      if (!existsSync(this.cursorDir)) {
+        mkdirSync(this.cursorDir, { recursive: true });
       }
 
       const cursorData = {
