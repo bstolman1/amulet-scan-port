@@ -83,15 +83,15 @@ export function mapEvent(r) {
     observers: safeStringArray(r.observers),
     actingParties: safeStringArray(r.acting_parties ?? r.actingParties),
     witnessParties: safeStringArray(r.witness_parties ?? r.witnessParties),
-    payloadJson: r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
+    payloadJson: r.payloadJson || r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
     // Created event specific fields
-    contractKeyJson: r.contract_key_json || (r.contract_key ? safeStringify(r.contract_key) : ''),
+    contractKeyJson: r.contractKeyJson || r.contract_key_json || (r.contract_key ? safeStringify(r.contract_key) : ''),
     // Exercised event specific fields
     choice: String(r.choice ?? ''),
     consuming: Boolean(r.consuming ?? false),
     interfaceId: String(r.interface_id ?? r.interfaceId ?? ''),
     childEventIds: safeStringArray(childEventIds),
-    exerciseResultJson: r.exercise_result_json || (r.exercise_result ? safeStringify(r.exercise_result) : ''),
+    exerciseResultJson: r.exerciseResultJson || r.exercise_result_json || (r.exercise_result ? safeStringify(r.exercise_result) : ''),
     // Reassignment event specific fields
     sourceSynchronizer: String(r.source_synchronizer ?? r.sourceSynchronizer ?? ''),
     targetSynchronizer: String(r.target_synchronizer ?? r.targetSynchronizer ?? ''),
@@ -99,7 +99,7 @@ export function mapEvent(r) {
     submitter: String(r.submitter ?? ''),
     reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
     // CRITICAL: Complete original event for recovery/future-proofing
-    rawJson: r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
+    rawJson: r.rawJson || r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
     // Deprecated
     party: String(r.party ?? ''),
   };
