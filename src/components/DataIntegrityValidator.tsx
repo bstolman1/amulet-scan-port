@@ -7,12 +7,25 @@ import { ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle, XCircle, Loader2,
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 
+interface SchemaCompliance {
+  eventsWithTypeOriginal: number;
+  eventsWithoutTypeOriginal: number;
+  eventsWithCanonicalId: number;
+  eventsWithSynthesizedId: number;
+  updatesWithRootEventIds: number;
+  updatesWithoutRootEventIds: number;
+  updatesWithRecordTime: number;
+  updatesWithoutRecordTime: number;
+  eventsWithChildEventIds: number;
+}
+
 interface ValidationResult {
   success: boolean;
   error?: string;
   totalFiles: number;
   sampledFiles: number;
   integrityScore: number;
+  schemaComplianceScore?: number;
   eventFiles: {
     checked: number;
     valid: number;
@@ -25,6 +38,7 @@ interface ValidationResult {
     missingUpdateDataJson: number;
     emptyRecords: number;
   };
+  schemaCompliance?: SchemaCompliance;
   errors: Array<{ file: string; error: string }>;
   sampleDetails: Array<{
     file: string;
@@ -32,6 +46,7 @@ interface ValidationResult {
     recordCount: number;
     hasRequiredFields: boolean;
     missingFields: string[];
+    schemaIssues?: string[];
   }>;
 }
 
@@ -117,7 +132,7 @@ export function DataIntegrityValidator() {
               Data Integrity Validator
             </CardTitle>
             <CardDescription>
-              Sample random .pb.zst files and verify update_data_json and raw_json fields are populated
+              Validates raw_json, update_data_json, event_type_original, root_event_ids, record_time and canonical event IDs
             </CardDescription>
           </div>
           <Button 
@@ -166,7 +181,12 @@ export function DataIntegrityValidator() {
                   <span className={`text-3xl font-bold ${getScoreColor(result.integrityScore)}`}>
                     {result.integrityScore}%
                   </span>
-                  <span className="text-muted-foreground">Integrity Score</span>
+                  <span className="text-muted-foreground">Combined Score</span>
+                  {result.schemaComplianceScore !== undefined && (
+                    <Badge variant="outline" className="ml-2">
+                      Schema: {result.schemaComplianceScore}%
+                    </Badge>
+                  )}
                 </div>
                 <Progress 
                   value={result.integrityScore} 
@@ -178,6 +198,52 @@ export function DataIntegrityValidator() {
                 <div>Total: {result.totalFiles.toLocaleString()} files</div>
               </div>
             </div>
+            
+            {/* Schema Compliance (NEW) */}
+            {result.schemaCompliance && (
+              <div className="p-4 rounded-lg border border-primary/20 bg-primary/5">
+                <h4 className="font-semibold mb-3 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4" />
+                  New Schema Compliance
+                </h4>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="space-y-2">
+                    <div className="font-medium text-muted-foreground">Events</div>
+                    <div className="flex justify-between">
+                      <span>event_type_original:</span>
+                      <span className={result.schemaCompliance.eventsWithTypeOriginal > 0 ? "text-green-500" : "text-yellow-500"}>
+                        {result.schemaCompliance.eventsWithTypeOriginal}/{result.schemaCompliance.eventsWithTypeOriginal + result.schemaCompliance.eventsWithoutTypeOriginal}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Canonical event_id:</span>
+                      <span className={result.schemaCompliance.eventsWithCanonicalId > 0 ? "text-green-500" : "text-yellow-500"}>
+                        {result.schemaCompliance.eventsWithCanonicalId}/{result.schemaCompliance.eventsWithCanonicalId + result.schemaCompliance.eventsWithSynthesizedId}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>child_event_ids:</span>
+                      <span>{result.schemaCompliance.eventsWithChildEventIds}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="font-medium text-muted-foreground">Updates</div>
+                    <div className="flex justify-between">
+                      <span>record_time:</span>
+                      <span className={result.schemaCompliance.updatesWithRecordTime > 0 ? "text-green-500" : "text-yellow-500"}>
+                        {result.schemaCompliance.updatesWithRecordTime}/{result.schemaCompliance.updatesWithRecordTime + result.schemaCompliance.updatesWithoutRecordTime}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>root_event_ids:</span>
+                      <span className={result.schemaCompliance.updatesWithRootEventIds > 0 ? "text-green-500" : "text-yellow-500"}>
+                        {result.schemaCompliance.updatesWithRootEventIds}/{result.schemaCompliance.updatesWithRootEventIds + result.schemaCompliance.updatesWithoutRootEventIds}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             
             {/* Event Files */}
             <div className="grid grid-cols-2 gap-4">
@@ -266,6 +332,11 @@ export function DataIntegrityValidator() {
                       {detail.missingFields.length > 0 && (
                         <span className="text-xs text-red-500">
                           Missing: {detail.missingFields.join(', ')}
+                        </span>
+                      )}
+                      {detail.schemaIssues && detail.schemaIssues.length > 0 && (
+                        <span className="text-xs text-yellow-500">
+                          Schema: {detail.schemaIssues.join(', ')}
                         </span>
                       )}
                     </div>
