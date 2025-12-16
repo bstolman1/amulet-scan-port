@@ -119,6 +119,14 @@ async function getEncoders() {
 }
 
 /**
+ * Extract migration id from partition path: .../migration=N/...
+ */
+function extractMigrationIdFromPath(filePath) {
+  const m = filePath.match(/migration=(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
  * Convert protobuf record to plain object with readable timestamps
  */
 function toPlainObject(record, isEvent, filePath) {
