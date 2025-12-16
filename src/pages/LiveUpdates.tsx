@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { DashboardLayout } from "@/components/DashboardLayout";
@@ -207,6 +207,27 @@ const LiveUpdates = () => {
     }));
   }, [updates.length, stats.updatesByType]);
 
+  // Track whether data is advancing (helps validate live ingestion in UI)
+  const lastSeenDataTimeRef = useRef<number | null>(null);
+  const [dataAdvancing, setDataAdvancing] = useState<null | {
+    status: "advancing" | "stalled";
+    lastSeenIso: string;
+    checkedAtIso: string;
+  }>(null);
+
+  useEffect(() => {
+    if (!stats.latestUpdate) return;
+    const latest = stats.latestUpdate.getTime();
+    const prev = lastSeenDataTimeRef.current;
+    lastSeenDataTimeRef.current = latest;
+
+    setDataAdvancing({
+      status: prev !== null && latest > prev ? "advancing" : "stalled",
+      lastSeenIso: stats.latestUpdate.toISOString(),
+      checkedAtIso: new Date().toISOString(),
+    });
+  }, [stats.latestUpdate?.getTime()]);
+
   if (isLoading) {
     return (
       <DashboardLayout>
@@ -307,22 +328,35 @@ const LiveUpdates = () => {
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               {(() => {
-                const latestBackfill = [...(liveStatus.backfill_cursors ?? [])].sort((a, b) => {
+                const backfills = liveStatus.backfill_cursors ?? [];
+
+                const latestBackfill = [...backfills].sort((a, b) => {
                   if (a.migration_id !== b.migration_id) return b.migration_id - a.migration_id;
                   const at = a.max_time ? new Date(a.max_time).getTime() : 0;
                   const bt = b.max_time ? new Date(b.max_time).getTime() : 0;
                   return bt - at;
                 })[0];
 
-                const backfillTime = latestBackfill?.max_time ? new Date(latestBackfill.max_time).getTime() : null;
-                const latestDataTime = stats.latestUpdate ? stats.latestUpdate.getTime() : null;
-                const dataAtOrBeyondBackfill =
-                  backfillTime && latestDataTime ? latestDataTime >= backfillTime : null;
+                // Specifically show migration 4 checkpoint if it exists
+                const m4Backfill = [...backfills]
+                  .filter((c) => c.migration_id === 4)
+                  .sort((a, b) => {
+                    const at = a.max_time ? new Date(a.max_time).getTime() : 0;
+                    const bt = b.max_time ? new Date(b.max_time).getTime() : 0;
+                    return bt - at;
+                  })[0];
+
+                const m4Time = m4Backfill?.max_time ? new Date(m4Backfill.max_time).getTime() : null;
 
                 const liveCursor = liveStatus.live_cursor;
                 const liveCursorTime = liveCursor?.record_time ? new Date(liveCursor.record_time).getTime() : null;
-                const liveAtOrBeyondBackfill =
-                  backfillTime && liveCursorTime ? liveCursorTime >= backfillTime : null;
+                const liveBuildsOnM4 =
+                  m4Time && liveCursorTime
+                    ? liveCursor.migration_id > 4 || (liveCursor.migration_id === 4 && liveCursorTime >= m4Time)
+                    : null;
+
+                const latestDataTime = stats.latestUpdate ? stats.latestUpdate.getTime() : null;
+                const displayedBuildsOnM4 = m4Time && latestDataTime ? latestDataTime >= m4Time : null;
 
                 const Step = ({
                   ok,
@@ -350,35 +384,28 @@ const LiveUpdates = () => {
                   </div>
                 );
 
+                const m4Subtitle = m4Backfill
+                  ? `m4 @ ${m4Backfill.max_time?.substring(0, 19) ?? "(no max_time)"}`
+                  : "No migration 4 backfill checkpoint reported by local API";
+
+                const latestBackfillSubtitle = latestBackfill
+                  ? `m${latestBackfill.migration_id} @ ${latestBackfill.max_time?.substring(0, 19) ?? "(no max_time)"}`
+                  : "No backfill cursor reported by local API";
+
+                const liveSubtitle = liveCursor
+                  ? `m${liveCursor.migration_id} @ ${liveCursor.record_time?.substring(0, 19) ?? "(no record_time)"}`
+                  : "No live cursor detected";
+
+                const advancingSubtitle = dataAdvancing
+                  ? `${dataAdvancing.lastSeenIso} (${dataAdvancing.status}, checked ${dataAdvancing.checkedAtIso.substring(11, 19)})`
+                  : "No latest data timestamp yet";
+
                 return (
                   <div className="space-y-2">
-                    <Step
-                      ok={latestBackfill ? true : null}
-                      title="Last backfill checkpoint"
-                      subtitle={
-                        latestBackfill
-                          ? `m${latestBackfill.migration_id} @ ${latestBackfill.max_time?.substring(0, 19) ?? "(no max_time)"}`
-                          : "No backfill cursor reported by local API"
-                      }
-                    />
-                    <Step
-                      ok={liveAtOrBeyondBackfill}
-                      title="Live cursor continues from backfill"
-                      subtitle={
-                        liveCursor
-                          ? `m${liveCursor.migration_id} @ ${liveCursor.record_time?.substring(0, 19) ?? "(no record_time)"}`
-                          : "No live cursor detected"
-                      }
-                    />
-                    <Step
-                      ok={dataAtOrBeyondBackfill}
-                      title="Latest displayed data"
-                      subtitle={
-                        stats.latestUpdate
-                          ? `${stats.latestUpdate.toISOString()} (updates shown: ${updates.length})`
-                          : "No updates loaded"
-                      }
-                    />
+                    <Step ok={m4Backfill ? true : null} title="Migration 4 backfill checkpoint" subtitle={m4Subtitle} />
+                    <Step ok={latestBackfill ? true : null} title="Latest backfill checkpoint (any migration)" subtitle={latestBackfillSubtitle} />
+                    <Step ok={liveBuildsOnM4} title="Live cursor builds on migration 4" subtitle={liveSubtitle} />
+                    <Step ok={displayedBuildsOnM4} title="Displayed data is at/after migration 4" subtitle={advancingSubtitle} />
                   </div>
                 );
               })()}
@@ -541,8 +568,12 @@ const LiveUpdates = () => {
                       <div className="space-y-2 flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <Badge variant="outline">{update.update_type}</Badge>
-                          <span className="font-mono text-xs text-muted-foreground">Migration {update.migration_id || "N/A"}</span>
-                          <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]" title={update.id}>{update.id.substring(0, 30)}...</span>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            Migration {update.migration_id ?? liveStatus?.live_cursor?.migration_id ?? "N/A"}
+                          </span>
+                          <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]" title={update.id}>
+                            {update.id.substring(0, 30)}...
+                          </span>
                         </div>
 
                         {/* Contract & Template Info */}
