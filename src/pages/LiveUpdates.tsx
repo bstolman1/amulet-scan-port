@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { formatDistanceToNow } from "date-fns";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,14 +8,32 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Activity, Clock, Search, Database, Wifi, WifiOff, FileText, RefreshCw, Zap, Timer, ChevronDown, ChevronRight, Copy, Check, Radio, Circle } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { useLedgerUpdates, LedgerUpdate } from "@/hooks/use-ledger-updates";
+import {
+  Activity,
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Clock,
+  Copy,
+  Database,
+  FileText,
+  Radio,
+  RefreshCw,
+  Search,
+  Timer,
+  Trash2,
+  Wifi,
+  WifiOff,
+  Zap,
+} from "lucide-react";
+import { useLedgerUpdates, type LedgerUpdate } from "@/hooks/use-ledger-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
 import { useDuckDBForLedger } from "@/lib/backend-config";
 import { getLiveStatus, purgeLiveCursor, type LiveStatus } from "@/lib/duckdb-api-client";
 import { useToast } from "@/hooks/use-toast";
-import { Trash2 } from "lucide-react";
 
 // JSON Viewer Component with copy functionality
 const JsonViewer = ({ data, label }: { data: any; label: string }) => {
@@ -75,7 +94,7 @@ const LiveUpdates = () => {
   const { toast } = useToast();
 
   // Fetch live status from backend
-  const { data: liveStatus } = useQuery({
+  const { data: liveStatus, refetch: refetchLiveStatus } = useQuery<LiveStatus>({
     queryKey: ["liveStatus"],
     queryFn: getLiveStatus,
     refetchInterval: 10000, // Refresh every 10 seconds
@@ -102,17 +121,17 @@ const LiveUpdates = () => {
   const handlePurgeLiveCursor = async () => {
     try {
       const result = await purgeLiveCursor();
-      toast({ 
+      toast({
         title: result.success ? "Live cursor purged" : "No cursor to purge",
-        description: result.message 
+        description: result.message,
       });
       // Refetch live status
-      refetch();
+      refetchLiveStatus();
     } catch (err: any) {
-      toast({ 
-        title: "Failed to purge", 
+      toast({
+        title: "Failed to purge",
         description: err.message,
-        variant: "destructive" 
+        variant: "destructive",
       });
     }
   };
@@ -165,7 +184,7 @@ const LiveUpdates = () => {
       : null;
 
     // Sort templates by count
-    const topTemplates = Object.entries(templateCounts)
+    const topTemplates = (Object.entries(templateCounts) as Array<[string, number]> )
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5);
 
@@ -181,7 +200,7 @@ const LiveUpdates = () => {
   // Calculate type distribution for visual breakdown
   const typeDistribution = useMemo(() => {
     const total = updates.length || 1;
-    return Object.entries(stats.updatesByType).map(([type, count]) => ({
+    return (Object.entries(stats.updatesByType) as Array<[string, number]>).map(([type, count]) => ({
       type,
       count,
       percentage: Math.round((count / total) * 100),
@@ -276,6 +295,96 @@ const LiveUpdates = () => {
             )}
           </div>
         </div>
+
+        {/* Validation Pipeline */}
+        {liveStatus && (
+          <Card className="glass-card">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" />
+                Validation Pipeline
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              {(() => {
+                const latestBackfill = [...(liveStatus.backfill_cursors ?? [])].sort((a, b) => {
+                  if (a.migration_id !== b.migration_id) return b.migration_id - a.migration_id;
+                  const at = a.max_time ? new Date(a.max_time).getTime() : 0;
+                  const bt = b.max_time ? new Date(b.max_time).getTime() : 0;
+                  return bt - at;
+                })[0];
+
+                const backfillTime = latestBackfill?.max_time ? new Date(latestBackfill.max_time).getTime() : null;
+                const latestDataTime = stats.latestUpdate ? stats.latestUpdate.getTime() : null;
+                const dataAtOrBeyondBackfill =
+                  backfillTime && latestDataTime ? latestDataTime >= backfillTime : null;
+
+                const liveCursor = liveStatus.live_cursor;
+                const liveCursorTime = liveCursor?.record_time ? new Date(liveCursor.record_time).getTime() : null;
+                const liveAtOrBeyondBackfill =
+                  backfillTime && liveCursorTime ? liveCursorTime >= backfillTime : null;
+
+                const Step = ({
+                  ok,
+                  title,
+                  subtitle,
+                }: {
+                  ok: boolean | null;
+                  title: string;
+                  subtitle: string;
+                }) => (
+                  <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-muted/30 p-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        {ok === null ? (
+                          <Circle className="w-4 h-4 text-muted-foreground" />
+                        ) : ok ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-amber-500" />
+                        )}
+                        <span className="font-medium">{title}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 break-words">{subtitle}</p>
+                    </div>
+                  </div>
+                );
+
+                return (
+                  <div className="space-y-2">
+                    <Step
+                      ok={latestBackfill ? true : null}
+                      title="Last backfill checkpoint"
+                      subtitle={
+                        latestBackfill
+                          ? `m${latestBackfill.migration_id} @ ${latestBackfill.max_time?.substring(0, 19) ?? "(no max_time)"}`
+                          : "No backfill cursor reported by local API"
+                      }
+                    />
+                    <Step
+                      ok={liveAtOrBeyondBackfill}
+                      title="Live cursor continues from backfill"
+                      subtitle={
+                        liveCursor
+                          ? `m${liveCursor.migration_id} @ ${liveCursor.record_time?.substring(0, 19) ?? "(no record_time)"}`
+                          : "No live cursor detected"
+                      }
+                    />
+                    <Step
+                      ok={dataAtOrBeyondBackfill}
+                      title="Latest displayed data"
+                      subtitle={
+                        stats.latestUpdate
+                          ? `${stats.latestUpdate.toISOString()} (updates shown: ${updates.length})`
+                          : "No updates loaded"
+                      }
+                    />
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Suggestion Banner */}
         {liveStatus?.suggestion && (
@@ -404,9 +513,22 @@ const LiveUpdates = () => {
               {filteredUpdates.map((update) => {
                 // Extract additional fields from update_data
                 const data = update.update_data as any;
-                const contractId = data?.contract_id || data?.created_event?.contract_id || null;
-                const templateId = data?.template_id || data?.created_event?.template_id || null;
-                const templateShort = templateId ? templateId.split(':').pop() : null;
+
+                const contractIdRaw =
+                  (update as any).contract_id ??
+                  data?.contract_id ??
+                  data?.created_event?.contract_id ??
+                  null;
+                const templateIdRaw =
+                  (update as any).template_id ??
+                  data?.template_id ??
+                  data?.created_event?.template_id ??
+                  null;
+
+                const contractId = typeof contractIdRaw === "string" ? contractIdRaw : null;
+                const templateId = typeof templateIdRaw === "string" ? templateIdRaw : null;
+
+                const templateShort = templateId ? templateId.split(":").pop() : null;
                 const signatories = data?.signatories || data?.created_event?.signatories || [];
                 const payload = data?.payload || data?.create_arguments || null;
                 
