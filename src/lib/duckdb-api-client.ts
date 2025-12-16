@@ -86,6 +86,35 @@ export async function getEventsCount(): Promise<{ count: number }> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Updates API
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface LedgerUpdateRecord {
+  update_id: string;
+  update_type: string;
+  migration_id?: number | null;
+  synchronizer_id?: string | null;
+  record_time?: string | null;
+  effective_at?: string | null;
+  timestamp?: string | null;
+  workflow_id?: string | null;
+  command_id?: string | null;
+  kind?: string | null;
+  offset?: string | number | null;
+  root_event_ids?: string[] | null;
+  event_count?: number | null;
+  update_data?: any;
+}
+
+export async function getLatestUpdates(limit = 100, offset = 0): Promise<ApiResponse<LedgerUpdateRecord[]>> {
+  return apiFetch(`/api/updates/latest?limit=${limit}&offset=${offset}`);
+}
+
+export async function getUpdatesCount(): Promise<{ count: number }> {
+  return apiFetch('/api/updates/count');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Party API
 // ─────────────────────────────────────────────────────────────────────────────
 

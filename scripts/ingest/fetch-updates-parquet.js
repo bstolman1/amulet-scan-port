@@ -15,7 +15,7 @@ dotenv.config();
 
 import axios from 'axios';
 import https from 'https';
-import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
+import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './parquet-schema.js';
 // Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
 
@@ -373,27 +373,32 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
 async function processUpdates(items) {
   const updates = [];
   const events = [];
-  
+
   for (const item of items) {
-    // Normalize update
+    // Normalize update (handles {transaction}, {reassignment}, or already-flat)
     const update = normalizeUpdate(item);
     updates.push(update);
-    
-    // Extract events from transaction
-    const tx = item.transaction;
-    if (tx?.events) {
-      for (const event of tx.events) {
-        // Pass complete event as raw to preserve all original data
-        const normalizedEvent = normalizeEvent(event, update.update_id, migrationId, event);
-        events.push(normalizedEvent);
-      }
+
+    // v2/updates returns a Transaction/Reassignment shape with events_by_id + root_event_ids
+    // (NOT an array at item.transaction.events)
+    const u = item.transaction || item.reassignment || item;
+    const eventsById = u?.events_by_id || u?.eventsById || {};
+    const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
+
+    const flattened = flattenEventsInTreeOrder(eventsById, rootEventIds);
+    for (const ev of flattened) {
+      // Preserve raw event (includes inner created_event/exercised_event, etc.)
+      const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev, u);
+      events.push(normalizedEvent);
     }
+
+    // Reassignment shape (if present) may not have events_by_id; keep 0 events in that case.
   }
-  
+
   // Buffer for batch writing (async)
   await bufferUpdates(updates);
   await bufferEvents(events);
-  
+
   return { updates: updates.length, events: events.length };
 }
 
