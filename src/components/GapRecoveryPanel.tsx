@@ -298,52 +298,65 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
       </CardHeader>
       
       <CardContent className="space-y-4">
-        {/* Reconciliation Summary */}
+        {/* Reconciliation Summary - Cursor vs Files */}
         {reconciliation && (
-          <div className="grid grid-cols-2 gap-3">
-            <div className={`p-3 rounded-lg ${reconciliation.updates.difference > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-success/10 border border-success/30'}`}>
-              <div className="flex items-center gap-2 text-sm font-medium mb-1">
-                <Database className="w-4 h-4" />
-                Updates
-              </div>
-              <div className="text-2xl font-bold">
-                {reconciliation.updates.fileTotal.toLocaleString()}
-              </div>
-              {reconciliation.updates.difference > 0 && (
-                <div className="text-xs text-warning mt-1">
-                  ⚠️ {reconciliation.updates.difference.toLocaleString()} missing ({reconciliation.updates.percentMissing.toFixed(1)}%)
-                </div>
-              )}
+          <>
+            <div className="text-xs text-muted-foreground mb-2 px-1">
+              <strong>Cursor vs File Reconciliation:</strong> Cursors track total records fetched from API. Files are what's actually stored.
+              Large differences indicate data loss during write (fixed in bulletproof-backfill). Re-run backfill for affected time ranges.
             </div>
-            
-            <div className={`p-3 rounded-lg ${reconciliation.events.difference > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-success/10 border border-success/30'}`}>
-              <div className="flex items-center gap-2 text-sm font-medium mb-1">
-                <FileWarning className="w-4 h-4" />
-                Events
-              </div>
-              <div className="text-2xl font-bold">
-                {reconciliation.events.fileTotal.toLocaleString()}
-              </div>
-              {reconciliation.events.difference > 0 && (
-                <div className="text-xs text-warning mt-1">
-                  ⚠️ {reconciliation.events.difference.toLocaleString()} missing ({reconciliation.events.percentMissing.toFixed(1)}%)
+            <div className="grid grid-cols-2 gap-3">
+              <div className={`p-3 rounded-lg ${reconciliation.updates.difference > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-success/10 border border-success/30'}`}>
+                <div className="flex items-center gap-2 text-sm font-medium mb-1">
+                  <Database className="w-4 h-4" />
+                  Updates
                 </div>
-              )}
+                <div className="text-2xl font-bold">
+                  {reconciliation.updates.fileTotal.toLocaleString()}
+                </div>
+                {reconciliation.updates.difference > 0 ? (
+                  <div className="text-xs text-warning mt-1">
+                    ⚠️ {reconciliation.updates.difference.toLocaleString()} missing ({reconciliation.updates.percentMissing.toFixed(1)}%)
+                  </div>
+                ) : (
+                  <div className="text-xs text-success mt-1">✓ Matches cursor</div>
+                )}
+              </div>
+              
+              <div className={`p-3 rounded-lg ${reconciliation.events.difference > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-success/10 border border-success/30'}`}>
+                <div className="flex items-center gap-2 text-sm font-medium mb-1">
+                  <FileWarning className="w-4 h-4" />
+                  Events
+                </div>
+                <div className="text-2xl font-bold">
+                  {reconciliation.events.fileTotal.toLocaleString()}
+                </div>
+                {reconciliation.events.difference > 0 ? (
+                  <div className="text-xs text-warning mt-1">
+                    ⚠️ {reconciliation.events.difference.toLocaleString()} missing ({reconciliation.events.percentMissing.toFixed(1)}%)
+                  </div>
+                ) : (
+                  <div className="text-xs text-success mt-1">✓ Matches cursor</div>
+                )}
+              </div>
             </div>
-          </div>
+          </>
         )}
 
-        {/* Gap Summary */}
+        {/* Time Gap Summary */}
         <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-1">
             <span className={hasGaps ? "text-warning font-medium" : "text-success"}>
               {hasGaps 
                 ? `⚠️ ${gapInfo!.totalGaps} time gap(s) detected` 
                 : "✅ No time gaps detected"}
             </span>
+            <span className="text-xs text-muted-foreground">
+              Time gaps = periods with no data files. Different from missing records above.
+            </span>
             {hasGaps && (
               <span className="text-sm text-muted-foreground">
-                Total: {gapInfo!.totalGapTime}
+                Total gap duration: {gapInfo!.totalGapTime}
               </span>
             )}
           </div>

@@ -52,6 +52,17 @@ export function DataIntegrityValidator() {
         body: JSON.stringify({ sampleSize: 20 }),
       });
       
+      // Check if response is JSON (not HTML error page)
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        toast({
+          title: "Backend unavailable",
+          description: "Make sure the DuckDB API server is running on localhost:3001",
+          variant: "destructive",
+        });
+        return;
+      }
+      
       const data = await response.json();
       
       if (!data.success) {
@@ -71,9 +82,12 @@ export function DataIntegrityValidator() {
         variant: data.integrityScore >= 90 ? "default" : "destructive",
       });
     } catch (err: any) {
+      const isConnectionError = err.message?.includes('fetch') || err.message?.includes('network');
       toast({
-        title: "Validation error",
-        description: err.message || "Failed to connect to backend",
+        title: isConnectionError ? "Cannot connect to backend" : "Validation error",
+        description: isConnectionError 
+          ? "Start the DuckDB API server: cd server && npm start" 
+          : err.message || "Failed to validate data",
         variant: "destructive",
       });
     } finally {
