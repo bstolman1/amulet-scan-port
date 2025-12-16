@@ -439,32 +439,38 @@ const Governance = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {governanceEvents.slice(0, 100).map((event: any) => (
-                    <TableRow key={event.id}>
-                      <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                      <TableCell>{event.round.toLocaleString()}</TableCell>
-                      <TableCell className="text-xs truncate max-w-[200px]">
-                        {event.template_id?.split(":").pop() || "-"}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {format(new Date(event.timestamp), "MMM d, yyyy HH:mm")}
-                      </TableCell>
-                      <TableCell>
-                        <Collapsible>
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <Code className="h-3 w-3" />
-                            </Button>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
-                              {JSON.stringify(event.payload || event.event_data, null, 2)}
-                            </pre>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {governanceEvents.slice(0, 100).map((event: any, idx: number) => {
+                    const ts = event.timestamp || event.effective_at || event.created_at;
+                    const date = ts ? new Date(ts) : null;
+                    const timestampLabel = date && !Number.isNaN(date.getTime())
+                      ? format(date, "MMM d, yyyy HH:mm")
+                      : "-";
+
+                    return (
+                      <TableRow key={event.event_id || event.contract_id || `${event.event_type}-${idx}`}>
+                        <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
+                        <TableCell>{typeof event.round === "number" ? event.round.toLocaleString() : "-"}</TableCell>
+                        <TableCell className="text-xs truncate max-w-[200px]">
+                          {event.template_id?.split(":").pop() || "-"}
+                        </TableCell>
+                        <TableCell className="text-xs">{timestampLabel}</TableCell>
+                        <TableCell>
+                          <Collapsible>
+                            <CollapsibleTrigger asChild>
+                              <Button variant="ghost" size="sm">
+                                <Code className="h-3 w-3" />
+                              </Button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
+                                {JSON.stringify(event.payload || event.event_data, null, 2)}
+                              </pre>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
