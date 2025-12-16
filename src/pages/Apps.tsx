@@ -3,7 +3,6 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Package, Star, Code, Database } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -11,18 +10,16 @@ import { Button } from "@/components/ui/button";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 
 const Apps = () => {
-  const { data: localAcsAvailable } = useLocalACSAvailable();
-  const { data: latestSnapshot } = useLatestACSSnapshot();
+  const { data: dataAvailable } = useLocalACSAvailable();
 
-  const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight");
-  const activityQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Amulet:FeaturedAppActivityMarker",
-  );
+  // Fetch from updates data (no snapshot required)
+  const appsQuery = useAggregatedTemplateData(undefined, "Splice:Amulet:FeaturedAppRight");
+  const activityQuery = useAggregatedTemplateData(undefined, "Splice:Amulet:FeaturedAppActivityMarker");
 
   const isLoading = appsQuery.isLoading || activityQuery.isLoading;
   const apps = appsQuery.data?.data || [];
   const activities = activityQuery.data?.data || [];
+  const dataSource = appsQuery.data?.source || "unknown";
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -49,10 +46,10 @@ const Apps = () => {
           <div className="flex items-center gap-2 mb-2">
             <Package className="h-8 w-8 text-primary" />
             <h1 className="text-3xl font-bold">Canton Network Apps</h1>
-            {localAcsAvailable && (
+            {dataAvailable && (
               <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                 <Database className="h-3 w-3 mr-1" />
-                Local ACS
+                {dataSource === "updates" ? "Updates" : dataSource === "acs-fallback" ? "ACS" : "Local"}
               </Badge>
             )}
           </div>
@@ -130,7 +127,7 @@ const Apps = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={["Splice:Amulet:FeaturedAppRight", "Splice:Amulet:FeaturedAppActivityMarker"]}
           isProcessing={false}
         />

@@ -6,7 +6,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Search, Award, Ticket, Code, Clock, Activity, Database } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -18,27 +17,26 @@ const ValidatorLicenses = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 100;
-  const { data: localAcsAvailable } = useLocalACSAvailable();
+  const { data: dataAvailable } = useLocalACSAvailable();
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-
+  // Fetch from updates data (no snapshot required)
   const licensesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:ValidatorLicense:ValidatorLicense",
   );
 
   const couponsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:ValidatorLicense:ValidatorFaucetCoupon",
   );
 
   const livenessQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:ValidatorLicense:ValidatorLivenessActivityRecord",
   );
 
   const validatorRightsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:Amulet:ValidatorRight",
   );
 
@@ -48,6 +46,7 @@ const ValidatorLicenses = () => {
   const validatorRightsData = validatorRightsQuery.data?.data || [];
   const isLoading =
     licensesQuery.isLoading || couponsQuery.isLoading || livenessQuery.isLoading || validatorRightsQuery.isLoading;
+  const dataSource = licensesQuery.data?.source || "unknown";
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -97,10 +96,10 @@ const ValidatorLicenses = () => {
           <div className="flex items-center gap-2 mb-2">
             <Award className="h-8 w-8 text-primary" />
             <h1 className="text-3xl font-bold">Validator Licenses & Coupons</h1>
-            {localAcsAvailable && (
+            {dataAvailable && (
               <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                 <Database className="h-3 w-3 mr-1" />
-                Local ACS
+                {dataSource === "updates" ? "Updates" : dataSource === "acs-fallback" ? "ACS" : "Local"}
               </Badge>
             )}
           </div>
@@ -444,7 +443,7 @@ const ValidatorLicenses = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={[
             "Splice:ValidatorLicense:ValidatorLicense",
             "Splice:ValidatorLicense:ValidatorFaucetCoupon",
