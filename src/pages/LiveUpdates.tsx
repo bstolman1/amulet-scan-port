@@ -87,9 +87,8 @@ const JsonViewer = ({ data, label }: { data: any; label: string }) => {
 };
 
 const LiveUpdates = () => {
-  const [viewMode, setViewMode] = useState<"events" | "updates">("events");
-  const { data: updates = [], isLoading, dataUpdatedAt, refetch } = useLedgerUpdates(100);
-  const { data: latestUpdates = [], isLoading: isLoadingUpdates, refetch: refetchUpdates } = useLatestUpdates(100);
+  const { data: events = [], isLoading, dataUpdatedAt, refetch } = useLedgerUpdates(100);
+  const { data: rawUpdates = [], isLoading: isLoadingUpdates, refetch: refetchUpdates } = useLatestUpdates(100);
   const { data: isDuckDBAvailable } = useDuckDBHealth();
   const usingDuckDB = useDuckDBForLedger();
   const [searchTerm, setSearchTerm] = useState("");
@@ -100,9 +99,52 @@ const LiveUpdates = () => {
   const { data: liveStatus, refetch: refetchLiveStatus } = useQuery<LiveStatus>({
     queryKey: ["liveStatus"],
     queryFn: getLiveStatus,
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 10000,
     retry: false,
   });
+
+  // Merge events and updates into unified timeline
+  const unifiedTransactions = useMemo(() => {
+    const eventItems = (events as any[]).map((e) => ({
+      ...e,
+      _source: "event" as const,
+      _sortTime: new Date(e.effective_at || e.timestamp || e.record_time || 0).getTime(),
+    }));
+    
+    const updateItems = (rawUpdates as any[]).map((u) => ({
+      ...u,
+      _source: "update" as const,
+      _sortTime: new Date(u.record_time || u.timestamp || 0).getTime(),
+    }));
+
+    return [...eventItems, ...updateItems].sort((a, b) => b._sortTime - a._sortTime);
+  }, [events, rawUpdates]);
+
+  // Freshness indicators
+  const freshness = useMemo(() => {
+    const latestEventTime = events.length > 0
+      ? Math.max(...(events as any[]).map((e) => new Date(e.effective_at || e.timestamp || 0).getTime()))
+      : null;
+    const latestUpdateTime = rawUpdates.length > 0
+      ? Math.max(...(rawUpdates as any[]).map((u) => new Date(u.record_time || u.timestamp || 0).getTime()))
+      : null;
+
+    const now = Date.now();
+    const fiveMinutes = 5 * 60 * 1000;
+
+    return {
+      events: {
+        count: events.length,
+        latestTime: latestEventTime ? new Date(latestEventTime) : null,
+        isStale: latestEventTime ? (now - latestEventTime) > fiveMinutes : true,
+      },
+      updates: {
+        count: rawUpdates.length,
+        latestTime: latestUpdateTime ? new Date(latestUpdateTime) : null,
+        isStale: latestUpdateTime ? (now - latestUpdateTime) > fiveMinutes : true,
+      },
+    };
+  }, [events, rawUpdates]);
 
   // Update seconds since last refresh
   useEffect(() => {
@@ -116,11 +158,8 @@ const LiveUpdates = () => {
 
   // Manual refresh handler
   const handleRefresh = () => {
-    if (viewMode === "updates") {
-      refetchUpdates();
-    } else {
-      refetch();
-    }
+    refetch();
+    refetchUpdates();
     toast({ title: "Refreshing data..." });
   };
 
@@ -132,7 +171,6 @@ const LiveUpdates = () => {
         title: result.success ? "Live cursor purged" : "No cursor to purge",
         description: result.message,
       });
-      // Refetch live status
       refetchLiveStatus();
     } catch (err: any) {
       toast({
@@ -143,66 +181,48 @@ const LiveUpdates = () => {
     }
   };
 
-  const filteredUpdates = (viewMode === "updates" ? latestUpdates : updates).filter((update: any) => {
-    const id = viewMode === "updates" ? (update.update_id || "") : update.id;
-    const type = viewMode === "updates" ? (update.update_type || "") : update.update_type;
-
-    const matchesSearch =
+  const filteredTransactions = unifiedTransactions.filter((item: any) => {
+    const id = item._source === "update" ? (item.update_id || "") : item.id;
+    const type = item.update_type || "";
+    return (
       !searchTerm ||
       String(id).toLowerCase().includes(searchTerm.toLowerCase()) ||
-      String(type).toLowerCase().includes(searchTerm.toLowerCase());
-
-    return matchesSearch;
+      String(type).toLowerCase().includes(searchTerm.toLowerCase())
+    );
   });
 
   // Calculate statistics
   const stats = useMemo(() => {
-    const active = viewMode === "updates" ? (latestUpdates as any[]) : (updates as any[]);
-
-    const updatesByType = active.reduce((acc, u) => {
-      const type = u.update_type || u.update_type || "unknown";
+    const updatesByType = unifiedTransactions.reduce((acc, u) => {
+      const type = u.update_type || "unknown";
       acc[type] = (acc[type] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
-    // Extract templates from update data (events view only)
-    const templateCounts = viewMode === "updates"
-      ? {}
-      : (active as any[]).reduce((acc, u) => {
-          const data = u.update_data as any;
-          const events = data?.events || data?.transaction?.events || [];
-          events.forEach((event: any) => {
-            const templateId = event?.template_id || event?.templateId;
-            if (templateId) {
-              const shortName = templateId.split(":").pop() || templateId;
-              acc[shortName] = (acc[shortName] || 0) + 1;
-            }
-          });
-          return acc;
-        }, {} as Record<string, number>);
+    const templateCounts = (events as any[]).reduce((acc, u) => {
+      const data = u.update_data as any;
+      const evts = data?.events || data?.transaction?.events || [];
+      evts.forEach((event: any) => {
+        const templateId = event?.template_id || event?.templateId;
+        if (templateId) {
+          const shortName = templateId.split(":").pop() || templateId;
+          acc[shortName] = (acc[shortName] || 0) + 1;
+        }
+      });
+      return acc;
+    }, {} as Record<string, number>);
 
-    const totalEvents = viewMode === "updates"
-      ? 0
-      : (active as any[]).reduce((sum, u) => {
-          const data = u.update_data as any;
-          const events = data?.events || data?.transaction?.events || [];
-          return sum + (Array.isArray(events) ? events.length : 0);
-        }, 0);
+    const totalEvents = (events as any[]).reduce((sum, u) => {
+      const data = u.update_data as any;
+      const evts = data?.events || data?.transaction?.events || [];
+      return sum + (Array.isArray(evts) ? evts.length : 0);
+    }, 0);
 
-    // Get latest update time
-    const latestUpdate = active.length > 0
-      ? new Date(
-          Math.max(
-            ...active.map((u: any) => {
-              const effectiveAt = u.effective_at;
-              const timestamp = u.timestamp || u.record_time;
-              return new Date(effectiveAt || timestamp || 0).getTime();
-            }),
-          ),
-        )
+    const latestUpdate = unifiedTransactions.length > 0
+      ? new Date(Math.max(...unifiedTransactions.map((u) => u._sortTime)))
       : null;
 
-    const topTemplates = (Object.entries(templateCounts) as Array<[string, number]> )
+    const topTemplates = (Object.entries(templateCounts) as Array<[string, number]>)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5);
 
@@ -213,17 +233,17 @@ const LiveUpdates = () => {
       latestUpdate,
       totalTypes: Object.keys(updatesByType).length,
     };
-  }, [updates, latestUpdates, viewMode]);
+  }, [events, unifiedTransactions]);
 
   // Calculate type distribution for visual breakdown
   const typeDistribution = useMemo(() => {
-    const total = updates.length || 1;
+    const total = unifiedTransactions.length || 1;
     return (Object.entries(stats.updatesByType) as Array<[string, number]>).map(([type, count]) => ({
       type,
       count,
       percentage: Math.round((count / total) * 100),
     }));
-  }, [updates.length, stats.updatesByType]);
+  }, [unifiedTransactions.length, stats.updatesByType]);
 
   // Track whether data is advancing (helps validate live ingestion in UI)
   const lastSeenDataTimeRef = useRef<number | null>(null);
@@ -246,7 +266,7 @@ const LiveUpdates = () => {
     });
   }, [stats.latestUpdate?.getTime()]);
 
-  if (isLoading || (viewMode === "updates" && isLoadingUpdates)) {
+  if (isLoading || isLoadingUpdates) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
@@ -261,24 +281,29 @@ const LiveUpdates = () => {
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold mb-2">Live Ledger Updates</h1>
-            <p className="text-muted-foreground">Ledger data from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
+            <h1 className="text-3xl font-bold mb-2">Transaction History</h1>
+            <p className="text-muted-foreground">Unified events & updates from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant={viewMode === "events" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setViewMode("events")}
-            >
-              Events
-            </Button>
-            <Button
-              variant={viewMode === "updates" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setViewMode("updates")}
-            >
-              Updates
-            </Button>
+          {/* Freshness Indicators */}
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.events.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}>
+              <Zap className={`w-4 h-4 ${freshness.events.isStale ? 'text-amber-500' : 'text-emerald-500'}`} />
+              <div className="text-xs">
+                <div className="font-medium">Events ({freshness.events.count})</div>
+                <div className="text-muted-foreground">
+                  {freshness.events.latestTime ? formatDistanceToNow(freshness.events.latestTime, { addSuffix: true }) : 'No data'}
+                </div>
+              </div>
+            </div>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.updates.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}>
+              <Activity className={`w-4 h-4 ${freshness.updates.isStale ? 'text-amber-500' : 'text-emerald-500'}`} />
+              <div className="text-xs">
+                <div className="font-medium">Updates ({freshness.updates.count})</div>
+                <div className="text-muted-foreground">
+                  {freshness.updates.latestTime ? formatDistanceToNow(freshness.updates.latestTime, { addSuffix: true }) : 'No data'}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -544,11 +569,11 @@ const LiveUpdates = () => {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Activity className="w-4 h-4" />
-                Total Updates
+                Total Items
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-3xl font-bold text-primary">{updates.length}</p>
+              <p className="text-3xl font-bold text-primary">{unifiedTransactions.length}</p>
             </CardContent>
           </Card>
 
@@ -655,49 +680,48 @@ const LiveUpdates = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-h-[600px] overflow-y-auto">
-              {filteredUpdates.map((update: any) => {
-                const isUpdatesView = viewMode === "updates";
+              {filteredTransactions.map((item: any, idx: number) => {
+                const isUpdate = item._source === "update";
+                const rowId: string = isUpdate ? String(item.update_id || "") : String(item.id || "");
+                const rowType: string = String(item.update_type || "unknown");
 
-                const rowId: string = isUpdatesView ? String(update.update_id || "") : String(update.id || "");
-                const rowType: string = String(update.update_type || "unknown");
-
-                // Extract additional fields from update_data (events view uses full event payload; updates view uses update_data JSON)
-                const data = (update.update_data ?? update.update_data ?? update.update_data) as any;
+                const data = item.update_data as any;
 
                 const contractIdRaw =
-                  update.contract_id ??
+                  item.contract_id ??
                   data?.contract_id ??
                   data?.created_event?.contract_id ??
-                  data?.contractId ??
                   null;
                 const templateIdRaw =
-                  update.template_id ??
+                  item.template_id ??
                   data?.template_id ??
                   data?.created_event?.template_id ??
-                  data?.templateId ??
                   null;
 
                 const contractId = typeof contractIdRaw === "string" ? contractIdRaw : null;
                 const templateId = typeof templateIdRaw === "string" ? templateIdRaw : null;
-
                 const templateShort = templateId ? templateId.split(":").pop() : null;
                 const signatories = data?.signatories || data?.created_event?.signatories || [];
                 const payload = data?.payload || data?.create_arguments || null;
 
-                const effectiveAtIso = update.effective_at || update.record_time || update.timestamp;
-                const createdAtIso = update.created_at || update.timestamp || update.record_time || update.effective_at;
+                const effectiveAtIso = item.effective_at || item.record_time || item.timestamp;
+                const createdAtIso = item.created_at || item.timestamp || item.record_time || item.effective_at;
 
                 return (
                   <div
-                    key={rowId}
+                    key={`${item._source}-${rowId}-${idx}`}
                     className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="space-y-2 flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
+                          {/* Source badge */}
+                          <Badge variant={isUpdate ? "secondary" : "default"} className="text-xs">
+                            {isUpdate ? "Update" : "Event"}
+                          </Badge>
                           <Badge variant="outline">{rowType}</Badge>
                           <span className="font-mono text-xs text-muted-foreground">
-                            Migration {update.migration_id ?? liveStatus?.live_cursor?.migration_id ?? "N/A"}
+                            Migration {item.migration_id ?? liveStatus?.live_cursor?.migration_id ?? "N/A"}
                           </span>
                           <span
                             className="font-mono text-xs text-muted-foreground truncate max-w-[200px]"
@@ -707,12 +731,11 @@ const LiveUpdates = () => {
                           </span>
                         </div>
 
-                        {/* Contract & Template Info */}
                         {(contractId || templateShort) && (
                           <div className="flex items-center gap-3 flex-wrap text-xs">
                             {contractId && (
                               <span className="font-mono text-blue-500" title={contractId}>
-                                📄 {contractId.substring(0, 24)}...
+                                {contractId.substring(0, 24)}...
                               </span>
                             )}
                             {templateShort && (
@@ -723,10 +746,8 @@ const LiveUpdates = () => {
                           </div>
                         )}
 
-                        {/* Signatories */}
-                        {!isUpdatesView && signatories.length > 0 && (
+                        {!isUpdate && signatories.length > 0 && (
                           <div className="flex items-center gap-1 flex-wrap text-xs text-muted-foreground">
-                            <span>👤</span>
                             {signatories.slice(0, 2).map((s: string, i: number) => (
                               <span key={i} className="font-mono truncate max-w-[150px]" title={s}>
                                 {s.substring(0, 20)}...
@@ -741,10 +762,9 @@ const LiveUpdates = () => {
                           {effectiveAtIso ? new Date(effectiveAtIso).toLocaleString() : "(no time)"}
                         </div>
 
-                        {/* Full JSON Data - Expandable */}
                         <div className="flex flex-wrap gap-2 pt-1">
-                          {!isUpdatesView && <JsonViewer data={payload} label="View Payload" />}
-                          <JsonViewer data={isUpdatesView ? update.update_data : data} label={isUpdatesView ? "View Update Data" : "View Full Data"} />
+                          {!isUpdate && payload && <JsonViewer data={payload} label="View Payload" />}
+                          <JsonViewer data={data} label="View Data" />
                         </div>
                       </div>
 
@@ -756,9 +776,9 @@ const LiveUpdates = () => {
                 );
               })}
 
-              {filteredUpdates.length === 0 && (
+              {filteredTransactions.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground">
-                  {searchTerm ? "No matching updates found." : "No updates yet. Start the DuckDB API server to see data."}
+                  {searchTerm ? "No matching transactions found." : "No data yet. Start the DuckDB API server to see data."}
                 </div>
               )}
             </div>
