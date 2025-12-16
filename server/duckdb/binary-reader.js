@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Proto schema definition (inline to avoid file dependency)
+// Proto schema definition - MUST MATCH scripts/ingest/schema/ledger.proto exactly!
 const PROTO_SCHEMA = `
 syntax = "proto3";
 package ledger;
@@ -23,27 +23,72 @@ message Event {
   string update_id = 2;
   string type = 3;
   string synchronizer = 4;
+
   int64 effective_at = 5;
   int64 recorded_at = 6;
-  string contract_id = 7;
-  string party = 8;
+  int64 created_at_ts = 7;
+
+  string contract_id = 8;
   string template = 9;
-  string payload_json = 10;
-  repeated string signatories = 11;
-  repeated string observers = 12;
-  string package_name = 13;
-  string raw_json = 14;
+  string package_name = 10;
+  int64 migration_id = 11;
+
+  repeated string signatories = 12;
+  repeated string observers = 13;
+  repeated string acting_parties = 14;
+  repeated string witness_parties = 15;
+
+  string payload_json = 16;
+  
+  string contract_key_json = 17;
+  
+  string choice = 18;
+  bool consuming = 19;
+  string interface_id = 20;
+  repeated string child_event_ids = 21;
+  string exercise_result_json = 22;
+  
+  string source_synchronizer = 23;
+  string target_synchronizer = 24;
+  string unassign_id = 25;
+  string submitter = 26;
+  int64 reassignment_counter = 27;
+  
+  string raw_json = 28;
+  
+  string party = 29;
+  
+  string type_original = 30;
 }
 
 message Update {
   string id = 1;
-  string synchronizer = 2;
-  int64 effective_at = 3;
-  int64 recorded_at = 4;
-  string transaction_id = 5;
-  string command_id = 6;
-  string workflow_id = 7;
-  string status = 8;
+  string type = 2;
+  string synchronizer = 3;
+
+  int64 effective_at = 4;
+  int64 recorded_at = 5;
+  int64 record_time = 6;
+
+  string command_id = 7;
+  string workflow_id = 8;
+  string kind = 9;
+  
+  int64 migration_id = 10;
+  int64 offset = 11;
+  
+  repeated string root_event_ids = 12;
+  int32 event_count = 13;
+  
+  string source_synchronizer = 14;
+  string target_synchronizer = 15;
+  string unassign_id = 16;
+  string submitter = 17;
+  int64 reassignment_counter = 18;
+  
+  string trace_context_json = 19;
+  
+  string update_data_json = 20;
 }
 
 message EventBatch {
@@ -74,50 +119,78 @@ async function getEncoders() {
 }
 
 /**
- * Extract migration id from partition path: .../migration=N/...
- */
-function extractMigrationIdFromPath(filePath) {
-  const m = filePath.match(/migration=(\d+)/);
-  return m ? parseInt(m[1], 10) : null;
-}
-
-/**
  * Convert protobuf record to plain object with readable timestamps
  */
 function toPlainObject(record, isEvent, filePath) {
-  const migration_id = filePath ? extractMigrationIdFromPath(filePath) : null;
+  // Extract migration_id from file path as fallback
+  const pathMigrationId = filePath ? extractMigrationIdFromPath(filePath) : null;
 
   if (isEvent) {
+    // Use protobuf migration_id if available, else fall back to path
+    const migrationId = record.migrationId ?? record.migration_id ?? pathMigrationId;
+    
     return {
       event_id: record.id || null,
       update_id: record.updateId || record.update_id || null,
       event_type: record.type || null,
+      event_type_original: record.typeOriginal || record.type_original || null,
       synchronizer_id: record.synchronizer || null,
-      migration_id,
+      migration_id: migrationId,
       timestamp: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
       effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
+      created_at_ts: record.createdAtTs ? new Date(Number(record.createdAtTs)).toISOString() : null,
       contract_id: record.contractId || record.contract_id || null,
-      party: record.party || null,
       template_id: record.template || null,
+      package_name: record.packageName || record.package_name || null,
       payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
       signatories: record.signatories || [],
       observers: record.observers || [],
-      package_name: record.packageName || record.package_name || null,
-      raw: record.rawJson ? tryParseJson(record.rawJson) : null, // Complete original event
+      acting_parties: record.actingParties || record.acting_parties || [],
+      witness_parties: record.witnessParties || record.witness_parties || [],
+      // Exercised event fields
+      choice: record.choice || null,
+      consuming: record.consuming || false,
+      interface_id: record.interfaceId || record.interface_id || null,
+      child_event_ids: record.childEventIds || record.child_event_ids || [],
+      exercise_result: record.exerciseResultJson ? tryParseJson(record.exerciseResultJson) : null,
+      // Created event fields
+      contract_key: record.contractKeyJson ? tryParseJson(record.contractKeyJson) : null,
+      // Reassignment fields
+      source_synchronizer: record.sourceSynchronizer || record.source_synchronizer || null,
+      target_synchronizer: record.targetSynchronizer || record.target_synchronizer || null,
+      unassign_id: record.unassignId || record.unassign_id || null,
+      submitter: record.submitter || null,
+      reassignment_counter: record.reassignmentCounter || record.reassignment_counter || null,
+      // Complete original event
+      raw: record.rawJson ? tryParseJson(record.rawJson) : null,
     };
   }
 
   // Update record
+  const migrationId = record.migrationId ?? record.migration_id ?? pathMigrationId;
+  
   return {
     update_id: record.id || null,
+    update_type: record.type || null,
     synchronizer_id: record.synchronizer || null,
-    migration_id,
+    migration_id: migrationId,
     timestamp: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
     effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
-    transaction_id: record.transactionId || record.transaction_id || null,
+    record_time: record.recordTime ? new Date(Number(record.recordTime)).toISOString() : null,
     command_id: record.commandId || record.command_id || null,
     workflow_id: record.workflowId || record.workflow_id || null,
-    status: record.status || null,
+    kind: record.kind || null,
+    offset: record.offset || null,
+    root_event_ids: record.rootEventIds || record.root_event_ids || [],
+    event_count: record.eventCount || record.event_count || 0,
+    // Reassignment fields
+    source_synchronizer: record.sourceSynchronizer || record.source_synchronizer || null,
+    target_synchronizer: record.targetSynchronizer || record.target_synchronizer || null,
+    unassign_id: record.unassignId || record.unassign_id || null,
+    submitter: record.submitter || null,
+    reassignment_counter: record.reassignmentCounter || record.reassignment_counter || null,
+    // Full update data
+    update_data: record.updateDataJson ? tryParseJson(record.updateDataJson) : null,
   };
 }
 
