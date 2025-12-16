@@ -1,19 +1,37 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/duckdb-api-client";
+
+interface GovernanceEvent {
+  id?: string;
+  event_id?: string;
+  event_type: string;
+  contract_id?: string;
+  template_id?: string;
+  package_name?: string;
+  round?: number;
+  timestamp?: string;
+  effective_at?: string;
+  created_at?: string;
+  payload?: Record<string, unknown>;
+  event_data?: Record<string, unknown>;
+  signatories?: string[];
+  observers?: string[];
+}
+
+interface EventsResponse {
+  data: GovernanceEvent[];
+  count: number;
+  hasMore?: boolean;
+  source?: string;
+}
 
 export function useGovernanceEvents() {
   return useQuery({
     queryKey: ["governanceEvents"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("ledger_events")
-        .select("*")
-        .like("template_id", "%Confirmation%")
-        .order("created_at", { ascending: false })
-        .limit(200);
-
-      if (error) throw error;
-      return data;
+    queryFn: async (): Promise<GovernanceEvent[]> => {
+      // Fetch governance-related events from DuckDB (backfill + updates)
+      const response = await apiFetch<EventsResponse>("/api/events/governance");
+      return response.data || [];
     },
     staleTime: 30_000,
   });
@@ -22,16 +40,10 @@ export function useGovernanceEvents() {
 export function useRewardClaimEvents() {
   return useQuery({
     queryKey: ["rewardClaimEvents"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("ledger_events")
-        .select("*")
-        .like("template_id", "%RewardCoupon%")
-        .order("created_at", { ascending: false })
-        .limit(500);
-
-      if (error) throw error;
-      return data;
+    queryFn: async (): Promise<GovernanceEvent[]> => {
+      // Fetch reward claim events from DuckDB
+      const response = await apiFetch<EventsResponse>("/api/events/rewards");
+      return response.data || [];
     },
     staleTime: 30_000,
   });

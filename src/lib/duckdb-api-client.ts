@@ -21,7 +21,7 @@ interface ApiResponse<T> {
 /**
  * Generic fetch wrapper with error handling
  */
-async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+export async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
