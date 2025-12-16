@@ -1,7 +1,7 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
+import { DeltaIndicator } from "@/components/DeltaIndicator";
+import { useMultiTemplateEventDelta } from "@/hooks/use-template-event-delta";
 
 const Governance = () => {
   const { data: dsoInfo } = useQuery({
@@ -56,6 +58,10 @@ const Governance = () => {
     latestSnapshot?.id,
     "Splice:AmuletRules:AmuletRules",
   );
+
+  // Get event deltas since snapshot
+  const templateSuffixes = ["Splice:DsoRules:VoteRequest", "Splice:DsoRules:Confirmation"];
+  const { data: deltas } = useMultiTemplateEventDelta(latestSnapshot?.record_time, templateSuffixes);
 
   const priceVotes = priceVotesData?.data || [];
   const confirmations = confirmationsData?.data || [];
@@ -218,7 +224,15 @@ const Governance = () => {
           <Card className="glass-card p-6">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium text-muted-foreground">Total Proposals</h3>
-              <Vote className="h-5 w-5 text-chart-2" />
+              <div className="flex items-center gap-2">
+                <DeltaIndicator 
+                  created={deltas?.["Splice:DsoRules:VoteRequest"]?.created_count}
+                  archived={deltas?.["Splice:DsoRules:VoteRequest"]?.archived_count}
+                  since={latestSnapshot?.record_time}
+                  compact
+                />
+                <Vote className="h-5 w-5 text-chart-2" />
+              </div>
             </div>
             {isLoading ? (
               <Skeleton className="h-10 w-full" />

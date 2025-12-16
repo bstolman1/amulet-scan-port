@@ -10,6 +10,8 @@ import { PaginationControls } from "@/components/PaginationControls";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
+import { DeltaIndicator } from "@/components/DeltaIndicator";
+import { useMultiTemplateEventDelta } from "@/hooks/use-template-event-delta";
 
 const Transfers = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -32,6 +34,14 @@ const Transfers = () => {
     snapshot?.id,
     "Splice:AmuletTransferInstruction:AmuletTransferInstruction",
   );
+
+  // Get event deltas since snapshot
+  const templateSuffixes = [
+    "Splice:AmuletRules:TransferPreapproval",
+    "Splice:ExternalPartyAmuletRules:TransferCommand",
+    "Splice:AmuletTransferInstruction:AmuletTransferInstruction"
+  ];
+  const { data: deltas } = useMultiTemplateEventDelta(snapshot?.record_time, templateSuffixes);
 
   const isLoading = preapprovalsQuery.isLoading || commandsQuery.isLoading || instructionsQuery.isLoading;
 
@@ -113,7 +123,15 @@ const Transfers = () => {
 
         <div className="grid gap-4 md:grid-cols-3">
           <Card className="p-6">
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">Active Preapprovals</h3>
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">Active Preapprovals</h3>
+              <DeltaIndicator 
+                created={deltas?.["Splice:AmuletRules:TransferPreapproval"]?.created_count}
+                archived={deltas?.["Splice:AmuletRules:TransferPreapproval"]?.archived_count}
+                since={snapshot?.record_time}
+                compact
+              />
+            </div>
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
@@ -121,7 +139,15 @@ const Transfers = () => {
             )}
           </Card>
           <Card className="p-6">
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">External Commands</h3>
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">External Commands</h3>
+              <DeltaIndicator 
+                created={deltas?.["Splice:ExternalPartyAmuletRules:TransferCommand"]?.created_count}
+                archived={deltas?.["Splice:ExternalPartyAmuletRules:TransferCommand"]?.archived_count}
+                since={snapshot?.record_time}
+                compact
+              />
+            </div>
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
@@ -129,7 +155,15 @@ const Transfers = () => {
             )}
           </Card>
           <Card className="p-6">
-            <h3 className="text-sm font-medium text-muted-foreground mb-2">Pending Instructions</h3>
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="text-sm font-medium text-muted-foreground">Pending Instructions</h3>
+              <DeltaIndicator 
+                created={deltas?.["Splice:AmuletTransferInstruction:AmuletTransferInstruction"]?.created_count}
+                archived={deltas?.["Splice:AmuletTransferInstruction:AmuletTransferInstruction"]?.archived_count}
+                since={snapshot?.record_time}
+                compact
+              />
+            </div>
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
