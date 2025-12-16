@@ -70,6 +70,8 @@ async function findLatestTimestamp() {
 
 /**
  * Find latest timestamp from backfill cursor files
+ * For LIVE updates, we want to continue FORWARD from the LATEST timestamp (max_time/last_before)
+ * NOT backward from min_time
  */
 function findLatestFromCursors() {
   if (!fs.existsSync(CURSOR_DIR)) {
@@ -78,7 +80,7 @@ function findLatestFromCursors() {
   }
   
   const cursorFiles = fs.readdirSync(CURSOR_DIR)
-    .filter(f => f.startsWith('cursor-') && f.endsWith('.json'));
+    .filter(f => f.endsWith('.json'));
   
   if (cursorFiles.length === 0) {
     console.log('📁 No cursor files found');
@@ -87,9 +89,9 @@ function findLatestFromCursors() {
   
   console.log(`📁 Found ${cursorFiles.length} cursor file(s)`);
   
-  // Find the cursor with the latest timestamp (min_time is the earliest point reached)
-  // We want to continue from min_time (where backfill stopped going backward)
-  let latestMinTime = null;
+  // For live updates, find the LATEST timestamp to continue FORWARD from
+  // We want max_time (the newest point in the backfill) or last_before if backfill incomplete
+  let latestTimestamp = null;
   let latestMigration = null;
   let selectedCursor = null;
   
@@ -98,32 +100,40 @@ function findLatestFromCursors() {
       const cursorPath = path.join(CURSOR_DIR, file);
       const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
       
-      // min_time is where the backfill reached (going backward)
-      // We want to start v2/updates from this point forward
-      const minTime = cursor.min_time || cursor.last_before;
+      // Skip non-cursor files
+      if (!cursor.migration_id && !cursor.max_time && !cursor.min_time) continue;
+      
       const migration = cursor.migration_id;
       
-      if (minTime) {
-        // Prefer cursors from higher migrations, then earlier min_time
-        if (!latestMinTime || 
-            (migration > latestMigration) ||
-            (migration === latestMigration && minTime < latestMinTime)) {
-          latestMinTime = minTime;
+      // For live updates: use max_time (the newest data point reached)
+      // If backfill is complete, max_time is where we should continue from
+      // If incomplete, last_before tells us where the cursor was during backfill
+      const maxTime = cursor.max_time;
+      
+      if (maxTime) {
+        const timestamp = new Date(maxTime).getTime();
+        const currentBest = latestTimestamp ? new Date(latestTimestamp).getTime() : 0;
+        
+        // Prefer the highest migration with the latest max_time
+        if (!latestTimestamp || 
+            migration > latestMigration ||
+            (migration === latestMigration && timestamp > currentBest)) {
+          latestTimestamp = maxTime;
           latestMigration = migration;
           selectedCursor = cursor;
         }
       }
       
-      console.log(`   • ${file}: migration=${migration}, min_time=${minTime}, total=${cursor.total_updates || 0}`);
+      console.log(`   • ${file}: migration=${migration}, max_time=${maxTime}, complete=${cursor.complete || false}`);
     } catch (err) {
       console.warn(`   ⚠️ Failed to read cursor ${file}: ${err.message}`);
     }
   }
   
-  if (latestMinTime && selectedCursor) {
-    console.log(`📍 Resuming from backfill cursor: migration=${latestMigration}, timestamp=${latestMinTime}`);
+  if (latestTimestamp && selectedCursor) {
+    console.log(`📍 Live updates will continue from: migration=${latestMigration}, timestamp=${latestTimestamp}`);
     lastMigrationId = latestMigration;
-    return latestMinTime;
+    return latestTimestamp;
   }
   
   return null;
