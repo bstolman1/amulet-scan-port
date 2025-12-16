@@ -35,11 +35,23 @@ const VERIFY_INTERVAL = 100; // Verify counts every N batches
  * Integrity-checked cursor operations
  */
 export class IntegrityCursor {
-  constructor(migrationId, synchronizerId, shardIndex = null, cursorDir = null) {
+  constructor(
+    migrationId,
+    synchronizerId,
+    shardIndex = null,
+    cursorDir = null,
+    minTime = null,
+    maxTime = null,
+    startedAt = null,
+  ) {
     this.migrationId = migrationId;
     this.synchronizerId = synchronizerId;
     this.shardIndex = shardIndex;
     this.cursorDir = cursorDir || CURSOR_DIR;
+    this.minTime = minTime;
+    this.maxTime = maxTime;
+    this.startedAt = startedAt || new Date().toISOString();
+
     this.cursorPath = this._getCursorPath();
     this.pendingUpdates = 0;
     this.pendingEvents = 0;
@@ -61,6 +73,9 @@ export class IntegrityCursor {
       this.confirmedUpdates = data.confirmed_updates || data.total_updates || 0;
       this.confirmedEvents = data.confirmed_events || data.total_events || 0;
       this.lastConfirmedBefore = data.last_confirmed_before || data.last_before || null;
+      this.minTime = data.min_time ?? this.minTime;
+      this.maxTime = data.max_time ?? this.maxTime;
+      this.startedAt = data.started_at ?? this.startedAt;
       return data;
     }
     return null;
@@ -72,6 +87,21 @@ export class IntegrityCursor {
    */
   persistSnapshot() {
     this._persist();
+  }
+
+  /**
+   * Ensure started_at is set once for the entire run.
+   */
+  ensureStartedAt() {
+    if (!this.startedAt) this.startedAt = new Date().toISOString();
+  }
+
+  /**
+   * Optionally set min/max range metadata for UI progress.
+   */
+  setRange(minTime, maxTime) {
+    if (minTime) this.minTime = minTime;
+    if (maxTime) this.maxTime = maxTime;
   }
 
   /**
@@ -113,21 +143,26 @@ export class IntegrityCursor {
         migration_id: this.migrationId,
         synchronizer_id: this.synchronizerId,
         shard_index: this.shardIndex,
-        
+
+        // Range metadata (used by UI progress)
+        min_time: this.minTime,
+        max_time: this.maxTime,
+        started_at: this.startedAt,
+
         // CONFIRMED state - safe to resume from here
         last_confirmed_before: this.lastConfirmedBefore,
         confirmed_updates: this.confirmedUpdates,
         confirmed_events: this.confirmedEvents,
-        
+
         // Legacy fields for compatibility
         last_before: this.lastConfirmedBefore,
         total_updates: this.confirmedUpdates,
         total_events: this.confirmedEvents,
-        
+
         // Pending state - not yet confirmed
         pending_updates: this.pendingUpdates,
         pending_events: this.pendingEvents,
-        
+
         // Metadata
         updated_at: new Date().toISOString(),
         complete: false,
@@ -153,6 +188,9 @@ export class IntegrityCursor {
       migration_id: this.migrationId,
       synchronizer_id: this.synchronizerId,
       shard_index: this.shardIndex,
+      min_time: this.minTime,
+      max_time: this.maxTime,
+      started_at: this.startedAt,
       last_confirmed_before: this.lastConfirmedBefore,
       last_before: this.lastConfirmedBefore,
       confirmed_updates: this.confirmedUpdates,

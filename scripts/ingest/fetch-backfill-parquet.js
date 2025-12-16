@@ -964,7 +964,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   console.log(`   🛡️ BULLETPROOF MODE: Cursor advances only after confirmed writes`);
   
   // Initialize bulletproof components
-  const integrityCursor = new IntegrityCursor(migrationId, synchronizerId, shardIndex, CURSOR_DIR);
+  const runStartedAt = new Date().toISOString();
+  const integrityCursor = new IntegrityCursor(
+    migrationId,
+    synchronizerId,
+    shardIndex,
+    CURSOR_DIR,
+    minTime,
+    maxTime,
+    runStartedAt,
+  );
   const writeVerifier = new WriteVerifier();
   const batchTracker = new BatchIntegrityTracker();
   
