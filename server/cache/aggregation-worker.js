@@ -66,13 +66,22 @@ async function refreshHolderBalances() {
     WITH latest_snapshot AS (
       SELECT MAX(snapshot_time) as snapshot_time FROM ${acsSource}
     ),
+    latest_contracts AS (
+      SELECT
+        contract_id,
+        any_value(template_id) as template_id,
+        any_value(entity_name) as entity_name,
+        any_value(payload) as payload
+      FROM ${acsSource} acs
+      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      GROUP BY contract_id
+    ),
     amulet_balances AS (
       SELECT 
         json_extract_string(payload, '$.owner') as owner,
         CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE) as amount
-      FROM ${acsSource} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (
+      FROM latest_contracts
+      WHERE (
           entity_name = 'Amulet'
           OR (
             (template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
@@ -90,9 +99,8 @@ async function refreshHolderBalances() {
           json_extract_string(payload, '$.amount.initialAmount'),
           '0'
         ) AS DOUBLE) as amount
-      FROM ${acsSource} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
+      FROM latest_contracts
+      WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%' OR template_id LIKE '%:LockedAmulet')
         AND (json_extract_string(payload, '$.amulet.owner') IS NOT NULL OR json_extract_string(payload, '$.owner') IS NOT NULL)
     ),
     combined AS (
@@ -141,19 +149,28 @@ async function refreshSupplyTotals() {
     WITH latest_snapshot AS (
       SELECT MAX(snapshot_time) as snapshot_time FROM ${acsSource}
     ),
+    latest_contracts AS (
+      SELECT
+        contract_id,
+        any_value(template_id) as template_id,
+        any_value(entity_name) as entity_name,
+        any_value(payload) as payload
+      FROM ${acsSource} acs
+      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+      GROUP BY contract_id
+    ),
     amulet_total AS (
       SELECT COALESCE(SUM(
         CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE)
       ), 0) as total
-      FROM ${acsSource} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (
-          entity_name = 'Amulet'
-          OR (
-            template_id LIKE '%:Amulet:%'
-            AND template_id NOT LIKE '%:LockedAmulet:%'
-          )
+      FROM latest_contracts
+      WHERE (
+        entity_name = 'Amulet'
+        OR (
+          template_id LIKE '%:Amulet:%'
+          AND template_id NOT LIKE '%:LockedAmulet:%'
         )
+      )
     ),
     locked_total AS (
       SELECT COALESCE(SUM(
@@ -163,9 +180,8 @@ async function refreshSupplyTotals() {
           '0'
         ) AS DOUBLE)
       ), 0) as total
-      FROM ${acsSource} acs
-      WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+      FROM latest_contracts
+      WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
     )
     SELECT 
       amulet_total.total as unlocked_supply,
