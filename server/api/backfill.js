@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename as pathBasename } from 'path';
 import { fileURLToPath } from 'url';
 import db from '../duckdb/connection.js';
 import { getLastGapDetection } from '../engine/gap-detector.js';
@@ -512,6 +512,141 @@ router.get('/reconciliation', async (req, res) => {
   } catch (err) {
     console.error('Error getting reconciliation data:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/backfill/validate-integrity - Validate data integrity by sampling files
+router.post('/validate-integrity', async (req, res) => {
+  const sampleSize = Math.min(req.body?.sampleSize || 10, 50); // Max 50 files
+  
+  try {
+    const rawDir = join(DATA_DIR, 'raw');
+    if (!existsSync(rawDir)) {
+      return res.json({ success: false, error: 'No raw data directory found' });
+    }
+    
+    // Find all .pb.zst files
+    const allFiles = [];
+    function scanDir(dir) {
+      try {
+        const entries = readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            scanDir(join(dir, entry.name));
+          } else if (entry.name.endsWith('.pb.zst')) {
+            allFiles.push(join(dir, entry.name));
+          }
+        }
+      } catch {}
+    }
+    scanDir(rawDir);
+    
+    if (allFiles.length === 0) {
+      return res.json({ success: false, error: 'No .pb.zst files found' });
+    }
+    
+    // Random sample
+    const shuffled = allFiles.sort(() => 0.5 - Math.random());
+    const sampled = shuffled.slice(0, sampleSize);
+    
+    // Import reader dynamically
+    const { readBinaryFile } = await import('../../scripts/ingest/read-binary.js');
+    
+    const results = {
+      totalFiles: allFiles.length,
+      sampledFiles: sampled.length,
+      eventFiles: { checked: 0, valid: 0, missingRawJson: 0, emptyRecords: 0 },
+      updateFiles: { checked: 0, valid: 0, missingUpdateDataJson: 0, emptyRecords: 0 },
+      errors: [],
+      sampleDetails: [],
+    };
+    
+    for (const filePath of sampled) {
+      try {
+        const basename = pathBasename(filePath);
+        const isEvents = basename.startsWith('events-');
+        const isUpdates = basename.startsWith('updates-');
+        
+        const fileData = await readBinaryFile(filePath);
+        const records = fileData.records || [];
+        
+        const detail = {
+          file: basename,
+          type: isEvents ? 'events' : 'updates',
+          recordCount: records.length,
+          hasRequiredFields: true,
+          missingFields: [],
+        };
+        
+        if (records.length === 0) {
+          detail.hasRequiredFields = false;
+          detail.missingFields.push('empty_file');
+          if (isEvents) results.eventFiles.emptyRecords++;
+          else results.updateFiles.emptyRecords++;
+        } else {
+          // Sample up to 5 records from each file
+          const sampleRecords = records.slice(0, 5);
+          
+          if (isEvents) {
+            results.eventFiles.checked++;
+            let hasMissing = false;
+            
+            for (const r of sampleRecords) {
+              // Check for raw_json field
+              if (!r.raw_json && r.raw_json !== null) {
+                hasMissing = true;
+                if (!detail.missingFields.includes('raw_json')) {
+                  detail.missingFields.push('raw_json');
+                }
+              }
+            }
+            
+            if (hasMissing) {
+              results.eventFiles.missingRawJson++;
+              detail.hasRequiredFields = false;
+            } else {
+              results.eventFiles.valid++;
+            }
+          } else if (isUpdates) {
+            results.updateFiles.checked++;
+            let hasMissing = false;
+            
+            for (const r of sampleRecords) {
+              // Check for update_data_json field (might be stored as different field)
+              const hasUpdateData = r.update_data_json || r.updateDataJson || r.data;
+              if (!hasUpdateData) {
+                hasMissing = true;
+                if (!detail.missingFields.includes('update_data_json')) {
+                  detail.missingFields.push('update_data_json');
+                }
+              }
+            }
+            
+            if (hasMissing) {
+              results.updateFiles.missingUpdateDataJson++;
+              detail.hasRequiredFields = false;
+            } else {
+              results.updateFiles.valid++;
+            }
+          }
+        }
+        
+        results.sampleDetails.push(detail);
+      } catch (err) {
+        results.errors.push({ file: filePath, error: err.message });
+      }
+    }
+    
+    // Calculate integrity score
+    const totalChecked = results.eventFiles.checked + results.updateFiles.checked;
+    const totalValid = results.eventFiles.valid + results.updateFiles.valid;
+    results.integrityScore = totalChecked > 0 ? Math.round((totalValid / totalChecked) * 100) : 0;
+    results.success = true;
+    
+    res.json(results);
+  } catch (err) {
+    console.error('Error validating integrity:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

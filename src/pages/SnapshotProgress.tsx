@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
 import { useDuckDBForLedger, checkDuckDBConnection } from "@/lib/backend-config";
 import { getACSSnapshots, getACSTemplates, getACSStats, type ACSSnapshot as LocalACSSnapshot, type ACSTemplateStats as LocalACSTemplateStats } from "@/lib/duckdb-api-client";
+import { DataIntegrityValidator } from "@/components/DataIntegrityValidator";
 
 interface Snapshot {
   id: string;
@@ -543,6 +544,11 @@ const SnapshotProgress = () => {
         {/* Scheduler Status Card - Only show in local mode */}
         {isLocalMode && (
           <SchedulerStatusCard latestSnapshotTime={snapshots[0]?.timestamp} />
+        )}
+
+        {/* Data Integrity Validator - Only show in local mode */}
+        {isLocalMode && (
+          <DataIntegrityValidator />
         )}
 
         {/* Migration Filter */}
