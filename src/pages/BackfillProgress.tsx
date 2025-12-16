@@ -11,6 +11,7 @@ import { useBackfillCursors, useBackfillStats, useWriteActivity, useBackfillDebu
 import { useToast } from "@/hooks/use-toast";
 import { ShardProgressCard } from "@/components/ShardProgressCard";
 import { GapRecoveryPanel } from "@/components/GapRecoveryPanel";
+import { DataIntegrityValidator } from "@/components/DataIntegrityValidator";
 
 /**
  * Calculate ETA for a cursor based on throughput
@@ -537,6 +538,9 @@ const BackfillProgress = () => {
 
         {/* Gap Detection & Recovery */}
         <GapRecoveryPanel refreshInterval={30000} />
+
+        {/* Data Integrity Validator */}
+        <DataIntegrityValidator />
 
         {/* Shard Progress */}
         <ShardProgressCard refreshInterval={3000} />

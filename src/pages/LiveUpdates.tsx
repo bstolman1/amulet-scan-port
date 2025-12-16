@@ -2,20 +2,74 @@ import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { Activity, Clock, Search, Database, Wifi, WifiOff, FileText, RefreshCw, Zap, Timer } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Activity, Clock, Search, Database, Wifi, WifiOff, FileText, RefreshCw, Zap, Timer, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useLedgerUpdates, LedgerUpdate } from "@/hooks/use-ledger-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
 import { useDuckDBForLedger } from "@/lib/backend-config";
+import { useToast } from "@/hooks/use-toast";
+
+// JSON Viewer Component with copy functionality
+const JsonViewer = ({ data, label }: { data: any; label: string }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
+  
+  const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data]);
+  
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(jsonString);
+      setCopied(true);
+      toast({ title: "Copied to clipboard" });
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({ title: "Failed to copy", variant: "destructive" });
+    }
+  };
+  
+  if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+    return null;
+  }
+  
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs gap-1">
+          {isOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          {label}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="relative mt-2">
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="absolute top-2 right-2 h-6 px-2"
+            onClick={handleCopy}
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          </Button>
+          <pre className="text-xs bg-muted/50 p-3 rounded-md overflow-x-auto max-h-96 overflow-y-auto font-mono">
+            {jsonString}
+          </pre>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+};
 
 const LiveUpdates = () => {
-  const { data: updates = [], isLoading, dataUpdatedAt } = useLedgerUpdates(100);
+  const { data: updates = [], isLoading, dataUpdatedAt, refetch } = useLedgerUpdates(100);
   const { data: isDuckDBAvailable } = useDuckDBHealth();
   const usingDuckDB = useDuckDBForLedger();
   const [searchTerm, setSearchTerm] = useState("");
   const [secondsSinceRefresh, setSecondsSinceRefresh] = useState(0);
+  const { toast } = useToast();
 
   // Update seconds since last refresh
   useEffect(() => {
@@ -26,6 +80,12 @@ const LiveUpdates = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, [dataUpdatedAt]);
+
+  // Manual refresh handler
+  const handleRefresh = () => {
+    refetch();
+    toast({ title: "Refreshing data..." });
+  };
 
   const filteredUpdates = updates.filter((update) => {
     const matchesSearch =
@@ -131,14 +191,15 @@ const LiveUpdates = () => {
             )}
           </div>
           <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <div className="flex items-center gap-1">
-              <RefreshCw className={`w-4 h-4 ${secondsSinceRefresh < 10 ? 'animate-spin' : ''}`} />
-              <span>Refreshed {secondsSinceRefresh}s ago</span>
-            </div>
+            <Button variant="outline" size="sm" onClick={handleRefresh} className="h-7 px-2">
+              <RefreshCw className={`w-4 h-4 mr-1 ${secondsSinceRefresh < 3 ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <span>Updated {secondsSinceRefresh}s ago</span>
             {stats.latestUpdate && (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" title="Effective time of latest record in dataset">
                 <Timer className="w-4 h-4" />
-                <span>Latest: {formatDistanceToNow(stats.latestUpdate, { addSuffix: true })}</span>
+                <span>Data from: {formatDistanceToNow(stats.latestUpdate, { addSuffix: true })}</span>
               </div>
             )}
           </div>
@@ -320,6 +381,12 @@ const LiveUpdates = () => {
                               (written {new Date(update.timestamp).toLocaleString()})
                             </span>
                           )}
+                        </div>
+
+                        {/* Full JSON Data - Expandable */}
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <JsonViewer data={payload} label="View Payload" />
+                          <JsonViewer data={data} label="View Full Data" />
                         </div>
                       </div>
 
