@@ -28,6 +28,15 @@ import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-sch
 // Use binary writer (Protobuf + ZSTD) instead of JSONL
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, shutdown } from './write-binary.js';
 
+// Import bulletproof components for zero data loss
+import {
+  IntegrityCursor,
+  WriteVerifier,
+  DedupTracker,
+  EmptyResponseHandler,
+  BatchIntegrityTracker,
+} from './bulletproof-backfill.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -662,18 +671,19 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
     if (txs.length === 0) {
       consecutiveEmpty++;
       
-      // Use much more conservative jumps to avoid skipping sparse data
-      // Maximum jump: 1ms per empty response, up to 5ms total
-      // This is MUCH safer than the previous exponential jump which could skip seconds of data
+      // BULLETPROOF: Only step back by 1ms, NEVER jump forward or skip
+      // This ensures we never miss sparse data
+      // After many empty responses, log but continue stepping back carefully
       if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY * 3) {
-        // After 6 consecutive empty responses with tiny jumps, we're likely in a true gap
-        break;
+        // Log warning but DON'T break - keep stepping back 1ms at a time
+        if (consecutiveEmpty % 100 === 0) {
+          console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses. Still stepping back 1ms at a time.`);
+        }
       }
       
-      // Jump by only 1ms to avoid skipping sparse data
-      const jumpMs = 1;
+      // CRITICAL: Always step back exactly 1ms - NEVER more
       const d = new Date(currentBefore);
-      d.setTime(d.getTime() - jumpMs);
+      d.setTime(d.getTime() - 1); // Exactly 1 millisecond
       
       if (d.getTime() <= new Date(sliceAfter).getTime()) {
         break;
@@ -890,17 +900,18 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
     if (txs.length === 0) {
       consecutiveEmpty++;
       
-      // Use conservative jumps to avoid skipping sparse data
-      if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY * 3) {
-        return { results, reachedEnd: true };
+      // BULLETPROOF: NEVER break on empty responses - always step back 1ms
+      // Empty responses don't mean "no data" - they might mean we're in a sparse period
+      if (consecutiveEmpty % 100 === 0) {
+        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses in sequential mode. Continuing.`);
       }
       
-      // Jump by only 1ms to avoid skipping sparse data
+      // CRITICAL: Always step back exactly 1ms - NEVER more, NEVER break early
       const d = new Date(currentBefore);
-      d.setTime(d.getTime() - 1);
+      d.setTime(d.getTime() - 1); // Exactly 1 millisecond
       
       if (d.getTime() <= new Date(atOrAfter).getTime()) {
-        return { results, reachedEnd: true };
+        return { results, reachedEnd: true }; // Only break when we reach the actual lower bound
       }
       
       currentBefore = d.toISOString();
