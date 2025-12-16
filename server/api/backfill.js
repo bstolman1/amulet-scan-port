@@ -518,10 +518,12 @@ router.get('/reconciliation', async (req, res) => {
       cursorEvents += cursor.total_events || 0;
     }
     
-    // Estimate file totals (approximate ~100 records per file for binary files)
-    // For a more accurate count, we'd need to read the files
-    const estimatedFileUpdates = fileCounts.updates * 100;
-    const estimatedFileEvents = fileCounts.events * 100;
+    // Estimate file totals using actual batch sizes from bulletproof-backfill.js
+    // Updates use BATCH_SIZE=5000, Events use ~7500 average (varies based on transaction complexity)
+    const UPDATES_PER_FILE = 5000;
+    const EVENTS_PER_FILE = 7500; // Average, events vary more than updates
+    const estimatedFileUpdates = fileCounts.updates * UPDATES_PER_FILE;
+    const estimatedFileEvents = fileCounts.events * EVENTS_PER_FILE;
     
     const updatesDiff = Math.max(0, cursorUpdates - estimatedFileUpdates);
     const eventsDiff = Math.max(0, cursorEvents - estimatedFileEvents);
@@ -541,7 +543,7 @@ router.get('/reconciliation', async (req, res) => {
         difference: eventsDiff,
         percentMissing: cursorEvents > 0 ? (eventsDiff / cursorEvents) * 100 : 0,
       },
-      note: 'File totals are estimates (~100 records/file). Run validate-backfill.js for exact counts.',
+      note: 'File totals are estimates (~5000 updates/file, ~7500 events/file). Run validate-backfill.js for exact counts.',
     });
   } catch (err) {
     console.error('Error getting reconciliation data:', err);
