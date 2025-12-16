@@ -118,26 +118,17 @@ function saveLiveCursor(migrationId, recordTime) {
  * This is the authoritative source for where backfill stopped
  */
 async function findLatestTimestamp() {
-  // In live mode, check live cursor first
+  // In live mode, check live cursor first (for resuming live ingestion)
   if (LIVE_MODE) {
     const liveCursor = loadLiveCursor();
     if (liveCursor) {
       lastMigrationId = liveCursor.migration_id;
       return liveCursor.record_time;
     }
-    
-    // No live cursor - start from current API time
-    console.log('🔴 LIVE MODE: Getting current API time...');
-    const current = await getCurrentAPITime();
-    if (current) {
-      console.log(`📍 Starting live ingestion from: migration=${current.migrationId}, record_time=${current.recordTime}`);
-      lastMigrationId = current.migrationId;
-      return current.recordTime;
-    }
-    console.warn('⚠️ Could not get current API time, falling back to backfill cursor');
+    console.log('🔴 LIVE MODE: No live cursor, checking backfill cursors...');
   }
   
-  // Check cursor files from backfill (most reliable)
+  // Check cursor files from backfill - continue FORWARD from where backfill stopped
   const cursorResult = findLatestFromCursors();
   if (cursorResult) {
     return cursorResult;
