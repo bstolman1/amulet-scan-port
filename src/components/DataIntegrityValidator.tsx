@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle, XCircle, Loader2, FileSearch } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle, XCircle, Loader2, FileSearch, ChevronDown, ChevronRight, Code } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 
@@ -22,6 +23,16 @@ interface SchemaCompliance {
   eventsWithoutContractId: number;
   updatesWithContractId: number;
   updatesWithoutContractId: number;
+}
+
+interface SampleDetail {
+  file: string;
+  type: string;
+  recordCount: number;
+  hasRequiredFields: boolean;
+  missingFields: string[];
+  schemaIssues?: string[];
+  sampleRecord?: Record<string, unknown>;
 }
 
 interface ValidationResult {
@@ -45,14 +56,7 @@ interface ValidationResult {
   };
   schemaCompliance?: SchemaCompliance;
   errors: Array<{ file: string; error: string }>;
-  sampleDetails: Array<{
-    file: string;
-    type: string;
-    recordCount: number;
-    hasRequiredFields: boolean;
-    missingFields: string[];
-    schemaIssues?: string[];
-  }>;
+  sampleDetails: SampleDetail[];
 }
 
 export function DataIntegrityValidator() {
@@ -331,33 +335,78 @@ export function DataIntegrityValidator() {
             {result.sampleDetails.length > 0 && (
               <div>
                 <h4 className="font-semibold mb-3">Sample Details</h4>
-                <div className="max-h-48 overflow-y-auto space-y-1">
-                  {result.sampleDetails.map((detail, idx) => (
-                    <div 
-                      key={idx}
-                      className="flex items-center gap-2 text-sm py-1 px-2 rounded hover:bg-muted/50"
-                    >
-                      {detail.hasRequiredFields ? (
-                        <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-                      )}
-                      <span className="font-mono text-xs truncate flex-1">{detail.file}</span>
-                      <Badge variant="outline" className="text-xs">
-                        {detail.recordCount} records
-                      </Badge>
-                      {detail.missingFields.length > 0 && (
-                        <span className="text-xs text-red-500">
-                          Missing: {detail.missingFields.join(', ')}
-                        </span>
-                      )}
-                      {detail.schemaIssues && detail.schemaIssues.length > 0 && (
-                        <span className="text-xs text-yellow-500">
-                          Schema: {detail.schemaIssues.join(', ')}
-                        </span>
-                      )}
-                    </div>
-                  ))}
+                <div className="max-h-96 overflow-y-auto space-y-2">
+                  {result.sampleDetails.map((detail, idx) => {
+                    const hasIssues = detail.missingFields.length > 0 || (detail.schemaIssues && detail.schemaIssues.length > 0);
+                    
+                    if (hasIssues && detail.sampleRecord) {
+                      return (
+                        <Collapsible key={idx}>
+                          <CollapsibleTrigger className="w-full">
+                            <div className="flex items-center gap-2 text-sm py-2 px-2 rounded hover:bg-muted/50 cursor-pointer">
+                              <ChevronRight className="h-4 w-4 flex-shrink-0 transition-transform ui-expanded:rotate-90" />
+                              {detail.hasRequiredFields ? (
+                                <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                              ) : (
+                                <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                              )}
+                              <span className="font-mono text-xs truncate flex-1 text-left">{detail.file}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {detail.recordCount} records
+                              </Badge>
+                              {detail.missingFields.length > 0 && (
+                                <span className="text-xs text-red-500">
+                                  Missing: {detail.missingFields.join(", ")}
+                                </span>
+                              )}
+                              {detail.schemaIssues && detail.schemaIssues.length > 0 && (
+                                <span className="text-xs text-yellow-500">
+                                  Schema: {detail.schemaIssues.join(", ")}
+                                </span>
+                              )}
+                              <Code className="h-3 w-3 text-muted-foreground" />
+                            </div>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="ml-6 mt-1 p-3 bg-muted/30 rounded border text-xs">
+                              <div className="font-semibold mb-2 text-muted-foreground">First Record (decoded):</div>
+                              <pre className="overflow-x-auto max-h-64 whitespace-pre-wrap break-all font-mono text-[10px] leading-tight">
+                                {JSON.stringify(detail.sampleRecord, null, 2)}
+                              </pre>
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      );
+                    }
+                    
+                    return (
+                      <div 
+                        key={idx}
+                        className="flex items-center gap-2 text-sm py-1 px-2 rounded hover:bg-muted/50"
+                      >
+                        <div className="w-4" /> {/* Spacer for alignment */}
+                        {detail.hasRequiredFields ? (
+                          <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+                        )}
+                        <span className="font-mono text-xs truncate flex-1">{detail.file}</span>
+                        <Badge variant="outline" className="text-xs">
+                          {detail.recordCount} records
+                        </Badge>
+                        {detail.missingFields.length > 0 && (
+                          <span className="text-xs text-red-500">
+                            Missing: {detail.missingFields.join(", ")}
+                          </span>
+                        )}
+                        {detail.schemaIssues && detail.schemaIssues.length > 0 && (
+                          <span className="text-xs text-yellow-500">
+                            Schema: {detail.schemaIssues.join(", ")}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

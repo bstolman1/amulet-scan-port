@@ -631,6 +631,7 @@ router.post('/validate-integrity', async (req, res) => {
           hasRequiredFields: true,
           missingFields: [],
           schemaIssues: [],
+          sampleRecord: null, // Will be populated if there are issues
         };
         
         if (records.length === 0) {
@@ -766,6 +767,22 @@ router.post('/validate-integrity', async (req, res) => {
               detail.hasRequiredFields = false;
             } else {
               results.updateFiles.valid++;
+            }
+          }
+          
+          // Add sample record if there are any issues (for debugging)
+          if (detail.missingFields.length > 0 || detail.schemaIssues.length > 0) {
+            // Get first record and sanitize (truncate large JSON fields)
+            const firstRecord = records[0];
+            if (firstRecord) {
+              const sanitized = { ...firstRecord };
+              // Truncate large fields to avoid bloating response
+              for (const key of ['raw_json', 'rawJson', 'payload_json', 'payloadJson', 'update_data_json', 'updateDataJson', 'update_data']) {
+                if (sanitized[key] && typeof sanitized[key] === 'string' && sanitized[key].length > 500) {
+                  sanitized[key] = sanitized[key].substring(0, 500) + '... [truncated]';
+                }
+              }
+              detail.sampleRecord = sanitized;
             }
           }
         }
