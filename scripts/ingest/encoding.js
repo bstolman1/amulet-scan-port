@@ -43,39 +43,61 @@ export async function getEncoders() {
  * - Many fields are optional (signatories only on created, etc.)
  */
 export function mapEvent(r) {
+  // Accept both snake_case (API/normalizer) and camelCase (internal)
+  const effectiveAt = r.effective_at ?? r.effectiveAt;
+  const recordedAt = r.recorded_at ?? r.recordedAt ?? r.timestamp;
+  const createdAtTs = r.created_at_ts ?? r.createdAtTs;
+
+  const eventType = r.type ?? r.event_type ?? r.eventType;
+  const eventTypeOriginal =
+    r.type_original ?? r.event_type_original ?? r.typeOriginal ?? r.eventTypeOriginal ?? eventType;
+
+  const contractId =
+    r.contract_id ??
+    r.contractId ??
+    r.created?.contract_id ??
+    r.created?.contractId ??
+    r.exercised?.contract_id ??
+    r.exercised?.contractId ??
+    r.reassignment?.contract_id ??
+    r.reassignment?.contractId ??
+    '';
+
+  const childEventIds = r.child_event_ids ?? r.childEventIds;
+
   return {
-    id: String(r.id ?? r.event_id ?? ''),
-    updateId: String(r.update_id ?? ''),
-    type: String(r.type ?? r.event_type ?? ''),
-    typeOriginal: String(r.type_original ?? r.event_type_original ?? ''),
-    synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? ''),
-    effectiveAt: safeTimestamp(r.effective_at),
-    recordedAt: safeTimestamp(r.recorded_at ?? r.timestamp),
-    createdAtTs: safeTimestamp(r.created_at_ts),
-    contractId: String(r.contract_id ?? ''),
-    template: String(r.template ?? r.template_id ?? ''),
-    packageName: String(r.package_name ?? ''),
-    migrationId: safeInt64(r.migration_id),
+    id: String(r.id ?? r.event_id ?? r.eventId ?? ''),
+    updateId: String(r.update_id ?? r.updateId ?? ''),
+    type: String(eventType ?? ''),
+    typeOriginal: String(eventTypeOriginal ?? ''),
+    synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? r.synchronizerId ?? ''),
+    effectiveAt: safeTimestamp(effectiveAt),
+    recordedAt: safeTimestamp(recordedAt),
+    createdAtTs: safeTimestamp(createdAtTs),
+    contractId: String(contractId ?? ''),
+    template: String(r.template ?? r.template_id ?? r.templateId ?? ''),
+    packageName: String(r.package_name ?? r.packageName ?? ''),
+    migrationId: safeInt64(r.migration_id ?? r.migrationId),
     // Optional arrays - may be null/undefined for certain event types
     signatories: safeStringArray(r.signatories),
     observers: safeStringArray(r.observers),
-    actingParties: safeStringArray(r.acting_parties),
-    witnessParties: safeStringArray(r.witness_parties),
+    actingParties: safeStringArray(r.acting_parties ?? r.actingParties),
+    witnessParties: safeStringArray(r.witness_parties ?? r.witnessParties),
     payloadJson: r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
     // Created event specific fields
     contractKeyJson: r.contract_key_json || (r.contract_key ? safeStringify(r.contract_key) : ''),
     // Exercised event specific fields
     choice: String(r.choice ?? ''),
     consuming: Boolean(r.consuming ?? false),
-    interfaceId: String(r.interface_id ?? ''),
-    childEventIds: safeStringArray(r.child_event_ids),
+    interfaceId: String(r.interface_id ?? r.interfaceId ?? ''),
+    childEventIds: safeStringArray(childEventIds),
     exerciseResultJson: r.exercise_result_json || (r.exercise_result ? safeStringify(r.exercise_result) : ''),
     // Reassignment event specific fields
-    sourceSynchronizer: String(r.source_synchronizer ?? ''),
-    targetSynchronizer: String(r.target_synchronizer ?? ''),
-    unassignId: String(r.unassign_id ?? ''),
+    sourceSynchronizer: String(r.source_synchronizer ?? r.sourceSynchronizer ?? ''),
+    targetSynchronizer: String(r.target_synchronizer ?? r.targetSynchronizer ?? ''),
+    unassignId: String(r.unassign_id ?? r.unassignId ?? ''),
     submitter: String(r.submitter ?? ''),
-    reassignmentCounter: safeInt64(r.reassignment_counter),
+    reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
     // CRITICAL: Complete original event for recovery/future-proofing
     rawJson: r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
     // Deprecated
@@ -88,26 +110,36 @@ export function mapEvent(r) {
  * NOTE: protobufjs uses camelCase field names internally
  */
 export function mapUpdate(r) {
+  const effectiveAt = r.effective_at ?? r.effectiveAt;
+  const recordedAt = r.recorded_at ?? r.recordedAt ?? r.timestamp;
+  const recordTime = r.record_time ?? r.recordTime;
+
+  const rootEventIds =
+    r.root_event_ids ??
+    r.rootEventIds ??
+    r.update_data?.root_event_ids ??
+    r.update_data?.rootEventIds;
+
   return {
-    id: String(r.id ?? r.update_id ?? ''),
-    type: String(r.type ?? r.update_type ?? ''),
-    synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? ''),
-    effectiveAt: safeTimestamp(r.effective_at),
-    recordedAt: safeTimestamp(r.recorded_at ?? r.timestamp),
-    recordTime: safeTimestamp(r.record_time),
-    commandId: String(r.command_id ?? ''),
-    workflowId: String(r.workflow_id ?? ''),
+    id: String(r.id ?? r.update_id ?? r.updateId ?? ''),
+    type: String(r.type ?? r.update_type ?? r.updateType ?? ''),
+    synchronizer: String(r.synchronizer ?? r.synchronizer_id ?? r.synchronizerId ?? ''),
+    effectiveAt: safeTimestamp(effectiveAt),
+    recordedAt: safeTimestamp(recordedAt),
+    recordTime: safeTimestamp(recordTime),
+    commandId: String(r.command_id ?? r.commandId ?? ''),
+    workflowId: String(r.workflow_id ?? r.workflowId ?? ''),
     kind: String(r.kind ?? ''),
-    migrationId: safeInt64(r.migration_id),
+    migrationId: safeInt64(r.migration_id ?? r.migrationId),
     offset: safeInt64(r.offset),
-    rootEventIds: safeStringArray(r.root_event_ids),
-    eventCount: parseInt(r.event_count) || 0,
+    rootEventIds: safeStringArray(rootEventIds),
+    eventCount: parseInt(r.event_count ?? r.eventCount) || 0,
     // Reassignment-specific update fields
-    sourceSynchronizer: String(r.source_synchronizer ?? ''),
-    targetSynchronizer: String(r.target_synchronizer ?? ''),
-    unassignId: String(r.unassign_id ?? ''),
+    sourceSynchronizer: String(r.source_synchronizer ?? r.sourceSynchronizer ?? ''),
+    targetSynchronizer: String(r.target_synchronizer ?? r.targetSynchronizer ?? ''),
+    unassignId: String(r.unassign_id ?? r.unassignId ?? ''),
     submitter: String(r.submitter ?? ''),
-    reassignmentCounter: safeInt64(r.reassignment_counter),
+    reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
     // Tracing
     traceContextJson: r.trace_context_json || (r.trace_context ? safeStringify(r.trace_context) : ''),
     updateDataJson: r.update_data_json || (r.update_data ? safeStringify(r.update_data) : ''),
