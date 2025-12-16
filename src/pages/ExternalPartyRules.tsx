@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { Shield, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -17,10 +16,8 @@ const ExternalPartyRules = () => {
   const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
   const itemsPerPage = 20;
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-
   const rulesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:ExternalPartyAmuletRules:ExternalPartyAmuletRules",
   );
 
@@ -147,9 +144,9 @@ const ExternalPartyRules = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={["Splice:ExternalPartyAmuletRules:ExternalPartyAmuletRules"]}
-          isProcessing={latestSnapshot?.status === "processing"}
+          isProcessing={false}
         />
       </div>
     </DashboardLayout>

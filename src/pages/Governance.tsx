@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -23,12 +22,11 @@ const Governance = () => {
     retry: 1,
   });
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEvents, isLoading: eventsLoading } = useGovernanceEvents();
 
   // Fetch DsoRules to get SV count and voting threshold - aggregated across all packages
   const { data: dsoRulesData } = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:DsoRules:DsoRules",
   );
 
@@ -37,23 +35,23 @@ const Governance = () => {
     data: voteRequestsData,
     isLoading,
     isError,
-  } = useAggregatedTemplateData(latestSnapshot?.id, "Splice:DsoRules:VoteRequest");
+  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
   // Fetch Amulet Price Votes
   const { data: priceVotesData, isLoading: priceVotesLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:DSO:AmuletPrice:AmuletPriceVote",
   );
 
   // Fetch Confirmations
   const { data: confirmationsData } = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:DsoRules:Confirmation",
   );
 
   // Fetch AmuletRules
   const { data: amuletRulesData } = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:AmuletRules:AmuletRules",
   );
 
@@ -493,7 +491,7 @@ const Governance = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
+          snapshotId={undefined}
           templateSuffixes={[
             "Splice:DsoRules:DsoRules",
             "Splice:DsoRules:VoteRequest",
