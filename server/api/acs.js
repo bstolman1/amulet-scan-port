@@ -1590,4 +1590,73 @@ router.get('/realtime-debug', async (req, res) => {
   }
 });
 
+// GET /api/acs/aggregate - Aggregate template data (sum amounts)
+router.get('/aggregate', async (req, res) => {
+  try {
+    const { template, mode = 'circulating' } = req.query;
+    
+    if (!template) {
+      return res.status(400).json({ error: 'template parameter required' });
+    }
+
+    const cacheKey = `acs:aggregate:${template}:${mode}`;
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+
+    if (!hasACSData()) {
+      return res.json({ sum: 0, count: 0, templateCount: 0 });
+    }
+
+    const acsSource = getSnapshotCTE();
+    
+    // Query for the template, summing the amount field
+    // mode=circulating sums all amounts, mode=locked sums only locked amounts
+    const amountField = mode === 'locked' 
+      ? "COALESCE(CAST(json_extract_string(payload, '$.lockedAmount') AS DOUBLE), 0)"
+      : "COALESCE(CAST(json_extract_string(payload, '$.amount') AS DOUBLE), 0)";
+
+    const sql = `
+      WITH filtered AS (
+        SELECT 
+          ${amountField} as amount
+        FROM ${acsSource}
+        WHERE template_id LIKE '%${template.replace(/'/g, "''")}'
+      )
+      SELECT 
+        SUM(amount) as sum,
+        COUNT(*) as count
+      FROM filtered
+    `;
+
+    const rows = await db.safeQuery(sql);
+    const result = {
+      sum: rows[0]?.sum || 0,
+      count: rows[0]?.count || 0,
+      templateCount: 1,
+    };
+
+    setCache(cacheKey, result, CACHE_TTL.SUPPLY);
+    res.json(result);
+  } catch (err) {
+    console.error('ACS aggregate error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/acs/trigger-snapshot - Trigger a new ACS snapshot
+router.post('/trigger-snapshot', async (req, res) => {
+  try {
+    // This endpoint triggers the local snapshot script
+    // For now, just return a message - the actual trigger would be implemented
+    // based on how your snapshot process works (e.g., spawn a child process)
+    res.json({ 
+      success: true, 
+      message: 'Snapshot trigger endpoint - run `node scripts/ingest/fetch-acs-parquet.js` manually' 
+    });
+  } catch (err) {
+    console.error('ACS trigger-snapshot error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

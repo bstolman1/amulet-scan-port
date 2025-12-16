@@ -1,10 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/duckdb-api-client";
 
 export interface ServerAggregationResult {
   sum: number;
   count: number;
   templateCount: number;
+}
+
+interface AggregateResponse {
+  sum: number;
+  count: number;
+  templateCount?: number;
 }
 
 export function useTemplateSumServer(
@@ -14,16 +20,19 @@ export function useTemplateSumServer(
   enabled: boolean = true,
 ) {
   return useQuery<ServerAggregationResult, Error>({
-    queryKey: ["server-template-sum", snapshotId, templateSuffix, mode],
+    queryKey: ["server-template-sum", templateSuffix, mode],
     queryFn: async () => {
-      if (!snapshotId) throw new Error("Snapshot ID required");
-      const { data, error } = await supabase.functions.invoke("aggregate-template-sum", {
-        body: { snapshot_id: snapshotId, template_suffix: templateSuffix, mode },
-      });
-      if (error) throw error as any;
-      return data as ServerAggregationResult;
+      // Use DuckDB aggregation endpoint
+      const response = await apiFetch<AggregateResponse>(
+        `/api/acs/aggregate?template=${encodeURIComponent(templateSuffix)}&mode=${mode}`
+      );
+      return {
+        sum: response.sum || 0,
+        count: response.count || 0,
+        templateCount: response.templateCount || 1,
+      };
     },
-    enabled: enabled && !!snapshotId && !!templateSuffix,
+    enabled: enabled && !!templateSuffix,
     staleTime: 5 * 60 * 1000,
   });
 }

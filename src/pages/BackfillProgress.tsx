@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { supabase } from "@/integrations/supabase/client";
 import { Database, Activity, Trash2, FileText, Layers, Zap, Clock, PlayCircle, PauseCircle, CheckCircle2 } from "lucide-react";
 import { formatDistanceToNow, format, formatDuration, intervalToDuration } from "date-fns";
 import { useBackfillCursors, useBackfillStats, useWriteActivity, useBackfillDebugInfo, BackfillCursor } from "@/hooks/use-backfill-cursors";
@@ -12,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ShardProgressCard } from "@/components/ShardProgressCard";
 import { GapRecoveryPanel } from "@/components/GapRecoveryPanel";
 import { DataIntegrityValidator } from "@/components/DataIntegrityValidator";
+import { apiFetch } from "@/lib/duckdb-api-client";
 
 /**
  * Calculate ETA for a cursor based on throughput
@@ -184,55 +184,7 @@ const BackfillProgress = () => {
     return overallProgress >= 99.95 ? 99.9 : overallProgress;
   }, [isStillWriting, overallProgress]);
 
-  useEffect(() => {
-    const channel = supabase
-      .channel("backfill-progress")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "backfill_cursors",
-        },
-        (payload: any) => {
-          console.log("Backfill cursor update:", payload);
-          if (payload.eventType === "INSERT") {
-            setRealtimeCursors((prev) => [payload.new as BackfillCursor, ...prev]);
-          } else if (payload.eventType === "UPDATE") {
-            setRealtimeCursors((prev) =>
-              prev.map((c) => (c.id === payload.new.id ? (payload.new as BackfillCursor) : c)),
-            );
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "ledger_updates",
-        },
-        () => {
-          refetchStats();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "ledger_events",
-        },
-        () => {
-          refetchStats();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [refetchStats]);
+  // Note: Supabase realtime removed - data auto-refreshes via react-query refetchInterval
 
   
 
@@ -247,37 +199,11 @@ const BackfillProgress = () => {
 
     setIsPurging(true);
     try {
-      // Try local DuckDB API first
-      const localApiUrl = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
-      try {
-        const response = await fetch(`${localApiUrl}/api/backfill/purge`, { method: "DELETE" });
-        if (response.ok) {
-          const data = await response.json();
-          toast({
-            title: "Purge complete",
-            description: `Deleted ${data.deleted_cursors} cursor files${data.deleted_data_dir ? " and raw data directory" : ""}`,
-          });
-          refetch();
-          refetchStats();
-          setRealtimeCursors([]);
-          return;
-        }
-      } catch (localError) {
-        console.log("Local API not available, falling back to Supabase edge function");
-      }
-
-      // Fallback to Supabase edge function
-      const { data, error } = await supabase.functions.invoke("purge-backfill-data", {
-        body: { purge_all: true },
-      });
-
-      if (error) throw error;
-
+      const response = await apiFetch<{ deleted_cursors: number; deleted_data_dir?: boolean }>("/api/backfill/purge", { method: "DELETE" });
       toast({
         title: "Purge complete",
-        description: `Deleted ${data.deleted_cursors} cursors, ${data.deleted_updates} updates, ${data.deleted_events} events`,
+        description: `Deleted ${response.deleted_cursors} cursor files${response.deleted_data_dir ? " and raw data directory" : ""}`,
       });
-
       refetch();
       refetchStats();
       setRealtimeCursors([]);
