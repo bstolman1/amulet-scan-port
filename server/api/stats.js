@@ -563,12 +563,19 @@ router.get('/ccview-comparison', async (req, res) => {
     const hasParquetUpdates = db.hasFileType('updates', '.parquet');
     const hasParquetEvents = db.hasFileType('events', '.parquet');
     
+    // Always check for binary files regardless of engine mode
+    const hasBinaryEvents = binaryReader.hasBinaryFiles(db.DATA_PATH, 'events');
+    const hasBinaryUpdates = binaryReader.hasBinaryFiles(db.DATA_PATH, 'updates');
+    
+    let actualSource = 'none';
+    
     if (hasParquetUpdates) {
       try {
         const updateResult = await db.safeQuery(`
           SELECT COUNT(*) as count FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
         `);
         updateCount = Number(updateResult[0]?.count || 0);
+        actualSource = 'parquet';
       } catch (e) {
         console.warn('Parquet updates count failed:', e.message);
       }
@@ -581,6 +588,7 @@ router.get('/ccview-comparison', async (req, res) => {
           SELECT COUNT(*) as count FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
         `);
         eventCount = Number(eventResult[0]?.count || 0);
+        actualSource = 'parquet';
         
         // Get breakdown by event_type (CCVIEW style)
         const typeBreakdown = await db.safeQuery(`
@@ -623,12 +631,15 @@ router.get('/ccview-comparison', async (req, res) => {
       } catch (e) {
         console.warn('Parquet events count failed:', e.message);
       }
-    } else if (sources.primarySource === 'binary') {
-      // Binary file counting
+    }
+    
+    // If no parquet data found, try binary files (regardless of engine mode)
+    if (eventCount === 0 && hasBinaryEvents) {
+      actualSource = 'binary';
       const eventFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
       const updateFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'updates');
       
-      updateCount = updateFiles.length * 100; // Estimate
+      updateCount = updateFiles.length * 100; // Estimate ~100 records per file
       
       // Sample some files for event type breakdown
       const sampleFiles = eventFiles.slice(0, Math.min(100, eventFiles.length));
@@ -656,7 +667,7 @@ router.get('/ccview-comparison', async (req, res) => {
         } catch (e) { /* ignore */ }
       }
       
-      // Extrapolate
+      // Extrapolate from sample
       if (sampledEvents > 0 && sampleFiles.length < eventFiles.length) {
         const ratio = eventFiles.length / sampleFiles.length;
         eventCount = Math.round(sampledEvents * ratio);
@@ -707,7 +718,14 @@ router.get('/ccview-comparison', async (req, res) => {
         expected_ratio: 'Typically 1 update contains 1-3 events on average',
         your_ratio: updateCount > 0 ? (eventCount / updateCount).toFixed(2) : 'N/A'
       },
-      data_source: sources.primarySource
+      data_source: actualSource,
+      data_path: basePath,
+      files_found: {
+        binary_events: hasBinaryEvents,
+        binary_updates: hasBinaryUpdates,
+        parquet_events: hasParquetEvents,
+        parquet_updates: hasParquetUpdates
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
