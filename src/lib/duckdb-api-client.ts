@@ -44,15 +44,25 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
 
 export interface LedgerEvent {
   event_id: string;
+  update_id?: string;
   event_type: string;
+  event_type_original?: string;
   contract_id: string;
   template_id: string;
   package_name: string;
   timestamp: string;
   effective_at?: string;
+  created_at_ts?: string;
+  synchronizer_id?: string;
+  migration_id?: number;
   signatories: string[];
   observers: string[];
+  acting_parties?: string[];
+  witness_parties?: string[];
+  choice?: string | null;
+  consuming?: boolean;
   payload: any;
+  raw?: any;
 }
 
 export async function getLatestEvents(limit = 100, offset = 0): Promise<ApiResponse<LedgerEvent[]>> {

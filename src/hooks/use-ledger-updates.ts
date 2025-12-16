@@ -30,26 +30,25 @@ export function useLedgerUpdates(limit: number = 50) {
         // Use DuckDB API
         try {
           const response = await getLatestEvents(limit, 0);
-          // Transform DuckDB events to LedgerUpdate format with richer data
-          return response.data.map((event: DuckDBEvent) => ({
-            id: event.event_id,
-            timestamp: event.timestamp,
-            effective_at: event.effective_at,
-            update_type: event.event_type,
-            update_data: {
-              payload: event.payload,
+          return response.data.map((event: DuckDBEvent) => {
+            // Keep the full event available for debugging/inspection in the UI
+            // (payload can legitimately be null for some event types like Archive)
+            const fullData = event as any;
+
+            return {
+              id: event.event_id,
+              timestamp: event.timestamp,
+              effective_at: event.effective_at,
+              update_type: event.event_type,
+              update_data: fullData,
+              created_at: event.timestamp,
+              migration_id: (event as any).migration_id ?? null,
+              synchronizer_id: (event as any).synchronizer_id ?? null,
+              update_id: (event as any).update_id ?? null,
               contract_id: event.contract_id,
               template_id: event.template_id,
-              signatories: event.signatories || [],
-              observers: event.observers || [],
-            },
-            created_at: event.timestamp,
-            migration_id: (event as any).migration_id ?? null,
-            synchronizer_id: (event as any).synchronizer_id ?? null,
-            update_id: event.event_id,
-            contract_id: event.contract_id,
-            template_id: event.template_id,
-          })) as LedgerUpdate[];
+            };
+          }) as LedgerUpdate[];
         } catch (error) {
           console.warn("DuckDB API unavailable, falling back to Supabase:", error);
           // Fallback to Supabase

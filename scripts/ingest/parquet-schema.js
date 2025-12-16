@@ -276,10 +276,23 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
   }
   
   // Timestamps - prefer created_at for created events, fall back to update's record_time
+  // IMPORTANT: Scan API can sometimes return timestamps without timezone suffix.
+  // If missing, treat as UTC to avoid local timezone shifts (e.g., appearing ~5h behind).
+  const asUtcDate = (v) => {
+    if (!v) return null;
+    if (v instanceof Date) return v;
+    if (typeof v === 'number') return new Date(v);
+    if (typeof v === 'string') {
+      const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(v);
+      return new Date(hasTz ? v : `${v}Z`);
+    }
+    return new Date(v);
+  };
+
   const createdAt = innerEvent.created_at || event.created_at;
-  const effectiveAt = createdAt 
-    ? new Date(createdAt) 
-    : (updateInfo?.record_time ? new Date(updateInfo.record_time) : null);
+  const effectiveAt = createdAt
+    ? asUtcDate(createdAt)
+    : (updateInfo?.record_time ? asUtcDate(updateInfo.record_time) : null);
   
   // Synchronizer from update context
   const synchronizer = updateInfo?.synchronizer_id || null;
