@@ -261,36 +261,75 @@ const LiveUpdates = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-h-[600px] overflow-y-auto">
-              {filteredUpdates.map((update) => (
-                <div
-                  key={update.id}
-                  className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-2 flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge variant="outline">{update.update_type}</Badge>
-                        <span className="font-mono text-xs text-muted-foreground">Migration {update.migration_id || "N/A"}</span>
-                        <span className="font-mono text-xs text-muted-foreground truncate">{update.id}</span>
-                      </div>
+              {filteredUpdates.map((update) => {
+                // Extract additional fields from update_data
+                const data = update.update_data as any;
+                const contractId = data?.contract_id || data?.created_event?.contract_id || null;
+                const templateId = data?.template_id || data?.created_event?.template_id || null;
+                const templateShort = templateId ? templateId.split(':').pop() : null;
+                const signatories = data?.signatories || data?.created_event?.signatories || [];
+                const payload = data?.payload || data?.create_arguments || null;
+                
+                return (
+                  <div
+                    key={update.id}
+                    className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="space-y-2 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline">{update.update_type}</Badge>
+                          <span className="font-mono text-xs text-muted-foreground">Migration {update.migration_id || "N/A"}</span>
+                          <span className="font-mono text-xs text-muted-foreground truncate max-w-[200px]" title={update.id}>{update.id.substring(0, 30)}...</span>
+                        </div>
 
-                      <div className="text-xs text-muted-foreground">
-                        <Clock className="w-3 h-3 inline mr-1" />
-                        {new Date((update as any).effective_at || update.timestamp).toLocaleString()}
-                        {(update as any).effective_at && (update as any).effective_at !== update.timestamp && (
-                          <span className="ml-2 text-muted-foreground/60" title="When the file was written">
-                            (written {new Date(update.timestamp).toLocaleString()})
-                          </span>
+                        {/* Contract & Template Info */}
+                        {(contractId || templateShort) && (
+                          <div className="flex items-center gap-3 flex-wrap text-xs">
+                            {contractId && (
+                              <span className="font-mono text-blue-500" title={contractId}>
+                                📄 {contractId.substring(0, 24)}...
+                              </span>
+                            )}
+                            {templateShort && (
+                              <Badge variant="secondary" className="font-mono text-xs">
+                                {templateShort}
+                              </Badge>
+                            )}
+                          </div>
                         )}
-                      </div>
-                    </div>
 
-                    <div className="text-xs text-muted-foreground whitespace-nowrap">
-                      {formatDistanceToNow(new Date(update.created_at), { addSuffix: true })}
+                        {/* Signatories */}
+                        {signatories.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap text-xs text-muted-foreground">
+                            <span>👤</span>
+                            {signatories.slice(0, 2).map((s: string, i: number) => (
+                              <span key={i} className="font-mono truncate max-w-[150px]" title={s}>
+                                {s.substring(0, 20)}...
+                              </span>
+                            ))}
+                            {signatories.length > 2 && <span>+{signatories.length - 2} more</span>}
+                          </div>
+                        )}
+
+                        <div className="text-xs text-muted-foreground">
+                          <Clock className="w-3 h-3 inline mr-1" />
+                          {new Date((update as any).effective_at || update.timestamp).toLocaleString()}
+                          {(update as any).effective_at && (update as any).effective_at !== update.timestamp && (
+                            <span className="ml-2 text-muted-foreground/60" title="When the file was written">
+                              (written {new Date(update.timestamp).toLocaleString()})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-muted-foreground whitespace-nowrap">
+                        {formatDistanceToNow(new Date(update.created_at), { addSuffix: true })}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {filteredUpdates.length === 0 && (
                 <div className="text-center py-12 text-muted-foreground">
