@@ -405,14 +405,43 @@ export class DedupTracker {
 }
 
 /**
- * Empty response handler - NEVER skip data
+ * Empty response handler - Progressive step-back for gaps
+ * 
+ * Strategy: Start with 1ms, then progressively increase step size
+ * after many consecutive empties (likely a migration gap).
+ * This balances safety with efficiency.
  */
 export class EmptyResponseHandler {
   constructor(stepBackMs = STEP_BACK_MS, maxEmpty = MAX_EMPTY_BEFORE_STEP) {
-    this.stepBackMs = stepBackMs;
+    this.baseStepMs = stepBackMs;
     this.maxEmpty = maxEmpty;
     this.consecutiveEmpty = 0;
     this.totalEmpty = 0;
+    
+    // Progressive step-back thresholds
+    // After N consecutive empties, use larger step
+    this.stepTiers = [
+      { threshold: 0, stepMs: 1 },           // Start: 1ms
+      { threshold: 100, stepMs: 100 },       // After 100: 100ms
+      { threshold: 200, stepMs: 1000 },      // After 200: 1 second
+      { threshold: 500, stepMs: 10000 },     // After 500: 10 seconds
+      { threshold: 1000, stepMs: 60000 },    // After 1000: 1 minute
+      { threshold: 2000, stepMs: 300000 },   // After 2000: 5 minutes
+      { threshold: 5000, stepMs: 3600000 },  // After 5000: 1 hour
+    ];
+  }
+
+  /**
+   * Get current step size based on consecutive empties
+   */
+  _getCurrentStep() {
+    let stepMs = this.baseStepMs;
+    for (const tier of this.stepTiers) {
+      if (this.consecutiveEmpty >= tier.threshold) {
+        stepMs = tier.stepMs;
+      }
+    }
+    return stepMs;
   }
 
   /**
@@ -426,24 +455,33 @@ export class EmptyResponseHandler {
     const currentMs = new Date(currentBefore).getTime();
     const lowerMs = new Date(lowerBound).getTime();
 
-    // CRITICAL: Only step back by 1ms, NEVER jump
-    const newMs = currentMs - this.stepBackMs;
+    // Get progressive step size
+    const stepMs = this._getCurrentStep();
+    const newMs = currentMs - stepMs;
 
     if (newMs <= lowerMs) {
       // We've reached the lower bound
       return { action: 'done', newBefore: null };
     }
 
-    // After many empty responses, we might be in a true gap
-    // But NEVER skip - just continue stepping back 1ms at a time
-    if (this.consecutiveEmpty >= this.maxEmpty * 3) {
-      console.log(`   ⚠️ ${this.consecutiveEmpty} consecutive empty responses. Continuing to step back carefully.`);
+    // Log at tier transitions
+    if (this.consecutiveEmpty === 100) {
+      console.log(`   ⚠️ 100 consecutive empties - increasing step to 100ms (possible gap)`);
+    } else if (this.consecutiveEmpty === 500) {
+      console.log(`   ⚠️ 500 consecutive empties - increasing step to 10s (likely migration gap)`);
+    } else if (this.consecutiveEmpty === 1000) {
+      console.log(`   ⚠️ 1000 consecutive empties - increasing step to 1min (large gap)`);
+    } else if (this.consecutiveEmpty === 2000) {
+      console.log(`   ⚠️ 2000 consecutive empties - increasing step to 5min (very large gap)`);
+    } else if (this.consecutiveEmpty % 1000 === 0 && this.consecutiveEmpty > 2000) {
+      console.log(`   ⚠️ ${this.consecutiveEmpty} consecutive empties - stepping back ${stepMs / 1000}s at a time`);
     }
 
     return { 
       action: 'continue', 
       newBefore: new Date(newMs).toISOString(),
       consecutiveEmpty: this.consecutiveEmpty,
+      stepMs,
     };
   }
 
@@ -452,6 +490,9 @@ export class EmptyResponseHandler {
    */
   resetOnData() {
     const wasEmpty = this.consecutiveEmpty;
+    if (wasEmpty > 100) {
+      console.log(`   ✅ Found data after ${wasEmpty} empty responses - resetting step to 1ms`);
+    }
     this.consecutiveEmpty = 0;
     return wasEmpty;
   }
@@ -460,6 +501,7 @@ export class EmptyResponseHandler {
     return {
       consecutiveEmpty: this.consecutiveEmpty,
       totalEmpty: this.totalEmpty,
+      currentStepMs: this._getCurrentStep(),
     };
   }
 }
