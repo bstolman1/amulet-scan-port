@@ -1,9 +1,7 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient } from "@tanstack/react-query";
-import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { DataPreloader } from "@/components/DataPreloader";
 import Dashboard from "./pages/Dashboard";
@@ -46,34 +44,15 @@ const queryClient = new QueryClient({
       retry: 2,
       retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 3000),
       staleTime: 5 * 60_000, // 5 minutes - data considered fresh
-      gcTime: 24 * 60 * 60_000, // 24 hours - keep in cache for persistence
+      gcTime: 30 * 60_000, // 30 minutes - keep in memory cache
       refetchOnWindowFocus: false,
       networkMode: "offlineFirst",
     },
   },
 });
 
-// Persist cache to localStorage for instant loads like Etherscan
-const persister = createSyncStoragePersister({
-  storage: window.localStorage,
-  key: "canton-explorer-cache",
-  // Serialize/deserialize with size limit
-  throttleTime: 1000,
-});
-
 const App = () => (
-  <PersistQueryClientProvider
-    client={queryClient}
-    persistOptions={{
-      persister,
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      buster: "v1", // Increment to invalidate old cache
-    }}
-    onSuccess={() => {
-      // Resume any paused mutations after hydration
-      queryClient.resumePausedMutations();
-    }}
-  >
+  <QueryClientProvider client={queryClient}>
     <DataPreloader />
     <TooltipProvider>
       <Toaster />
@@ -115,7 +94,7 @@ const App = () => (
         </Routes>
       </BrowserRouter>
     </TooltipProvider>
-  </PersistQueryClientProvider>
+  </QueryClientProvider>
 );
 
 export default App;
