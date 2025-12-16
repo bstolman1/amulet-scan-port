@@ -62,8 +62,11 @@ const Governance = () => {
   const amuletRules = amuletRulesData?.data || [];
 
   // Get SV count and voting threshold from DsoRules FIRST (needed for proposals processing)
-  const dsoRules = dsoRulesData?.data?.[0];
-  const svCount = Object.keys(dsoRules?.svs || {}).length;
+  // Handle both flat and nested payload structure from DuckDB
+  const dsoRulesRaw = dsoRulesData?.data?.[0];
+  const dsoRulesPayload = dsoRulesRaw?.payload || dsoRulesRaw || {};
+  const svs = dsoRulesPayload.svs || {};
+  const svCount = Object.keys(svs).length;
   const votingThreshold = dsoInfo?.voting_threshold || Math.ceil(svCount * 0.67); // 2/3 majority
 
   // Helper to safely extract field values from nested structure
@@ -77,7 +80,7 @@ const Governance = () => {
 
   // Debug logging - Log ALL data structures
   console.log("🔍 DEBUG Governance - Full Data Dump:");
-  console.log("DsoRules:", dsoRules ? JSON.stringify(dsoRules, null, 2) : "No data");
+  console.log("DsoRules:", dsoRulesPayload ? JSON.stringify(dsoRulesPayload, null, 2) : "No data");
   console.log("Vote requests count:", voteRequestsData?.data?.length || 0);
   if (voteRequestsData?.data?.[0]) {
     console.log("First VoteRequest:", JSON.stringify(voteRequestsData.data[0], null, 2));
@@ -93,23 +96,26 @@ const Governance = () => {
   console.log("AmuletRules:", amuletRules[0] ? JSON.stringify(amuletRules[0], null, 2) : "No data");
 
   // Process proposals from ACS data with full JSON parsing
+  // Note: ACS data has fields nested in payload, so we need to extract them
   const proposals =
-    voteRequestsData?.data.map((voteRequest: any) => {
-      const votes = voteRequest.votes || {};
+    voteRequestsData?.data?.map((voteRequest: any) => {
+      // Handle both flat structure and nested payload structure from DuckDB
+      const payload = voteRequest.payload || voteRequest;
+      const votes = payload.votes || voteRequest.votes || {};
       const votesList = Object.values(votes);
       const votesFor = votesList.filter((v: any) => v?.accept || v?.Accept).length;
       const votesAgainst = votesList.filter((v: any) => v?.reject || v?.Reject).length;
-      const action = voteRequest.action || {};
+      const action = payload.action || voteRequest.action || {};
       const actionKey = Object.keys(action)[0] || "Unknown";
       const actionData = action[actionKey];
       const title = actionKey.replace(/ARC_|_/g, " ");
 
       // Extract requester information
-      const requester = voteRequest.requester || "Unknown";
-      const requesterParty = voteRequest.requesterName || requester;
+      const requester = payload.requester || voteRequest.requester || "Unknown";
+      const requesterParty = payload.requesterName || voteRequest.requesterName || requester;
 
       // Extract reason
-      const reason = voteRequest.reason?.url || voteRequest.reason || "No reason provided";
+      const reason = payload.reason?.url || payload.reason || voteRequest.reason?.url || voteRequest.reason || "No reason provided";
 
       // Extract voting information
       const votedSvs = Object.keys(votes).map((svParty) => ({
@@ -124,9 +130,13 @@ const Governance = () => {
       if (votesFor >= threshold) status = "approved";
       else if (votesAgainst > svCount - threshold) status = "rejected";
 
+      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
+      const effectiveAt = payload.effectiveAt || voteRequest.effectiveAt;
+      const expiresAt = payload.expiresAt || voteRequest.expiresAt;
+
       return {
-        id: voteRequest.trackingCid?.slice(0, 12) || voteRequest.contractId?.slice(0, 12) || "unknown",
-        trackingCid: voteRequest.trackingCid,
+        id: trackingCid?.slice(0, 12) || "unknown",
+        trackingCid,
         title,
         actionType: actionKey,
         actionData,
@@ -137,9 +147,9 @@ const Governance = () => {
         votesFor,
         votesAgainst,
         votedSvs,
-        effectiveAt: voteRequest.effectiveAt,
-        expiresAt: voteRequest.expiresAt,
-        createdAt: voteRequest.effectiveAt,
+        effectiveAt,
+        expiresAt,
+        createdAt: effectiveAt,
         rawData: voteRequest, // Keep full JSON for debugging
       };
     }) || [];
