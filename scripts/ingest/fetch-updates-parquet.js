@@ -118,29 +118,61 @@ function saveLiveCursor(migrationId, recordTime) {
  * This is the authoritative source for where backfill stopped
  */
 async function findLatestTimestamp() {
-  // In live mode, check live cursor first (for resuming live ingestion)
+  // In live mode, try to resume from live cursor, but never go backwards behind backfill.
   if (LIVE_MODE) {
     const liveCursor = loadLiveCursor();
-    if (liveCursor) {
-      lastMigrationId = liveCursor.migration_id;
-      return liveCursor.record_time;
+    const liveMigration = liveCursor?.migration_id ?? null;
+    const liveTime = liveCursor?.record_time ?? null;
+
+    // Always compute the best-known backfill resume point too.
+    const backfillTime = findLatestFromCursors();
+    const backfillMigration = lastMigrationId;
+
+    // If we have both, prefer whichever is newer.
+    if (liveCursor && backfillTime) {
+      const liveTs = new Date(liveTime).getTime();
+      const backfillTs = new Date(backfillTime).getTime();
+
+      const useBackfill =
+        backfillMigration > liveMigration ||
+        (backfillMigration === liveMigration && backfillTs > liveTs);
+
+      if (useBackfill) {
+        console.log(
+          `⚠️ Live cursor is behind backfill (live m${liveMigration}@${liveTime}); continuing from backfill (m${backfillMigration}@${backfillTime})`
+        );
+        return backfillTime;
+      }
+
+      lastMigrationId = liveMigration;
+      return liveTime;
     }
-    console.log('🔴 LIVE MODE: No live cursor, checking backfill cursors...');
+
+    // Only live cursor exists
+    if (liveCursor) {
+      lastMigrationId = liveMigration;
+      return liveTime;
+    }
+
+    // Only backfill cursor exists
+    if (backfillTime) {
+      return backfillTime;
+    }
+
+    console.log('🔴 LIVE MODE: No live/backfill cursor found, falling back to raw files...');
+  } else {
+    // Non-live mode: cursor files from backfill are authoritative
+    const backfillTime = findLatestFromCursors();
+    if (backfillTime) return backfillTime;
   }
-  
-  // Check cursor files from backfill - continue FORWARD from where backfill stopped
-  const cursorResult = findLatestFromCursors();
-  if (cursorResult) {
-    return cursorResult;
-  }
-  
+
   // Fallback: check raw data directory for binary files
   const rawDir = path.join(DATA_DIR, 'raw');
   if (fs.existsSync(rawDir)) {
     const result = await findLatestFromRawData(rawDir);
     if (result) return result;
   }
-  
+
   console.log('📁 No existing backfill data found, starting fresh');
   return null;
 }
