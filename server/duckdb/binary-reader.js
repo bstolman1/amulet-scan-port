@@ -74,15 +74,26 @@ async function getEncoders() {
 }
 
 /**
+ * Extract migration id from partition path: .../migration=N/...
+ */
+function extractMigrationIdFromPath(filePath) {
+  const m = filePath.match(/migration=(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
  * Convert protobuf record to plain object with readable timestamps
  */
-function toPlainObject(record, isEvent) {
+function toPlainObject(record, isEvent, filePath) {
+  const migration_id = filePath ? extractMigrationIdFromPath(filePath) : null;
+
   if (isEvent) {
     return {
       event_id: record.id || null,
       update_id: record.updateId || record.update_id || null,
       event_type: record.type || null,
       synchronizer_id: record.synchronizer || null,
+      migration_id,
       timestamp: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
       effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
       contract_id: record.contractId || record.contract_id || null,
@@ -95,11 +106,12 @@ function toPlainObject(record, isEvent) {
       raw: record.rawJson ? tryParseJson(record.rawJson) : null, // Complete original event
     };
   }
-  
+
   // Update record
   return {
     update_id: record.id || null,
     synchronizer_id: record.synchronizer || null,
+    migration_id,
     timestamp: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
     effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
     transaction_id: record.transactionId || record.transaction_id || null,
@@ -198,9 +210,9 @@ export async function readBinaryFile(filePath) {
     // Decode protobuf
     const message = BatchType.decode(decompressed);
     const records = message[recordKey] || [];
-    
+
     for (const r of records) {
-      allRecords.push(toPlainObject(r, isEvents));
+      allRecords.push(toPlainObject(r, isEvents, filePath));
     }
   }
   

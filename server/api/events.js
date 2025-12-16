@@ -66,10 +66,13 @@ router.get('/latest', async (req, res) => {
     const sql = `
       SELECT 
         event_id,
+        update_id,
         event_type,
         contract_id,
         template_id,
         package_name,
+        migration_id,
+        synchronizer_id,
         timestamp,
         effective_at,
         signatories,
