@@ -97,36 +97,150 @@ function generateFileName(prefix) {
 
 /**
  * Map records to protobuf-compatible format
+ * CRITICAL: These mappings must preserve ALL fields from the Scan API
  */
 function mapUpdateRecord(r) {
+  // Helper for safe timestamp conversion
+  const safeTimestamp = (val) => {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    try {
+      const ts = new Date(val).getTime();
+      return isNaN(ts) ? 0 : ts;
+    } catch { return 0; }
+  };
+  
+  // Helper for safe int64
+  const safeInt64 = (val) => {
+    if (val === null || val === undefined) return 0;
+    const num = parseInt(val);
+    return isNaN(num) ? 0 : num;
+  };
+  
+  // Helper for safe string array
+  const safeStringArray = (arr) => Array.isArray(arr) ? arr.map(String) : [];
+  
+  // Helper for safe JSON stringify
+  const safeStringify = (obj) => {
+    if (!obj) return '';
+    try {
+      return typeof obj === 'string' ? obj : JSON.stringify(obj);
+    } catch { return ''; }
+  };
+
   return {
-    id: r.update_id || r.id || '',
-    synchronizer: r.synchronizer_id || r.synchronizer || '',
-    effective_at: r.effective_at ? new Date(r.effective_at).getTime() : 0,
-    recorded_at: r.recorded_at ? new Date(r.recorded_at).getTime() : (r.timestamp ? new Date(r.timestamp).getTime() : 0),
-    transaction_id: r.transaction_id || '',
-    command_id: r.command_id || '',
-    workflow_id: r.workflow_id || '',
-    status: r.status || '',
+    // Core identifiers
+    id: String(r.update_id || r.id || ''),
+    type: String(r.update_type || r.type || ''),
+    synchronizer: String(r.synchronizer_id || r.synchronizer || ''),
+    
+    // Timestamps
+    effectiveAt: safeTimestamp(r.effective_at),
+    recordedAt: safeTimestamp(r.recorded_at || r.timestamp),
+    recordTime: safeTimestamp(r.record_time),
+    
+    // Transaction metadata
+    commandId: String(r.command_id || ''),
+    workflowId: String(r.workflow_id || ''),
+    kind: String(r.kind || ''),
+    
+    // Numeric fields
+    migrationId: safeInt64(r.migration_id),
+    offset: safeInt64(r.offset),
+    eventCount: parseInt(r.event_count) || 0,
+    
+    // Event references
+    rootEventIds: safeStringArray(r.root_event_ids),
+    
+    // Reassignment-specific fields
+    sourceSynchronizer: String(r.source_synchronizer || ''),
+    targetSynchronizer: String(r.target_synchronizer || ''),
+    unassignId: String(r.unassign_id || ''),
+    submitter: String(r.submitter || ''),
+    reassignmentCounter: safeInt64(r.reassignment_counter),
+    
+    // CRITICAL: Full data preservation
+    traceContextJson: r.trace_context ? safeStringify(r.trace_context) : '',
+    updateDataJson: r.update_data ? safeStringify(r.update_data) : '',
   };
 }
 
 function mapEventRecord(r) {
+  // Helper for safe timestamp conversion
+  const safeTimestamp = (val) => {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    try {
+      const ts = new Date(val).getTime();
+      return isNaN(ts) ? 0 : ts;
+    } catch { return 0; }
+  };
+  
+  // Helper for safe int64
+  const safeInt64 = (val) => {
+    if (val === null || val === undefined) return 0;
+    const num = parseInt(val);
+    return isNaN(num) ? 0 : num;
+  };
+  
+  // Helper for safe string array
+  const safeStringArray = (arr) => Array.isArray(arr) ? arr.map(String) : [];
+  
+  // Helper for safe JSON stringify
+  const safeStringify = (obj) => {
+    if (!obj) return '';
+    try {
+      return typeof obj === 'string' ? obj : JSON.stringify(obj);
+    } catch { return ''; }
+  };
+
   return {
-    id: r.event_id || r.id || '',
-    update_id: r.update_id || '',
-    type: r.event_type || r.type || '',
-    synchronizer: r.synchronizer_id || r.synchronizer || '',
-    effective_at: r.effective_at ? new Date(r.effective_at).getTime() : 0,
-    recorded_at: r.recorded_at ? new Date(r.recorded_at).getTime() : (r.timestamp ? new Date(r.timestamp).getTime() : 0),
-    contract_id: r.contract_id || '',
-    party: r.party || '',
-    template: r.template_id || r.template || '',
-    payload_json: r.payload ? (typeof r.payload === 'string' ? r.payload : JSON.stringify(r.payload)) : '',
-    signatories: r.signatories || [],
-    observers: r.observers || [],
-    package_name: r.package_name || '',
-    raw_json: r.raw ? JSON.stringify(r.raw) : '', // Complete original event
+    // Core identifiers
+    id: String(r.event_id || r.id || ''),
+    updateId: String(r.update_id || ''),
+    type: String(r.event_type || r.type || ''),
+    synchronizer: String(r.synchronizer_id || r.synchronizer || ''),
+    
+    // Timestamps
+    effectiveAt: safeTimestamp(r.effective_at),
+    recordedAt: safeTimestamp(r.recorded_at || r.timestamp),
+    createdAtTs: safeTimestamp(r.created_at_ts),
+    
+    // Contract info
+    contractId: String(r.contract_id || ''),
+    template: String(r.template_id || r.template || ''),
+    packageName: String(r.package_name || ''),
+    migrationId: safeInt64(r.migration_id),
+    
+    // Parties
+    signatories: safeStringArray(r.signatories),
+    observers: safeStringArray(r.observers),
+    actingParties: safeStringArray(r.acting_parties),
+    witnessParties: safeStringArray(r.witness_parties),
+    
+    // Payload data
+    payloadJson: r.payload ? safeStringify(r.payload) : '',
+    contractKeyJson: r.contract_key ? safeStringify(r.contract_key) : '',
+    
+    // Exercise-specific fields
+    choice: String(r.choice || ''),
+    consuming: Boolean(r.consuming ?? false),
+    interfaceId: String(r.interface_id || ''),
+    childEventIds: safeStringArray(r.child_event_ids),
+    exerciseResultJson: r.exercise_result ? safeStringify(r.exercise_result) : '',
+    
+    // Reassignment-specific fields
+    sourceSynchronizer: String(r.source_synchronizer || ''),
+    targetSynchronizer: String(r.target_synchronizer || ''),
+    unassignId: String(r.unassign_id || ''),
+    submitter: String(r.submitter || ''),
+    reassignmentCounter: safeInt64(r.reassignment_counter),
+    
+    // CRITICAL: Complete original event for full data preservation
+    rawJson: r.raw ? safeStringify(r.raw) : '',
+    
+    // Deprecated field kept for backwards compatibility
+    party: String(r.party || ''),
   };
 }
 

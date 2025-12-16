@@ -469,4 +469,131 @@ router.post('/gaps/detect', async (req, res) => {
   }
 });
 
+// GET /api/backfill/reconciliation - Get cursor vs file reconciliation data
+router.get('/reconciliation', async (req, res) => {
+  try {
+    const cursors = readAllCursors();
+    const fileCounts = countRawFiles();
+    
+    // Sum up cursor totals
+    let cursorUpdates = 0;
+    let cursorEvents = 0;
+    
+    for (const cursor of cursors) {
+      cursorUpdates += cursor.total_updates || 0;
+      cursorEvents += cursor.total_events || 0;
+    }
+    
+    // Estimate file totals (approximate ~100 records per file for binary files)
+    // For a more accurate count, we'd need to read the files
+    const estimatedFileUpdates = fileCounts.updates * 100;
+    const estimatedFileEvents = fileCounts.events * 100;
+    
+    const updatesDiff = Math.max(0, cursorUpdates - estimatedFileUpdates);
+    const eventsDiff = Math.max(0, cursorEvents - estimatedFileEvents);
+    
+    res.json({
+      updates: {
+        cursorTotal: cursorUpdates,
+        fileTotal: estimatedFileUpdates,
+        fileCount: fileCounts.updates,
+        difference: updatesDiff,
+        percentMissing: cursorUpdates > 0 ? (updatesDiff / cursorUpdates) * 100 : 0,
+      },
+      events: {
+        cursorTotal: cursorEvents,
+        fileTotal: estimatedFileEvents,
+        fileCount: fileCounts.events,
+        difference: eventsDiff,
+        percentMissing: cursorEvents > 0 ? (eventsDiff / cursorEvents) * 100 : 0,
+      },
+      note: 'File totals are estimates (~100 records/file). Run validate-backfill.js for exact counts.',
+    });
+  } catch (err) {
+    console.error('Error getting reconciliation data:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/backfill/gaps/recover - Recover gaps with streaming progress
+router.post('/gaps/recover', async (req, res) => {
+  const maxGaps = req.body?.maxGaps || 10;
+  const stream = req.body?.stream === true;
+  
+  // Set up SSE for streaming progress
+  if (stream) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+  }
+  
+  const sendProgress = (data) => {
+    if (stream) {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+  
+  try {
+    // First detect gaps
+    sendProgress({ type: 'progress', message: '🔍 Detecting gaps...' });
+    const gapResult = await triggerGapDetection(false);
+    
+    if (!gapResult.gaps || gapResult.gaps.length === 0) {
+      sendProgress({ type: 'progress', message: '✅ No gaps detected' });
+      if (stream) {
+        res.end();
+      } else {
+        res.json({ success: true, message: 'No gaps to recover', recovered: 0 });
+      }
+      return;
+    }
+    
+    const gapsToRecover = gapResult.gaps.slice(0, maxGaps);
+    sendProgress({ 
+      type: 'progress', 
+      message: `📋 Found ${gapResult.gaps.length} gaps, recovering ${gapsToRecover.length}...`,
+      totalGaps: gapsToRecover.length,
+    });
+    
+    let totalUpdates = 0;
+    let totalEvents = 0;
+    
+    // Recovery would require importing the actual recovery functions
+    // For now, trigger the detection with autoRecover=true
+    sendProgress({ type: 'progress', message: '🔄 Starting auto-recovery...' });
+    
+    const recoveryResult = await triggerGapDetection(true);
+    
+    totalUpdates = recoveryResult.transactionsRecovered || 0;
+    
+    sendProgress({ 
+      type: 'progress', 
+      message: `✅ Recovery complete: ${totalUpdates} transactions found`,
+      updatesRecovered: totalUpdates,
+      eventsRecovered: totalEvents,
+    });
+    
+    if (stream) {
+      res.end();
+    } else {
+      res.json({ 
+        success: true, 
+        message: 'Recovery complete',
+        updatesRecovered: totalUpdates,
+        eventsRecovered: totalEvents,
+      });
+    }
+  } catch (err) {
+    console.error('Error recovering gaps:', err);
+    sendProgress({ type: 'error', message: err.message });
+    
+    if (stream) {
+      res.end();
+    } else {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
 export default router;

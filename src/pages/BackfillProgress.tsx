@@ -10,7 +10,7 @@ import { formatDistanceToNow, format, formatDuration, intervalToDuration } from 
 import { useBackfillCursors, useBackfillStats, useWriteActivity, useBackfillDebugInfo, BackfillCursor } from "@/hooks/use-backfill-cursors";
 import { useToast } from "@/hooks/use-toast";
 import { ShardProgressCard } from "@/components/ShardProgressCard";
-import { GapDetectionCard } from "@/components/GapDetectionCard";
+import { GapRecoveryPanel } from "@/components/GapRecoveryPanel";
 
 /**
  * Calculate ETA for a cursor based on throughput
@@ -535,8 +535,8 @@ const BackfillProgress = () => {
 
         </div>
 
-        {/* Gap Detection */}
-        <GapDetectionCard refreshInterval={30000} />
+        {/* Gap Detection & Recovery */}
+        <GapRecoveryPanel refreshInterval={30000} />
 
         {/* Shard Progress */}
         <ShardProgressCard refreshInterval={3000} />
