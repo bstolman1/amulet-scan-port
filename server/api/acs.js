@@ -40,38 +40,46 @@ function findACSFiles() {
 }
 
 // Helper to get ACS source - builds query from actual files found
+// IMPORTANT: Uses UNION (not UNION ALL) to prevent duplicate records
 const getACSSource = () => {
   const files = findACSFiles();
   if (files.length === 0) {
     return `(SELECT NULL as placeholder WHERE false)`;
   }
   
-  // For small file counts, use explicit list
-  if (files.length <= 100) {
-    const selects = files.map(f => 
+  // Deduplicate files to prevent double-counting
+  const uniqueFiles = [...new Set(files)];
+  
+  // For small file counts, use explicit list with UNION to deduplicate
+  if (uniqueFiles.length <= 100) {
+    const selects = uniqueFiles.map(f => 
       `SELECT * FROM read_json_auto('${f}', union_by_name=true, ignore_errors=true)`
     );
-    return `(${selects.join(' UNION ALL ')})`;
+    return `(${selects.join(' UNION ')})`;
   }
   
   // For large counts, use glob but only for file types that exist
-  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
-  const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
-  const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
+  // Group by extension type to avoid overlap
   const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
   
+  // Separate files by extension type
+  const jsonlFiles = uniqueFiles.filter(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
+  const gzFiles = uniqueFiles.filter(f => f.endsWith('.jsonl.gz'));
+  const zstFiles = uniqueFiles.filter(f => f.endsWith('.jsonl.zst'));
+  
   const parts = [];
-  if (hasJsonl) {
+  if (jsonlFiles.length > 0) {
     parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl', union_by_name=true, ignore_errors=true)`);
   }
-  if (hasGz) {
+  if (gzFiles.length > 0) {
     parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   }
-  if (hasZst) {
+  if (zstFiles.length > 0) {
     parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   }
   
-  return parts.length > 0 ? `(${parts.join(' UNION ALL ')})` : `(SELECT NULL as placeholder WHERE false)`;
+  // Use UNION to deduplicate across all sources
+  return parts.length > 0 ? `(${parts.join(' UNION ')})` : `(SELECT NULL as placeholder WHERE false)`;
 };
 
 // Check if ACS data exists
