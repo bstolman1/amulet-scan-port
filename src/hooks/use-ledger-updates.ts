@@ -44,8 +44,8 @@ export function useLedgerUpdates(limit: number = 50) {
               observers: event.observers || [],
             },
             created_at: event.timestamp,
-            migration_id: null,
-            synchronizer_id: null,
+            migration_id: (event as any).migration_id ?? null,
+            synchronizer_id: (event as any).synchronizer_id ?? null,
             update_id: event.event_id,
             contract_id: event.contract_id,
             template_id: event.template_id,
@@ -74,6 +74,7 @@ export function useLedgerUpdates(limit: number = 50) {
       return data as LedgerUpdate[];
     },
     staleTime: 5_000,
+    refetchInterval: 10_000, // Auto-refresh every 10 seconds
   });
 }
 
