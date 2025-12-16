@@ -28,7 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { scanApi } from "@/lib/api-client";
 import { useLocalACSAvailable } from "@/hooks/use-local-acs";
 import { toCC } from "@/lib/amount-utils";
-import { getACSRichList, getACSAllocations, getACSMiningRounds } from "@/lib/duckdb-api-client";
+import { getRealtimeSupply, getACSAllocations, getACSMiningRounds } from "@/lib/duckdb-api-client";
 
 const Supply = () => {
   const queryClient = useQueryClient();
@@ -59,10 +59,10 @@ const Supply = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  // Fetch supply stats from server-side aggregation (uses same endpoint as rich-list)
-  const { data: supplyStats, isLoading: supplyLoading } = useQuery({
-    queryKey: ["supply-stats"],
-    queryFn: () => getACSRichList({ limit: 1 }), // We only need the stats, not the holder list
+  // Fetch real-time supply stats (snapshot + v2/updates delta)
+  const { data: realtimeSupply, isLoading: supplyLoading } = useQuery({
+    queryKey: ["realtime-supply"],
+    queryFn: () => getRealtimeSupply(),
     staleTime: 30000,
   });
 
@@ -93,11 +93,16 @@ const Supply = () => {
 
   const isLoading = supplyLoading || allocationsLoading || miningRoundsLoading || latestRoundLoading;
 
-  // Use server-side aggregated supply metrics
-  const totalUnlocked = supplyStats?.unlockedSupply || 0;
-  const totalLocked = supplyStats?.lockedSupply || 0;
-  const totalSupply = supplyStats?.totalSupply || 0;
-  const circulatingSupply = totalUnlocked;
+  // Use real-time supply metrics (snapshot + delta)
+  const supplyData = realtimeSupply?.data;
+  const totalUnlocked = supplyData?.realtime?.unlocked || 0;
+  const totalLocked = supplyData?.realtime?.locked || 0;
+  const totalSupply = supplyData?.realtime?.total || 0;
+  const circulatingSupply = supplyData?.realtime?.circulating || totalUnlocked;
+  
+  // Delta info for display
+  const deltaInfo = supplyData?.delta;
+  const snapshotInfo = supplyData?.snapshot;
 
   // Server-side allocations data
   const allocations = allocationsData?.data || [];
@@ -127,11 +132,24 @@ const Supply = () => {
               {localAcsAvailable && (
                 <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                   <Database className="h-3 w-3 mr-1" />
-                  Local ACS
+                  {deltaInfo ? "Real-time" : "Snapshot"}
                 </Badge>
               )}
             </div>
-            <p className="text-muted-foreground">Track supply, allocations, and mining rounds from ACS snapshots</p>
+            <p className="text-muted-foreground">
+              Track supply, allocations, and mining rounds
+              {snapshotInfo?.record_time && (
+                <span className="text-xs ml-2">
+                  (Snapshot @ {new Date(snapshotInfo.record_time).toLocaleString()}
+                  {deltaInfo && deltaInfo.events.created + deltaInfo.events.archived > 0 && (
+                    <span className="text-primary ml-1">
+                      + {deltaInfo.events.created} creates, -{deltaInfo.events.archived} archives
+                    </span>
+                  )}
+                  )
+                </span>
+              )}
+            </p>
           </div>
           <Button onClick={handleForceRefresh} variant="outline" size="sm" className="gap-2" disabled={isRefreshing}>
             <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />

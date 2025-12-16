@@ -997,4 +997,441 @@ router.get('/debug', async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REAL-TIME SUPPLY: Snapshot + v2/updates delta calculation
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Helper to get events source for delta calculation
+function getEventsSource() {
+  const hasParquet = db.hasFileType('events', '.parquet');
+  if (hasParquet) {
+    return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/events-*.parquet', union_by_name=true)`;
+  }
+
+  const hasJsonl = db.hasFileType('events', '.jsonl');
+  const hasGzip = db.hasFileType('events', '.jsonl.gz');
+  const hasZstd = db.hasFileType('events', '.jsonl.zst');
+
+  if (!hasJsonl && !hasGzip && !hasZstd) {
+    return `(SELECT NULL::VARCHAR as event_id WHERE false)`;
+  }
+
+  const basePath = db.DATA_PATH.replace(/\\/g, '/');
+  const queries = [];
+  if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)`);
+  if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+
+  return `(${queries.join(' UNION ')})`;
+}
+
+// GET /api/acs/realtime-supply - Get real-time supply (snapshot + delta from v2/updates)
+router.get('/realtime-supply', async (req, res) => {
+  try {
+    if (!hasACSData()) {
+      return res.json({ 
+        data: null, 
+        message: 'No ACS data available',
+        source: 'none'
+      });
+    }
+
+    // Check cache (shorter TTL for real-time)
+    const cacheKey = 'acs:v3:realtime-supply';
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const acsSource = getACSSource();
+    const eventsSource = getEventsSource();
+
+    // Step 1: Get snapshot totals and record_time
+    const snapshotSql = `
+      WITH ${getLatestSnapshotCTE(acsSource)},
+      latest_contracts AS (
+        SELECT
+          contract_id,
+          any_value(template_id) as template_id,
+          any_value(entity_name) as entity_name,
+          any_value(payload) as payload
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        GROUP BY contract_id
+      ),
+      snapshot_info AS (
+        SELECT 
+          snapshot_time,
+          migration_id,
+          MIN(record_time) as record_time
+        FROM ${acsSource}
+        WHERE migration_id = (SELECT migration_id FROM latest_migration)
+          AND snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        GROUP BY snapshot_time, migration_id
+      ),
+      amulet_total AS (
+        SELECT COALESCE(SUM(
+          CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE)
+        ), 0) as total
+        FROM latest_contracts
+        WHERE (
+          entity_name = 'Amulet'
+          OR (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
+        )
+      ),
+      locked_total AS (
+        SELECT COALESCE(SUM(
+          CAST(COALESCE(
+            json_extract_string(payload, '$.amulet.amount.initialAmount'),
+            json_extract_string(payload, '$.amount.initialAmount'),
+            '0'
+          ) AS DOUBLE)
+        ), 0) as total
+        FROM latest_contracts
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+      )
+      SELECT 
+        snapshot_info.snapshot_time,
+        snapshot_info.migration_id,
+        snapshot_info.record_time,
+        amulet_total.total as snapshot_unlocked,
+        locked_total.total as snapshot_locked,
+        amulet_total.total + locked_total.total as snapshot_total
+      FROM snapshot_info, amulet_total, locked_total
+    `;
+
+    const snapshotResult = await db.safeQuery(snapshotSql);
+    
+    if (snapshotResult.length === 0) {
+      return res.json({ data: null, message: 'No snapshot data found' });
+    }
+
+    const snapshot = snapshotResult[0];
+    const recordTime = snapshot.record_time;
+
+    // Step 2: Calculate delta from events since record_time
+    // Created events ADD to supply, Archived events SUBTRACT
+    let deltaUnlocked = 0;
+    let deltaLocked = 0;
+    let createdCount = 0;
+    let archivedCount = 0;
+
+    if (recordTime) {
+      const deltaSql = `
+        WITH amulet_events AS (
+          SELECT 
+            event_type,
+            template_id,
+            CAST(COALESCE(
+              json_extract_string(payload, '$.amount.initialAmount'),
+              '0'
+            ) AS DOUBLE) as amount
+          FROM ${eventsSource}
+          WHERE effective_at > '${recordTime}'::TIMESTAMP
+            AND (
+              template_id LIKE '%:Amulet:%' 
+              AND template_id NOT LIKE '%:LockedAmulet:%'
+            )
+            AND event_type IN ('created', 'archived')
+        ),
+        locked_events AS (
+          SELECT 
+            event_type,
+            template_id,
+            CAST(COALESCE(
+              json_extract_string(payload, '$.amulet.amount.initialAmount'),
+              json_extract_string(payload, '$.amount.initialAmount'),
+              '0'
+            ) AS DOUBLE) as amount
+          FROM ${eventsSource}
+          WHERE effective_at > '${recordTime}'::TIMESTAMP
+            AND template_id LIKE '%:LockedAmulet:%'
+            AND event_type IN ('created', 'archived')
+        ),
+        amulet_delta AS (
+          SELECT 
+            SUM(CASE WHEN event_type = 'created' THEN amount ELSE 0 END) as created_sum,
+            SUM(CASE WHEN event_type = 'archived' THEN amount ELSE 0 END) as archived_sum,
+            COUNT(CASE WHEN event_type = 'created' THEN 1 END) as created_count,
+            COUNT(CASE WHEN event_type = 'archived' THEN 1 END) as archived_count
+          FROM amulet_events
+        ),
+        locked_delta AS (
+          SELECT 
+            SUM(CASE WHEN event_type = 'created' THEN amount ELSE 0 END) as created_sum,
+            SUM(CASE WHEN event_type = 'archived' THEN amount ELSE 0 END) as archived_sum,
+            COUNT(CASE WHEN event_type = 'created' THEN 1 END) as created_count,
+            COUNT(CASE WHEN event_type = 'archived' THEN 1 END) as archived_count
+          FROM locked_events
+        )
+        SELECT 
+          COALESCE(amulet_delta.created_sum, 0) - COALESCE(amulet_delta.archived_sum, 0) as delta_unlocked,
+          COALESCE(locked_delta.created_sum, 0) - COALESCE(locked_delta.archived_sum, 0) as delta_locked,
+          COALESCE(amulet_delta.created_count, 0) + COALESCE(locked_delta.created_count, 0) as created_count,
+          COALESCE(amulet_delta.archived_count, 0) + COALESCE(locked_delta.archived_count, 0) as archived_count
+        FROM amulet_delta, locked_delta
+      `;
+
+      try {
+        const deltaResult = await db.safeQuery(deltaSql);
+        if (deltaResult.length > 0) {
+          deltaUnlocked = deltaResult[0].delta_unlocked || 0;
+          deltaLocked = deltaResult[0].delta_locked || 0;
+          createdCount = deltaResult[0].created_count || 0;
+          archivedCount = deltaResult[0].archived_count || 0;
+        }
+      } catch (deltaErr) {
+        console.warn('Could not calculate delta from events:', deltaErr.message);
+        // Continue with snapshot-only values
+      }
+    }
+
+    // Step 3: Combine snapshot + delta for real-time values
+    const realtimeUnlocked = snapshot.snapshot_unlocked + deltaUnlocked;
+    const realtimeLocked = snapshot.snapshot_locked + deltaLocked;
+    const realtimeTotal = realtimeUnlocked + realtimeLocked;
+
+    const result = serializeBigInt({
+      data: {
+        // Snapshot values (point-in-time)
+        snapshot: {
+          timestamp: snapshot.snapshot_time,
+          migration_id: snapshot.migration_id,
+          record_time: recordTime,
+          unlocked: snapshot.snapshot_unlocked,
+          locked: snapshot.snapshot_locked,
+          total: snapshot.snapshot_total,
+        },
+        // Delta from v2/updates since snapshot
+        delta: {
+          since: recordTime,
+          unlocked: deltaUnlocked,
+          locked: deltaLocked,
+          total: deltaUnlocked + deltaLocked,
+          events: {
+            created: createdCount,
+            archived: archivedCount,
+          }
+        },
+        // Combined real-time values
+        realtime: {
+          unlocked: realtimeUnlocked,
+          locked: realtimeLocked,
+          total: realtimeTotal,
+          circulating: realtimeUnlocked, // Unlocked = circulating
+        },
+        // Metadata
+        calculated_at: new Date().toISOString(),
+      }
+    });
+
+    // Short cache for real-time data (30 seconds)
+    setCache(cacheKey, result, 30 * 1000);
+    res.json(result);
+  } catch (err) {
+    console.error('Realtime supply error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/acs/realtime-rich-list - Get real-time rich list (snapshot + delta)
+router.get('/realtime-rich-list', async (req, res) => {
+  try {
+    if (!hasACSData()) {
+      return res.json({ data: [], message: 'No ACS data available' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const search = req.query.search || '';
+
+    // Check cache
+    const cacheKey = `acs:v3:realtime-rich-list:${limit}:${search}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const acsSource = getACSSource();
+    const eventsSource = getEventsSource();
+
+    // Step 1: Get snapshot record_time
+    const recordTimeSql = `
+      WITH ${getLatestSnapshotCTE(acsSource)}
+      SELECT MIN(record_time) as record_time
+      FROM ${acsSource}
+      WHERE migration_id = (SELECT migration_id FROM latest_migration)
+        AND snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+    `;
+    const recordTimeResult = await db.safeQuery(recordTimeSql);
+    const recordTime = recordTimeResult[0]?.record_time;
+
+    // Step 2: Get snapshot balances per owner
+    const snapshotSql = `
+      WITH ${getLatestSnapshotCTE(acsSource)},
+      latest_contracts AS (
+        SELECT
+          contract_id,
+          any_value(template_id) as template_id,
+          any_value(entity_name) as entity_name,
+          any_value(payload) as payload
+        FROM ${acsSource} acs
+        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        GROUP BY contract_id
+      ),
+      amulet_balances AS (
+        SELECT 
+          json_extract_string(payload, '$.owner') as owner,
+          CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE) as amount
+        FROM latest_contracts
+        WHERE (
+          entity_name = 'Amulet'
+          OR (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
+        )
+          AND json_extract_string(payload, '$.owner') IS NOT NULL
+      ),
+      locked_balances AS (
+        SELECT 
+          COALESCE(json_extract_string(payload, '$.amulet.owner'), json_extract_string(payload, '$.owner')) as owner,
+          CAST(COALESCE(
+            json_extract_string(payload, '$.amulet.amount.initialAmount'),
+            json_extract_string(payload, '$.amount.initialAmount'),
+            '0'
+          ) AS DOUBLE) as amount
+        FROM latest_contracts
+        WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+          AND (json_extract_string(payload, '$.amulet.owner') IS NOT NULL OR json_extract_string(payload, '$.owner') IS NOT NULL)
+      ),
+      combined AS (
+        SELECT owner, amount, 0.0 as locked FROM amulet_balances
+        UNION ALL
+        SELECT owner, 0.0 as amount, amount as locked FROM locked_balances
+      )
+      SELECT 
+        owner,
+        SUM(amount) as unlocked_balance,
+        SUM(locked) as locked_balance
+      FROM combined
+      WHERE owner IS NOT NULL AND owner != ''
+      GROUP BY owner
+    `;
+
+    const snapshotBalances = await db.safeQuery(snapshotSql);
+    
+    // Build a map of owner -> balances
+    const balanceMap = new Map();
+    for (const row of snapshotBalances) {
+      balanceMap.set(row.owner, {
+        unlocked: row.unlocked_balance || 0,
+        locked: row.locked_balance || 0,
+      });
+    }
+
+    // Step 3: Apply delta from events since record_time
+    if (recordTime) {
+      const deltaSql = `
+        WITH amulet_events AS (
+          SELECT 
+            event_type,
+            json_extract_string(payload, '$.owner') as owner,
+            CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE) as amount
+          FROM ${eventsSource}
+          WHERE effective_at > '${recordTime}'::TIMESTAMP
+            AND (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
+            AND event_type IN ('created', 'archived')
+            AND json_extract_string(payload, '$.owner') IS NOT NULL
+        ),
+        locked_events AS (
+          SELECT 
+            event_type,
+            COALESCE(json_extract_string(payload, '$.amulet.owner'), json_extract_string(payload, '$.owner')) as owner,
+            CAST(COALESCE(
+              json_extract_string(payload, '$.amulet.amount.initialAmount'),
+              json_extract_string(payload, '$.amount.initialAmount'),
+              '0'
+            ) AS DOUBLE) as amount
+          FROM ${eventsSource}
+          WHERE effective_at > '${recordTime}'::TIMESTAMP
+            AND template_id LIKE '%:LockedAmulet:%'
+            AND event_type IN ('created', 'archived')
+        )
+        SELECT 
+          owner,
+          SUM(CASE WHEN event_type = 'created' THEN amount ELSE -amount END) as delta,
+          'unlocked' as type
+        FROM amulet_events
+        WHERE owner IS NOT NULL
+        GROUP BY owner
+        UNION ALL
+        SELECT 
+          owner,
+          SUM(CASE WHEN event_type = 'created' THEN amount ELSE -amount END) as delta,
+          'locked' as type
+        FROM locked_events
+        WHERE owner IS NOT NULL
+        GROUP BY owner
+      `;
+
+      try {
+        const deltaRows = await db.safeQuery(deltaSql);
+        for (const row of deltaRows) {
+          const existing = balanceMap.get(row.owner) || { unlocked: 0, locked: 0 };
+          if (row.type === 'unlocked') {
+            existing.unlocked += row.delta;
+          } else {
+            existing.locked += row.delta;
+          }
+          balanceMap.set(row.owner, existing);
+        }
+      } catch (deltaErr) {
+        console.warn('Could not apply event deltas to rich list:', deltaErr.message);
+      }
+    }
+
+    // Step 4: Convert to array and sort
+    let holders = Array.from(balanceMap.entries())
+      .map(([owner, bal]) => ({
+        owner,
+        amount: Math.max(0, bal.unlocked), // Clamp to 0 (archived more than created = 0)
+        locked: Math.max(0, bal.locked),
+        total: Math.max(0, bal.unlocked) + Math.max(0, bal.locked),
+      }))
+      .filter(h => h.total > 0);
+
+    // Apply search filter
+    if (search) {
+      holders = holders.filter(h => h.owner.toLowerCase().includes(search.toLowerCase()));
+    }
+
+    // Sort by total descending
+    holders.sort((a, b) => b.total - a.total);
+
+    // Limit
+    holders = holders.slice(0, limit);
+
+    // Calculate totals
+    const totalSupply = holders.reduce((sum, h) => sum + h.total, 0);
+    const unlockedSupply = holders.reduce((sum, h) => sum + h.amount, 0);
+    const lockedSupply = holders.reduce((sum, h) => sum + h.locked, 0);
+
+    const result = serializeBigInt({
+      data: holders,
+      totalSupply,
+      unlockedSupply,
+      lockedSupply,
+      holderCount: balanceMap.size,
+      snapshotRecordTime: recordTime,
+      isRealtime: !!recordTime,
+    });
+
+    // Short cache (30 seconds)
+    setCache(cacheKey, result, 30 * 1000);
+    res.json(result);
+  } catch (err) {
+    console.error('Realtime rich-list error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
