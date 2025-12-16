@@ -133,35 +133,38 @@ function mapUpdateRecord(r) {
     id: String(r.update_id || r.id || ''),
     type: String(r.update_type || r.type || ''),
     synchronizer: String(r.synchronizer_id || r.synchronizer || ''),
-    
+
     // Timestamps
     effectiveAt: safeTimestamp(r.effective_at),
     recordedAt: safeTimestamp(r.recorded_at || r.timestamp),
     recordTime: safeTimestamp(r.record_time),
-    
+
     // Transaction metadata
     commandId: String(r.command_id || ''),
     workflowId: String(r.workflow_id || ''),
     kind: String(r.kind || ''),
-    
+
     // Numeric fields
     migrationId: safeInt64(r.migration_id),
     offset: safeInt64(r.offset),
     eventCount: parseInt(r.event_count) || 0,
-    
-    // Event references
-    rootEventIds: safeStringArray(r.root_event_ids),
-    
+
+    // Event references (Scan API)
+    // Some sources nest these under update_data
+    rootEventIds: safeStringArray(
+      r.root_event_ids || r.rootEventIds || r.update_data?.root_event_ids || r.update_data?.rootEventIds,
+    ),
+
     // Reassignment-specific fields
     sourceSynchronizer: String(r.source_synchronizer || ''),
     targetSynchronizer: String(r.target_synchronizer || ''),
     unassignId: String(r.unassign_id || ''),
     submitter: String(r.submitter || ''),
     reassignmentCounter: safeInt64(r.reassignment_counter),
-    
+
     // CRITICAL: Full data preservation
-    traceContextJson: r.trace_context ? safeStringify(r.trace_context) : '',
-    updateDataJson: r.update_data ? safeStringify(r.update_data) : '',
+    traceContextJson: r.trace_context_json || (r.trace_context ? safeStringify(r.trace_context) : ''),
+    updateDataJson: r.update_data_json || (r.update_data ? safeStringify(r.update_data) : ''),
   };
 }
 
@@ -199,46 +202,60 @@ function mapEventRecord(r) {
     id: String(r.event_id || r.id || ''),
     updateId: String(r.update_id || ''),
     type: String(r.event_type || r.type || ''),
+    // Preserve original API type if present; fall back to type to avoid empty string in protobuf
+    typeOriginal: String(
+      r.event_type_original || r.type_original || r.typeOriginal || r.type_original || r.event_type || r.type || '',
+    ),
     synchronizer: String(r.synchronizer_id || r.synchronizer || ''),
-    
+
     // Timestamps
     effectiveAt: safeTimestamp(r.effective_at),
     recordedAt: safeTimestamp(r.recorded_at || r.timestamp),
     createdAtTs: safeTimestamp(r.created_at_ts),
-    
-    // Contract info
-    contractId: String(r.contract_id || ''),
+
+    // Contract info (Scan API fields can be nested per event-kind)
+    contractId: String(
+      r.contract_id ||
+        r.contractId ||
+        r.created?.contract_id ||
+        r.created?.contractId ||
+        r.exercised?.contract_id ||
+        r.exercised?.contractId ||
+        r.reassignment?.contract_id ||
+        r.reassignment?.contractId ||
+        '',
+    ),
     template: String(r.template_id || r.template || ''),
     packageName: String(r.package_name || ''),
     migrationId: safeInt64(r.migration_id),
-    
+
     // Parties
     signatories: safeStringArray(r.signatories),
     observers: safeStringArray(r.observers),
     actingParties: safeStringArray(r.acting_parties),
     witnessParties: safeStringArray(r.witness_parties),
-    
+
     // Payload data
-    payloadJson: r.payload ? safeStringify(r.payload) : '',
-    contractKeyJson: r.contract_key ? safeStringify(r.contract_key) : '',
-    
+    payloadJson: r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
+    contractKeyJson: r.contract_key_json || (r.contract_key ? safeStringify(r.contract_key) : ''),
+
     // Exercise-specific fields
     choice: String(r.choice || ''),
     consuming: Boolean(r.consuming ?? false),
     interfaceId: String(r.interface_id || ''),
-    childEventIds: safeStringArray(r.child_event_ids),
-    exerciseResultJson: r.exercise_result ? safeStringify(r.exercise_result) : '',
-    
+    childEventIds: safeStringArray(r.child_event_ids || r.childEventIds),
+    exerciseResultJson: r.exercise_result_json || (r.exercise_result ? safeStringify(r.exercise_result) : ''),
+
     // Reassignment-specific fields
     sourceSynchronizer: String(r.source_synchronizer || ''),
     targetSynchronizer: String(r.target_synchronizer || ''),
     unassignId: String(r.unassign_id || ''),
     submitter: String(r.submitter || ''),
     reassignmentCounter: safeInt64(r.reassignment_counter),
-    
+
     // CRITICAL: Complete original event for full data preservation
-    rawJson: r.raw ? safeStringify(r.raw) : '',
-    
+    rawJson: r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
+
     // Deprecated field kept for backwards compatibility
     party: String(r.party || ''),
   };
