@@ -12,8 +12,9 @@ import { formatDistanceToNow } from "date-fns";
 import { useLedgerUpdates, LedgerUpdate } from "@/hooks/use-ledger-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
 import { useDuckDBForLedger } from "@/lib/backend-config";
-import { getLiveStatus, type LiveStatus } from "@/lib/duckdb-api-client";
+import { getLiveStatus, purgeLiveCursor, type LiveStatus } from "@/lib/duckdb-api-client";
 import { useToast } from "@/hooks/use-toast";
+import { Trash2 } from "lucide-react";
 
 // JSON Viewer Component with copy functionality
 const JsonViewer = ({ data, label }: { data: any; label: string }) => {
@@ -95,6 +96,25 @@ const LiveUpdates = () => {
   const handleRefresh = () => {
     refetch();
     toast({ title: "Refreshing data..." });
+  };
+
+  // Purge live cursor handler
+  const handlePurgeLiveCursor = async () => {
+    try {
+      const result = await purgeLiveCursor();
+      toast({ 
+        title: result.success ? "Live cursor purged" : "No cursor to purge",
+        description: result.message 
+      });
+      // Refetch live status
+      refetch();
+    } catch (err: any) {
+      toast({ 
+        title: "Failed to purge", 
+        description: err.message,
+        variant: "destructive" 
+      });
+    }
   };
 
   const filteredUpdates = updates.filter((update) => {
@@ -220,6 +240,18 @@ const LiveUpdates = () => {
               <RefreshCw className={`w-4 h-4 mr-1 ${secondsSinceRefresh < 3 ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
+            {liveStatus?.live_cursor && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={handlePurgeLiveCursor} 
+                className="h-7 px-2 text-destructive border-destructive/50 hover:bg-destructive/10"
+                title="Delete live cursor to stop tracking. Script will need restart."
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Purge Live Cursor
+              </Button>
+            )}
             <span>Updated {secondsSinceRefresh}s ago</span>
             {/* Show actual file timestamp if available */}
             {liveStatus?.latest_file_write && (

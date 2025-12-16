@@ -444,6 +444,10 @@ export async function getLiveStatus(): Promise<LiveStatus> {
   return apiFetch('/api/stats/live-status');
 }
 
+export async function purgeLiveCursor(): Promise<{ success: boolean; message: string; deleted_file: string | null }> {
+  return apiFetch('/api/stats/live-cursor', { method: 'DELETE' });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
