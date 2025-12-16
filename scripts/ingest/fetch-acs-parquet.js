@@ -16,8 +16,12 @@ import BigNumber from 'bignumber.js';
 import { normalizeACSContract, isTemplate, parseTemplateId } from './acs-schema.js';
 import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers } from './write-acs-parquet.js';
 
-// TLS config
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+// TLS config (secure by default)
+// Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
+const INSECURE_TLS = ['1', 'true', 'yes'].includes(String(process.env.INSECURE_TLS || '').toLowerCase());
+if (INSECURE_TLS) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
@@ -30,7 +34,7 @@ const client = axios.create({
   httpsAgent: new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 30000,
-    rejectUnauthorized: false,
+    rejectUnauthorized: !INSECURE_TLS,
   }),
   timeout: 120000,
 });

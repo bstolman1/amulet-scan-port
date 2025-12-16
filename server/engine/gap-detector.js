@@ -16,8 +16,12 @@ const GAP_THRESHOLD_MS = parseInt(process.env.GAP_THRESHOLD_MS || '120000', 10);
 const MAX_GAPS_PER_CYCLE = parseInt(process.env.MAX_GAPS_PER_CYCLE || '3', 10);
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '1000', 10);
 
-// TLS config for self-signed certs
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+// TLS config (secure by default)
+// Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
+const INSECURE_TLS = ['1', 'true', 'yes'].includes(String(process.env.INSECURE_TLS || '').toLowerCase());
+if (INSECURE_TLS) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
 
 // HTTP client with connection pooling
 const client = axios.create({
@@ -30,7 +34,7 @@ const client = axios.create({
   httpsAgent: new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 60000,
-    rejectUnauthorized: false,
+    rejectUnauthorized: !INSECURE_TLS,
     maxSockets: 4,
   }),
   timeout: 120000,
