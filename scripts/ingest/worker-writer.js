@@ -166,7 +166,44 @@ async function run() {
       const mappedRecords = [];
       for (let j = 0; j < slice.length; j++) {
         try {
-          const mapped = mapFn(slice[j]);
+          const input = slice[j];
+          const mapped = mapFn(input);
+
+          // Sanity checks: warn if we appear to drop data during mapping
+          if (type === 'events') {
+            const hadRaw = !!(input?.raw || input?.raw_json || input?.rawJson);
+            if (hadRaw && !mapped?.rawJson) {
+              console.warn('[WORKER][SANITY] Event raw present but rawJson empty (mapping mismatch)');
+            }
+
+            const hadPayload = !!(input?.payload || input?.payload_json || input?.payloadJson);
+            if (hadPayload && !mapped?.payloadJson) {
+              console.warn('[WORKER][SANITY] Event payload present but payloadJson empty (mapping mismatch)');
+            }
+
+            const hadContractKey = !!(input?.contract_key || input?.contract_key_json || input?.contractKeyJson);
+            if (hadContractKey && !mapped?.contractKeyJson) {
+              console.warn('[WORKER][SANITY] Event contract_key present but contractKeyJson empty (mapping mismatch)');
+            }
+
+            const hadExerciseResult = !!(input?.exercise_result || input?.exercise_result_json || input?.exerciseResultJson);
+            if (hadExerciseResult && !mapped?.exerciseResultJson) {
+              console.warn('[WORKER][SANITY] Event exercise_result present but exerciseResultJson empty (mapping mismatch)');
+            }
+          }
+
+          if (type === 'updates') {
+            const hadUpdateData = !!(input?.update_data || input?.update_data_json || input?.updateDataJson);
+            if (hadUpdateData && !mapped?.updateDataJson) {
+              console.warn('[WORKER][SANITY] Update update_data present but updateDataJson empty (mapping mismatch)');
+            }
+
+            const hadTrace = !!(input?.trace_context || input?.trace_context_json || input?.traceContextJson);
+            if (hadTrace && !mapped?.traceContextJson) {
+              console.warn('[WORKER][SANITY] Update trace_context present but traceContextJson empty (mapping mismatch)');
+            }
+          }
+
           const created = RecordType.create(mapped);
           mappedRecords.push(created);
         } catch (mapErr) {

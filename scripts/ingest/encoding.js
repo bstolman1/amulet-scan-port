@@ -141,8 +141,8 @@ export function mapUpdate(r) {
     submitter: String(r.submitter ?? ''),
     reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
     // Tracing
-    traceContextJson: r.trace_context_json || (r.trace_context ? safeStringify(r.trace_context) : ''),
-    updateDataJson: r.update_data_json || (r.update_data ? safeStringify(r.update_data) : ''),
+    traceContextJson: r.traceContextJson || r.trace_context_json || (r.trace_context ? safeStringify(r.trace_context) : ''),
+    updateDataJson: r.updateDataJson || r.update_data_json || (r.update_data ? safeStringify(r.update_data) : ''),
   };
 }
 
