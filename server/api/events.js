@@ -277,4 +277,105 @@ router.get('/debug', async (req, res) => {
   }
 });
 
+// GET /api/events/governance - Get governance-related events (VoteRequest, Confirmation, etc.)
+router.get('/governance', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const sources = getDataSources();
+    
+    // Governance templates to filter for
+    const governanceTemplates = [
+      'VoteRequest',
+      'Confirmation',
+      'DsoRules',
+      'AmuletRules',
+      'AmuletPriceVote',
+    ];
+    
+    if (sources.primarySource === 'binary') {
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        maxDays: 365, // Governance events span long periods
+        maxFilesToScan: 500,
+        sortBy: 'effective_at',
+        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
+      });
+      return res.json({ 
+        data: result.records, 
+        count: result.records.length, 
+        hasMore: result.hasMore, 
+        source: 'binary' 
+      });
+    }
+    
+    const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    const sql = `
+      SELECT *
+      FROM ${getEventsSource()}
+      WHERE ${templateFilter}
+      ORDER BY effective_at DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+  } catch (err) {
+    console.error('Error fetching governance events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/rewards - Get reward-related events (RewardCoupon, etc.)
+router.get('/rewards', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
+    const offset = parseInt(req.query.offset) || 0;
+    const sources = getDataSources();
+    
+    // Reward templates to filter for
+    const rewardTemplates = [
+      'RewardCoupon',
+      'AppRewardCoupon',
+      'ValidatorRewardCoupon',
+      'SvRewardCoupon',
+    ];
+    
+    if (sources.primarySource === 'binary') {
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        maxDays: 90,
+        maxFilesToScan: 300,
+        sortBy: 'effective_at',
+        filter: (e) => rewardTemplates.some(t => e.template_id?.includes(t))
+      });
+      return res.json({ 
+        data: result.records, 
+        count: result.records.length, 
+        hasMore: result.hasMore, 
+        source: 'binary' 
+      });
+    }
+    
+    const templateFilter = rewardTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    const sql = `
+      SELECT *
+      FROM ${getEventsSource()}
+      WHERE ${templateFilter}
+      ORDER BY effective_at DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+  } catch (err) {
+    console.error('Error fetching reward events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
