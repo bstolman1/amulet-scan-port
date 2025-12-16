@@ -1121,11 +1121,27 @@ router.get('/realtime-supply', async (req, res) => {
     }
 
     // Check cache (shorter TTL for real-time)
-    const cacheKey = 'acs:v3:realtime-supply';
+    // IMPORTANT: Cache key must include the latest COMPLETE snapshot identity,
+    // otherwise we can serve stale totals right after a new snapshot is written.
+    const latestComplete = (() => {
+      const snaps = findCompleteSnapshots();
+      if (!snaps.length) return null;
+      snaps.sort((a, b) => {
+        if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+        return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+      });
+      return snaps[0];
+    })();
+
+    const cacheKey = latestComplete
+      ? `acs:v3:realtime-supply:m${latestComplete.migrationId}:t${latestComplete.snapshotTime}`
+      : 'acs:v3:realtime-supply:incomplete';
+
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
     }
+
 
     const acsSource = getACSSource();
     const eventsSource = getEventsSource();
