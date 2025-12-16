@@ -260,21 +260,22 @@ router.get('/latest', async (req, res) => {
             )
           ), 0) as amulet_total
         FROM latest_contracts
-        WHERE entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%'
-      ),
-      locked_totals AS (
-        SELECT 
-          COALESCE(SUM(
-            CAST(
-              COALESCE(
-                payload->>'$.amulet.amount.initialAmount',
-                payload->'amulet'->'amount'->>'initialAmount',
-                '0'
-              ) AS DOUBLE
-            )
-          ), 0) as locked_total
-        FROM latest_contracts
-        WHERE entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%'
+        WHERE entity_name = 'Amulet'
+           OR (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
+       ),
+       locked_totals AS (
+         SELECT 
+           COALESCE(SUM(
+             CAST(
+               COALESCE(
+                 payload->>'$.amulet.amount.initialAmount',
+                 payload->'amulet'->'amount'->>'initialAmount',
+                 '0'
+               ) AS DOUBLE
+             )
+           ), 0) as locked_total
+         FROM latest_contracts
+         WHERE entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%'
       )
       SELECT 
         amulet_totals.amulet_total,
@@ -464,40 +465,40 @@ router.get('/rich-list', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const search = req.query.search || '';
 
-    // Check cache - use search-specific key
-    const cacheKey = `acs:rich-list:${limit}:${search}`;
-    const cached = getCached(cacheKey);
-    if (cached) {
-      console.log(`[ACS] Rich list cache HIT: ${cacheKey}`);
-      return res.json(cached);
-    }
+     // Check cache - use search-specific key
+     const cacheKey = `acs:v2:rich-list:${limit}:${search}`;
+     const cached = getCached(cacheKey);
+     if (cached) {
+       console.log(`[ACS] Rich list cache HIT: ${cacheKey}`);
+       return res.json(cached);
+     }
 
-    console.log(`[ACS] Rich list cache MISS: ${cacheKey}`);
+     console.log(`[ACS] Rich list cache MISS: ${cacheKey}`);
 
-    // Try to use pre-computed aggregation first
-    const aggregation = getCached('aggregation:holder-balances');
-    if (aggregation && !search) {
-      // Use pre-computed data
-      const holders = aggregation.holders.slice(0, limit).map(row => ({
-        owner: row.owner,
-        amount: row.unlocked_balance,
-        locked: row.locked_balance,
-        total: row.total_balance,
-      }));
-      
-      const result = serializeBigInt({
-        data: holders,
-        totalSupply: aggregation.totalSupply,
-        unlockedSupply: aggregation.unlockedSupply,
-        lockedSupply: aggregation.lockedSupply,
-        holderCount: aggregation.holderCount,
-        cached: true,
-        refreshedAt: aggregation.refreshedAt,
-      });
-      
-      setCache(cacheKey, result, CACHE_TTL.RICH_LIST);
-      return res.json(result);
-    }
+     // Try to use pre-computed aggregation first
+     const aggregation = getCached('aggregation:v2:holder-balances');
+     if (aggregation && !search) {
+       // Use pre-computed data
+       const holders = aggregation.holders.slice(0, limit).map(row => ({
+         owner: row.owner,
+         amount: row.unlocked_balance,
+         locked: row.locked_balance,
+         total: row.total_balance,
+       }));
+
+       const result = serializeBigInt({
+         data: holders,
+         totalSupply: aggregation.totalSupply,
+         unlockedSupply: aggregation.unlockedSupply,
+         lockedSupply: aggregation.lockedSupply,
+         holderCount: aggregation.holderCount,
+         cached: true,
+         refreshedAt: aggregation.refreshedAt,
+       });
+
+       setCache(cacheKey, result, CACHE_TTL.RICH_LIST);
+       return res.json(result);
+     }
 
     // Fall back to query (for search or if no pre-computed data)
     const acsSource = getACSSource();
@@ -513,7 +514,14 @@ router.get('/rich-list', async (req, res) => {
         FROM ${acsSource} acs
         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+          AND (
+            entity_name = 'Amulet'
+            OR (
+              (template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+              AND template_id NOT LIKE '%:LockedAmulet:%'
+              AND template_id NOT LIKE '%:LockedAmulet'
+            )
+          )
           AND json_extract_string(payload, '$.owner') IS NOT NULL
       ),
       locked_balances AS (
@@ -571,33 +579,39 @@ router.get('/rich-list', async (req, res) => {
         FROM ${acsSource} acs
         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%')
-      ),
-      locked_total AS (
-        SELECT COALESCE(SUM(
-          CAST(COALESCE(
-            json_extract_string(payload, '$.amulet.amount.initialAmount'),
-            json_extract_string(payload, '$.amount.initialAmount'),
-            '0'
-          ) AS DOUBLE)
-        ), 0) as total
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
-      ),
-      holder_count AS (
-        SELECT COUNT(DISTINCT COALESCE(
-          json_extract_string(payload, '$.amulet.owner'),
-          json_extract_string(payload, '$.owner')
-        )) as count
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name IN ('Amulet', 'LockedAmulet') 
-               OR template_id LIKE '%:Amulet:%' 
-               OR template_id LIKE '%:LockedAmulet:%')
-      )
+          AND (
+            entity_name = 'Amulet'
+            OR (
+              template_id LIKE '%:Amulet:%'
+              AND template_id NOT LIKE '%:LockedAmulet:%'
+            )
+          )
+       ),
+       locked_total AS (
+         SELECT COALESCE(SUM(
+           CAST(COALESCE(
+             json_extract_string(payload, '$.amulet.amount.initialAmount'),
+             json_extract_string(payload, '$.amount.initialAmount'),
+             '0'
+           ) AS DOUBLE)
+         ), 0) as total
+         FROM ${acsSource} acs
+         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+           AND (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
+       ),
+       holder_count AS (
+         SELECT COUNT(DISTINCT COALESCE(
+           json_extract_string(payload, '$.amulet.owner'),
+           json_extract_string(payload, '$.owner')
+         )) as count
+         FROM ${acsSource} acs
+         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
+           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+           AND (entity_name IN ('Amulet', 'LockedAmulet') 
+                OR (template_id LIKE '%:Amulet:%' AND template_id NOT LIKE '%:LockedAmulet:%')
+                OR template_id LIKE '%:LockedAmulet:%')
+       )
       SELECT 
         amulet_total.total + locked_total.total as total_supply,
         amulet_total.total as unlocked_supply,
@@ -641,7 +655,7 @@ router.get('/supply', async (req, res) => {
     }
 
     // Check cache
-    const cacheKey = 'acs:supply';
+    const cacheKey = 'acs:v2:supply';
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);

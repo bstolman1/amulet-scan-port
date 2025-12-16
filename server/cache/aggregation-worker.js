@@ -32,25 +32,28 @@ function getACSSource() {
   if (files.length === 0) {
     return `(SELECT NULL as placeholder WHERE false)`;
   }
-  
-  if (files.length <= 100) {
-    const selects = files.map(f => 
-      `SELECT * FROM read_json_auto('${f}', union_by_name=true, ignore_errors=true)`
+
+  const uniqueFiles = [...new Set(files)];
+
+  if (uniqueFiles.length <= 100) {
+    const selects = uniqueFiles.map(
+      (f) => `SELECT * FROM read_json_auto('${f}', union_by_name=true, ignore_errors=true)`
     );
-    return `(${selects.join(' UNION ALL ')})`;
+    // Use UNION to prevent accidental duplicates
+    return `(${selects.join(' UNION ')})`;
   }
-  
-  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
-  const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
-  const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
+
   const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
-  
+  const hasJsonl = uniqueFiles.some((f) => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
+  const hasGz = uniqueFiles.some((f) => f.endsWith('.jsonl.gz'));
+  const hasZst = uniqueFiles.some((f) => f.endsWith('.jsonl.zst'));
+
   const parts = [];
   if (hasJsonl) parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl', union_by_name=true, ignore_errors=true)`);
   if (hasGz) parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   if (hasZst) parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
-  
-  return parts.length > 0 ? `(${parts.join(' UNION ALL ')})` : `(SELECT NULL as placeholder WHERE false)`;
+
+  return parts.length > 0 ? `(${parts.join(' UNION ')})` : `(SELECT NULL as placeholder WHERE false)`;
 }
 
 /**
@@ -69,7 +72,14 @@ async function refreshHolderBalances() {
         CAST(COALESCE(json_extract_string(payload, '$.amount.initialAmount'), '0') AS DOUBLE) as amount
       FROM ${acsSource} acs
       WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+        AND (
+          entity_name = 'Amulet'
+          OR (
+            (template_id LIKE '%:Amulet:%' OR template_id LIKE '%:Amulet')
+            AND template_id NOT LIKE '%:LockedAmulet:%'
+            AND template_id NOT LIKE '%:LockedAmulet'
+          )
+        )
         AND json_extract_string(payload, '$.owner') IS NOT NULL
     ),
     locked_balances AS (
@@ -117,7 +127,7 @@ async function refreshHolderBalances() {
     refreshedAt: new Date().toISOString(),
   };
   
-  setCache('aggregation:holder-balances', result, AGGREGATION_TTL);
+  setCache('aggregation:v2:holder-balances', result, AGGREGATION_TTL);
   return result;
 }
 
@@ -137,7 +147,13 @@ async function refreshSupplyTotals() {
       ), 0) as total
       FROM ${acsSource} acs
       WHERE acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'Amulet' OR template_id LIKE '%:Amulet:%')
+        AND (
+          entity_name = 'Amulet'
+          OR (
+            template_id LIKE '%:Amulet:%'
+            AND template_id NOT LIKE '%:LockedAmulet:%'
+          )
+        )
     ),
     locked_total AS (
       SELECT COALESCE(SUM(
@@ -164,7 +180,7 @@ async function refreshSupplyTotals() {
     refreshedAt: new Date().toISOString(),
   };
   
-  setCache('aggregation:supply-totals', result, AGGREGATION_TTL);
+  setCache('aggregation:v2:supply-totals', result, AGGREGATION_TTL);
   return result;
 }
 
@@ -221,7 +237,7 @@ async function refreshMiningRounds() {
     refreshedAt: new Date().toISOString(),
   };
   
-  setCache('aggregation:mining-rounds', result, AGGREGATION_TTL);
+  setCache('aggregation:v2:mining-rounds', result, AGGREGATION_TTL);
   return result;
 }
 
@@ -272,8 +288,8 @@ export async function refreshAllAggregations() {
  * Invalidate all ACS-related caches (call after new snapshot)
  */
 export function invalidateACSCache() {
-  invalidateCache('aggregation:');
-  invalidateCache('acs:');
+  invalidateCache('aggregation:v2:');
+  invalidateCache('acs:v2:');
   console.log('🗑️ ACS caches invalidated');
 }
 
