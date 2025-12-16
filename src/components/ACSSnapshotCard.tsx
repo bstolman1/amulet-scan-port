@@ -19,18 +19,19 @@ export const ACSSnapshotCard = () => {
     setIsRefreshing(true);
     try {
       // Invalidate server-side cache first
-      const apiBase = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
+      const apiBase = import.meta.env.VITE_DUCKDB_API_URL || 'http://localhost:3001';
       await fetch(`${apiBase}/api/acs/cache/invalidate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // NOTE: server cache keys were versioned to avoid stale results
-        body: JSON.stringify({ prefix: "acs:v2:" }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix: 'acs:' }),
       }).catch(() => {}); // Ignore cache invalidation errors
-
+      
       // Invalidate all ACS-related queries
-      await queryClient.invalidateQueries({ queryKey: ["latestAcsSnapshot"] });
-      await queryClient.invalidateQueries({ queryKey: ["acsSnapshots"] });
-      await queryClient.invalidateQueries({ queryKey: ["acsTemplateStats"] });
+      await queryClient.invalidateQueries({ queryKey: ['latestACSSnapshot'] });
+      await queryClient.invalidateQueries({ queryKey: ['acsSnapshots'] });
+      await queryClient.invalidateQueries({ queryKey: ['localACSStats'] });
+      await queryClient.invalidateQueries({ queryKey: ['localACSTemplates'] });
+      await queryClient.invalidateQueries({ queryKey: ['localLatestACSSnapshot'] });
       
       await refetch();
       if (showToast) {
