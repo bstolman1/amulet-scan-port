@@ -24,76 +24,57 @@ const Governance = () => {
   });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
-  const { data: governanceEvents, isLoading: eventsLoading } = useGovernanceEvents();
+  const { data: governanceEvents, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
 
-  // Fetch DsoRules to get SV count and voting threshold - aggregated across all packages
-  const { data: dsoRulesData } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:DsoRules:DsoRules",
-  );
-
-  // Fetch vote requests - aggregated across all packages
+  // Fetch vote requests FIRST - this is the PRIMARY governance data source
   const {
     data: voteRequestsData,
     isLoading,
     isError,
-  } = useAggregatedTemplateData(latestSnapshot?.id, "Splice:DsoRules:VoteRequest");
+    error: voteRequestError,
+  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
-  // Fetch Amulet Price Votes
-  const { data: priceVotesData, isLoading: priceVotesLoading } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:DSO:AmuletPrice:AmuletPriceVote",
+  // Fetch DsoRules to get SV count and voting threshold
+  const { data: dsoRulesData } = useAggregatedTemplateData(
+    undefined,
+    "Splice:DsoRules:DsoRules",
   );
 
-  // Fetch Confirmations
+  // Fetch Confirmations (secondary governance data)
   const { data: confirmationsData } = useAggregatedTemplateData(
-    latestSnapshot?.id,
+    undefined,
     "Splice:DsoRules:Confirmation",
   );
 
-  // Fetch AmuletRules
-  const { data: amuletRulesData } = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:AmuletRules:AmuletRules",
-  );
+  // Debug: Log data loading status
+  console.log("🔍 Governance Data Status:", {
+    voteRequests: voteRequestsData?.data?.length ?? "loading",
+    dsoRules: dsoRulesData?.data?.length ?? "loading", 
+    confirmations: confirmationsData?.data?.length ?? "loading",
+    events: governanceEvents?.length ?? "loading",
+    voteRequestError: voteRequestError?.message,
+    eventsError: eventsError?.message,
+  });
 
-  const priceVotes = priceVotesData?.data || [];
   const confirmations = confirmationsData?.data || [];
-  const amuletRules = amuletRulesData?.data || [];
 
-  // Get SV count and voting threshold from DsoRules FIRST (needed for proposals processing)
+  // Get SV count and voting threshold from DsoRules
   // Handle both flat and nested payload structure from DuckDB
   const dsoRulesRaw = dsoRulesData?.data?.[0];
   const dsoRulesPayload = dsoRulesRaw?.payload || dsoRulesRaw || {};
   const svs = dsoRulesPayload.svs || {};
-  const svCount = Object.keys(svs).length;
-  const votingThreshold = dsoInfo?.voting_threshold || Math.ceil(svCount * 0.67); // 2/3 majority
+  const svCount = Object.keys(svs).length || 0;
+  const votingThreshold = dsoInfo?.voting_threshold || Math.ceil(svCount * 0.67) || 1; // 2/3 majority
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
+    if (!record) return undefined;
     for (const field of fieldNames) {
       if (record[field] !== undefined && record[field] !== null) return record[field];
       if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
     }
     return undefined;
   };
-
-  // Debug logging - Log ALL data structures
-  console.log("🔍 DEBUG Governance - Full Data Dump:");
-  console.log("DsoRules:", dsoRulesPayload ? JSON.stringify(dsoRulesPayload, null, 2) : "No data");
-  console.log("Vote requests count:", voteRequestsData?.data?.length || 0);
-  if (voteRequestsData?.data?.[0]) {
-    console.log("First VoteRequest:", JSON.stringify(voteRequestsData.data[0], null, 2));
-  }
-  console.log("Price votes count:", priceVotes.length);
-  if (priceVotes[0]) {
-    console.log("First PriceVote:", JSON.stringify(priceVotes[0], null, 2));
-  }
-  console.log("Confirmations count:", confirmations.length);
-  if (confirmations[0]) {
-    console.log("First Confirmation:", JSON.stringify(confirmations[0], null, 2));
-  }
-  console.log("AmuletRules:", amuletRules[0] ? JSON.stringify(amuletRules[0], null, 2) : "No data");
 
   // Process proposals from ACS data with full JSON parsing
   // Note: ACS data has fields nested in payload, so we need to extract them
@@ -511,11 +492,9 @@ const Governance = () => {
         <DataSourcesFooter
           snapshotId={latestSnapshot?.id}
           templateSuffixes={[
-            "Splice:DsoRules:DsoRules",
             "Splice:DsoRules:VoteRequest",
-            "Splice:DSO:AmuletPrice:AmuletPriceVote",
+            "Splice:DsoRules:DsoRules",
             "Splice:DsoRules:Confirmation",
-            "Splice:AmuletRules:AmuletRules",
           ]}
           isProcessing={false}
         />
