@@ -851,26 +851,25 @@ router.get('/mining-rounds', async (req, res) => {
       all_rounds AS (
         SELECT 
           contract_id,
-          any_value(entity_name) as entity_name,
-          any_value(template_id) as template_id,
+          entity_name,
+          template_id,
           -- Try multiple extraction paths for round number
-          any_value(COALESCE(
+          COALESCE(
             NULLIF(json_extract_string(payload, '$.round.number'), ''),
             NULLIF(CAST(json_extract(payload, '$.round.number') AS VARCHAR), ''),
             NULLIF(json_extract_string(payload, '$.round'), ''),
             NULLIF(CAST(json_extract(payload, '$.round') AS VARCHAR), '')
-          )) as round_number,
-          any_value(json_extract_string(payload, '$.opensAt')) as opens_at,
-          any_value(json_extract_string(payload, '$.targetClosesAt')) as target_closes_at,
-          any_value(json_extract_string(payload, '$.amuletPrice')) as amulet_price,
-          any_value(payload) as payload,
+          ) as round_number,
+          json_extract_string(payload, '$.opensAt') as opens_at,
+          json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
+          json_extract_string(payload, '$.amuletPrice') as amulet_price,
+          payload,
           (SELECT snapshot_time FROM latest_snapshot) as snapshot_time
         FROM ${acsSource} acs
         WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
           AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
           AND (entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
                OR template_id LIKE '%MiningRound%')
-        GROUP BY contract_id
       )
       SELECT * FROM all_rounds
       ORDER BY entity_name, CAST(COALESCE(NULLIF(round_number, ''), '0') AS BIGINT) DESC
@@ -878,17 +877,10 @@ router.get('/mining-rounds', async (req, res) => {
 
     const rows = await db.safeQuery(sql);
 
-    // Separate by type - use entity_name first, fallback to template_id
-    const getType = (r) => {
-      if (r.entity_name?.includes('Open') || r.template_id?.includes('OpenMiningRound')) return 'open';
-      if (r.entity_name?.includes('Issuing') || r.template_id?.includes('IssuingMiningRound')) return 'issuing';
-      if (r.entity_name?.includes('Closed') || r.template_id?.includes('ClosedMiningRound')) return 'closed';
-      return null;
-    };
-    
-    const openRounds = rows.filter(r => getType(r) === 'open');
-    const issuingRounds = rows.filter(r => getType(r) === 'issuing');
-    const allClosedRounds = rows.filter(r => getType(r) === 'closed');
+    // Separate by type
+    const openRounds = rows.filter(r => r.entity_name === 'OpenMiningRound' || r.template_id?.includes('OpenMiningRound'));
+    const issuingRounds = rows.filter(r => r.entity_name === 'IssuingMiningRound' || r.template_id?.includes('IssuingMiningRound'));
+    const allClosedRounds = rows.filter(r => r.entity_name === 'ClosedMiningRound' || r.template_id?.includes('ClosedMiningRound'));
     const closedRounds = allClosedRounds.slice(0, closedLimit);
 
     // Get snapshot_time from first row or null
