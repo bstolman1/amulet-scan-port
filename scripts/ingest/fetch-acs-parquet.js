@@ -14,7 +14,7 @@ import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
 import { normalizeACSContract, isTemplate, parseTemplateId } from './acs-schema.js';
-import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers } from './write-acs-parquet.js';
+import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker } from './write-acs-parquet.js';
 
 // TLS config (secure by default)
 // Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
@@ -209,6 +209,16 @@ async function runMigrationSnapshot(migrationId) {
   
   // Flush remaining
   await flushAll();
+  
+  // Write completion marker to indicate this snapshot is complete
+  const stats = {
+    totalContracts,
+    amuletTotal: amuletTotal.toString(),
+    lockedTotal: lockedTotal.toString(),
+    circulatingTotal: amuletTotal.plus(lockedTotal).toString(),
+    templateCount: Object.keys(templateCounts).length,
+  };
+  await writeCompletionMarker(snapshotRunTime, migrationId, stats);
   
   return {
     migrationId,

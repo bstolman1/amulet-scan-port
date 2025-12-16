@@ -87,8 +87,45 @@ function hasACSData() {
   return findACSFiles().length > 0;
 }
 
-// Helper function to get CTE for latest snapshot (filters by latest migration_id first)
+// Find completion marker files to identify complete snapshots
+function findCompleteSnapshots() {
+  try {
+    if (!fs.existsSync(ACS_DATA_PATH)) return [];
+    const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
+    return allFiles
+      .map(f => String(f))
+      .filter(f => f.endsWith('_COMPLETE'))
+      .map(f => {
+        // Parse partition path: acs/migration_id=X/snapshot_time=YYYY-MM-DDTHH-MM-SS/_COMPLETE
+        const parts = f.split('/');
+        let migrationId = null;
+        let snapshotTime = null;
+        for (const part of parts) {
+          if (part.startsWith('migration_id=')) {
+            migrationId = parseInt(part.replace('migration_id=', ''));
+          } else if (part.startsWith('snapshot_time=')) {
+            // Convert YYYY-MM-DDTHH-MM-SS back to ISO format
+            snapshotTime = part.replace('snapshot_time=', '').replace(/-/g, (m, offset) => 
+              offset > 9 ? ':' : m // Only replace after the date part
+            );
+            // More precise conversion: YYYY-MM-DDTHH-MM-SS -> YYYY-MM-DDTHH:MM:SS
+            const match = snapshotTime.match(/^(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})(.*)$/);
+            if (match) {
+              snapshotTime = `${match[1]}${match[2]}:${match[3]}:${match[4]}${match[5]}`;
+            }
+          }
+        }
+        return { migrationId, snapshotTime, path: f };
+      })
+      .filter(s => s.migrationId !== null && s.snapshotTime !== null);
+  } catch {
+    return [];
+  }
+}
+
+// Helper function to get CTE for latest COMPLETE snapshot (filters by latest migration_id first)
 // If snapshotTime is provided, uses that specific snapshot instead of latest
+// IMPORTANT: Only uses snapshots that have a _COMPLETE marker file
 function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
   if (snapshotTime) {
     // Use specific snapshot
@@ -102,7 +139,32 @@ function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
       latest_snapshot AS (SELECT snapshot_time, migration_id FROM snapshot_params)
     `;
   }
-  // Use latest snapshot from latest migration
+  
+  // Find complete snapshots from filesystem
+  const completeSnapshots = findCompleteSnapshots();
+  
+  if (completeSnapshots.length > 0) {
+    // Sort by migration_id DESC, then snapshot_time DESC to get the latest complete one
+    completeSnapshots.sort((a, b) => {
+      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+    });
+    
+    const latest = completeSnapshots[0];
+    console.log(`[ACS] Using complete snapshot: migration_id=${latest.migrationId}, snapshot_time=${latest.snapshotTime}`);
+    
+    return `
+      latest_migration AS (
+        SELECT ${latest.migrationId} as migration_id
+      ),
+      latest_snapshot AS (
+        SELECT '${latest.snapshotTime}'::TIMESTAMP as snapshot_time, ${latest.migrationId} as migration_id
+      )
+    `;
+  }
+  
+  // Fallback: Use latest snapshot from latest migration (may be incomplete)
+  console.log('[ACS] WARNING: No complete snapshots found, using latest (possibly incomplete)');
   return `
     latest_migration AS (
       SELECT MAX(migration_id) as migration_id FROM ${acsSource}
@@ -172,18 +234,30 @@ router.get('/snapshots', async (req, res) => {
 
     const rows = await db.safeQuery(sql);
     
+    // Get complete snapshots to mark status
+    const completeSnapshots = findCompleteSnapshots();
+    const completeSet = new Set(
+      completeSnapshots.map(s => `${s.migrationId}:${s.snapshotTime}`)
+    );
+    
     // Transform to match the UI's expected format
     // Use snapshot_time as the unique identifier for each snapshot
-    const snapshots = rows.map((row) => ({
-      id: `local-m${row.migration_id}-${new Date(row.snapshot_time).toISOString()}`,
-      timestamp: row.snapshot_time,
-      migration_id: row.migration_id,
-      record_time: row.record_time,
-      entry_count: row.contract_count,
-      template_count: row.template_count,
-      status: 'completed',
-      source: 'local',
-    }));
+    const snapshots = rows.map((row) => {
+      const snapshotTimeStr = new Date(row.snapshot_time).toISOString();
+      const isComplete = completeSet.has(`${row.migration_id}:${snapshotTimeStr}`) ||
+        completeSet.has(`${row.migration_id}:${row.snapshot_time}`);
+      
+      return {
+        id: `local-m${row.migration_id}-${snapshotTimeStr}`,
+        timestamp: row.snapshot_time,
+        migration_id: row.migration_id,
+        record_time: row.record_time,
+        entry_count: row.contract_count,
+        template_count: row.template_count,
+        status: isComplete ? 'completed' : 'in_progress',
+        source: 'local',
+      };
+    });
 
     console.log(`Returning ${snapshots.length} snapshots:`, snapshots.map(s => `M${s.migration_id}`).join(', '));
     const result = serializeBigInt({ data: snapshots });
