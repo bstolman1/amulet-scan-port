@@ -27,9 +27,8 @@ import {
   Trash2,
   Wifi,
   WifiOff,
-  Zap,
+  Wifi,
 } from "lucide-react";
-import { useLedgerUpdates, type LedgerUpdate } from "@/hooks/use-ledger-updates";
 import { useLatestUpdates } from "@/hooks/use-latest-updates";
 import { useDuckDBHealth } from "@/hooks/use-duckdb-events";
 import { useDuckDBForLedger } from "@/lib/backend-config";
@@ -87,8 +86,7 @@ const JsonViewer = ({ data, label }: { data: any; label: string }) => {
 };
 
 const LiveUpdates = () => {
-  const { data: events = [], isLoading, dataUpdatedAt, refetch } = useLedgerUpdates(100);
-  const { data: rawUpdates = [], isLoading: isLoadingUpdates, refetch: refetchUpdates } = useLatestUpdates(100);
+  const { data: rawUpdates = [], isLoading, dataUpdatedAt, refetch } = useLatestUpdates(100);
   const { data: isDuckDBAvailable } = useDuckDBHealth();
   const usingDuckDB = useDuckDBForLedger();
   const [searchTerm, setSearchTerm] = useState("");
@@ -103,34 +101,17 @@ const LiveUpdates = () => {
     retry: false,
   });
 
-  // Merge events and updates into unified timeline
+  // Updates are the source of truth (events live inside updates)
   const unifiedTransactions = useMemo(() => {
-    const eventItems = (events as any[]).map((e) => ({
-      ...e,
-      _source: "event" as const,
-      _sortTime: new Date(e.effective_at || e.timestamp || e.record_time || 0).getTime(),
-    }));
-    
-    const updateItems = (rawUpdates as any[]).map((u) => ({
+    return (rawUpdates as any[]).map((u) => ({
       ...u,
       _source: "update" as const,
       _sortTime: new Date(u.record_time || u.timestamp || 0).getTime(),
-    }));
+    })).sort((a, b) => b._sortTime - a._sortTime);
+  }, [rawUpdates]);
 
-    return [...eventItems, ...updateItems].sort((a, b) => b._sortTime - a._sortTime);
-  }, [events, rawUpdates]);
-
-  // Freshness indicators
+  // Freshness indicator (updates are the source of truth)
   const freshness = useMemo(() => {
-    // For "up to date" we care about ingest/write time (timestamp).
-    // Ledger time (effective_at) can legitimately be older (e.g., backfill or late-arriving txs).
-    const latestEventIngestMs = events.length > 0
-      ? Math.max(...(events as any[]).map((e) => new Date(e.timestamp || 0).getTime()))
-      : null;
-    const latestEventLedgerMs = events.length > 0
-      ? Math.max(...(events as any[]).map((e) => new Date(e.effective_at || 0).getTime()))
-      : null;
-
     const latestUpdateMs = rawUpdates.length > 0
       ? Math.max(...(rawUpdates as any[]).map((u) => new Date(u.record_time || u.timestamp || 0).getTime()))
       : null;
@@ -139,19 +120,11 @@ const LiveUpdates = () => {
     const fiveMinutes = 5 * 60 * 1000;
 
     return {
-      events: {
-        count: events.length,
-        latestIngestTime: latestEventIngestMs ? new Date(latestEventIngestMs) : null,
-        latestLedgerTime: latestEventLedgerMs ? new Date(latestEventLedgerMs) : null,
-        isStale: latestEventIngestMs ? (now - latestEventIngestMs) > fiveMinutes : true,
-      },
-      updates: {
-        count: rawUpdates.length,
-        latestTime: latestUpdateMs ? new Date(latestUpdateMs) : null,
-        isStale: latestUpdateMs ? (now - latestUpdateMs) > fiveMinutes : true,
-      },
+      count: rawUpdates.length,
+      latestTime: latestUpdateMs ? new Date(latestUpdateMs) : null,
+      isStale: latestUpdateMs ? (now - latestUpdateMs) > fiveMinutes : true,
     };
-  }, [events, rawUpdates]);
+  }, [rawUpdates]);
 
   // Update seconds since last refresh
   useEffect(() => {
@@ -166,7 +139,6 @@ const LiveUpdates = () => {
   // Manual refresh handler
   const handleRefresh = () => {
     refetch();
-    refetchUpdates();
     toast({ title: "Refreshing data..." });
   };
 
@@ -189,7 +161,7 @@ const LiveUpdates = () => {
   };
 
   const filteredTransactions = unifiedTransactions.filter((item: any) => {
-    const id = item._source === "update" ? (item.update_id || "") : item.id;
+    const id = item.update_id || "";
     const type = item.update_type || "";
     return (
       !searchTerm ||
@@ -198,7 +170,7 @@ const LiveUpdates = () => {
     );
   });
 
-  // Calculate statistics
+  // Calculate statistics (events are extracted from updates' update_data)
   const stats = useMemo(() => {
     const updatesByType = unifiedTransactions.reduce((acc, u) => {
       const type = u.update_type || "unknown";
@@ -206,7 +178,7 @@ const LiveUpdates = () => {
       return acc;
     }, {} as Record<string, number>);
 
-    const templateCounts = (events as any[]).reduce((acc, u) => {
+    const templateCounts = unifiedTransactions.reduce((acc, u) => {
       const data = u.update_data as any;
       const evts = data?.events || data?.transaction?.events || [];
       evts.forEach((event: any) => {
@@ -219,7 +191,7 @@ const LiveUpdates = () => {
       return acc;
     }, {} as Record<string, number>);
 
-    const totalEvents = (events as any[]).reduce((sum, u) => {
+    const totalEvents = unifiedTransactions.reduce((sum, u) => {
       const data = u.update_data as any;
       const evts = data?.events || data?.transaction?.events || [];
       return sum + (Array.isArray(evts) ? evts.length : 0);
@@ -240,7 +212,7 @@ const LiveUpdates = () => {
       latestUpdate,
       totalTypes: Object.keys(updatesByType).length,
     };
-  }, [events, unifiedTransactions]);
+  }, [unifiedTransactions]);
 
   // Calculate type distribution for visual breakdown
   const typeDistribution = useMemo(() => {
@@ -273,7 +245,7 @@ const LiveUpdates = () => {
     });
   }, [stats.latestUpdate?.getTime()]);
 
-  if (isLoading || isLoadingUpdates) {
+  if (isLoading) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
@@ -289,33 +261,16 @@ const LiveUpdates = () => {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold mb-2">Transaction History</h1>
-            <p className="text-muted-foreground">Unified events & updates from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
+            <p className="text-muted-foreground">Live updates from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
           </div>
-          {/* Freshness Indicators */}
+          {/* Freshness Indicator */}
           <div className="flex items-center gap-3">
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.events.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}
-              title={freshness.events.latestLedgerTime ? `Ledger time: ${freshness.events.latestLedgerTime.toISOString()}` : undefined}
-            >
-              <Zap className={`w-4 h-4 ${freshness.events.isStale ? 'text-amber-500' : 'text-emerald-500'}`} />
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}>
+              <Activity className={`w-4 h-4 ${freshness.isStale ? 'text-amber-500' : 'text-emerald-500'}`} />
               <div className="text-xs">
-                <div className="font-medium">Events ({freshness.events.count})</div>
+                <div className="font-medium">Updates ({freshness.count})</div>
                 <div className="text-muted-foreground">
-                  {freshness.events.latestIngestTime ? `Ingested ${formatDistanceToNow(freshness.events.latestIngestTime, { addSuffix: false })} ago` : 'No data'}
-                </div>
-                {freshness.events.latestLedgerTime && (
-                  <div className="text-muted-foreground/70">
-                    Ledger {formatDistanceToNow(freshness.events.latestLedgerTime, { addSuffix: true })}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${freshness.updates.isStale ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/50 bg-emerald-500/10'}`}>
-              <Activity className={`w-4 h-4 ${freshness.updates.isStale ? 'text-amber-500' : 'text-emerald-500'}`} />
-              <div className="text-xs">
-                <div className="font-medium">Updates ({freshness.updates.count})</div>
-                <div className="text-muted-foreground">
-                  {freshness.updates.latestTime ? formatDistanceToNow(freshness.updates.latestTime, { addSuffix: true }) : 'No data'}
+                  {freshness.latestTime ? formatDistanceToNow(freshness.latestTime, { addSuffix: true }) : 'No data'}
                 </div>
               </div>
             </div>
@@ -696,8 +651,7 @@ const LiveUpdates = () => {
           <CardContent>
             <div className="space-y-2 max-h-[600px] overflow-y-auto">
               {filteredTransactions.map((item: any, idx: number) => {
-                const isUpdate = item._source === "update";
-                const rowId: string = isUpdate ? String(item.update_id || "") : String(item.id || "");
+                const rowId: string = String(item.update_id || "");
                 const rowType: string = String(item.update_type || "unknown");
 
                 const data = item.update_data as any;
@@ -716,24 +670,18 @@ const LiveUpdates = () => {
                 const contractId = typeof contractIdRaw === "string" ? contractIdRaw : null;
                 const templateId = typeof templateIdRaw === "string" ? templateIdRaw : null;
                 const templateShort = templateId ? templateId.split(":").pop() : null;
-                const signatories = data?.signatories || data?.created_event?.signatories || [];
-                const payload = data?.payload || data?.create_arguments || null;
 
                 const effectiveAtIso = item.effective_at || item.record_time || item.timestamp;
                 const createdAtIso = item.created_at || item.timestamp || item.record_time || item.effective_at;
 
                 return (
                   <div
-                    key={`${item._source}-${rowId}-${idx}`}
+                    key={`update-${rowId}-${idx}`}
                     className="p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="space-y-2 flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          {/* Source badge */}
-                          <Badge variant={isUpdate ? "secondary" : "default"} className="text-xs">
-                            {isUpdate ? "Update" : "Event"}
-                          </Badge>
                           <Badge variant="outline">{rowType}</Badge>
                           <span className="font-mono text-xs text-muted-foreground">
                             Migration {item.migration_id ?? liveStatus?.live_cursor?.migration_id ?? "N/A"}
@@ -761,24 +709,12 @@ const LiveUpdates = () => {
                           </div>
                         )}
 
-                        {!isUpdate && signatories.length > 0 && (
-                          <div className="flex items-center gap-1 flex-wrap text-xs text-muted-foreground">
-                            {signatories.slice(0, 2).map((s: string, i: number) => (
-                              <span key={i} className="font-mono truncate max-w-[150px]" title={s}>
-                                {s.substring(0, 20)}...
-                              </span>
-                            ))}
-                            {signatories.length > 2 && <span>+{signatories.length - 2} more</span>}
-                          </div>
-                        )}
-
                         <div className="text-xs text-muted-foreground">
                           <Clock className="w-3 h-3 inline mr-1" />
                           {effectiveAtIso ? new Date(effectiveAtIso).toLocaleString() : "(no time)"}
                         </div>
 
                         <div className="flex flex-wrap gap-2 pt-1">
-                          {!isUpdate && payload && <JsonViewer data={payload} label="View Payload" />}
                           <JsonViewer data={data} label="View Data" />
                         </div>
                       </div>
