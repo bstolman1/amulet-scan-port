@@ -213,18 +213,25 @@ function extractIdentifiers(text) {
     keywords: [],
   };
   
-  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123, CIP - 0066) and format as 4-digit
+  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123, CIP - 0066, or standalone "0054 Add Figment...")
   // Check for TBD/unassigned CIPs first
   const tbdMatch = text.match(/CIP\s*[-#]?\s*(TBD|00XX|XXXX|\?\?|unassigned)/i);
   if (tbdMatch) {
     identifiers.cipNumber = 'CIP-00XX';
   } else {
     // Handle various CIP formats: "CIP-0066", "CIP 0066", "CIP#0066", "CIP - 0066"
-    // Use explicit pattern: CIP, optional spaces, optional separator, optional spaces, digits
     const cipMatch = text.match(/CIP\s*[-#]?\s*(\d{2,})/i);
     if (cipMatch) {
       identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
       console.log(`EXTRACTED CIP: "${identifiers.cipNumber}" from "${text.slice(0, 60)}"`);
+    } else {
+      // Also check for standalone 4-digit number at the start (e.g., "0054 Add Figment...")
+      // This catches CIP announcements that don't include "CIP-" prefix
+      const standaloneMatch = text.match(/^\s*0*(\d{4})\s+/);
+      if (standaloneMatch) {
+        identifiers.cipNumber = `CIP-${standaloneMatch[1]}`;
+        console.log(`EXTRACTED standalone CIP: "${identifiers.cipNumber}" from "${text.slice(0, 60)}"`);
+      }
     }
   }
   
@@ -970,12 +977,18 @@ function writeCache(data) {
 function readOverrides() {
   try {
     if (fs.existsSync(OVERRIDES_FILE)) {
-      return JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf-8'));
+      // Ensure all override types exist
+      return {
+        itemOverrides: data.itemOverrides || {},
+        topicOverrides: data.topicOverrides || {},
+        mergeOverrides: data.mergeOverrides || {},
+      };
     }
   } catch (err) {
     console.error('Error reading overrides:', err.message);
   }
-  return { itemOverrides: {}, topicOverrides: {} };
+  return { itemOverrides: {}, topicOverrides: {}, mergeOverrides: {} };
 }
 
 // Write overrides to file
@@ -993,35 +1006,102 @@ function writeOverrides(overrides) {
   }
 }
 
-// Apply overrides to lifecycle data
+// Apply overrides to lifecycle data (type changes and merges)
 function applyOverrides(data) {
   if (!data || !data.lifecycleItems) return data;
   
   const overrides = readOverrides();
-  if (!overrides.itemOverrides || Object.keys(overrides.itemOverrides).length === 0) {
+  const hasItemOverrides = overrides.itemOverrides && Object.keys(overrides.itemOverrides).length > 0;
+  const hasMergeOverrides = overrides.mergeOverrides && Object.keys(overrides.mergeOverrides).length > 0;
+  
+  if (!hasItemOverrides && !hasMergeOverrides) {
     return data;
   }
   
   let appliedCount = 0;
-  data.lifecycleItems = data.lifecycleItems.map(item => {
-    // Check for override by item ID or primaryId
-    const override = overrides.itemOverrides[item.id] || overrides.itemOverrides[item.primaryId];
-    if (override) {
-      console.log(`Applying override: "${item.primaryId}" -> type=${override.type}`);
-      appliedCount++;
-      return {
-        ...item,
-        type: override.type,
-        overrideApplied: true,
-        overrideReason: override.reason || 'Manual correction',
-      };
-    }
-    return item;
-  });
+  let mergeCount = 0;
   
-  if (appliedCount > 0) {
-    console.log(`Applied ${appliedCount} manual overrides`);
+  // First pass: Apply type overrides
+  if (hasItemOverrides) {
+    data.lifecycleItems = data.lifecycleItems.map(item => {
+      const override = overrides.itemOverrides[item.id] || overrides.itemOverrides[item.primaryId];
+      if (override) {
+        console.log(`Applying type override: "${item.primaryId}" -> type=${override.type}`);
+        appliedCount++;
+        return {
+          ...item,
+          type: override.type,
+          overrideApplied: true,
+          overrideReason: override.reason || 'Manual correction',
+        };
+      }
+      return item;
+    });
   }
+  
+  // Second pass: Apply merge overrides
+  if (hasMergeOverrides) {
+    const itemsToMerge = [];
+    const targetItems = new Map();
+    
+    // Identify items to merge and their targets
+    data.lifecycleItems.forEach(item => {
+      const mergeOverride = overrides.mergeOverrides[item.id] || overrides.mergeOverrides[item.primaryId];
+      if (mergeOverride) {
+        itemsToMerge.push({ item, targetCip: mergeOverride.mergeInto });
+      }
+    });
+    
+    // Find target items
+    data.lifecycleItems.forEach(item => {
+      if (item.primaryId) {
+        targetItems.set(item.primaryId.toUpperCase(), item);
+      }
+    });
+    
+    // Perform merges
+    itemsToMerge.forEach(({ item, targetCip }) => {
+      const normalizedTarget = targetCip.toUpperCase();
+      const target = targetItems.get(normalizedTarget);
+      if (target) {
+        console.log(`Merging "${item.primaryId}" into "${target.primaryId}"`);
+        // Merge topics into target
+        item.topics.forEach(topic => {
+          if (!target.topics.find(t => t.id === topic.id)) {
+            target.topics.push(topic);
+            // Also add to the appropriate stage
+            const stage = topic.stage;
+            if (!target.stages[stage]) target.stages[stage] = [];
+            if (!target.stages[stage].find(t => t.id === topic.id)) {
+              target.stages[stage].push(topic);
+            }
+          }
+        });
+        // Update date range
+        if (new Date(item.firstDate) < new Date(target.firstDate)) {
+          target.firstDate = item.firstDate;
+        }
+        if (new Date(item.lastDate) > new Date(target.lastDate)) {
+          target.lastDate = item.lastDate;
+        }
+        target.mergedFrom = target.mergedFrom || [];
+        target.mergedFrom.push(item.primaryId);
+        mergeCount++;
+      }
+    });
+    
+    // Remove merged items from the list
+    if (itemsToMerge.length > 0) {
+      const mergedIds = new Set(itemsToMerge.map(m => m.item.id));
+      const mergedPrimaryIds = new Set(itemsToMerge.map(m => m.item.primaryId));
+      data.lifecycleItems = data.lifecycleItems.filter(item => 
+        !mergedIds.has(item.id) && !mergedPrimaryIds.has(item.primaryId)
+      );
+    }
+  }
+  
+  if (appliedCount > 0) console.log(`Applied ${appliedCount} type overrides`);
+  if (mergeCount > 0) console.log(`Applied ${mergeCount} merge overrides`);
   
   return data;
 }
@@ -1311,6 +1391,61 @@ router.delete('/overrides/:key', (req, res) => {
   } else {
     res.status(404).json({ error: `No override found for "${key}"` });
   }
+});
+
+// Set a merge override (merge one item into another CIP)
+router.post('/overrides/merge', (req, res) => {
+  const { sourceId, sourcePrimaryId, mergeInto, reason } = req.body;
+  
+  if (!mergeInto || (!sourceId && !sourcePrimaryId)) {
+    return res.status(400).json({ error: 'Missing required fields: mergeInto and either sourceId or sourcePrimaryId' });
+  }
+  
+  // Normalize the target CIP number
+  const normalizedTarget = mergeInto.toUpperCase().replace(/^CIP\s*[-#]?\s*0*/, 'CIP-').padEnd(8, '0');
+  
+  const overrides = readOverrides();
+  if (!overrides.mergeOverrides) {
+    overrides.mergeOverrides = {};
+  }
+  
+  const key = sourcePrimaryId || sourceId;
+  overrides.mergeOverrides[key] = {
+    mergeInto: normalizedTarget,
+    reason: reason || 'Manual merge',
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Merge override set: "${key}" -> ${normalizedTarget}`);
+    res.json({ success: true, override: overrides.mergeOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save merge override' });
+  }
+});
+
+// Get list of existing CIP items (for merge target selection)
+router.get('/cip-list', (req, res) => {
+  const cached = readCache();
+  if (!cached || !cached.lifecycleItems) {
+    return res.json({ cips: [] });
+  }
+  
+  const cips = cached.lifecycleItems
+    .filter(item => item.type === 'cip' && item.primaryId.match(/^CIP-\d+$/i))
+    .map(item => ({
+      primaryId: item.primaryId,
+      firstDate: item.firstDate,
+      lastDate: item.lastDate,
+      topicCount: item.topics.length,
+    }))
+    .sort((a, b) => {
+      const numA = parseInt(a.primaryId.match(/\d+/)?.[0] || '0');
+      const numB = parseInt(b.primaryId.match(/\d+/)?.[0] || '0');
+      return numB - numA;
+    });
+  
+  res.json({ cips });
 });
 
 

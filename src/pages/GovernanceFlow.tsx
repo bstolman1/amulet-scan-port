@@ -38,6 +38,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
@@ -287,8 +290,61 @@ const GovernanceFlow = () => {
     }
   };
 
+  // State for CIP list (for merge dropdown)
+  const [cipList, setCipList] = useState<{ primaryId: string; topicCount: number }[]>([]);
+  
+  // Fetch CIP list for merge dropdown
+  const fetchCipList = async () => {
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/cip-list`);
+      if (response.ok) {
+        const { cips } = await response.json();
+        setCipList(cips || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch CIP list:', err);
+    }
+  };
+  
+  // Handler to merge an item into a CIP
+  const handleMergeInto = async (sourcePrimaryId: string, targetCip: string) => {
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourcePrimaryId,
+          mergeInto: targetCip,
+          reason: 'Manual merge via UI',
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to save merge override');
+      }
+      
+      toast({
+        title: "Merge saved",
+        description: `"${sourcePrimaryId}" will be merged into ${targetCip}`,
+      });
+      
+      // Refresh data to show the change
+      fetchData(false);
+    } catch (err) {
+      console.error('Failed to merge:', err);
+      toast({
+        title: "Error",
+        description: "Failed to save merge override",
+        variant: "destructive",
+      });
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    fetchCipList();
   }, []);
 
   // Fetch VoteRequests from local ACS
@@ -1263,7 +1319,7 @@ const GovernanceFlow = () => {
                                     <MoreVertical className="h-4 w-4 text-muted-foreground" />
                                   </Button>
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="bg-popover">
+                                <DropdownMenuContent align="end" className="bg-popover w-56">
                                   <DropdownMenuLabel className="text-xs">Reclassify as...</DropdownMenuLabel>
                                   <DropdownMenuSeparator />
                                   {Object.entries(TYPE_CONFIG).map(([typeKey, config]) => (
@@ -1282,6 +1338,34 @@ const GovernanceFlow = () => {
                                       {typeKey === group.type && <span className="text-muted-foreground">(current)</span>}
                                     </DropdownMenuItem>
                                   ))}
+                                  
+                                  {/* Merge into CIP submenu - only show for non-CIP items */}
+                                  {!group.primaryId.match(/^CIP-\d+$/i) && cipList.length > 0 && (
+                                    <>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger className="text-xs">
+                                          <Edit2 className="mr-2 h-3 w-3" />
+                                          Merge into CIP...
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuSubContent className="bg-popover max-h-64 overflow-y-auto">
+                                          {cipList.slice(0, 20).map((cip) => (
+                                            <DropdownMenuItem
+                                              key={cip.primaryId}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleMergeInto(group.primaryId, cip.primaryId);
+                                              }}
+                                              className="text-xs"
+                                            >
+                                              <span className="font-mono">{cip.primaryId}</span>
+                                              <span className="ml-2 text-muted-foreground">({cip.topicCount} topics)</span>
+                                            </DropdownMenuItem>
+                                          ))}
+                                        </DropdownMenuSubContent>
+                                      </DropdownMenuSub>
+                                    </>
+                                  )}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                               
