@@ -687,7 +687,17 @@ const Governance = () => {
                             </CollapsibleTrigger>
                             <CollapsibleContent>
                               <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
-                                {JSON.stringify(event.payload || event.event_data, null, 2)}
+                                {JSON.stringify(
+                                  event.payload || event.exercise_result || event.event_data || event.raw || {
+                                    event_id: event.event_id,
+                                    event_type: event.event_type,
+                                    contract_id: event.contract_id,
+                                    choice: event.choice,
+                                    template_id: event.template_id,
+                                  },
+                                  null,
+                                  2
+                                )}
                               </pre>
                             </CollapsibleContent>
                           </Collapsible>
