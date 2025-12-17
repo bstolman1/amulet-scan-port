@@ -427,6 +427,83 @@ router.get('/debug', (req, res) => {
   }
 });
 
+// GET /api/acs/sample - Get sample raw contracts to verify schema and data
+router.get('/sample', async (req, res) => {
+  try {
+    if (!hasACSData()) {
+      return res.json({ data: [], message: 'No ACS data available' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+
+    // Get sample rows with all columns
+    const sql = `
+      SELECT *
+      FROM ${acsSource}
+      LIMIT ${limit}
+    `;
+
+    const rows = await db.safeQuery(sql);
+
+    // Also get distinct template_ids to show what's available
+    const templateSql = `
+      SELECT DISTINCT 
+        COALESCE(template_id, 'NULL') as template_id,
+        COALESCE(entity_name, 'NULL') as entity_name,
+        COALESCE(module_name, 'NULL') as module_name
+      FROM ${acsSource}
+      ORDER BY template_id
+      LIMIT 50
+    `;
+    
+    const templates = await db.safeQuery(templateSql);
+
+    // Get total count
+    const countSql = `SELECT COUNT(*) as cnt FROM ${acsSource}`;
+    const countRows = await db.safeQuery(countSql);
+    const totalCount = Number(countRows?.[0]?.cnt || 0);
+
+    // Check for governance-related templates specifically
+    const governanceSql = `
+      SELECT 
+        COALESCE(template_id, 'NULL') as template_id,
+        COUNT(*) as cnt
+      FROM ${acsSource}
+      WHERE template_id LIKE '%Vote%'
+         OR template_id LIKE '%Dso%'
+         OR template_id LIKE '%Confirmation%'
+         OR template_id LIKE '%Governance%'
+         OR entity_name LIKE '%Vote%'
+         OR entity_name LIKE '%Dso%'
+      GROUP BY template_id
+      ORDER BY cnt DESC
+      LIMIT 20
+    `;
+    
+    let governanceTemplates = [];
+    try {
+      governanceTemplates = await db.safeQuery(governanceSql);
+    } catch {}
+
+    res.json(serializeBigInt({
+      snapshot: snapshot ? {
+        migration_id: snapshot.migrationId,
+        snapshot_time: snapshot.snapshotTime,
+        path: snapshot.path,
+      } : null,
+      totalContracts: totalCount,
+      sampleContracts: rows,
+      availableTemplates: templates,
+      governanceTemplates,
+      columns: rows.length > 0 ? Object.keys(rows[0]) : [],
+    }));
+  } catch (err) {
+    console.error('ACS sample error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/acs/cache - Get cache statistics (for debugging)
 router.get('/cache', (req, res) => {
   res.json(getCacheStats());
