@@ -88,6 +88,7 @@ interface LifecycleItem {
   currentStage: string;
   overrideApplied?: boolean;
   overrideReason?: string;
+  llmClassified?: boolean;
 }
 
 interface GovernanceData {
@@ -1302,6 +1303,12 @@ const GovernanceFlow = () => {
                               {group.items[0]?.overrideApplied && (
                                 <Badge variant="outline" className="text-[10px] h-5 border-purple-500/50 text-purple-400 bg-purple-500/10">
                                   ✎ Manually classified
+                                </Badge>
+                              )}
+                              {/* LLM classification indicator */}
+                              {group.items[0]?.llmClassified && !group.items[0]?.overrideApplied && (
+                                <Badge variant="outline" className="text-[10px] h-5 border-cyan-500/50 text-cyan-400 bg-cyan-500/10">
+                                  🤖 AI classified
                                 </Badge>
                               )}
                             </div>
