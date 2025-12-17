@@ -290,7 +290,8 @@ function getSnapshotFilesSource(snapshotPath) {
   if (parts.length === 0) return null;
   
   console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl')).length} files)`);
-  return `(${parts.join(' UNION ALL ')})`;
+  // Use UNION (not UNION ALL) to prevent duplicate records across file types
+  return `(${parts.join(' UNION ')})`;
 }
 
 // Get the best snapshot and its source (returns both snapshot info and optimized DuckDB source)
@@ -937,9 +938,9 @@ router.get('/contracts', async (req, res) => {
       console.log('[ACS] No snapshot found, falling back to full scan');
     }
     
-    // First get total count
+    // First get total count (deduplicated by contract_id)
     const countSql = `
-      SELECT COUNT(*) as total_count
+      SELECT COUNT(DISTINCT contract_id) as total_count
       FROM ${acsSource} acs
       WHERE ${whereClause}
     `;
@@ -947,19 +948,21 @@ router.get('/contracts', async (req, res) => {
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
     
+    // Use GROUP BY contract_id to deduplicate (handles any duplicate records)
     const sql = `
       SELECT 
         contract_id,
-        template_id,
-        entity_name,
-        module_name,
-        signatories,
-        observers,
-        payload,
-        record_time,
-        snapshot_time
+        any_value(template_id) as template_id,
+        any_value(entity_name) as entity_name,
+        any_value(module_name) as module_name,
+        any_value(signatories) as signatories,
+        any_value(observers) as observers,
+        any_value(payload) as payload,
+        any_value(record_time) as record_time,
+        any_value(snapshot_time) as snapshot_time
       FROM ${acsSource} acs
       WHERE ${whereClause}
+      GROUP BY contract_id
       ORDER BY contract_id
       LIMIT ${limit}
       OFFSET ${offset}
