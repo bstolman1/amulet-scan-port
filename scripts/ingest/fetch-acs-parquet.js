@@ -13,7 +13,7 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
-import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, detectTemplateFormat } from './acs-schema.js';
+import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat } from './acs-schema.js';
 import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete } from './write-acs-parquet.js';
 
 // TLS config (secure by default)
@@ -162,6 +162,14 @@ async function runMigrationSnapshot(migrationId) {
   let lockedTotal = new BigNumber(0);
   const templateCounts = {};
   
+  // Field validation tracking
+  const fieldIssues = {
+    criticalMissing: {},  // field -> count
+    importantMissing: {}, // field -> count
+    contractsWithCritical: 0,
+    contractsWithImportant: 0,
+  };
+  
   while (true) {
     page++;
     console.log(`   📄 Fetching page ${page}...`);
@@ -184,6 +192,21 @@ async function runMigrationSnapshot(migrationId) {
       // Normalize for storage
       const contract = normalizeACSContract(event, migrationId, recordTime, recordTime);
       contracts.push(contract);
+      
+      // Validate contract fields
+      const { missingCritical, missingImportant } = validateContractFields(contract);
+      if (missingCritical.length > 0) {
+        fieldIssues.contractsWithCritical++;
+        for (const field of missingCritical) {
+          fieldIssues.criticalMissing[field] = (fieldIssues.criticalMissing[field] || 0) + 1;
+        }
+      }
+      if (missingImportant.length > 0) {
+        fieldIssues.contractsWithImportant++;
+        for (const field of missingImportant) {
+          fieldIssues.importantMissing[field] = (fieldIssues.importantMissing[field] || 0) + 1;
+        }
+      }
       
       // Count by template
       const templateId = event.template_id || 'unknown';
@@ -224,6 +247,28 @@ async function runMigrationSnapshot(migrationId) {
   console.log(`   ├─ Unexpected: ${validation.unexpected.length} templates`);
   console.log(`   └─ Format variations: ${JSON.stringify(validation.formatVariations)}`);
   
+  // Print field validation report
+  console.log(`\n   🔍 Field Validation Report:`);
+  const criticalFields = Object.entries(fieldIssues.criticalMissing);
+  const importantFields = Object.entries(fieldIssues.importantMissing);
+  
+  if (criticalFields.length === 0 && importantFields.length === 0) {
+    console.log(`   ✅ All fields populated correctly`);
+  } else {
+    if (criticalFields.length > 0) {
+      console.log(`   ❌ CRITICAL MISSING (${fieldIssues.contractsWithCritical} contracts):`);
+      for (const [field, count] of criticalFields) {
+        console.log(`      - ${field}: ${count} contracts`);
+      }
+    }
+    if (importantFields.length > 0) {
+      console.log(`   ⚠️  Important missing (${fieldIssues.contractsWithImportant} contracts):`);
+      for (const [field, count] of importantFields) {
+        console.log(`      - ${field}: ${count} contracts`);
+      }
+    }
+  }
+  
   // Print warnings
   if (validation.warnings.length > 0) {
     console.log(`\n   ⚠️  VALIDATION WARNINGS:`);
@@ -256,6 +301,12 @@ async function runMigrationSnapshot(migrationId) {
       unexpectedCount: validation.unexpected.length,
       warnings: validation.warnings,
     },
+    fieldValidation: {
+      criticalMissing: fieldIssues.criticalMissing,
+      importantMissing: fieldIssues.importantMissing,
+      contractsWithCriticalIssues: fieldIssues.contractsWithCritical,
+      contractsWithImportantIssues: fieldIssues.contractsWithImportant,
+    },
   };
   await writeCompletionMarker(snapshotRunTime, migrationId, stats);
   
@@ -268,6 +319,7 @@ async function runMigrationSnapshot(migrationId) {
     circulatingTotal: amuletTotal.plus(lockedTotal).toString(),
     templateCounts,
     validation,
+    fieldIssues,
   };
 }
 
@@ -330,6 +382,17 @@ async function runACSSnapshot() {
         console.log(`   - Warnings: ${r.validation.warnings.length}`);
       }
     }
+    
+    if (r.fieldIssues) {
+      const criticalCount = r.fieldIssues.contractsWithCritical;
+      const importantCount = r.fieldIssues.contractsWithImportant;
+      if (criticalCount > 0) {
+        console.log(`   - ❌ Critical field issues: ${criticalCount} contracts`);
+      }
+      if (importantCount > 0) {
+        console.log(`   - ⚠️  Important field issues: ${importantCount} contracts`);
+      }
+    }
   }
   
   // Print overall validation summary
@@ -341,8 +404,15 @@ async function runACSSnapshot() {
     }
   }
   
+  // Check for critical field issues
+  const hasCriticalIssues = results.some(r => r.fieldIssues?.contractsWithCritical > 0);
+  
   console.log('\n' + '='.repeat(80));
-  console.log('✅ ACS Snapshot Complete');
+  if (hasCriticalIssues) {
+    console.log('⚠️  ACS Snapshot Complete (with critical field issues)');
+  } else {
+    console.log('✅ ACS Snapshot Complete');
+  }
   console.log('='.repeat(80));
 }
 
