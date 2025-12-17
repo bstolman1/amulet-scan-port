@@ -107,33 +107,79 @@ const Governance = () => {
     return undefined;
   };
 
+  // Helper to parse action and get human-readable title
+  const parseAction = (action: any) => {
+    if (!action) return { title: "Unknown Action", type: "Unknown", details: null };
+    
+    const tag = action.tag || "";
+    const value = action.value || {};
+    const dsoAction = value.dsoAction || {};
+    const dsoActionTag = dsoAction.tag || "";
+    const dsoActionValue = dsoAction.value || {};
+    
+    // Build human-readable title from the action type
+    const actionTypeMap: Record<string, string> = {
+      "SRARC_UpdateSvRewardWeight": "Update SV Reward Weight",
+      "SRARC_AddSv": "Add Super Validator",
+      "SRARC_RemoveSv": "Remove Super Validator",
+      "SRARC_GrantFeaturedAppRight": "Grant Featured App Right",
+      "SRARC_RevokeFeaturedAppRight": "Revoke Featured App Right",
+      "CRARC_AddFutureAmuletConfigSchedule": "Update Amulet Config",
+      "SRARC_SetConfig": "Set DSO Config",
+    };
+    
+    const title = actionTypeMap[dsoActionTag] || dsoActionTag.replace(/^SRARC_|^CRARC_|^ARC_/g, "").replace(/([A-Z])/g, " $1").trim();
+    
+    return {
+      title: title || tag.replace(/^ARC_/g, "").replace(/([A-Z])/g, " $1").trim(),
+      type: dsoActionTag || tag,
+      details: dsoActionValue,
+    };
+  };
+
   // Process proposals from ACS data with full JSON parsing
   // Note: ACS data has fields nested in payload, so we need to extract them
   const proposals =
     voteRequestsData?.data?.map((voteRequest: any) => {
       // Handle both flat structure and nested payload structure from DuckDB
       const payload = voteRequest.payload || voteRequest;
-      const votes = payload.votes || voteRequest.votes || {};
-      const votesList = Object.values(votes);
-      const votesFor = votesList.filter((v: any) => v?.accept || v?.Accept).length;
-      const votesAgainst = votesList.filter((v: any) => v?.reject || v?.Reject).length;
+      
+      // Parse votes - can be array of tuples [[svName, voteObj], ...] or object {svName: voteObj}
+      const rawVotes = payload.votes || voteRequest.votes || [];
+      let votesArray: Array<{ svName: string; vote: any }> = [];
+      
+      if (Array.isArray(rawVotes)) {
+        // Array of tuples: [["SV-Name", {sv: "...", accept: true, reason: {...}}], ...]
+        votesArray = rawVotes.map((v: any) => ({
+          svName: Array.isArray(v) ? v[0] : v.svName || "Unknown",
+          vote: Array.isArray(v) ? v[1] : v,
+        }));
+      } else if (typeof rawVotes === "object") {
+        // Object format: {svName: voteObj}
+        votesArray = Object.entries(rawVotes).map(([svName, vote]) => ({ svName, vote }));
+      }
+      
+      const votesFor = votesArray.filter((v) => v.vote?.accept === true).length;
+      const votesAgainst = votesArray.filter((v) => v.vote?.accept === false).length;
+      
+      // Parse action
       const action = payload.action || voteRequest.action || {};
-      const actionKey = Object.keys(action)[0] || "Unknown";
-      const actionData = action[actionKey];
-      const title = actionKey.replace(/ARC_|_/g, " ");
+      const parsedAction = parseAction(action);
 
       // Extract requester information
       const requester = payload.requester || voteRequest.requester || "Unknown";
-      const requesterParty = payload.requesterName || voteRequest.requesterName || requester;
 
-      // Extract reason
-      const reason = payload.reason?.url || payload.reason || voteRequest.reason?.url || voteRequest.reason || "No reason provided";
+      // Extract reason - handle object with url and body
+      const reasonObj = payload.reason || voteRequest.reason || {};
+      const reasonBody = typeof reasonObj === "object" ? reasonObj.body : reasonObj;
+      const reasonUrl = typeof reasonObj === "object" ? reasonObj.url : null;
 
-      // Extract voting information
-      const votedSvs = Object.keys(votes).map((svParty) => ({
-        party: svParty,
-        vote: votes[svParty]?.accept || votes[svParty]?.Accept ? "accept" : "reject",
-        weight: votes[svParty]?.expiresAt || "N/A",
+      // Extract voting information for display
+      const votedSvs = votesArray.map((v) => ({
+        party: v.svName,
+        vote: v.vote?.accept === true ? "accept" : v.vote?.accept === false ? "reject" : "pending",
+        reason: v.vote?.reason?.body || "",
+        castAt: v.vote?.optCastAt,
       }));
 
       // Determine status based on votes and threshold
@@ -143,25 +189,25 @@ const Governance = () => {
       else if (votesAgainst > svCount - threshold) status = "rejected";
 
       const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
-      const effectiveAt = payload.effectiveAt || voteRequest.effectiveAt;
-      const expiresAt = payload.expiresAt || voteRequest.expiresAt;
+      const voteBefore = payload.voteBefore || voteRequest.voteBefore;
+      const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
         trackingCid,
-        title,
-        actionType: actionKey,
-        actionData,
-        description: reason,
+        title: parsedAction.title,
+        actionType: parsedAction.type,
+        actionDetails: parsedAction.details,
+        reasonBody,
+        reasonUrl,
         requester,
-        requesterParty,
         status,
         votesFor,
         votesAgainst,
+        totalVotes: votesArray.length,
         votedSvs,
-        effectiveAt,
-        expiresAt,
-        createdAt: effectiveAt,
+        voteBefore,
+        targetEffectiveAt,
         rawData: voteRequest, // Keep full JSON for debugging
       };
     }) || [];
@@ -376,19 +422,56 @@ const Governance = () => {
                             <h4 className="font-semibold text-lg">{proposal.title}</h4>
                             <p className="text-sm text-muted-foreground">Proposal #{proposal.id}</p>
                             <p className="text-xs text-muted-foreground mt-1">
-                              Requested by: <span className="font-mono">{proposal.requesterParty.slice(0, 40)}...</span>
+                              Requested by: <span className="font-mono">{proposal.requester}</span>
                             </p>
                           </div>
                         </div>
                         <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
                       </div>
 
+                      {/* Action Details */}
+                      {proposal.actionDetails && Object.keys(proposal.actionDetails).length > 0 && (
+                        <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                          <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                            {proposal.actionDetails.svParty && (
+                              <div>
+                                <span className="text-muted-foreground">Target SV: </span>
+                                <span className="font-mono">{proposal.actionDetails.svParty.split("::")[0]}</span>
+                              </div>
+                            )}
+                            {proposal.actionDetails.newRewardWeight && (
+                              <div>
+                                <span className="text-muted-foreground">New Weight: </span>
+                                <span className="font-bold text-primary">
+                                  {(parseInt(proposal.actionDetails.newRewardWeight) / 10000).toFixed(2)}%
+                                </span>
+                                <span className="text-xs text-muted-foreground ml-1">
+                                  ({parseInt(proposal.actionDetails.newRewardWeight).toLocaleString()} basis points)
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reason */}
                       <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                         <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                        <p className="text-sm">{proposal.description}</p>
+                        <p className="text-sm">{proposal.reasonBody || "No reason provided"}</p>
+                        {proposal.reasonUrl && (
+                          <a 
+                            href={proposal.reasonUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary hover:underline mt-2 inline-block"
+                          >
+                            {proposal.reasonUrl}
+                          </a>
+                        )}
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                         <div className="p-3 rounded-lg bg-background/50">
                           <p className="text-xs text-muted-foreground mb-1">Votes For</p>
                           <p className="text-lg font-bold text-success">{proposal.votesFor || 0}</p>
@@ -398,35 +481,60 @@ const Governance = () => {
                           <p className="text-lg font-bold text-destructive">{proposal.votesAgainst || 0}</p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Effective At</p>
+                          <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
                           <p className="text-xs font-mono">
-                            {proposal.effectiveAt ? new Date(proposal.effectiveAt).toLocaleDateString() : "N/A"}
+                            {proposal.targetEffectiveAt ? format(new Date(proposal.targetEffectiveAt), "MMM d, yyyy HH:mm") : "N/A"}
                           </p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Expires At</p>
+                          <p className="text-xs text-muted-foreground mb-1">Vote Before</p>
                           <p className="text-xs font-mono">
-                            {proposal.expiresAt ? new Date(proposal.expiresAt).toLocaleDateString() : "N/A"}
+                            {proposal.voteBefore ? format(new Date(proposal.voteBefore), "MMM d, yyyy HH:mm") : "N/A"}
                           </p>
                         </div>
                       </div>
 
                       {proposal.votedSvs?.length > 0 && (
                         <div className="mb-4">
-                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast:</p>
-                          <div className="flex flex-wrap gap-2">
+                          <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                            Votes Cast ({proposal.totalVotes}):
+                          </p>
+                          <div className="space-y-2">
                             {proposal.votedSvs.map((sv: any, idx: number) => (
-                              <Badge
+                              <div 
                                 key={idx}
-                                variant="outline"
-                                className={
+                                className={`p-2 rounded-lg border ${
                                   sv.vote === "accept"
-                                    ? "border-success/50 text-success"
-                                    : "border-destructive/50 text-destructive"
-                                }
+                                    ? "border-success/30 bg-success/5"
+                                    : sv.vote === "reject"
+                                    ? "border-destructive/30 bg-destructive/5"
+                                    : "border-border/30 bg-muted/30"
+                                }`}
                               >
-                                {sv.party.slice(0, 20)}... - {sv.vote}
-                              </Badge>
+                                <div className="flex items-center justify-between">
+                                  <span className="font-mono text-sm">{sv.party}</span>
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      sv.vote === "accept"
+                                        ? "border-success/50 text-success"
+                                        : sv.vote === "reject"
+                                        ? "border-destructive/50 text-destructive"
+                                        : "border-muted-foreground/50"
+                                    }
+                                  >
+                                    {sv.vote}
+                                  </Badge>
+                                </div>
+                                {sv.reason && (
+                                  <p className="text-xs text-muted-foreground mt-1">{sv.reason}</p>
+                                )}
+                                {sv.castAt && (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Cast: {format(new Date(sv.castAt), "MMM d, yyyy HH:mm")}
+                                  </p>
+                                )}
+                              </div>
                             ))}
                           </div>
                         </div>
