@@ -28,13 +28,22 @@ const ACS_DATA_PATH = db.ACS_DATA_PATH;
 // Find ACS files and return their paths
 function findACSFiles() {
   try {
-    if (!fs.existsSync(ACS_DATA_PATH)) return [];
+    if (!fs.existsSync(ACS_DATA_PATH)) {
+      console.log(`[ACS] findACSFiles: ACS_DATA_PATH does not exist: ${ACS_DATA_PATH}`);
+      return [];
+    }
     const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
-    return allFiles
+    const jsonlFiles = allFiles
       .map(f => String(f))
       .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'))
       .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
-  } catch {
+    
+    if (jsonlFiles.length > 0) {
+      console.log(`[ACS] findACSFiles: Found ${jsonlFiles.length} files (first: ${jsonlFiles[0]})`);
+    }
+    return jsonlFiles;
+  } catch (err) {
+    console.error(`[ACS] findACSFiles error: ${err.message}`);
     return [];
   }
 }
@@ -96,25 +105,47 @@ function findCompleteSnapshots() {
       .map(f => String(f))
       .filter(f => f.endsWith('_COMPLETE'))
       .map(f => {
-        // Parse partition path: acs/migration_id=X/snapshot_time=YYYY-MM-DDTHH-MM-SS/_COMPLETE
-        const parts = f.split('/');
+        // Parse partition path - supports both old and new formats:
+        // Old: migration_id=X/snapshot_time=YYYY-MM-DDTHH-MM-SS/_COMPLETE
+        // New: migration=X/year=YYYY/month=MM/day=DD/snapshot=HHMMSS/_COMPLETE
+        const parts = f.split(/[\/\\]/);
         let migrationId = null;
         let snapshotTime = null;
+        let year = null, month = null, day = null, snapshot = null;
+        
         for (const part of parts) {
           if (part.startsWith('migration_id=')) {
             migrationId = parseInt(part.replace('migration_id=', ''));
+          } else if (part.startsWith('migration=')) {
+            migrationId = parseInt(part.replace('migration=', ''));
           } else if (part.startsWith('snapshot_time=')) {
-            // Convert YYYY-MM-DDTHH-MM-SS back to ISO format
             snapshotTime = part.replace('snapshot_time=', '').replace(/-/g, (m, offset) => 
-              offset > 9 ? ':' : m // Only replace after the date part
+              offset > 9 ? ':' : m
             );
-            // More precise conversion: YYYY-MM-DDTHH-MM-SS -> YYYY-MM-DDTHH:MM:SS
             const match = snapshotTime.match(/^(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})(.*)$/);
             if (match) {
               snapshotTime = `${match[1]}${match[2]}:${match[3]}:${match[4]}${match[5]}`;
             }
+          } else if (part.startsWith('year=')) {
+            year = part.replace('year=', '');
+          } else if (part.startsWith('month=')) {
+            month = part.replace('month=', '');
+          } else if (part.startsWith('day=')) {
+            day = part.replace('day=', '');
+          } else if (part.startsWith('snapshot=')) {
+            snapshot = part.replace('snapshot=', '');
           }
         }
+        
+        // Build snapshot time from year/month/day/snapshot if not already set
+        if (!snapshotTime && year && month && day && snapshot) {
+          // snapshot format: HHMMSS -> HH:MM:SS
+          const hh = snapshot.substring(0, 2);
+          const mm = snapshot.substring(2, 4);
+          const ss = snapshot.substring(4, 6) || '00';
+          snapshotTime = `${year}-${month}-${day}T${hh}:${mm}:${ss}`;
+        }
+        
         return { migrationId, snapshotTime, path: f };
       })
       .filter(s => s.migrationId !== null && s.snapshotTime !== null);
@@ -124,42 +155,106 @@ function findCompleteSnapshots() {
 }
 
 // Scan filesystem for available snapshots (even without _COMPLETE markers)
+// Supports both old format (migration_id=/snapshot_time=) and new format (migration=/year=/month=/day=/snapshot=)
 function findAvailableSnapshots() {
   try {
-    if (!fs.existsSync(ACS_DATA_PATH)) return [];
+    if (!fs.existsSync(ACS_DATA_PATH)) {
+      console.log(`[ACS] ACS_DATA_PATH does not exist: ${ACS_DATA_PATH}`);
+      return [];
+    }
     
     const snapshots = [];
     const entries = fs.readdirSync(ACS_DATA_PATH, { withFileTypes: true });
     
+    console.log(`[ACS] Scanning ACS_DATA_PATH: ${ACS_DATA_PATH}`);
+    console.log(`[ACS] Found top-level entries: ${entries.map(e => e.name).join(', ')}`);
+    
     for (const entry of entries) {
-      if (!entry.isDirectory() || !entry.name.startsWith('migration_id=')) continue;
+      if (!entry.isDirectory()) continue;
       
-      const migrationId = parseInt(entry.name.replace('migration_id=', ''));
+      let migrationId = null;
+      
+      // Support both formats
+      if (entry.name.startsWith('migration_id=')) {
+        migrationId = parseInt(entry.name.replace('migration_id=', ''));
+      } else if (entry.name.startsWith('migration=')) {
+        migrationId = parseInt(entry.name.replace('migration=', ''));
+      } else {
+        continue;
+      }
+      
       const migrationPath = path.join(ACS_DATA_PATH, entry.name);
       
-      const snapshotDirs = fs.readdirSync(migrationPath, { withFileTypes: true });
-      for (const snapDir of snapshotDirs) {
-        if (!snapDir.isDirectory() || !snapDir.name.startsWith('snapshot_time=')) continue;
+      // Check for old format: direct snapshot_time= directories
+      const migrationContents = fs.readdirSync(migrationPath, { withFileTypes: true });
+      
+      for (const subEntry of migrationContents) {
+        if (!subEntry.isDirectory()) continue;
         
-        // Convert YYYY-MM-DDTHH-MM-SS back to ISO format
-        let snapshotTime = snapDir.name.replace('snapshot_time=', '');
-        const match = snapshotTime.match(/^(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})(.*)$/);
-        if (match) {
-          snapshotTime = `${match[1]}${match[2]}:${match[3]}:${match[4]}${match[5]}`;
-        }
-        
-        // Check if this snapshot has any data files
-        const snapshotPath = path.join(migrationPath, snapDir.name);
-        const files = fs.readdirSync(snapshotPath);
-        const hasData = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
-        const isComplete = files.includes('_COMPLETE');
-        
-        if (hasData) {
-          snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath });
+        if (subEntry.name.startsWith('snapshot_time=')) {
+          // Old format: migration_id=X/snapshot_time=YYYY-MM-DDTHH-MM-SS/
+          let snapshotTime = subEntry.name.replace('snapshot_time=', '');
+          const match = snapshotTime.match(/^(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})(.*)$/);
+          if (match) {
+            snapshotTime = `${match[1]}${match[2]}:${match[3]}:${match[4]}${match[5]}`;
+          }
+          
+          const snapshotPath = path.join(migrationPath, subEntry.name);
+          const files = fs.readdirSync(snapshotPath);
+          const hasData = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
+          const isComplete = files.includes('_COMPLETE');
+          
+          if (hasData) {
+            snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath });
+          }
+        } else if (subEntry.name.startsWith('year=')) {
+          // New format: migration=X/year=YYYY/month=MM/day=DD/snapshot=HHMMSS/
+          const year = subEntry.name.replace('year=', '');
+          const yearPath = path.join(migrationPath, subEntry.name);
+          
+          const monthDirs = fs.readdirSync(yearPath, { withFileTypes: true })
+            .filter(d => d.isDirectory() && d.name.startsWith('month='));
+          
+          for (const monthDir of monthDirs) {
+            const month = monthDir.name.replace('month=', '');
+            const monthPath = path.join(yearPath, monthDir.name);
+            
+            const dayDirs = fs.readdirSync(monthPath, { withFileTypes: true })
+              .filter(d => d.isDirectory() && d.name.startsWith('day='));
+            
+            for (const dayDir of dayDirs) {
+              const day = dayDir.name.replace('day=', '');
+              const dayPath = path.join(monthPath, dayDir.name);
+              
+              const snapshotDirs = fs.readdirSync(dayPath, { withFileTypes: true })
+                .filter(d => d.isDirectory() && d.name.startsWith('snapshot='));
+              
+              for (const snapDir of snapshotDirs) {
+                const snapshot = snapDir.name.replace('snapshot=', '');
+                const snapshotPath = path.join(dayPath, snapDir.name);
+                
+                // Build ISO timestamp from components
+                const hh = snapshot.substring(0, 2) || '00';
+                const mm = snapshot.substring(2, 4) || '00';
+                const ss = snapshot.substring(4, 6) || '00';
+                const snapshotTime = `${year}-${month}-${day}T${hh}:${mm}:${ss}`;
+                
+                const files = fs.readdirSync(snapshotPath);
+                const hasData = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
+                const isComplete = files.includes('_COMPLETE');
+                
+                if (hasData) {
+                  console.log(`[ACS] Found snapshot: migration=${migrationId}, time=${snapshotTime}, path=${snapshotPath}`);
+                  snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath });
+                }
+              }
+            }
+          }
         }
       }
     }
     
+    console.log(`[ACS] Total snapshots found: ${snapshots.length}`);
     return snapshots;
   } catch (err) {
     console.error('[ACS] Error scanning snapshots:', err.message);
