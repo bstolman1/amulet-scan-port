@@ -58,6 +58,7 @@ export const EXPECTED_TEMPLATES = {
 
 export const ACS_CONTRACTS_SCHEMA = {
   contract_id: 'STRING',
+  event_id: 'STRING',
   template_id: 'STRING',
   package_name: 'STRING',
   module_name: 'STRING',
@@ -67,11 +68,14 @@ export const ACS_CONTRACTS_SCHEMA = {
   snapshot_time: 'TIMESTAMP',
   signatories: 'LIST<STRING>',
   observers: 'LIST<STRING>',
+  witness_parties: 'LIST<STRING>',
   payload: 'JSON',
+  raw: 'JSON',
 };
 
 export const ACS_COLUMNS = [
   'contract_id',
+  'event_id',
   'template_id',
   'package_name',
   'module_name',
@@ -81,7 +85,9 @@ export const ACS_COLUMNS = [
   'snapshot_time',
   'signatories',
   'observers',
+  'witness_parties',
   'payload',
+  'raw',
 ];
 
 /**
@@ -155,7 +161,9 @@ export function normalizeACSContract(event, migrationId, recordTime, snapshotTim
   const { packageName, moduleName, entityName } = parseTemplateId(templateId);
   
   return {
+    // Preserve BOTH contract_id and event_id (API returns both)
     contract_id: event.contract_id || event.event_id,
+    event_id: event.event_id || null,
     template_id: templateId,
     package_name: packageName,
     module_name: moduleName,
@@ -165,7 +173,10 @@ export function normalizeACSContract(event, migrationId, recordTime, snapshotTim
     snapshot_time: snapshotTime ? new Date(snapshotTime) : new Date(),
     signatories: event.signatories || [],
     observers: event.observers || [],
+    witness_parties: event.witness_parties || [],
     payload: event.create_arguments ? JSON.stringify(event.create_arguments) : null,
+    // CRITICAL: Preserve raw API response for full data recovery
+    raw: JSON.stringify(event),
   };
 }
 
