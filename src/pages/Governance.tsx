@@ -107,62 +107,118 @@ const Governance = () => {
     return undefined;
   };
 
+  // Helper to parse action structure and extract meaningful title
+  const parseAction = (action: any): { title: string; actionType: string; actionDetails: any } => {
+    if (!action) return { title: "Unknown Action", actionType: "Unknown", actionDetails: null };
+    
+    // Handle nested tag/value structure: { tag: "ARC_DsoRules", value: { dsoAction: { tag: "SRARC_...", value: {...} } } }
+    const outerTag = action.tag || Object.keys(action)[0] || "Unknown";
+    const outerValue = action.value || action[outerTag] || action;
+    
+    // Extract inner action (e.g., dsoAction)
+    const innerAction = outerValue?.dsoAction || outerValue?.amuletRulesAction || outerValue;
+    const innerTag = innerAction?.tag || "";
+    const innerValue = innerAction?.value || innerAction;
+    
+    // Build human-readable title
+    const actionType = innerTag || outerTag;
+    const title = actionType
+      .replace(/^(SRARC_|ARC_|CRARC_|ARAC_)/, "")
+      .replace(/([A-Z])/g, " $1")
+      .trim();
+    
+    return { title, actionType, actionDetails: innerValue };
+  };
+
+  // Helper to parse votes array (format: [[svName, voteObj], ...])
+  const parseVotes = (votes: any): { votesFor: number; votesAgainst: number; votedSvs: any[] } => {
+    if (!votes) return { votesFor: 0, votesAgainst: 0, votedSvs: [] };
+    
+    // Handle array of tuples format: [["SV Name", { sv, accept, reason, optCastAt }], ...]
+    const votesArray = Array.isArray(votes) ? votes : Object.entries(votes);
+    
+    let votesFor = 0;
+    let votesAgainst = 0;
+    const votedSvs: any[] = [];
+    
+    for (const vote of votesArray) {
+      const [svName, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
+      const isAccept = voteData?.accept === true || voteData?.Accept === true;
+      const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
+      
+      if (isAccept) votesFor++;
+      else if (isReject) votesAgainst++;
+      
+      votedSvs.push({
+        party: svName,
+        sv: voteData?.sv || svName,
+        vote: isAccept ? "accept" : isReject ? "reject" : "abstain",
+        reason: voteData?.reason?.body || voteData?.reason || "",
+        reasonUrl: voteData?.reason?.url || "",
+        castAt: voteData?.optCastAt || null,
+      });
+    }
+    
+    return { votesFor, votesAgainst, votedSvs };
+  };
+
   // Process proposals from ACS data with full JSON parsing
-  // Note: ACS data has fields nested in payload, so we need to extract them
   const proposals =
     voteRequestsData?.data?.map((voteRequest: any) => {
       // Handle both flat structure and nested payload structure from DuckDB
       const payload = voteRequest.payload || voteRequest;
-      const votes = payload.votes || voteRequest.votes || {};
-      const votesList = Object.values(votes);
-      const votesFor = votesList.filter((v: any) => v?.accept || v?.Accept).length;
-      const votesAgainst = votesList.filter((v: any) => v?.reject || v?.Reject).length;
+      
+      // Parse action
       const action = payload.action || voteRequest.action || {};
-      const actionKey = Object.keys(action)[0] || "Unknown";
-      const actionData = action[actionKey];
-      const title = actionKey.replace(/ARC_|_/g, " ");
+      const { title, actionType, actionDetails } = parseAction(action);
+      
+      // Parse votes
+      const votesRaw = payload.votes || voteRequest.votes || [];
+      const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
 
       // Extract requester information
       const requester = payload.requester || voteRequest.requester || "Unknown";
-      const requesterParty = payload.requesterName || voteRequest.requesterName || requester;
 
-      // Extract reason
-      const reason = payload.reason?.url || payload.reason || voteRequest.reason?.url || voteRequest.reason || "No reason provided";
+      // Extract reason (has url and body)
+      const reasonObj = payload.reason || voteRequest.reason || {};
+      const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
+      const reasonUrl = reasonObj?.url || "";
 
-      // Extract voting information
-      const votedSvs = Object.keys(votes).map((svParty) => ({
-        party: svParty,
-        vote: votes[svParty]?.accept || votes[svParty]?.Accept ? "accept" : "reject",
-        weight: votes[svParty]?.expiresAt || "N/A",
-      }));
+      // Extract timing fields
+      const voteBefore = payload.voteBefore || voteRequest.voteBefore;
+      const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
+      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
 
       // Determine status based on votes and threshold
-      const threshold = votingThreshold || svCount;
+      const threshold = votingThreshold || svCount || 1;
       let status: "approved" | "rejected" | "pending" = "pending";
+      
+      // Check if voting deadline has passed
+      const now = new Date();
+      const voteDeadline = voteBefore ? new Date(voteBefore) : null;
+      const isExpired = voteDeadline && voteDeadline < now;
+      
       if (votesFor >= threshold) status = "approved";
-      else if (votesAgainst > svCount - threshold) status = "rejected";
-
-      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
-      const effectiveAt = payload.effectiveAt || voteRequest.effectiveAt;
-      const expiresAt = payload.expiresAt || voteRequest.expiresAt;
+      else if (isExpired || votesAgainst > svCount - threshold) status = "rejected";
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
+        contractId: voteRequest.contract_id || trackingCid,
         trackingCid,
         title,
-        actionType: actionKey,
-        actionData,
-        description: reason,
+        actionType,
+        actionDetails,
+        action, // Keep full action for detailed display
+        reasonBody,
+        reasonUrl,
         requester,
-        requesterParty,
         status,
         votesFor,
         votesAgainst,
         votedSvs,
-        effectiveAt,
-        expiresAt,
-        createdAt: effectiveAt,
-        rawData: voteRequest, // Keep full JSON for debugging
+        voteBefore,
+        targetEffectiveAt,
+        rawData: voteRequest,
       };
     }) || [];
 
@@ -374,59 +430,117 @@ const Governance = () => {
                           <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
                           <div className="flex-1">
                             <h4 className="font-semibold text-lg">{proposal.title}</h4>
-                            <p className="text-sm text-muted-foreground">Proposal #{proposal.id}</p>
+                            <p className="text-sm text-muted-foreground">
+                              Proposal #{proposal.id}
+                              <span className="mx-2">•</span>
+                              <span className="font-mono text-xs">{proposal.actionType}</span>
+                            </p>
                             <p className="text-xs text-muted-foreground mt-1">
-                              Requested by: <span className="font-mono">{proposal.requesterParty.slice(0, 40)}...</span>
+                              Requested by: <span className="font-medium text-foreground">{proposal.requester}</span>
                             </p>
                           </div>
                         </div>
                         <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
                       </div>
 
+                      {/* Action Details */}
+                      {proposal.actionDetails && (
+                        <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                          <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                            {Object.entries(proposal.actionDetails).map(([key, value]: [string, any]) => (
+                              <div key={key} className="flex flex-col">
+                                <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                                <span className="font-mono text-xs break-all">
+                                  {typeof value === "string" ? value : JSON.stringify(value)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reason Section */}
                       <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                         <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                        <p className="text-sm">{proposal.description}</p>
+                        {proposal.reasonBody && (
+                          <p className="text-sm mb-2">{proposal.reasonBody}</p>
+                        )}
+                        {proposal.reasonUrl && (
+                          <a 
+                            href={proposal.reasonUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-sm text-primary hover:underline break-all"
+                          >
+                            {proposal.reasonUrl}
+                          </a>
+                        )}
+                        {!proposal.reasonBody && !proposal.reasonUrl && (
+                          <p className="text-sm text-muted-foreground italic">No reason provided</p>
+                        )}
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                      {/* Stats Grid */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                         <div className="p-3 rounded-lg bg-background/50">
                           <p className="text-xs text-muted-foreground mb-1">Votes For</p>
-                          <p className="text-lg font-bold text-success">{proposal.votesFor || 0}</p>
+                          <p className="text-lg font-bold text-success">{proposal.votesFor}</p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
                           <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
-                          <p className="text-lg font-bold text-destructive">{proposal.votesAgainst || 0}</p>
+                          <p className="text-lg font-bold text-destructive">{proposal.votesAgainst}</p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Effective At</p>
+                          <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
                           <p className="text-xs font-mono">
-                            {proposal.effectiveAt ? new Date(proposal.effectiveAt).toLocaleDateString() : "N/A"}
+                            {proposal.targetEffectiveAt 
+                              ? format(new Date(proposal.targetEffectiveAt), "MMM d, yyyy HH:mm")
+                              : "N/A"}
                           </p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Expires At</p>
+                          <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
                           <p className="text-xs font-mono">
-                            {proposal.expiresAt ? new Date(proposal.expiresAt).toLocaleDateString() : "N/A"}
+                            {proposal.voteBefore 
+                              ? format(new Date(proposal.voteBefore), "MMM d, yyyy HH:mm")
+                              : "N/A"}
                           </p>
                         </div>
                       </div>
 
+                      {/* Votes Cast */}
                       {proposal.votedSvs?.length > 0 && (
                         <div className="mb-4">
-                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast:</p>
-                          <div className="flex flex-wrap gap-2">
+                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast ({proposal.votedSvs.length}):</p>
+                          <div className="space-y-2">
                             {proposal.votedSvs.map((sv: any, idx: number) => (
-                              <Badge
+                              <div 
                                 key={idx}
-                                variant="outline"
-                                className={
-                                  sv.vote === "accept"
-                                    ? "border-success/50 text-success"
-                                    : "border-destructive/50 text-destructive"
-                                }
+                                className={`p-2 rounded border text-sm ${
+                                  sv.vote === "accept" 
+                                    ? "bg-success/5 border-success/30" 
+                                    : "bg-destructive/5 border-destructive/30"
+                                }`}
                               >
-                                {sv.party.slice(0, 20)}... - {sv.vote}
-                              </Badge>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="font-medium">{sv.party}</span>
+                                  <Badge 
+                                    variant="outline" 
+                                    className={sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}
+                                  >
+                                    {sv.vote === "accept" ? "✓ Accept" : "✗ Reject"}
+                                  </Badge>
+                                </div>
+                                {sv.reason && (
+                                  <p className="text-xs text-muted-foreground italic">"{sv.reason}"</p>
+                                )}
+                                {sv.castAt && (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    Cast: {format(new Date(sv.castAt), "MMM d, yyyy HH:mm")}
+                                  </p>
+                                )}
+                              </div>
                             ))}
                           </div>
                         </div>
@@ -442,9 +556,9 @@ const Governance = () => {
                       <CollapsibleContent className="mt-4">
                         <div className="p-4 rounded-lg bg-background/70 border border-border/50">
                           <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                            Action Type: {proposal.actionType}
+                            Contract ID: <span className="font-mono">{proposal.contractId}</span>
                           </p>
-                          <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30">
+                          <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-96">
                             {JSON.stringify(proposal.rawData, null, 2)}
                           </pre>
                         </div>
