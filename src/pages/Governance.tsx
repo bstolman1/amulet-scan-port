@@ -277,8 +277,11 @@ const Governance = () => {
             {isError ? (
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">
-                  Unable to load proposals. The governance API endpoint may be unavailable.
+                <p className="text-muted-foreground mb-2">
+                  Unable to load proposals from local ACS data.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {voteRequestError?.message || "Ensure the local server is running (cd server && npm start)"}
                 </p>
               </div>
             ) : isLoading ? (
