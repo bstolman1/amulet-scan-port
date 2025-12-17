@@ -262,6 +262,78 @@ function findAvailableSnapshots() {
   }
 }
 
+// Get ACS source for a specific snapshot path (much more efficient than reading all files)
+function getSnapshotFilesSource(snapshotPath) {
+  if (!snapshotPath || !fs.existsSync(snapshotPath)) {
+    return null;
+  }
+  
+  const normalizedPath = snapshotPath.replace(/\\/g, '/');
+  
+  // Check what file types exist in this snapshot
+  const files = fs.readdirSync(snapshotPath);
+  const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
+  const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
+  const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
+  
+  const parts = [];
+  if (hasJsonl) {
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl', union_by_name=true, ignore_errors=true)`);
+  }
+  if (hasGz) {
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  }
+  if (hasZst) {
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+  }
+  
+  if (parts.length === 0) return null;
+  
+  console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl')).length} files)`);
+  return `(${parts.join(' UNION ALL ')})`;
+}
+
+// Get the best snapshot and its source (returns both snapshot info and optimized DuckDB source)
+function getBestSnapshotAndSource() {
+  // First try: Find complete snapshots from filesystem
+  const completeSnapshots = findCompleteSnapshots();
+  
+  if (completeSnapshots.length > 0) {
+    completeSnapshots.sort((a, b) => {
+      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+    });
+    
+    const latest = completeSnapshots[0];
+    const source = getSnapshotFilesSource(latest.path);
+    if (source) {
+      console.log(`[ACS] Using complete snapshot: migration_id=${latest.migrationId}, snapshot_time=${latest.snapshotTime}`);
+      return { snapshot: latest, source, type: 'complete' };
+    }
+  }
+  
+  // Second try: Use available snapshots from filesystem
+  const availableSnapshots = findAvailableSnapshots();
+  
+  if (availableSnapshots.length > 0) {
+    availableSnapshots.sort((a, b) => {
+      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+    });
+    
+    const latest = availableSnapshots[0];
+    const source = getSnapshotFilesSource(latest.path);
+    if (source) {
+      console.log(`[ACS] Using filesystem snapshot: migration_id=${latest.migrationId}, snapshot_time=${latest.snapshotTime}`);
+      return { snapshot: latest, source, type: 'available' };
+    }
+  }
+  
+  // Final fallback: Use all ACS files (expensive!)
+  console.log('[ACS] WARNING: No snapshots found, falling back to all files');
+  return { snapshot: null, source: getACSSource(), type: 'fallback' };
+}
+
 // Helper function to get CTE for latest COMPLETE snapshot (filters by latest migration_id first)
 // If snapshotTime is provided, uses that specific snapshot instead of latest
 // IMPORTANT: Only uses snapshots that have a _COMPLETE marker file
@@ -279,48 +351,16 @@ function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
     `;
   }
   
-  // First try: Find complete snapshots from filesystem
-  const completeSnapshots = findCompleteSnapshots();
+  // Use getBestSnapshotAndSource for filesystem-based detection
+  const { snapshot } = getBestSnapshotAndSource();
   
-  if (completeSnapshots.length > 0) {
-    // Sort by migration_id DESC, then snapshot_time DESC to get the latest complete one
-    completeSnapshots.sort((a, b) => {
-      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
-      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
-    });
-    
-    const latest = completeSnapshots[0];
-    console.log(`[ACS] Using complete snapshot: migration_id=${latest.migrationId}, snapshot_time=${latest.snapshotTime}`);
-    
+  if (snapshot) {
     return `
       latest_migration AS (
-        SELECT ${latest.migrationId} as migration_id
+        SELECT ${snapshot.migrationId} as migration_id
       ),
       latest_snapshot AS (
-        SELECT '${latest.snapshotTime}'::TIMESTAMP as snapshot_time, ${latest.migrationId} as migration_id
-      )
-    `;
-  }
-  
-  // Second try: Use available snapshots from filesystem (even without _COMPLETE marker)
-  const availableSnapshots = findAvailableSnapshots();
-  
-  if (availableSnapshots.length > 0) {
-    // Sort by migration_id DESC, then snapshot_time DESC
-    availableSnapshots.sort((a, b) => {
-      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
-      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
-    });
-    
-    const latest = availableSnapshots[0];
-    console.log(`[ACS] Using filesystem snapshot (no _COMPLETE marker): migration_id=${latest.migrationId}, snapshot_time=${latest.snapshotTime}`);
-    
-    return `
-      latest_migration AS (
-        SELECT ${latest.migrationId} as migration_id
-      ),
-      latest_snapshot AS (
-        SELECT '${latest.snapshotTime}'::TIMESTAMP as snapshot_time, ${latest.migrationId} as migration_id
+        SELECT '${snapshot.snapshotTime}'::TIMESTAMP as snapshot_time, ${snapshot.migrationId} as migration_id
       )
     `;
   }
@@ -343,6 +383,49 @@ function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
 function getLatestSnapshotCTE(acsSource) {
   return getSnapshotCTE(acsSource);
 }
+
+// GET /api/acs/debug - Debug endpoint showing paths, snapshots, and file counts
+router.get('/debug', (req, res) => {
+  try {
+    const completeSnapshots = findCompleteSnapshots();
+    const availableSnapshots = findAvailableSnapshots();
+    const files = findACSFiles();
+    
+    // Get selected snapshot info
+    let selectedSnapshot = null;
+    if (completeSnapshots.length > 0) {
+      completeSnapshots.sort((a, b) => {
+        if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+        return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+      });
+      selectedSnapshot = { ...completeSnapshots[0], source: 'complete' };
+    } else if (availableSnapshots.length > 0) {
+      availableSnapshots.sort((a, b) => {
+        if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+        return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+      });
+      selectedSnapshot = { ...availableSnapshots[0], source: 'available' };
+    }
+    
+    res.json({
+      acsDataPath: ACS_DATA_PATH,
+      pathExists: fs.existsSync(ACS_DATA_PATH),
+      totalFiles: files.length,
+      sampleFiles: files.slice(0, 5),
+      completeSnapshots: completeSnapshots.length,
+      availableSnapshots: availableSnapshots.length,
+      allSnapshots: availableSnapshots.map(s => ({
+        migrationId: s.migrationId,
+        snapshotTime: s.snapshotTime,
+        isComplete: s.isComplete,
+        path: s.path,
+      })),
+      selectedSnapshot,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/acs/cache - Get cache statistics (for debugging)
 router.get('/cache', (req, res) => {
@@ -574,9 +657,10 @@ router.get('/templates', async (req, res) => {
       return res.json(cached);
     }
 
-    const acsSource = getACSSource();
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
     const sql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         template_id,
         entity_name,
@@ -584,8 +668,6 @@ router.get('/templates', async (req, res) => {
         COUNT(DISTINCT contract_id) as contract_count,
         COUNT(DISTINCT contract_id) as unique_contracts
       FROM ${acsSource} acs
-      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
       GROUP BY template_id, entity_name, module_name
       ORDER BY contract_count DESC
       LIMIT ${limit}
@@ -626,23 +708,24 @@ router.get('/contracts', async (req, res) => {
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
 
-    const acsSource = getACSSource();
+    // Use optimized snapshot source (reads only files from selected snapshot)
+    const { snapshot, source: acsSource, type } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      console.log('[ACS] No snapshot found, falling back to full scan');
+    }
     
     // First get total count
     const countSql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT COUNT(*) as total_count
       FROM ${acsSource} acs
-      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND ${whereClause}
+      WHERE ${whereClause}
     `;
     
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
     
     const sql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         contract_id,
         template_id,
@@ -654,16 +737,14 @@ router.get('/contracts', async (req, res) => {
         record_time,
         snapshot_time
       FROM ${acsSource} acs
-      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND ${whereClause}
+      WHERE ${whereClause}
       ORDER BY contract_id
       LIMIT ${limit}
       OFFSET ${offset}
     `;
 
     const rows = await db.safeQuery(sql);
-    console.log(`[ACS] Found ${rows.length} contracts (total: ${totalCount}) for entity=${entity}`);
+    console.log(`[ACS] Found ${rows.length} contracts (total: ${totalCount}) for template=${template}`);
     
     // Parse payload JSON and flatten for frontend consumption
     const parsedRows = rows.map(row => {
