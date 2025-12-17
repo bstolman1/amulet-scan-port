@@ -13,10 +13,12 @@ export const EXPECTED_TEMPLATES = {
   'Splice.Amulet:Amulet': { required: true, description: 'Amulet tokens' },
   'Splice.Amulet:LockedAmulet': { required: false, description: 'Locked amulet tokens' },
   'Splice.Amulet:FeaturedAppRight': { required: false, description: 'Featured app rights' },
+  'Splice.Amulet:FeaturedAppActivityMarker': { required: false, description: 'Featured app activity markers' },
   'Splice.Amulet:ValidatorRight': { required: false, description: 'Validator rights' },
   'Splice.Amulet:AppRewardCoupon': { required: false, description: 'App reward coupons' },
   'Splice.Amulet:SvRewardCoupon': { required: false, description: 'SV reward coupons' },
   'Splice.Amulet:ValidatorRewardCoupon': { required: false, description: 'Validator reward coupons' },
+  'Splice.Amulet:UnclaimedReward': { required: false, description: 'Unclaimed rewards' },
   
   // Validator templates
   'Splice.ValidatorLicense:ValidatorLicense': { required: true, description: 'Validator licenses' },
@@ -33,6 +35,9 @@ export const EXPECTED_TEMPLATES = {
   'Splice.DSO.SvState:SvNodeState': { required: false, description: 'SV node state' },
   'Splice.DSO.SvState:SvRewardState': { required: false, description: 'SV reward state' },
   'Splice.DSO.SvState:SvStatusReport': { required: false, description: 'SV status reports' },
+  
+  // DSO Amulet Price templates
+  'Splice.DSO.AmuletPrice:AmuletPriceVote': { required: false, description: 'Amulet price votes' },
   
   // Amulet Rules templates
   'Splice.AmuletRules:AmuletRules': { required: false, description: 'Amulet rules configuration' },
