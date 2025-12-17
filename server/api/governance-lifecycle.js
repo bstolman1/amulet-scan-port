@@ -214,14 +214,16 @@ function extractIdentifiers(text) {
   
   // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123, CIP - 0066) and format as 4-digit
   // Check for TBD/unassigned CIPs first
-  const tbdMatch = text.match(/CIP[#\-\s]*(TBD|00XX|XXXX|\?\?|unassigned)/i);
+  const tbdMatch = text.match(/CIP\s*[-#]?\s*(TBD|00XX|XXXX|\?\?|unassigned)/i);
   if (tbdMatch) {
     identifiers.cipNumber = 'CIP-00XX';
   } else {
     // Handle various CIP formats: "CIP-0066", "CIP 0066", "CIP#0066", "CIP - 0066"
-    const cipMatch = text.match(/CIP[\s#-]*(\d+)/i);
+    // Use explicit pattern: CIP, optional spaces, optional separator, optional spaces, digits
+    const cipMatch = text.match(/CIP\s*[-#]?\s*(\d{2,})/i);
     if (cipMatch) {
       identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
+      console.log(`EXTRACTED CIP: "${identifiers.cipNumber}" from "${text.slice(0, 60)}"`);
     }
   }
   
