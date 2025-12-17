@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { inferStagesBatch } from '../inference/inferStage.js';
+import { classifyTopicsBatch, isLLMAvailable } from '../inference/llm-classifier.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -943,6 +944,54 @@ function fixLifecycleItemTypes(data) {
   return data;
 }
 
+// LLM-based classification for ambiguous items
+async function classifyAmbiguousItems(lifecycleItems) {
+  if (!isLLMAvailable()) {
+    console.log('⚠️ LLM classification unavailable (OPENAI_API_KEY not set)');
+    return lifecycleItems;
+  }
+  
+  // Find items still classified as 'other'
+  const ambiguousItems = lifecycleItems.filter(item => item.type === 'other');
+  
+  if (ambiguousItems.length === 0) {
+    console.log('✅ No ambiguous items to classify');
+    return lifecycleItems;
+  }
+  
+  console.log(`🤖 Classifying ${ambiguousItems.length} ambiguous items with LLM...`);
+  
+  // Prepare topics for batch classification
+  const topicsToClassify = ambiguousItems.map(item => {
+    const firstTopic = item.topics?.[0];
+    return {
+      id: item.id,
+      subject: firstTopic?.subject || item.primaryId,
+      groupName: firstTopic?.groupName || 'unknown',
+    };
+  });
+  
+  // Batch classify
+  const classifications = await classifyTopicsBatch(topicsToClassify);
+  
+  // Apply classifications
+  let classified = 0;
+  for (const item of lifecycleItems) {
+    if (item.type === 'other' && classifications.has(item.id)) {
+      const result = classifications.get(item.id);
+      if (result.type && result.type !== 'other') {
+        console.log(`  ✓ "${item.primaryId}" -> ${result.type}`);
+        item.type = result.type;
+        item.llmClassified = true;
+        classified++;
+      }
+    }
+  }
+  
+  console.log(`🤖 LLM classified ${classified}/${ambiguousItems.length} items`);
+  return lifecycleItems;
+}
+
 // Helper to read cached data
 function readCache() {
   try {
@@ -1195,7 +1244,15 @@ async function fetchFreshData() {
   // ========== END INFERENCE STEP ==========
   
   // Correlate topics into lifecycle items
-  const lifecycleItems = correlateTopics(allTopics);
+  let lifecycleItems = correlateTopics(allTopics);
+  
+  // ========== LLM CLASSIFICATION STEP ==========
+  // Classify ambiguous items (type='other') using LLM
+  const ambiguousBefore = lifecycleItems.filter(i => i.type === 'other').length;
+  if (ambiguousBefore > 0) {
+    lifecycleItems = await classifyAmbiguousItems(lifecycleItems);
+  }
+  // ========== END LLM CLASSIFICATION ==========
   
   // Count topics in lifecycle items to verify none are dropped
   const topicsInItems = lifecycleItems.reduce((sum, item) => sum + (item.topics?.length || 0), 0);
