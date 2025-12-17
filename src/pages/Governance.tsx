@@ -1,7 +1,8 @@
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, Timer, UserPlus, AppWindow, Settings } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,8 +15,224 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { format } from "date-fns";
+import { format, formatDistanceToNow, differenceInSeconds, differenceInMinutes, differenceInHours, differenceInDays } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
+
+// Countdown Timer Component
+const CountdownTimer = ({ deadline }: { deadline: string }) => {
+  const [timeLeft, setTimeLeft] = useState<string>("");
+  const [isExpired, setIsExpired] = useState(false);
+  const [urgency, setUrgency] = useState<"normal" | "warning" | "critical">("normal");
+
+  useEffect(() => {
+    const updateCountdown = () => {
+      const now = new Date();
+      const target = new Date(deadline);
+      const diffSeconds = differenceInSeconds(target, now);
+
+      if (diffSeconds <= 0) {
+        setIsExpired(true);
+        setTimeLeft("Expired");
+        return;
+      }
+
+      const days = differenceInDays(target, now);
+      const hours = differenceInHours(target, now) % 24;
+      const minutes = differenceInMinutes(target, now) % 60;
+      const seconds = diffSeconds % 60;
+
+      // Set urgency level
+      if (days < 1 && hours < 6) {
+        setUrgency("critical");
+      } else if (days < 2) {
+        setUrgency("warning");
+      } else {
+        setUrgency("normal");
+      }
+
+      if (days > 0) {
+        setTimeLeft(`${days}d ${hours}h ${minutes}m`);
+      } else if (hours > 0) {
+        setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
+      } else {
+        setTimeLeft(`${minutes}m ${seconds}s`);
+      }
+    };
+
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [deadline]);
+
+  const colorClass = isExpired
+    ? "text-destructive"
+    : urgency === "critical"
+    ? "text-destructive animate-pulse"
+    : urgency === "warning"
+    ? "text-warning"
+    : "text-primary";
+
+  return (
+    <div className={`flex items-center gap-1.5 ${colorClass}`}>
+      <Timer className="h-3.5 w-3.5" />
+      <span className="font-mono font-semibold text-sm">{timeLeft}</span>
+    </div>
+  );
+};
+
+// Action Details Display Component
+const ActionDetailsDisplay = ({ actionType, details }: { actionType: string; details: any }) => {
+  if (!details || Object.keys(details).length === 0) return null;
+
+  const renderDetails = () => {
+    switch (actionType) {
+      case "SRARC_UpdateSvRewardWeight":
+        return (
+          <>
+            {details.svParty && (
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-muted-foreground" />
+                <span className="text-muted-foreground">Target SV:</span>
+                <span className="font-mono text-sm">{details.svParty.split("::")[0]}</span>
+              </div>
+            )}
+            {details.newRewardWeight && (
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+                <span className="text-muted-foreground">New Weight:</span>
+                <span className="font-bold text-primary">
+                  {(parseInt(details.newRewardWeight) / 10000).toFixed(2)}%
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  ({parseInt(details.newRewardWeight).toLocaleString()} bp)
+                </span>
+              </div>
+            )}
+          </>
+        );
+
+      case "SRARC_AddSv":
+        return (
+          <>
+            {details.newSv && (
+              <div className="flex items-center gap-2">
+                <UserPlus className="h-4 w-4 text-success" />
+                <span className="text-muted-foreground">New SV:</span>
+                <span className="font-mono text-sm">{details.newSv.split("::")[0]}</span>
+              </div>
+            )}
+            {details.svName && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Name:</span>
+                <span className="font-semibold">{details.svName}</span>
+              </div>
+            )}
+            {details.svRewardWeight && (
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+                <span className="text-muted-foreground">Initial Weight:</span>
+                <span className="font-bold text-primary">
+                  {(parseInt(details.svRewardWeight) / 10000).toFixed(2)}%
+                </span>
+              </div>
+            )}
+            {details.participantId && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Participant ID:</span>
+                <span className="font-mono text-xs">{details.participantId}</span>
+              </div>
+            )}
+          </>
+        );
+
+      case "SRARC_RemoveSv":
+        return (
+          <>
+            {details.svParty && (
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-destructive" />
+                <span className="text-muted-foreground">Remove SV:</span>
+                <span className="font-mono text-sm">{details.svParty.split("::")[0]}</span>
+              </div>
+            )}
+          </>
+        );
+
+      case "SRARC_GrantFeaturedAppRight":
+        return (
+          <>
+            {details.provider && (
+              <div className="flex items-center gap-2">
+                <AppWindow className="h-4 w-4 text-chart-2" />
+                <span className="text-muted-foreground">Provider:</span>
+                <span className="font-mono text-sm">{details.provider.split("::")[0]}</span>
+              </div>
+            )}
+            {details.featuredAppRight?.provider && (
+              <div className="flex items-center gap-2">
+                <AppWindow className="h-4 w-4 text-chart-2" />
+                <span className="text-muted-foreground">App Provider:</span>
+                <span className="font-mono text-sm">{details.featuredAppRight.provider.split("::")[0]}</span>
+              </div>
+            )}
+          </>
+        );
+
+      case "SRARC_RevokeFeaturedAppRight":
+        return (
+          <>
+            {details.provider && (
+              <div className="flex items-center gap-2">
+                <AppWindow className="h-4 w-4 text-destructive" />
+                <span className="text-muted-foreground">Revoke From:</span>
+                <span className="font-mono text-sm">{details.provider.split("::")[0]}</span>
+              </div>
+            )}
+          </>
+        );
+
+      case "SRARC_SetConfig":
+      case "CRARC_AddFutureAmuletConfigSchedule":
+        return (
+          <>
+            <div className="flex items-center gap-2 mb-2">
+              <Settings className="h-4 w-4 text-chart-3" />
+              <span className="text-muted-foreground">Configuration Update</span>
+            </div>
+            {details.newConfig && (
+              <div className="text-xs bg-background/50 p-2 rounded font-mono max-h-32 overflow-auto">
+                {JSON.stringify(details.newConfig, null, 2).slice(0, 500)}
+                {JSON.stringify(details.newConfig).length > 500 && "..."}
+              </div>
+            )}
+            {details.newScheduleItem && (
+              <div className="text-xs bg-background/50 p-2 rounded font-mono max-h-32 overflow-auto">
+                {JSON.stringify(details.newScheduleItem, null, 2).slice(0, 500)}
+              </div>
+            )}
+          </>
+        );
+
+      default:
+        // Generic display for unknown action types
+        return (
+          <div className="text-xs bg-background/50 p-2 rounded font-mono max-h-32 overflow-auto">
+            {JSON.stringify(details, null, 2).slice(0, 300)}
+            {JSON.stringify(details).length > 300 && "..."}
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
+      <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
+      <div className="space-y-2 text-sm">
+        {renderDetails()}
+      </div>
+    </div>
+  );
+};
 
 const Governance = () => {
   const { data: dsoInfo } = useQuery({
@@ -430,30 +647,7 @@ const Governance = () => {
                       </div>
 
                       {/* Action Details */}
-                      {proposal.actionDetails && Object.keys(proposal.actionDetails).length > 0 && (
-                        <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
-                          <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                            {proposal.actionDetails.svParty && (
-                              <div>
-                                <span className="text-muted-foreground">Target SV: </span>
-                                <span className="font-mono">{proposal.actionDetails.svParty.split("::")[0]}</span>
-                              </div>
-                            )}
-                            {proposal.actionDetails.newRewardWeight && (
-                              <div>
-                                <span className="text-muted-foreground">New Weight: </span>
-                                <span className="font-bold text-primary">
-                                  {(parseInt(proposal.actionDetails.newRewardWeight) / 10000).toFixed(2)}%
-                                </span>
-                                <span className="text-xs text-muted-foreground ml-1">
-                                  ({parseInt(proposal.actionDetails.newRewardWeight).toLocaleString()} basis points)
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                      <ActionDetailsDisplay actionType={proposal.actionType} details={proposal.actionDetails} />
 
                       {/* Reason */}
                       <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
@@ -487,10 +681,17 @@ const Governance = () => {
                           </p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Vote Before</p>
-                          <p className="text-xs font-mono">
-                            {proposal.voteBefore ? format(new Date(proposal.voteBefore), "MMM d, yyyy HH:mm") : "N/A"}
-                          </p>
+                          <p className="text-xs text-muted-foreground mb-1">Time Remaining</p>
+                          {proposal.voteBefore ? (
+                            <CountdownTimer deadline={proposal.voteBefore} />
+                          ) : (
+                            <p className="text-xs font-mono text-muted-foreground">N/A</p>
+                          )}
+                          {proposal.voteBefore && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {format(new Date(proposal.voteBefore), "MMM d, HH:mm")}
+                            </p>
+                          )}
                         </div>
                       </div>
 
