@@ -21,6 +21,7 @@ import {
   ChevronDown,
   ChevronUp,
   CheckCircle2,
+  XCircle,
   Clock,
   Vote,
   ArrowRight,
@@ -493,32 +494,73 @@ const GovernanceFlow = () => {
   };
 
   // Timeline data - group events by month
+  // Create timeline entries from vote requests
+  type TimelineEntry = 
+    | { type: 'topic'; data: Topic; date: Date }
+    | { type: 'vote-started'; data: VoteRequest; date: Date; cipRef: string | null }
+    | { type: 'vote-ended'; data: VoteRequest; date: Date; cipRef: string | null; status: 'passed' | 'failed' | 'expired' };
+
   const timelineData = useMemo(() => {
-    if (!filteredTopics.length) return [];
+    const entries: TimelineEntry[] = [];
     
-    const monthGroups: Record<string, Topic[]> = {};
+    // Add topics as entries
     filteredTopics.forEach(topic => {
-      const date = new Date(topic.date);
-      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      entries.push({ type: 'topic', data: topic, date: new Date(topic.date) });
+    });
+    
+    // Add vote requests as timeline entries
+    voteRequests.forEach(vr => {
+      const cipRef = extractCipReference(vr);
+      const recordTime = vr.record_time ? new Date(vr.record_time) : null;
+      const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
+      
+      // "Vote Started" entry - use record_time if available
+      if (recordTime) {
+        entries.push({ type: 'vote-started', data: vr, date: recordTime, cipRef });
+      }
+      
+      // "Vote Ended" entry - only if vote deadline has passed
+      if (voteBefore && voteBefore < new Date()) {
+        // Calculate vote result
+        const votesRaw = vr.payload?.votes || [];
+        let votesFor = 0;
+        for (const vote of votesRaw) {
+          const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
+          const isAccept = voteData?.accept === true || voteData?.Accept === true;
+          if (isAccept) votesFor++;
+        }
+        const threshold = 10; // Assuming threshold
+        const status: 'passed' | 'failed' | 'expired' = votesFor >= threshold ? 'passed' : votesRaw.length > 0 ? 'failed' : 'expired';
+        entries.push({ type: 'vote-ended', data: vr, date: voteBefore, cipRef, status });
+      }
+    });
+    
+    if (entries.length === 0) return [];
+    
+    // Group by month
+    const monthGroups: Record<string, TimelineEntry[]> = {};
+    entries.forEach(entry => {
+      const monthKey = `${entry.date.getFullYear()}-${String(entry.date.getMonth() + 1).padStart(2, '0')}`;
       if (!monthGroups[monthKey]) {
         monthGroups[monthKey] = [];
       }
-      monthGroups[monthKey].push(topic);
+      monthGroups[monthKey].push(entry);
     });
     
     return Object.entries(monthGroups)
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([month, topics]) => {
-        // Parse month correctly - use explicit year/month to avoid timezone issues
+      .map(([month, monthEntries]) => {
         const [year, monthNum] = month.split('-').map(Number);
-        const monthDate = new Date(year, monthNum - 1, 1); // month is 0-indexed
+        const monthDate = new Date(year, monthNum - 1, 1);
         return {
           month,
           label: monthDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
-          topics: topics.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+          entries: monthEntries.sort((a, b) => b.date.getTime() - a.date.getTime()),
+          topicCount: monthEntries.filter(e => e.type === 'topic').length,
+          voteCount: monthEntries.filter(e => e.type === 'vote-started' || e.type === 'vote-ended').length,
         };
       });
-  }, [filteredTopics]);
+  }, [filteredTopics, voteRequests]);
 
   // Helper to render VoteRequest card
   const renderVoteRequestCard = (vr: VoteRequest) => {
@@ -1249,54 +1291,151 @@ const GovernanceFlow = () => {
                         <h3 className="text-lg font-semibold sticky top-0 bg-background py-2 z-10">
                           {monthData.label}
                           <Badge variant="secondary" className="ml-2 text-xs">
-                            {monthData.topics.length} topics
+                            {monthData.topicCount} topics
                           </Badge>
+                          {monthData.voteCount > 0 && (
+                            <Badge className="ml-2 text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30">
+                              🗳️ {monthData.voteCount} votes
+                            </Badge>
+                          )}
                         </h3>
                         
                         <div className="space-y-2">
-                          {monthData.topics.map((topic) => {
-                            const stageConfig = STAGE_CONFIG[topic.stage as keyof typeof STAGE_CONFIG];
-                            const StageIcon = stageConfig?.icon || FileText;
+                          {monthData.entries.map((entry, idx) => {
+                            if (entry.type === 'topic') {
+                              const topic = entry.data;
+                              const stageConfig = STAGE_CONFIG[topic.stage as keyof typeof STAGE_CONFIG];
+                              const StageIcon = stageConfig?.icon || FileText;
+                              
+                              return (
+                                <div 
+                                  key={topic.id}
+                                  className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors"
+                                >
+                                  <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${stageConfig?.color || 'bg-muted'}`}>
+                                    <StageIcon className="h-4 w-4" />
+                                  </div>
+                                  
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <h4 className="font-medium text-sm">{topic.subject}</h4>
+                                        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
+                                          <span>{formatDate(topic.date)}</span>
+                                          <Badge variant="outline" className="text-[10px] h-5">
+                                            {topic.groupLabel}
+                                          </Badge>
+                                          <Badge className={`text-[10px] h-5 ${stageConfig?.color || ''}`}>
+                                            {stageConfig?.label || topic.stage}
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                      {topic.sourceUrl && (
+                                        <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
+                                          <a href={topic.sourceUrl} target="_blank" rel="noopener noreferrer">
+                                            <ExternalLink className="h-3.5 w-3.5" />
+                                          </a>
+                                        </Button>
+                                      )}
+                                    </div>
+                                    {topic.excerpt && (
+                                      <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                                        {topic.excerpt}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
+                            
+                            // Vote timeline entries
+                            const vr = entry.data;
+                            const payload = vr.payload;
+                            const reason = payload?.reason;
+                            const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
+                            const votesRaw = payload?.votes || [];
+                            let votesFor = 0;
+                            let votesAgainst = 0;
+                            for (const vote of votesRaw) {
+                              const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
+                              const isAccept = voteData?.accept === true || (voteData as any)?.Accept === true;
+                              const isReject = voteData?.accept === false || (voteData as any)?.reject === true || (voteData as any)?.Reject === true;
+                              if (isAccept) votesFor++;
+                              else if (isReject) votesAgainst++;
+                            }
+                            
+                            const isStartEntry = entry.type === 'vote-started';
+                            const statusColors = {
+                              passed: 'bg-green-500/20 border-green-500/50 text-green-400',
+                              failed: 'bg-red-500/20 border-red-500/50 text-red-400',
+                              expired: 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400',
+                            };
                             
                             return (
-                              <div 
-                                key={topic.id}
-                                className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors"
+                              <a
+                                key={`${entry.type}-${vr.contract_id}-${idx}`}
+                                href={`/governance?proposal=${vr.contract_id?.slice(0, 12)}`}
+                                className={cn(
+                                  "flex gap-3 p-3 rounded-lg border transition-colors",
+                                  isStartEntry 
+                                    ? "bg-pink-500/10 border-pink-500/30 hover:border-pink-500/50"
+                                    : entry.type === 'vote-ended' && statusColors[entry.status]
+                                )}
                               >
-                                {/* Stage indicator */}
-                                <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${stageConfig?.color || 'bg-muted'}`}>
-                                  <StageIcon className="h-4 w-4" />
+                                <div className={cn(
+                                  "shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
+                                  isStartEntry ? "bg-pink-500/30" : 
+                                  entry.type === 'vote-ended' && entry.status === 'passed' ? "bg-green-500/30" :
+                                  entry.type === 'vote-ended' && entry.status === 'failed' ? "bg-red-500/30" :
+                                  "bg-yellow-500/30"
+                                )}>
+                                  {isStartEntry ? (
+                                    <Vote className="h-4 w-4 text-pink-400" />
+                                  ) : entry.type === 'vote-ended' && entry.status === 'passed' ? (
+                                    <CheckCircle2 className="h-4 w-4 text-green-400" />
+                                  ) : entry.type === 'vote-ended' && entry.status === 'failed' ? (
+                                    <XCircle className="h-4 w-4 text-red-400" />
+                                  ) : (
+                                    <Clock className="h-4 w-4 text-yellow-400" />
+                                  )}
                                 </div>
                                 
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                      <h4 className="font-medium text-sm">{topic.subject}</h4>
+                                      <h4 className="font-medium text-sm">
+                                        {isStartEntry ? '🗳️ Vote Opened' : 
+                                          entry.type === 'vote-ended' && entry.status === 'passed' ? '✅ Vote Passed' :
+                                          entry.type === 'vote-ended' && entry.status === 'failed' ? '❌ Vote Failed' :
+                                          '⏳ Vote Expired'}
+                                        {entry.cipRef && ` for CIP-${parseInt(entry.cipRef)}`}
+                                      </h4>
                                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
-                                        <span>{formatDate(topic.date)}</span>
+                                        <span>{formatDate(entry.date.toISOString())}</span>
                                         <Badge variant="outline" className="text-[10px] h-5">
-                                          {topic.groupLabel}
+                                          On-chain Vote
                                         </Badge>
-                                        <Badge className={`text-[10px] h-5 ${stageConfig?.color || ''}`}>
-                                          {stageConfig?.label || topic.stage}
-                                        </Badge>
+                                        <span className="flex items-center gap-1">
+                                          <Vote className="h-3 w-3" />
+                                          {votesFor} for / {votesAgainst} against
+                                        </span>
+                                        {isStartEntry && voteBefore && (
+                                          <span className="flex items-center gap-1 text-yellow-400">
+                                            <Clock className="h-3 w-3" />
+                                            Due {format(voteBefore, 'MMM d, yyyy')}
+                                          </span>
+                                        )}
                                       </div>
                                     </div>
-                                    {topic.sourceUrl && (
-                                      <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
-                                        <a href={topic.sourceUrl} target="_blank" rel="noopener noreferrer">
-                                          <ExternalLink className="h-3.5 w-3.5" />
-                                        </a>
-                                      </Button>
-                                    )}
+                                    <ExternalLink className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                   </div>
-                                  {topic.excerpt && (
+                                  {reason?.body && (
                                     <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
-                                      {topic.excerpt}
+                                      {reason.body}
                                     </p>
                                   )}
                                 </div>
-                              </div>
+                              </a>
                             );
                           })}
                         </div>
