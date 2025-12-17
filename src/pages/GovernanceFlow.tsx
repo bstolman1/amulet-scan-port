@@ -551,9 +551,6 @@ const GovernanceFlow = () => {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30">
-                {actionTag.replace(/([A-Z])/g, ' $1').trim()}
-              </Badge>
               <Badge 
                 variant="outline" 
                 className={cn(
@@ -569,7 +566,7 @@ const GovernanceFlow = () => {
             <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Vote className="h-3 w-3" />
-                {votesFor}/{totalVotes} votes for
+                {votesFor} for / {votesAgainst} against ({totalVotes} total)
               </span>
               {voteBefore && (
                 <span className="flex items-center gap-1">
