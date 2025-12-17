@@ -89,7 +89,7 @@ interface GovernanceData {
 
 // Type-specific workflow stages
 const WORKFLOW_STAGES = {
-  cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce'],
+  cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce', 'sv-onchain-vote'],
   'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
   validator: ['tokenomics', 'sv-announce'],
   'protocol-upgrade': ['tokenomics', 'sv-announce'],
@@ -103,6 +103,8 @@ const STAGE_CONFIG: Record<string, { label: string; icon: typeof FileText; color
   'cip-discuss': { label: 'Discuss', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
   'cip-vote': { label: 'Vote', icon: Vote, color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
   'cip-announce': { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  // On-chain vote stage
+  'sv-onchain-vote': { label: 'On-Chain Vote', icon: Vote, color: 'bg-pink-500/20 text-pink-400 border-pink-500/30' },
   // Shared stages
   'tokenomics': { label: 'Tokenomics', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
   'tokenomics-announce': { label: 'Announced', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
@@ -116,6 +118,45 @@ const TYPE_CONFIG = {
   'protocol-upgrade': { label: 'Protocol Upgrade', color: 'bg-cyan-500/20 text-cyan-400' },
   outcome: { label: 'Tokenomics Outcomes', color: 'bg-amber-500/20 text-amber-400' },
   other: { label: 'Other', color: 'bg-muted text-muted-foreground' },
+};
+
+// Interface for VoteRequest contracts from ACS
+interface VoteRequest {
+  contract_id: string;
+  payload: {
+    voteBefore: string;
+    requester: string;
+    reason: {
+      url: string;
+      body: string;
+    };
+    action: {
+      tag: string;
+      value?: Record<string, unknown>;
+    };
+    votes: Array<{
+      sv: string;
+      accept: boolean;
+      reason: { url: string; body: string };
+    }>;
+    trackingCid?: string;
+  };
+  record_time: string;
+}
+
+// Helper to extract CIP number from VoteRequest reason
+const extractCipReference = (voteRequest: VoteRequest): string | null => {
+  const reason = voteRequest.payload?.reason;
+  if (!reason) return null;
+  
+  // Check both body and url for CIP references
+  const text = `${reason.body || ''} ${reason.url || ''}`;
+  const match = text.match(/CIP[#\-\s]?0*(\d+)/i);
+  if (match) {
+    // Normalize to 4-digit format (e.g., "83" -> "0083")
+    return match[1].padStart(4, '0');
+  }
+  return null;
 };
 
 const GovernanceFlow = () => {
@@ -132,6 +173,22 @@ const GovernanceFlow = () => {
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [datePreset, setDatePreset] = useState<string>('all');
   const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [voteRequests, setVoteRequests] = useState<VoteRequest[]>([]);
+  
+  // Map CIP numbers to their active VoteRequests
+  const cipVoteRequestMap = useMemo(() => {
+    const map = new Map<string, VoteRequest[]>();
+    voteRequests.forEach(vr => {
+      const cipNum = extractCipReference(vr);
+      if (cipNum) {
+        if (!map.has(cipNum)) {
+          map.set(cipNum, []);
+        }
+        map.get(cipNum)!.push(vr);
+      }
+    });
+    return map;
+  }, [voteRequests]);
 
   const fetchData = async (forceRefresh = false) => {
     if (forceRefresh) {
@@ -179,6 +236,25 @@ const GovernanceFlow = () => {
 
   useEffect(() => {
     fetchData();
+  }, []);
+
+  // Fetch VoteRequests from local ACS
+  useEffect(() => {
+    const fetchVoteRequests = async () => {
+      try {
+        const baseUrl = getDuckDBApiUrl();
+        const response = await fetch(`${baseUrl}/api/acs/contracts?template=VoteRequest&limit=100`);
+        if (response.ok) {
+          const result = await response.json();
+          if (result.data) {
+            setVoteRequests(result.data);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch VoteRequests:', err);
+      }
+    };
+    fetchVoteRequests();
   }, []);
 
   const toggleExpand = (id: string) => {
@@ -444,20 +520,100 @@ const GovernanceFlow = () => {
       });
   }, [filteredTopics]);
 
-  const renderLifecycleProgress = (item: LifecycleItem) => {
+  // Helper to render VoteRequest card
+  const renderVoteRequestCard = (vr: VoteRequest) => {
+    const payload = vr.payload;
+    const actionTag = payload?.action?.tag || 'Unknown Action';
+    const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
+    const isExpired = voteBefore && voteBefore < new Date();
+    const votes = payload?.votes || [];
+    const votesFor = votes.filter(v => v.accept).length;
+    const votesAgainst = votes.filter(v => !v.accept).length;
+    const totalVotes = votes.length;
+    const reason = payload?.reason;
+    
+    // Determine status
+    let status: 'pending' | 'approved' | 'rejected' = 'pending';
+    // Assuming threshold of 10 for now (actual threshold would need to come from DSO rules)
+    const threshold = 10;
+    if (votesFor >= threshold) status = 'approved';
+    else if (isExpired && votesFor < threshold) status = 'rejected';
+    
+    return (
+      <a
+        key={vr.contract_id}
+        href="/governance"
+        className="block p-3 rounded-lg bg-pink-500/10 border border-pink-500/30 hover:border-pink-500/50 transition-colors"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30">
+                {actionTag.replace(/([A-Z])/g, ' $1').trim()}
+              </Badge>
+              <Badge 
+                variant="outline" 
+                className={cn(
+                  "text-[10px] h-5",
+                  status === 'approved' ? 'border-green-500/50 text-green-400 bg-green-500/10' :
+                  status === 'rejected' ? 'border-red-500/50 text-red-400 bg-red-500/10' :
+                  'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
+                )}
+              >
+                {status === 'approved' ? '✓ Approved' : status === 'rejected' ? '✗ Rejected' : '⏳ Pending'}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Vote className="h-3 w-3" />
+                {votesFor}/{totalVotes} votes for
+              </span>
+              {voteBefore && (
+                <span className="flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  {isExpired ? 'Expired' : `Due ${format(voteBefore, 'MMM d, yyyy')}`}
+                </span>
+              )}
+            </div>
+            {reason?.body && (
+              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                {reason.body}
+              </p>
+            )}
+          </div>
+          <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </div>
+        </div>
+      </a>
+    );
+  };
+
+  const renderLifecycleProgress = (item: LifecycleItem, cipNumber?: string) => {
     // Get the stages specific to this item's type
     const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
     const currentIdx = stages.indexOf(item.currentStage);
     
+    // Check if there are VoteRequests for this CIP
+    const matchingVoteRequests = cipNumber ? cipVoteRequestMap.get(cipNumber) || [] : [];
+    
     return (
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap">
         {stages.map((stage, idx) => {
-          const hasStage = item.stages[stage] && item.stages[stage].length > 0;
+          // For sv-onchain-vote stage, check VoteRequests instead of topics
+          const hasStage = stage === 'sv-onchain-vote' 
+            ? matchingVoteRequests.length > 0
+            : item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
           const isPast = idx < currentIdx;
           const config = STAGE_CONFIG[stage];
           if (!config) return null;
           const Icon = config.icon;
+          
+          // Count for tooltip
+          const count = stage === 'sv-onchain-vote' 
+            ? matchingVoteRequests.length 
+            : item.stages[stage]?.length || 0;
           
           return (
             <div key={stage} className="flex items-center">
@@ -467,11 +623,11 @@ const GovernanceFlow = () => {
                     ? config.color + ' border'
                     : 'bg-muted/30 text-muted-foreground/50 border border-transparent'
                 } ${isCurrent ? 'ring-1 ring-offset-1 ring-offset-background ring-primary/50' : ''}`}
-                title={`${config.label}: ${hasStage ? item.stages[stage].length + ' topics' : 'No activity'}`}
+                title={`${config.label}: ${hasStage ? count + (stage === 'sv-onchain-vote' ? ' vote request(s)' : ' topics') : 'No activity'}`}
               >
                 <Icon className="h-3 w-3" />
                 <span className="hidden sm:inline">{config.label}</span>
-                {hasStage && <span className="text-[10px] opacity-70">({item.stages[stage].length})</span>}
+                {hasStage && <span className="text-[10px] opacity-70">({count})</span>}
               </div>
               {idx < stages.length - 1 && (
                 <ArrowRight className={`h-3 w-3 mx-0.5 ${isPast || isCurrent ? 'text-primary/50' : 'text-muted-foreground/30'}`} />
@@ -939,8 +1095,29 @@ const GovernanceFlow = () => {
                               
                               {/* Lifecycle Progress */}
                               <div className="pt-1">
-                                {renderLifecycleProgress(group.items[0])}
+                                {(() => {
+                                  // Extract CIP number for VoteRequest lookup
+                                  const cipMatch = group.primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+                                  const cipNum = cipMatch ? cipMatch[1].padStart(4, '0') : undefined;
+                                  return renderLifecycleProgress(group.items[0], cipNum);
+                                })()}
                               </div>
+                              
+                              {/* Active Vote Badge */}
+                              {(() => {
+                                const cipMatch = group.primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+                                const cipNum = cipMatch ? cipMatch[1].padStart(4, '0') : null;
+                                const hasActiveVote = cipNum && cipVoteRequestMap.has(cipNum) && 
+                                  cipVoteRequestMap.get(cipNum)!.some(vr => {
+                                    const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
+                                    return !voteBefore || voteBefore > new Date();
+                                  });
+                                return hasActiveVote ? (
+                                  <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30 animate-pulse">
+                                    🗳️ Active Vote
+                                  </Badge>
+                                ) : null;
+                              })()}
                             </div>
                             
                             {isExpanded ? (
@@ -955,6 +1132,11 @@ const GovernanceFlow = () => {
                           <CardContent className="pt-0 space-y-3 border-t">
                             {group.items.map((item) => {
                               const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
+                              // Extract CIP number for this item
+                              const cipMatch = group.primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+                              const cipNum = cipMatch ? cipMatch[1].padStart(4, '0') : null;
+                              const matchingVoteReqs = cipNum ? cipVoteRequestMap.get(cipNum) || [] : [];
+                              
                               return (
                                 <div key={item.id} className="space-y-2 pt-3">
                                   {group.hasMultipleNetworks && (
@@ -971,6 +1153,27 @@ const GovernanceFlow = () => {
                                     </Badge>
                                   )}
                                   {stages.map(stage => {
+                                    // Handle sv-onchain-vote stage specially
+                                    if (stage === 'sv-onchain-vote') {
+                                      if (matchingVoteReqs.length === 0) return null;
+                                      const config = STAGE_CONFIG[stage];
+                                      if (!config) return null;
+                                      const Icon = config.icon;
+                                      
+                                      return (
+                                        <div key={stage} className="space-y-2">
+                                          <h4 className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+                                            <Icon className="h-4 w-4" />
+                                            {config.label} ({matchingVoteReqs.length})
+                                          </h4>
+                                          <div className="space-y-2 pl-6">
+                                            {matchingVoteReqs.map(vr => renderVoteRequestCard(vr))}
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    
+                                    // Regular topic stages
                                     const stageTopics = item.stages[stage];
                                     if (!stageTopics || stageTopics.length === 0) return null;
                                     const config = STAGE_CONFIG[stage];
