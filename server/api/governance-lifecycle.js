@@ -679,7 +679,7 @@ function correlateTopics(allTopics) {
       const formattedDate = topicDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       primaryId = `Outcomes - ${formattedDate}`;
     } else {
-      primaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40);
+      primaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject;
     }
     
     // Create a new lifecycle item
