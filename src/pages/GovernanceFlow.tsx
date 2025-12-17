@@ -532,6 +532,9 @@ const GovernanceFlow = () => {
     const totalVotes = votes.length;
     const reason = payload?.reason;
     
+    // Get the proposal ID (first 12 chars of tracking CID or contract ID)
+    const proposalId = payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown';
+    
     // Determine status
     let status: 'pending' | 'approved' | 'rejected' = 'pending';
     // Assuming threshold of 10 for now (actual threshold would need to come from DSO rules)
@@ -542,7 +545,7 @@ const GovernanceFlow = () => {
     return (
       <a
         key={vr.contract_id}
-        href="/governance"
+        href={`/governance?proposal=${proposalId}`}
         className="block p-3 rounded-lg bg-pink-500/10 border border-pink-500/30 hover:border-pink-500/50 transition-colors"
       >
         <div className="flex items-start justify-between gap-3">
