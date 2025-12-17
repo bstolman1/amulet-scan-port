@@ -13,7 +13,7 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
-import { normalizeACSContract, isTemplate, parseTemplateId } from './acs-schema.js';
+import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, detectTemplateFormat } from './acs-schema.js';
 import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete } from './write-acs-parquet.js';
 
 // TLS config (secure by default)
@@ -214,6 +214,35 @@ async function runMigrationSnapshot(migrationId) {
   // Flush remaining
   await flushAll();
   
+  // Validate templates against expected registry
+  const validation = validateTemplates(templateCounts);
+  
+  // Print validation report
+  console.log(`\n   📋 Template Validation Report:`);
+  console.log(`   ├─ Found: ${validation.found.length} expected templates`);
+  console.log(`   ├─ Missing: ${validation.missing.length} templates (${validation.missing.filter(t => t.required).length} required)`);
+  console.log(`   ├─ Unexpected: ${validation.unexpected.length} templates`);
+  console.log(`   └─ Format variations: ${JSON.stringify(validation.formatVariations)}`);
+  
+  // Print warnings
+  if (validation.warnings.length > 0) {
+    console.log(`\n   ⚠️  VALIDATION WARNINGS:`);
+    for (const warning of validation.warnings) {
+      console.log(`      ${warning}`);
+    }
+  }
+  
+  // Log unexpected templates (may be new templates we should add to registry)
+  if (validation.unexpected.length > 0) {
+    console.log(`\n   🔍 Unexpected templates (consider adding to registry):`);
+    for (const t of validation.unexpected.slice(0, 10)) {
+      console.log(`      - ${t.key} (${t.count} contracts, formats: ${t.formats.join(', ')})`);
+    }
+    if (validation.unexpected.length > 10) {
+      console.log(`      ... and ${validation.unexpected.length - 10} more`);
+    }
+  }
+  
   // Write completion marker to indicate this snapshot is complete
   const stats = {
     totalContracts,
@@ -221,6 +250,12 @@ async function runMigrationSnapshot(migrationId) {
     lockedTotal: lockedTotal.toString(),
     circulatingTotal: amuletTotal.plus(lockedTotal).toString(),
     templateCount: Object.keys(templateCounts).length,
+    validation: {
+      foundCount: validation.found.length,
+      missingCount: validation.missing.length,
+      unexpectedCount: validation.unexpected.length,
+      warnings: validation.warnings,
+    },
   };
   await writeCompletionMarker(snapshotRunTime, migrationId, stats);
   
@@ -232,6 +267,7 @@ async function runMigrationSnapshot(migrationId) {
     lockedTotal: lockedTotal.toString(),
     circulatingTotal: amuletTotal.plus(lockedTotal).toString(),
     templateCounts,
+    validation,
   };
 }
 
@@ -286,6 +322,23 @@ async function runACSSnapshot() {
     console.log(`   - Amulet Total: ${r.amuletTotal}`);
     console.log(`   - Locked Total: ${r.lockedTotal}`);
     console.log(`   - Circulating: ${r.circulatingTotal}`);
+    
+    if (r.validation) {
+      console.log(`   - Templates Found: ${r.validation.found.length}`);
+      console.log(`   - Templates Missing: ${r.validation.missing.length}`);
+      if (r.validation.warnings.length > 0) {
+        console.log(`   - Warnings: ${r.validation.warnings.length}`);
+      }
+    }
+  }
+  
+  // Print overall validation summary
+  const allWarnings = results.flatMap(r => r.validation?.warnings || []);
+  if (allWarnings.length > 0) {
+    console.log('\n⚠️  VALIDATION WARNINGS SUMMARY:');
+    for (const w of [...new Set(allWarnings)]) {
+      console.log(`   ${w}`);
+    }
   }
   
   console.log('\n' + '='.repeat(80));
