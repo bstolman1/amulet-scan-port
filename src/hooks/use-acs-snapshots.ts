@@ -5,6 +5,7 @@ import {
   getLatestACSSnapshot as getLocalLatestACSSnapshot,
   getACSTemplates as getLocalACSTemplates,
   apiFetch,
+  isApiAvailable,
 } from "@/lib/duckdb-api-client";
 
 export interface ACSSnapshot {
@@ -42,10 +43,15 @@ export function useACSSnapshots() {
   return useQuery({
     queryKey: ["acsSnapshots"],
     queryFn: async (): Promise<ACSSnapshot[]> => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("Local DuckDB server is not available. Start with: cd server && npm start");
+      }
       const response = await getLocalACSSnapshots();
       return (response.data as ACSSnapshot[]) || [];
     },
     staleTime: 30_000,
+    retry: false,
   });
 }
 
@@ -53,10 +59,15 @@ export function useLatestACSSnapshot() {
   return useQuery({
     queryKey: ["latestAcsSnapshot"],
     queryFn: async (): Promise<ACSSnapshot | null> => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("Local DuckDB server is not available. Start with: cd server && npm start");
+      }
       const response = await getLocalLatestACSSnapshot();
       return (response.data as ACSSnapshot) || null;
     },
     staleTime: 30_000,
+    retry: false,
   });
 }
 
@@ -65,6 +76,10 @@ export function useActiveSnapshot() {
   return useQuery({
     queryKey: ["activeAcsSnapshot"],
     queryFn: async () => {
+      const available = await isApiAvailable();
+      if (!available) {
+        throw new Error("Local DuckDB server is not available");
+      }
       const response = await getLocalLatestACSSnapshot();
       if (response.data) {
         return { 
@@ -75,6 +90,7 @@ export function useActiveSnapshot() {
       return { snapshot: null, isProcessing: false };
     },
     staleTime: 30_000,
+    retry: false,
   });
 }
 

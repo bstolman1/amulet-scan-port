@@ -42,7 +42,7 @@ export function useACSTemplateData<T = any>(
 
       const isAvailable = await isDuckDBAvailable();
       if (!isAvailable) {
-        throw new Error("Local DuckDB server is not available");
+        throw new Error("Local DuckDB server is not available. Start with: cd server && npm start");
       }
 
       console.log(`[useACSTemplateData] Fetching from DuckDB: ${templateId}`);
@@ -59,6 +59,7 @@ export function useACSTemplateData<T = any>(
     },
     enabled: enabled && !!templateId,
     staleTime: 5 * 60 * 1000,
+    retry: false,
   });
 }
 
@@ -71,7 +72,7 @@ export function useACSTemplates(snapshotId: string | undefined) {
     queryFn: async () => {
       const isAvailable = await isDuckDBAvailable();
       if (!isAvailable) {
-        throw new Error("Local DuckDB server is not available");
+        throw new Error("Local DuckDB server is not available. Start with: cd server && npm start");
       }
 
       console.log("[useACSTemplates] Fetching from DuckDB");
@@ -87,5 +88,6 @@ export function useACSTemplates(snapshotId: string | undefined) {
     },
     enabled: true,
     staleTime: 5 * 60 * 1000,
+    retry: false,
   });
 }
