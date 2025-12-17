@@ -1,18 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { checkDuckDBConnection } from "@/lib/backend-config";
 import { getACSTemplates as getLocalACSTemplates, getACSContracts as getLocalACSContracts } from "@/lib/duckdb-api-client";
-// Cached DuckDB availability check
-let duckDBAvailable: boolean | null = null;
-let duckDBCheckTime = 0;
-async function isDuckDBAvailable(): Promise<boolean> {
-  const now = Date.now();
-  if (duckDBAvailable !== null && now - duckDBCheckTime < 30_000) {
-    return duckDBAvailable;
-  }
-  duckDBAvailable = await checkDuckDBConnection();
-  duckDBCheckTime = now;
-  return duckDBAvailable;
-}
 
 interface TemplateDataMetadata {
   template_id: string;
@@ -26,7 +13,7 @@ interface TemplateDataResponse<T = any> {
 }
 
 /**
- * Fetch template data from Supabase Storage or local DuckDB for a given snapshot
+ * Fetch template data from local DuckDB for a given snapshot
  */
 export function useACSTemplateData<T = any>(
   snapshotId: string | undefined,
@@ -38,11 +25,6 @@ export function useACSTemplateData<T = any>(
     queryFn: async (): Promise<TemplateDataResponse<T>> => {
       if (!templateId) {
         throw new Error("Missing templateId");
-      }
-
-      const isAvailable = await isDuckDBAvailable();
-      if (!isAvailable) {
-        throw new Error("Local DuckDB server is not available. Start with: cd server && npm start");
       }
 
       console.log(`[useACSTemplateData] Fetching from DuckDB: ${templateId}`);
@@ -64,17 +46,12 @@ export function useACSTemplateData<T = any>(
 }
 
 /**
- * Get all available templates for a snapshot (with DuckDB fallback)
+ * Get all available templates for a snapshot
  */
 export function useACSTemplates(snapshotId: string | undefined) {
   return useQuery({
     queryKey: ["acs-templates"],
     queryFn: async () => {
-      const isAvailable = await isDuckDBAvailable();
-      if (!isAvailable) {
-        throw new Error("Local DuckDB server is not available. Start with: cd server && npm start");
-      }
-
       console.log("[useACSTemplates] Fetching from DuckDB");
       const response = await getLocalACSTemplates(500);
       
