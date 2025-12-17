@@ -439,13 +439,9 @@ router.post('/cache/invalidate', (req, res) => {
   res.json({ status: 'ok', message: 'Cache invalidated' });
 });
 
-// GET /api/acs/snapshots - List all available snapshots
+// GET /api/acs/snapshots - List all available snapshots (uses filesystem scan, not data query)
 router.get('/snapshots', async (req, res) => {
   try {
-    if (!hasACSData()) {
-      return res.json({ data: [], message: 'No ACS data available' });
-    }
-
     // Check cache first
     const cacheKey = 'acs:v2:snapshots';
     const cached = getCached(cacheKey);
@@ -453,58 +449,44 @@ router.get('/snapshots', async (req, res) => {
       return res.json(cached);
     }
 
-    // First, get distinct migration_ids to understand what's available
-    const migrationSql = `
-      SELECT DISTINCT migration_id, COUNT(*) as count
-      FROM ${getACSSource()}
-      GROUP BY migration_id
-      ORDER BY migration_id DESC
-    `;
-    
-    const migrations = await db.safeQuery(migrationSql);
-    console.log('Available migrations:', migrations.map(m => `migration_id=${m.migration_id} (${m.count} contracts)`).join(', '));
-
-    const sql = `
-      SELECT 
-        snapshot_time,
-        migration_id,
-        COUNT(DISTINCT contract_id) as contract_count,
-        COUNT(DISTINCT template_id) as template_count,
-        MIN(record_time) as record_time
-      FROM ${getACSSource()}
-      GROUP BY snapshot_time, migration_id
-      ORDER BY migration_id DESC, snapshot_time DESC
-      LIMIT 50
-    `;
-
-    const rows = await db.safeQuery(sql);
-    
-    // Get complete snapshots to mark status
+    // Use filesystem-based snapshot discovery (fast, no data query)
+    const availableSnapshots = findAvailableSnapshots();
     const completeSnapshots = findCompleteSnapshots();
+    
+    if (availableSnapshots.length === 0) {
+      return res.json({ data: [], message: 'No ACS snapshots found' });
+    }
+    
+    // Build complete set for status marking
     const completeSet = new Set(
       completeSnapshots.map(s => `${s.migrationId}:${s.snapshotTime}`)
     );
     
+    // Sort by migration DESC, then snapshot_time DESC
+    availableSnapshots.sort((a, b) => {
+      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+    });
+    
     // Transform to match the UI's expected format
-    // Use snapshot_time as the unique identifier for each snapshot
-    const snapshots = rows.map((row) => {
-      const snapshotTimeStr = new Date(row.snapshot_time).toISOString();
-      const isComplete = completeSet.has(`${row.migration_id}:${snapshotTimeStr}`) ||
-        completeSet.has(`${row.migration_id}:${row.snapshot_time}`);
+    const snapshots = availableSnapshots.slice(0, 50).map((s) => {
+      const snapshotTimeStr = new Date(s.snapshotTime).toISOString();
+      const isComplete = s.isComplete || completeSet.has(`${s.migrationId}:${s.snapshotTime}`);
       
       return {
-        id: `local-m${row.migration_id}-${snapshotTimeStr}`,
-        timestamp: row.snapshot_time,
-        migration_id: row.migration_id,
-        record_time: row.record_time,
-        entry_count: row.contract_count,
-        template_count: row.template_count,
+        id: `local-m${s.migrationId}-${snapshotTimeStr}`,
+        timestamp: s.snapshotTime,
+        migration_id: s.migrationId,
+        record_time: s.snapshotTime,
+        entry_count: 0, // Would require query to get exact count
+        template_count: 0,
         status: isComplete ? 'completed' : 'in_progress',
         source: 'local',
+        path: s.path,
       };
     });
 
-    console.log(`Returning ${snapshots.length} snapshots:`, snapshots.map(s => `M${s.migration_id}`).join(', '));
+    console.log(`[ACS] Returning ${snapshots.length} snapshots from filesystem scan`);
     const result = serializeBigInt({ data: snapshots });
     setCache(cacheKey, result, CACHE_TTL.SNAPSHOTS);
     res.json(result);
@@ -514,7 +496,7 @@ router.get('/snapshots', async (req, res) => {
   }
 });
 
-// GET /api/acs/latest - Get latest snapshot summary with supply metrics
+// GET /api/acs/latest - Get latest snapshot summary with supply metrics (optimized)
 router.get('/latest', async (req, res) => {
   try {
     if (!hasACSData()) {
@@ -528,31 +510,24 @@ router.get('/latest', async (req, res) => {
       return res.json(cached);
     }
 
-    // Get basic snapshot info - latest migration and latest snapshot within it
-    const acsSource = getACSSource();
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: null, message: 'No snapshot found' });
+    }
+
+    // Get basic counts from the optimized source
     const basicSql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
-        acs.snapshot_time,
-        acs.migration_id,
-        COUNT(DISTINCT acs.contract_id) as contract_count,
+        COUNT(DISTINCT contract_id) as contract_count,
         COUNT(DISTINCT template_id) as template_count,
         MIN(record_time) as record_time
-      FROM ${acsSource} acs
-      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-      GROUP BY acs.snapshot_time, acs.migration_id
+      FROM ${acsSource}
     `;
 
     const basicRows = await db.safeQuery(basicSql);
-    
-    if (basicRows.length === 0) {
-      return res.json({ data: null });
-    }
-
-    const row = basicRows[0];
-    const snapshotTime = row.snapshot_time;
-    const migrationId = row.migration_id;
+    const row = basicRows[0] || {};
 
     // Calculate supply metrics from Amulet and LockedAmulet contracts
     const supplySql = `
@@ -563,8 +538,6 @@ router.get('/latest', async (req, res) => {
           any_value(entity_name) as entity_name,
           any_value(payload) as payload
         FROM ${acsSource}
-        WHERE migration_id = ${migrationId}
-          AND snapshot_time = '${snapshotTime}'
         GROUP BY contract_id
       ),
       amulet_totals AS (
@@ -620,15 +593,15 @@ router.get('/latest', async (req, res) => {
     const result = serializeBigInt({
       data: {
         id: 'local-latest',
-        timestamp: row.snapshot_time,
-        migration_id: row.migration_id,
-        record_time: row.record_time,
-        entry_count: row.contract_count,
-        template_count: row.template_count,
+        timestamp: snapshot.snapshotTime,
+        migration_id: snapshot.migrationId,
+        record_time: row.record_time || snapshot.snapshotTime,
+        entry_count: row.contract_count || 0,
+        template_count: row.template_count || 0,
         amulet_total: amuletTotal,
         locked_total: lockedTotal,
         circulating_supply: circulatingSupply,
-        status: 'completed',
+        status: snapshot.isComplete ? 'completed' : 'in_progress',
         source: 'local',
       }
     });
@@ -1223,7 +1196,7 @@ router.get('/mining-rounds', async (req, res) => {
   }
 });
 
-// GET /api/acs/stats - Overview statistics
+// GET /api/acs/stats - Overview statistics (uses optimized snapshot source)
 router.get('/stats', async (req, res) => {
   try {
     if (!hasACSData()) {
@@ -1244,18 +1217,27 @@ router.get('/stats', async (req, res) => {
       return res.json(cached);
     }
 
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    const availableSnapshots = findAvailableSnapshots();
+
     const sql = `
       SELECT 
         COUNT(DISTINCT contract_id) as total_contracts,
-        COUNT(DISTINCT template_id) as total_templates,
-        COUNT(DISTINCT snapshot_time) as total_snapshots,
-        MAX(snapshot_time) as latest_snapshot,
-        MAX(record_time) as latest_record_time
-      FROM ${getACSSource()}
+        COUNT(DISTINCT template_id) as total_templates
+      FROM ${acsSource}
     `;
 
     const rows = await db.safeQuery(sql);
-    const result = serializeBigInt({ data: rows[0] || {} });
+    const result = serializeBigInt({ 
+      data: {
+        ...rows[0],
+        total_snapshots: availableSnapshots.length,
+        latest_snapshot: snapshot?.snapshotTime || null,
+        latest_record_time: snapshot?.snapshotTime || null,
+        migration_id: snapshot?.migrationId || null,
+      }
+    });
     setCache(cacheKey, result, CACHE_TTL.STATS);
     res.json(result);
   } catch (err) {
