@@ -212,13 +212,14 @@ function extractIdentifiers(text) {
     keywords: [],
   };
   
-  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123) and format as 4-digit
+  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123, CIP - 0066) and format as 4-digit
   // Check for TBD/unassigned CIPs first
   const tbdMatch = text.match(/CIP[#\-\s]*(TBD|00XX|XXXX|\?\?|unassigned)/i);
   if (tbdMatch) {
     identifiers.cipNumber = 'CIP-00XX';
   } else {
-    const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
+    // Handle various CIP formats: "CIP-0066", "CIP 0066", "CIP#0066", "CIP - 0066"
+    const cipMatch = text.match(/CIP[\s#-]*(\d+)/i);
     if (cipMatch) {
       identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
     }
@@ -639,8 +640,10 @@ function correlateTopics(allTopics) {
     } else if (topic.flow === 'shared') {
       // Shared groups (tokenomics, sv-announce) need subject-line disambiguation
       // Use specific vote proposal type flags for better accuracy
-      if (topic.identifiers.isCipVoteProposal || hasCip || isCipDiscussion) {
-        // Only CIP-specific vote proposals or topics with CIP numbers
+      // STRICT CIP detection: only classify as CIP if there's an actual CIP number
+      // isCipDiscussion alone is NOT enough - many topics mention "CIP" without being CIPs
+      if (topic.identifiers.isCipVoteProposal || hasCip) {
+        // Only CIP-specific vote proposals or topics with explicit CIP numbers
         type = 'cip';
       } else if (topic.identifiers.isValidatorVoteProposal || isValidatorOperations || hasValidatorIndicator) {
         type = 'validator';
