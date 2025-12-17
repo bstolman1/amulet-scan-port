@@ -408,8 +408,22 @@ const GovernanceFlow = () => {
   const getTopicType = (topic: Topic): string => {
     const subjectTrimmed = topic.subject.trim();
     const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
-    const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
     const isProtocolUpgrade = /\b(?:synchronizer\s+migration|splice\s+\d+\.\d+|protocol\s+upgrade|network\s+upgrade|hard\s*fork|migration\s+to\s+splice)\b/i.test(subjectTrimmed);
+    const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
+    const isValidatorOperations = /\bValidator\s+Operations\b/i.test(subjectTrimmed);
+    
+    // Specific vote proposal type detection
+    const isCipVoteProposal = isVoteProposal && (
+      /CIP[#\-\s]?\d+/i.test(subjectTrimmed) || 
+      /\bCIP\s+(?:vote|voting|approval)\b/i.test(subjectTrimmed)
+    );
+    const isFeaturedAppVoteProposal = isVoteProposal && (
+      /featured\s*app|featured\s*application|app\s+rights/i.test(subjectTrimmed) ||
+      /(?:mainnet|testnet|main\s*net|test\s*net):/i.test(subjectTrimmed)
+    );
+    const isValidatorVoteProposal = isVoteProposal && (
+      /validator\s+(?:operator|onboarding|license)/i.test(subjectTrimmed)
+    );
     
     if (isOutcome) return 'outcome';
     if (isProtocolUpgrade) return 'protocol-upgrade';
@@ -417,13 +431,20 @@ const GovernanceFlow = () => {
     if (topic.flow === 'featured-app') return 'featured-app';
     if (topic.flow === 'shared') {
       // Shared groups need subject-line disambiguation (matching backend logic)
-      if (isVoteProposal || topic.identifiers.cipNumber || topic.identifiers.isCipDiscussion) {
+      if (isCipVoteProposal || topic.identifiers.cipNumber || topic.identifiers.isCipDiscussion) {
         return 'cip';
       }
-      if (/\bValidator\s+Operations\b/i.test(subjectTrimmed) || topic.identifiers.validatorName) {
+      if (isValidatorVoteProposal || isValidatorOperations || topic.identifiers.validatorName) {
         return 'validator';
       }
-      if (topic.identifiers.appName) {
+      if (isFeaturedAppVoteProposal || topic.identifiers.appName) {
+        return 'featured-app';
+      }
+      if (isVoteProposal) {
+        // Generic vote proposal - check for network prefix
+        if (/(?:mainnet|testnet|main\s*net|test\s*net):/i.test(subjectTrimmed)) {
+          return 'featured-app';
+        }
         return 'featured-app';
       }
       return 'featured-app'; // Default for shared
