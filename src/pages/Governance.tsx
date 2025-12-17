@@ -197,6 +197,9 @@ const Governance = () => {
               <span>
                 <strong>Files:</strong> {snapshotInfo.data.file_count}
               </span>
+              <span className="max-w-[28rem] truncate" title={snapshotInfo.data.path}>
+                <strong>Path:</strong> {snapshotInfo.data.path}
+              </span>
               <Badge variant="outline" className="text-xs">
                 {snapshotInfo.data.type}
               </Badge>

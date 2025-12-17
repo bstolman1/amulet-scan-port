@@ -669,7 +669,7 @@ router.get('/templates/search', async (req, res) => {
     }
 
     const { snapshot, source: acsSource } = getBestSnapshotAndSource();
-    
+
     // Normalize query for flexible matching (handle colon vs dot separators)
     const query = String(q);
     const variants = [
@@ -677,26 +677,78 @@ router.get('/templates/search', async (req, res) => {
       query.replaceAll(':', '.'),
       query.replaceAll('.', ':'),
     ];
-    
-    const likeClauses = variants.map(v => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
-    
+
+    const like = (col, v) => `${col} LIKE '%${v.replace(/'/g, "''")}%'`;
+    const where = variants
+      .flatMap((v) => [
+        like('tid', v),
+        like('entity_name', v),
+        like('module_name', v),
+      ])
+      .join(' OR ');
+
     const sql = `
-      SELECT 
-        template_id,
+      WITH base AS (
+        SELECT
+          COALESCE(
+            template_id,
+            json_extract_string(payload, '$.template_id'),
+            json_extract_string(payload, '$.templateId')
+          ) AS tid,
+          entity_name,
+          module_name,
+          contract_id
+        FROM ${acsSource}
+      )
+      SELECT
+        tid as template_id,
         entity_name,
         module_name,
         COUNT(DISTINCT contract_id) as contract_count
-      FROM ${acsSource}
-      WHERE ${likeClauses.join(' OR ')}
-      GROUP BY template_id, entity_name, module_name
+      FROM base
+      WHERE tid IS NOT NULL AND (${where})
+      GROUP BY tid, entity_name, module_name
       ORDER BY contract_count DESC
       LIMIT 20
     `;
 
     const rows = await db.safeQuery(sql);
-    
+
+    // Add quick snapshot context and fallback hints when no match
+    let totalTemplates = 0;
+    let sampleTemplates = [];
+    if (rows.length === 0) {
+      try {
+        const tRows = await db.safeQuery(`
+          WITH base AS (
+            SELECT COALESCE(template_id, json_extract_string(payload, '$.template_id'), json_extract_string(payload, '$.templateId')) AS tid
+            FROM ${acsSource}
+          )
+          SELECT COUNT(DISTINCT tid) as cnt
+          FROM base
+          WHERE tid IS NOT NULL
+        `);
+        totalTemplates = Number(tRows?.[0]?.cnt || 0);
+
+        const sRows = await db.safeQuery(`
+          WITH base AS (
+            SELECT COALESCE(template_id, json_extract_string(payload, '$.template_id'), json_extract_string(payload, '$.templateId')) AS tid
+            FROM ${acsSource}
+          )
+          SELECT DISTINCT tid
+          FROM base
+          WHERE tid IS NOT NULL
+          ORDER BY tid
+          LIMIT 20
+        `);
+        sampleTemplates = sRows.map(r => r.tid).filter(Boolean);
+      } catch {
+        // ignore
+      }
+    }
+
     console.log(`[ACS] Template search for "${q}": found ${rows.length} matching templates`);
-    
+
     res.json(serializeBigInt({
       data: rows,
       found: rows.length > 0,
@@ -706,6 +758,7 @@ router.get('/templates/search', async (req, res) => {
         snapshot_time: snapshot.snapshotTime,
         path: snapshot.path,
       } : null,
+      debug: rows.length === 0 ? { totalTemplates, sampleTemplates } : undefined,
     }));
   } catch (err) {
     console.error('ACS template search error:', err);
