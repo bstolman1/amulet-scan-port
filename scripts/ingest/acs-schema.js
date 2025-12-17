@@ -88,6 +88,22 @@ export const ACS_COLUMNS = [
   'raw',
 ];
 
+// Field validation - critical fields that MUST have values
+export const CRITICAL_CONTRACT_FIELDS = [
+  'contract_id',
+  'template_id',
+  'migration_id',
+  'record_time',
+];
+
+// Important fields that SHOULD have values
+export const IMPORTANT_CONTRACT_FIELDS = [
+  'module_name',
+  'entity_name',
+  'signatories',
+  'payload',
+];
+
 /**
  * Parse template ID into components
  * Handles multiple formats:
@@ -191,6 +207,33 @@ export function isTemplate(event, moduleName, entityName) {
   const targetModule = moduleName.replace(/_/g, '.');
   
   return normalizedModule === targetModule && parsed.entityName === entityName;
+}
+
+/**
+ * Validate a single contract's fields
+ * Returns object with arrays of missing critical and important fields
+ */
+export function validateContractFields(contract) {
+  const missingCritical = [];
+  const missingImportant = [];
+  
+  for (const field of CRITICAL_CONTRACT_FIELDS) {
+    const value = contract[field];
+    if (value === null || value === undefined || value === '') {
+      missingCritical.push(field);
+    }
+  }
+  
+  for (const field of IMPORTANT_CONTRACT_FIELDS) {
+    const value = contract[field];
+    const isEmpty = value === null || value === undefined || value === '' ||
+      (Array.isArray(value) && value.length === 0);
+    if (isEmpty) {
+      missingImportant.push(field);
+    }
+  }
+  
+  return { missingCritical, missingImportant };
 }
 
 /**
