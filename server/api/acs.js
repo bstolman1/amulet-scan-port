@@ -673,10 +673,29 @@ router.get('/contracts', async (req, res) => {
 
     let whereClause = '1=1';
     if (template) {
-      whereClause = `template_id LIKE '%${template}%'`;
+      // Normalize template query:
+      // UI sends e.g. "Splice:DsoRules:VoteRequest" but stored template_id is typically
+      // "<pkg-hash>:Splice.DsoRules:VoteRequest" (module path uses dots)
+      const t = String(template);
+      const variants = new Set([
+        t,
+        t.replaceAll(':', '.'),
+        // replace module separators (all but last) with dots
+        t.split(':').length >= 3 ? (() => {
+          const parts = t.split(':');
+          const entity = parts.pop();
+          return `${parts.join('.')}:${entity}`;
+        })() : t,
+      ]);
+
+      const likeClauses = [...variants]
+        .filter(Boolean)
+        .map((v) => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
+
+      whereClause = `(${likeClauses.join(' OR ')})`;
     } else if (entity) {
       // Match by entity_name OR template_id containing the entity name
-      whereClause = `(entity_name = '${entity}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
+      whereClause = `(entity_name = '${String(entity).replace(/'/g, "''")}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
     }
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
