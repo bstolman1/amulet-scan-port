@@ -68,7 +68,6 @@ export const ACS_CONTRACTS_SCHEMA = {
   snapshot_time: 'TIMESTAMP',
   signatories: 'LIST<STRING>',
   observers: 'LIST<STRING>',
-  witness_parties: 'LIST<STRING>',
   payload: 'JSON',
   raw: 'JSON',
 };
@@ -85,7 +84,6 @@ export const ACS_COLUMNS = [
   'snapshot_time',
   'signatories',
   'observers',
-  'witness_parties',
   'payload',
   'raw',
 ];
@@ -173,7 +171,6 @@ export function normalizeACSContract(event, migrationId, recordTime, snapshotTim
     snapshot_time: snapshotTime ? new Date(snapshotTime) : new Date(),
     signatories: event.signatories || [],
     observers: event.observers || [],
-    witness_parties: event.witness_parties || [],
     payload: event.create_arguments ? JSON.stringify(event.create_arguments) : null,
     // CRITICAL: Preserve raw API response for full data recovery
     raw: JSON.stringify(event),
