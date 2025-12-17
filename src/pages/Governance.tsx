@@ -210,8 +210,15 @@ const Governance = () => {
       const voteDeadline = voteBefore ? new Date(voteBefore) : null;
       const isExpired = voteDeadline && voteDeadline < now;
       
-      if (votesFor >= threshold) status = "approved";
-      else if (isExpired || votesAgainst > svCount - threshold) status = "rejected";
+      // Only mark as approved if enough votes FOR
+      if (votesFor >= threshold) {
+        status = "approved";
+      } 
+      // Only mark as rejected if deadline passed AND not enough votes
+      else if (isExpired && votesFor < threshold) {
+        status = "rejected";
+      }
+      // Otherwise it's still pending (deadline not reached or voting ongoing)
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
