@@ -86,16 +86,30 @@ function eventToPlain(record) {
 function updateToPlain(record) {
   return {
     id: record.id || null,
+    type: record.type || null,
     synchronizer: record.synchronizer || null,
+    // Timestamps
     effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
     recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
-    type: record.type || null,
+    record_time: record.recordTime ? new Date(Number(record.recordTime)).toISOString() : null,
+    // Transaction metadata
     command_id: record.commandId || null,
     workflow_id: record.workflowId || null,
     kind: record.kind || null,
     migration_id: record.migrationId ? Number(record.migrationId) : null,
-    offset_val: record.offset ? Number(record.offset) : null,
+    offset: record.offset ? Number(record.offset) : null,
     event_count: record.eventCount || 0,
+    // Event tree traversal
+    root_event_ids: record.rootEventIds || [],
+    // Reassignment fields
+    source_synchronizer: record.sourceSynchronizer || null,
+    target_synchronizer: record.targetSynchronizer || null,
+    unassign_id: record.unassignId || null,
+    submitter: record.submitter || null,
+    reassignment_counter: record.reassignmentCounter ? Number(record.reassignmentCounter) : null,
+    // Full data preservation
+    trace_context: record.traceContextJson ? tryParseJson(record.traceContextJson) : null,
+    update_data: record.updateDataJson ? tryParseJson(record.updateDataJson) : null,
   };
 }
 
