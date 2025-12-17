@@ -123,6 +123,50 @@ function findCompleteSnapshots() {
   }
 }
 
+// Scan filesystem for available snapshots (even without _COMPLETE markers)
+function findAvailableSnapshots() {
+  try {
+    if (!fs.existsSync(ACS_DATA_PATH)) return [];
+    
+    const snapshots = [];
+    const entries = fs.readdirSync(ACS_DATA_PATH, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('migration_id=')) continue;
+      
+      const migrationId = parseInt(entry.name.replace('migration_id=', ''));
+      const migrationPath = path.join(ACS_DATA_PATH, entry.name);
+      
+      const snapshotDirs = fs.readdirSync(migrationPath, { withFileTypes: true });
+      for (const snapDir of snapshotDirs) {
+        if (!snapDir.isDirectory() || !snapDir.name.startsWith('snapshot_time=')) continue;
+        
+        // Convert YYYY-MM-DDTHH-MM-SS back to ISO format
+        let snapshotTime = snapDir.name.replace('snapshot_time=', '');
+        const match = snapshotTime.match(/^(\d{4}-\d{2}-\d{2}T)(\d{2})-(\d{2})-(\d{2})(.*)$/);
+        if (match) {
+          snapshotTime = `${match[1]}${match[2]}:${match[3]}:${match[4]}${match[5]}`;
+        }
+        
+        // Check if this snapshot has any data files
+        const snapshotPath = path.join(migrationPath, snapDir.name);
+        const files = fs.readdirSync(snapshotPath);
+        const hasData = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
+        const isComplete = files.includes('_COMPLETE');
+        
+        if (hasData) {
+          snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath });
+        }
+      }
+    }
+    
+    return snapshots;
+  } catch (err) {
+    console.error('[ACS] Error scanning snapshots:', err.message);
+    return [];
+  }
+}
+
 // Helper function to get CTE for latest COMPLETE snapshot (filters by latest migration_id first)
 // If snapshotTime is provided, uses that specific snapshot instead of latest
 // IMPORTANT: Only uses snapshots that have a _COMPLETE marker file
@@ -140,7 +184,7 @@ function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
     `;
   }
   
-  // Find complete snapshots from filesystem
+  // First try: Find complete snapshots from filesystem
   const completeSnapshots = findCompleteSnapshots();
   
   if (completeSnapshots.length > 0) {
@@ -163,8 +207,31 @@ function getSnapshotCTE(acsSource, snapshotTime = null, migrationId = null) {
     `;
   }
   
-  // Fallback: Use latest snapshot from latest migration (may be incomplete)
-  console.log('[ACS] WARNING: No complete snapshots found, using latest (possibly incomplete)');
+  // Second try: Use available snapshots from filesystem (even without _COMPLETE marker)
+  const availableSnapshots = findAvailableSnapshots();
+  
+  if (availableSnapshots.length > 0) {
+    // Sort by migration_id DESC, then snapshot_time DESC
+    availableSnapshots.sort((a, b) => {
+      if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+      return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+    });
+    
+    const latest = availableSnapshots[0];
+    console.log(`[ACS] Using filesystem snapshot (no _COMPLETE marker): migration_id=${latest.migrationId}, snapshot_time=${latest.snapshotTime}`);
+    
+    return `
+      latest_migration AS (
+        SELECT ${latest.migrationId} as migration_id
+      ),
+      latest_snapshot AS (
+        SELECT '${latest.snapshotTime}'::TIMESTAMP as snapshot_time, ${latest.migrationId} as migration_id
+      )
+    `;
+  }
+  
+  // Final fallback: Query the data (may be slow/fail for large datasets)
+  console.log('[ACS] WARNING: No snapshots found via filesystem scan, falling back to data query');
   return `
     latest_migration AS (
       SELECT MAX(migration_id) as migration_id FROM ${acsSource}
