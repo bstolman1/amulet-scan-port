@@ -224,8 +224,10 @@ function extractIdentifiers(text) {
     }
   }
   
-  // Check if this is a CIP discussion (even without a number) - e.g., "CIP Discuss-"
-  const isCipDiscussion = /\bCIP\s*(?:Discuss|Discussion|Vote|Announce)/i.test(text);
+  // Check if this is a CIP discussion (even without a number)
+  // Only set this if it's clearly a CIP-specific topic, not just any mention of CIP
+  // e.g., "CIP Discussion:", "CIP-XXXX:", "New CIP Proposal" - but NOT "discussed CIP requirements"
+  const isCipDiscussion = /^\s*(?:re:\s*)?CIP[#\-\s]|^(?:re:\s*)?(?:new\s+)?CIP\s+(?:discuss|proposal|draft)/i.test(text);
   
   // Detect network (testnet or mainnet)
   if (/testnet|test\s*net|tn\b/i.test(text)) {
@@ -234,18 +236,35 @@ function extractIdentifiers(text) {
     identifiers.network = 'mainnet';
   }
   
+  // Check for Vote Proposal patterns - distinguish between CIP votes and other votes
+  // CIP Vote Proposals contain a CIP number or are specifically about CIP governance
+  // Featured App Vote Proposals mention "featured app" or network (MainNet/TestNet)
+  const isVoteProposal = /\bVote\s+Proposal\b/i.test(text);
+  const isCipVoteProposal = isVoteProposal && (
+    /CIP[#\-\s]?\d+/i.test(text) || 
+    /\bCIP\s+(?:vote|voting|approval)\b/i.test(text)
+  );
+  const isFeaturedAppVoteProposal = isVoteProposal && (
+    /featured\s*app|featured\s*application|app\s+rights/i.test(text) ||
+    /(?:mainnet|testnet|main\s*net|test\s*net):/i.test(text)
+  );
+  const isValidatorVoteProposal = isVoteProposal && (
+    /validator\s+(?:operator|onboarding|license)/i.test(text)
+  );
+  
   // Check if text contains featured app indicators - BUT NOT if it's a CIP discussion about featured apps
   // Also detect "Vote Proposal on MainNet/TestNet:" patterns as featured app related
   const isFeaturedApp = !isCipDiscussion && (
     /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text) ||
-    /vote\s+proposal\s+(?:on|for)\s+(?:mainnet|testnet|main\s*net|test\s*net)/i.test(text) ||
+    isFeaturedAppVoteProposal ||
     /featured\s+app\s+rights/i.test(text)
   );
   
   // Check if text contains validator indicators - including "validator approved" and "validator operator approved"
-  // BUT exclude "Vote Proposal" patterns which are typically CIP-related even if they mention validators
-  const isVoteProposal = /\bvote\s+proposal\b/i.test(text);
-  const isValidator = !isVoteProposal && /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
+  const isValidator = (
+    /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text) ||
+    isValidatorVoteProposal
+  );
   
   // Extract the primary entity name (now returns { name, isMultiEntity })
   const entityResult = extractPrimaryEntityName(text);
@@ -254,6 +273,11 @@ function extractIdentifiers(text) {
   
   // Add CIP discussion flag to identifiers
   identifiers.isCipDiscussion = isCipDiscussion;
+  
+  // Add vote proposal type flags for better type determination
+  identifiers.isCipVoteProposal = isCipVoteProposal;
+  identifiers.isFeaturedAppVoteProposal = isFeaturedAppVoteProposal;
+  identifiers.isValidatorVoteProposal = isValidatorVoteProposal;
   
   // Debug log for featured app detection
   if (text.toLowerCase().includes('featured app approved')) {
@@ -614,14 +638,23 @@ function correlateTopics(allTopics) {
       type = 'featured-app';
     } else if (topic.flow === 'shared') {
       // Shared groups (tokenomics, sv-announce) need subject-line disambiguation
-      // Priority: Vote Proposal (CIP) > CIP number/discussion > Validator Operations > Featured App
-      if (isVoteProposal || hasCip || isCipDiscussion) {
-        // "Vote Proposal" patterns are CIP-related even if they mention validators
+      // Use specific vote proposal type flags for better accuracy
+      if (topic.identifiers.isCipVoteProposal || hasCip || isCipDiscussion) {
+        // Only CIP-specific vote proposals or topics with CIP numbers
         type = 'cip';
-      } else if (isValidatorOperations || hasValidatorIndicator) {
+      } else if (topic.identifiers.isValidatorVoteProposal || isValidatorOperations || hasValidatorIndicator) {
         type = 'validator';
-      } else if (hasAppIndicator) {
+      } else if (topic.identifiers.isFeaturedAppVoteProposal || hasAppIndicator) {
         type = 'featured-app';
+      } else if (isVoteProposal) {
+        // Generic vote proposal without clear indicators - check for network prefix
+        // "Vote Proposal on MainNet:" is typically featured app
+        if (/(?:mainnet|testnet|main\s*net|test\s*net):/i.test(subjectTrimmed)) {
+          type = 'featured-app';
+        } else {
+          // Default generic vote proposals to featured-app (most common in practice)
+          type = 'featured-app';
+        }
       } else {
         // Default shared group topics to featured-app (most common)
         type = 'featured-app';
@@ -748,12 +781,20 @@ function correlateTopics(allTopics) {
         } else if (candidate.flow === 'featured-app') {
           candidateType = 'featured-app';
         } else if (candidate.flow === 'shared') {
-          if (candidateIsVoteProposal || candidateHasCip || candidateIsCipDiscussion) {
+          // Use specific vote proposal type flags for better accuracy
+          if (candidate.identifiers.isCipVoteProposal || candidateHasCip || candidateIsCipDiscussion) {
             candidateType = 'cip';
-          } else if (candidateIsValidatorOperations || candidate.identifiers.validatorName) {
+          } else if (candidate.identifiers.isValidatorVoteProposal || candidateIsValidatorOperations || candidate.identifiers.validatorName) {
             candidateType = 'validator';
-          } else if (candidate.identifiers.appName) {
+          } else if (candidate.identifiers.isFeaturedAppVoteProposal || candidate.identifiers.appName) {
             candidateType = 'featured-app';
+          } else if (candidateIsVoteProposal) {
+            // Generic vote proposal - check for network prefix
+            if (/(?:mainnet|testnet|main\s*net|test\s*net):/i.test(candidateSubject)) {
+              candidateType = 'featured-app';
+            } else {
+              candidateType = 'featured-app';
+            }
           } else {
             candidateType = 'featured-app';
           }
