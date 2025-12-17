@@ -13,10 +13,15 @@ export const EXPECTED_TEMPLATES = {
   'Splice.Amulet:Amulet': { required: true, description: 'Amulet tokens' },
   'Splice.Amulet:LockedAmulet': { required: false, description: 'Locked amulet tokens' },
   'Splice.Amulet:FeaturedAppRight': { required: false, description: 'Featured app rights' },
+  'Splice.Amulet:ValidatorRight': { required: false, description: 'Validator rights' },
+  'Splice.Amulet:AppRewardCoupon': { required: false, description: 'App reward coupons' },
+  'Splice.Amulet:SvRewardCoupon': { required: false, description: 'SV reward coupons' },
+  'Splice.Amulet:ValidatorRewardCoupon': { required: false, description: 'Validator reward coupons' },
   
   // Validator templates
   'Splice.ValidatorLicense:ValidatorLicense': { required: true, description: 'Validator licenses' },
   'Splice.ValidatorLicense:ValidatorFaucetCoupon': { required: false, description: 'Validator faucet coupons' },
+  'Splice.ValidatorLicense:ValidatorLivenessActivityRecord': { required: false, description: 'Validator liveness records' },
   
   // DSO/Governance templates
   'Splice.DsoRules:DsoRules': { required: false, description: 'DSO rules configuration' },
@@ -24,10 +29,18 @@ export const EXPECTED_TEMPLATES = {
   'Splice.DsoRules:Confirmation': { required: false, description: 'Governance confirmations' },
   'Splice.DsoRules:ElectionRequest': { required: false, description: 'Election requests' },
   
+  // DSO SV State templates
+  'Splice.DSO.SvState:SvNodeState': { required: false, description: 'SV node state' },
+  'Splice.DSO.SvState:SvRewardState': { required: false, description: 'SV reward state' },
+  'Splice.DSO.SvState:SvStatusReport': { required: false, description: 'SV status reports' },
+  
   // Amulet Rules templates
   'Splice.AmuletRules:AmuletRules': { required: false, description: 'Amulet rules configuration' },
   'Splice.AmuletRules:TransferPreapproval': { required: false, description: 'Transfer pre-approvals' },
   'Splice.AmuletRules:ExternalPartySetupProposal': { required: false, description: 'External party setup' },
+  
+  // External Party templates
+  'Splice.ExternalPartyAmuletRules:ExternalPartyAmuletRules': { required: false, description: 'External party amulet rules' },
   
   // Round templates
   'Splice.Round:OpenMiningRound': { required: false, description: 'Open mining rounds' },
@@ -38,6 +51,8 @@ export const EXPECTED_TEMPLATES = {
   // ANS templates
   'Splice.Ans:AnsEntry': { required: false, description: 'ANS name entries' },
   'Splice.Ans:AnsEntryContext': { required: false, description: 'ANS entry contexts' },
+  'Splice.Ans:AnsRules': { required: false, description: 'ANS rules configuration' },
+  'Splice.Ans.AmuletConversionRateFeed:AmuletConversionRateFeed': { required: false, description: 'Amulet conversion rate feed' },
   
   // Traffic templates
   'Splice.DecentralizedSynchronizer:MemberTraffic': { required: false, description: 'Member traffic records' },
