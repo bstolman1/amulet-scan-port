@@ -1,7 +1,7 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,34 +35,56 @@ const Governance = () => {
     staleTime: 60 * 1000,
   });
 
-  // Fetch vote requests FIRST - this is the PRIMARY governance data source
+  // Fetch vote requests from LOCAL ACS first
   const {
-    data: voteRequestsData,
-    isLoading,
-    isError,
-    error: voteRequestError,
+    data: localVoteRequestsData,
+    isLoading: localLoading,
+    isError: localError,
   } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
-  // Fetch DsoRules to get SV count and voting threshold
-  const { data: dsoRulesData } = useAggregatedTemplateData(
+  // Fetch DsoRules from LOCAL ACS
+  const { data: localDsoRulesData } = useAggregatedTemplateData(
     undefined,
     "Splice:DsoRules:DsoRules",
   );
 
-  // Fetch Confirmations (secondary governance data)
-  const { data: confirmationsData } = useAggregatedTemplateData(
+  // Fetch Confirmations from LOCAL ACS
+  const { data: localConfirmationsData } = useAggregatedTemplateData(
     undefined,
     "Splice:DsoRules:Confirmation",
   );
 
+  // Check if local ACS has governance data
+  const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
+
+  // FALLBACK: Fetch from live Canton Scan API if local ACS has no governance data
+  const { data: liveVoteRequestsData, isLoading: liveLoading } = useQuery({
+    queryKey: ["live-vote-requests"],
+    queryFn: async () => {
+      const proposals = await scanApi.fetchGovernanceProposals();
+      return { data: proposals, source: "live" };
+    },
+    enabled: !localLoading && !localHasGovernanceData,
+    staleTime: 60 * 1000,
+    retry: 1,
+  });
+
+  // Use local data if available, otherwise use live fallback
+  const voteRequestsData = localHasGovernanceData ? localVoteRequestsData : liveVoteRequestsData;
+  const dsoRulesData = localDsoRulesData;
+  const confirmationsData = localConfirmationsData;
+  const isLoading = localLoading || (liveLoading && !localHasGovernanceData);
+  const isError = localError && !liveVoteRequestsData;
+  const isUsingLiveFallback = !localHasGovernanceData && !!liveVoteRequestsData;
+
   // Debug: Log data loading status
   console.log("🔍 Governance Data Status:", {
-    voteRequests: voteRequestsData?.data?.length ?? "loading",
-    dsoRules: dsoRulesData?.data?.length ?? "loading", 
+    localVoteRequests: localVoteRequestsData?.data?.length ?? "loading",
+    liveVoteRequests: liveVoteRequestsData?.data?.length ?? "not loaded",
+    usingLiveFallback: isUsingLiveFallback,
+    dsoRules: dsoRulesData?.data?.length ?? "loading",
     confirmations: confirmationsData?.data?.length ?? "loading",
     events: governanceEvents?.length ?? "loading",
-    voteRequestError: voteRequestError?.message,
-    eventsError: eventsError?.message,
   });
 
   const confirmations = confirmationsData?.data || [];
@@ -207,6 +229,17 @@ const Governance = () => {
           </Alert>
         )}
 
+        {/* Live Fallback Warning */}
+        {isUsingLiveFallback && (
+          <Alert className="bg-yellow-500/10 border-yellow-500/30">
+            <AlertTriangle className="h-4 w-4 text-yellow-500" />
+            <AlertDescription className="text-sm">
+              <strong>Using live Canton Scan API</strong> — Local ACS snapshot doesn't contain VoteRequest contracts. 
+              Governance data is being fetched from the live network.
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card className="glass-card p-6">
@@ -314,7 +347,7 @@ const Governance = () => {
                   Unable to load proposals from local ACS data.
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {voteRequestError?.message || "Ensure the local server is running (cd server && npm start)"}
+                  Ensure the local server is running (cd server && npm start) or check network connectivity.
                 </p>
               </div>
             ) : isLoading ? (
