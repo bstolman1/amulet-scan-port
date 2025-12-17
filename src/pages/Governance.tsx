@@ -1,8 +1,7 @@
-import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, Timer, UserPlus, AppWindow, Settings } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,224 +14,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { format, formatDistanceToNow, differenceInSeconds, differenceInMinutes, differenceInHours, differenceInDays } from "date-fns";
+import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
-
-// Countdown Timer Component
-const CountdownTimer = ({ deadline }: { deadline: string }) => {
-  const [timeLeft, setTimeLeft] = useState<string>("");
-  const [isExpired, setIsExpired] = useState(false);
-  const [urgency, setUrgency] = useState<"normal" | "warning" | "critical">("normal");
-
-  useEffect(() => {
-    const updateCountdown = () => {
-      const now = new Date();
-      const target = new Date(deadline);
-      const diffSeconds = differenceInSeconds(target, now);
-
-      if (diffSeconds <= 0) {
-        setIsExpired(true);
-        setTimeLeft("Expired");
-        return;
-      }
-
-      const days = differenceInDays(target, now);
-      const hours = differenceInHours(target, now) % 24;
-      const minutes = differenceInMinutes(target, now) % 60;
-      const seconds = diffSeconds % 60;
-
-      // Set urgency level
-      if (days < 1 && hours < 6) {
-        setUrgency("critical");
-      } else if (days < 2) {
-        setUrgency("warning");
-      } else {
-        setUrgency("normal");
-      }
-
-      if (days > 0) {
-        setTimeLeft(`${days}d ${hours}h ${minutes}m`);
-      } else if (hours > 0) {
-        setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
-      } else {
-        setTimeLeft(`${minutes}m ${seconds}s`);
-      }
-    };
-
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
-    return () => clearInterval(interval);
-  }, [deadline]);
-
-  const colorClass = isExpired
-    ? "text-destructive"
-    : urgency === "critical"
-    ? "text-destructive animate-pulse"
-    : urgency === "warning"
-    ? "text-warning"
-    : "text-primary";
-
-  return (
-    <div className={`flex items-center gap-1.5 ${colorClass}`}>
-      <Timer className="h-3.5 w-3.5" />
-      <span className="font-mono font-semibold text-sm">{timeLeft}</span>
-    </div>
-  );
-};
-
-// Action Details Display Component
-const ActionDetailsDisplay = ({ actionType, details }: { actionType: string; details: any }) => {
-  if (!details || Object.keys(details).length === 0) return null;
-
-  const renderDetails = () => {
-    switch (actionType) {
-      case "SRARC_UpdateSvRewardWeight":
-        return (
-          <>
-            {details.svParty && (
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">Target SV:</span>
-                <span className="font-mono text-sm">{details.svParty.split("::")[0]}</span>
-              </div>
-            )}
-            {details.newRewardWeight && (
-              <div className="flex items-center gap-2">
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">New Weight:</span>
-                <span className="font-bold text-primary">
-                  {(parseInt(details.newRewardWeight) / 10000).toFixed(2)}%
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  ({parseInt(details.newRewardWeight).toLocaleString()} bp)
-                </span>
-              </div>
-            )}
-          </>
-        );
-
-      case "SRARC_AddSv":
-        return (
-          <>
-            {details.newSv && (
-              <div className="flex items-center gap-2">
-                <UserPlus className="h-4 w-4 text-success" />
-                <span className="text-muted-foreground">New SV:</span>
-                <span className="font-mono text-sm">{details.newSv.split("::")[0]}</span>
-              </div>
-            )}
-            {details.svName && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Name:</span>
-                <span className="font-semibold">{details.svName}</span>
-              </div>
-            )}
-            {details.svRewardWeight && (
-              <div className="flex items-center gap-2">
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">Initial Weight:</span>
-                <span className="font-bold text-primary">
-                  {(parseInt(details.svRewardWeight) / 10000).toFixed(2)}%
-                </span>
-              </div>
-            )}
-            {details.participantId && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Participant ID:</span>
-                <span className="font-mono text-xs">{details.participantId}</span>
-              </div>
-            )}
-          </>
-        );
-
-      case "SRARC_RemoveSv":
-        return (
-          <>
-            {details.svParty && (
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-destructive" />
-                <span className="text-muted-foreground">Remove SV:</span>
-                <span className="font-mono text-sm">{details.svParty.split("::")[0]}</span>
-              </div>
-            )}
-          </>
-        );
-
-      case "SRARC_GrantFeaturedAppRight":
-        return (
-          <>
-            {details.provider && (
-              <div className="flex items-center gap-2">
-                <AppWindow className="h-4 w-4 text-chart-2" />
-                <span className="text-muted-foreground">Provider:</span>
-                <span className="font-mono text-sm">{details.provider.split("::")[0]}</span>
-              </div>
-            )}
-            {details.featuredAppRight?.provider && (
-              <div className="flex items-center gap-2">
-                <AppWindow className="h-4 w-4 text-chart-2" />
-                <span className="text-muted-foreground">App Provider:</span>
-                <span className="font-mono text-sm">{details.featuredAppRight.provider.split("::")[0]}</span>
-              </div>
-            )}
-          </>
-        );
-
-      case "SRARC_RevokeFeaturedAppRight":
-        return (
-          <>
-            {details.provider && (
-              <div className="flex items-center gap-2">
-                <AppWindow className="h-4 w-4 text-destructive" />
-                <span className="text-muted-foreground">Revoke From:</span>
-                <span className="font-mono text-sm">{details.provider.split("::")[0]}</span>
-              </div>
-            )}
-          </>
-        );
-
-      case "SRARC_SetConfig":
-      case "CRARC_AddFutureAmuletConfigSchedule":
-        return (
-          <>
-            <div className="flex items-center gap-2 mb-2">
-              <Settings className="h-4 w-4 text-chart-3" />
-              <span className="text-muted-foreground">Configuration Update</span>
-            </div>
-            {details.newConfig && (
-              <div className="text-xs bg-background/50 p-2 rounded font-mono max-h-32 overflow-auto">
-                {JSON.stringify(details.newConfig, null, 2).slice(0, 500)}
-                {JSON.stringify(details.newConfig).length > 500 && "..."}
-              </div>
-            )}
-            {details.newScheduleItem && (
-              <div className="text-xs bg-background/50 p-2 rounded font-mono max-h-32 overflow-auto">
-                {JSON.stringify(details.newScheduleItem, null, 2).slice(0, 500)}
-              </div>
-            )}
-          </>
-        );
-
-      default:
-        // Generic display for unknown action types
-        return (
-          <div className="text-xs bg-background/50 p-2 rounded font-mono max-h-32 overflow-auto">
-            {JSON.stringify(details, null, 2).slice(0, 300)}
-            {JSON.stringify(details).length > 300 && "..."}
-          </div>
-        );
-    }
-  };
-
-  return (
-    <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
-      <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
-      <div className="space-y-2 text-sm">
-        {renderDetails()}
-      </div>
-    </div>
-  );
-};
 
 const Governance = () => {
   const { data: dsoInfo } = useQuery({
@@ -257,18 +40,18 @@ const Governance = () => {
     data: localVoteRequestsData,
     isLoading: localLoading,
     isError: localError,
-  } = useAggregatedTemplateData(undefined, "Splice.DsoRules:VoteRequest");
+  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
   // Fetch DsoRules from LOCAL ACS
   const { data: localDsoRulesData } = useAggregatedTemplateData(
     undefined,
-    "Splice.DsoRules:DsoRules",
+    "Splice:DsoRules:DsoRules",
   );
 
   // Fetch Confirmations from LOCAL ACS
   const { data: localConfirmationsData } = useAggregatedTemplateData(
     undefined,
-    "Splice.DsoRules:Confirmation",
+    "Splice:DsoRules:Confirmation",
   );
 
   // Check if local ACS has governance data
@@ -324,79 +107,33 @@ const Governance = () => {
     return undefined;
   };
 
-  // Helper to parse action and get human-readable title
-  const parseAction = (action: any) => {
-    if (!action) return { title: "Unknown Action", type: "Unknown", details: null };
-    
-    const tag = action.tag || "";
-    const value = action.value || {};
-    const dsoAction = value.dsoAction || {};
-    const dsoActionTag = dsoAction.tag || "";
-    const dsoActionValue = dsoAction.value || {};
-    
-    // Build human-readable title from the action type
-    const actionTypeMap: Record<string, string> = {
-      "SRARC_UpdateSvRewardWeight": "Update SV Reward Weight",
-      "SRARC_AddSv": "Add Super Validator",
-      "SRARC_RemoveSv": "Remove Super Validator",
-      "SRARC_GrantFeaturedAppRight": "Grant Featured App Right",
-      "SRARC_RevokeFeaturedAppRight": "Revoke Featured App Right",
-      "CRARC_AddFutureAmuletConfigSchedule": "Update Amulet Config",
-      "SRARC_SetConfig": "Set DSO Config",
-    };
-    
-    const title = actionTypeMap[dsoActionTag] || dsoActionTag.replace(/^SRARC_|^CRARC_|^ARC_/g, "").replace(/([A-Z])/g, " $1").trim();
-    
-    return {
-      title: title || tag.replace(/^ARC_/g, "").replace(/([A-Z])/g, " $1").trim(),
-      type: dsoActionTag || tag,
-      details: dsoActionValue,
-    };
-  };
-
   // Process proposals from ACS data with full JSON parsing
   // Note: ACS data has fields nested in payload, so we need to extract them
   const proposals =
     voteRequestsData?.data?.map((voteRequest: any) => {
       // Handle both flat structure and nested payload structure from DuckDB
       const payload = voteRequest.payload || voteRequest;
-      
-      // Parse votes - can be array of tuples [[svName, voteObj], ...] or object {svName: voteObj}
-      const rawVotes = payload.votes || voteRequest.votes || [];
-      let votesArray: Array<{ svName: string; vote: any }> = [];
-      
-      if (Array.isArray(rawVotes)) {
-        // Array of tuples: [["SV-Name", {sv: "...", accept: true, reason: {...}}], ...]
-        votesArray = rawVotes.map((v: any) => ({
-          svName: Array.isArray(v) ? v[0] : v.svName || "Unknown",
-          vote: Array.isArray(v) ? v[1] : v,
-        }));
-      } else if (typeof rawVotes === "object") {
-        // Object format: {svName: voteObj}
-        votesArray = Object.entries(rawVotes).map(([svName, vote]) => ({ svName, vote }));
-      }
-      
-      const votesFor = votesArray.filter((v) => v.vote?.accept === true).length;
-      const votesAgainst = votesArray.filter((v) => v.vote?.accept === false).length;
-      
-      // Parse action
+      const votes = payload.votes || voteRequest.votes || {};
+      const votesList = Object.values(votes);
+      const votesFor = votesList.filter((v: any) => v?.accept || v?.Accept).length;
+      const votesAgainst = votesList.filter((v: any) => v?.reject || v?.Reject).length;
       const action = payload.action || voteRequest.action || {};
-      const parsedAction = parseAction(action);
+      const actionKey = Object.keys(action)[0] || "Unknown";
+      const actionData = action[actionKey];
+      const title = actionKey.replace(/ARC_|_/g, " ");
 
       // Extract requester information
       const requester = payload.requester || voteRequest.requester || "Unknown";
+      const requesterParty = payload.requesterName || voteRequest.requesterName || requester;
 
-      // Extract reason - handle object with url and body
-      const reasonObj = payload.reason || voteRequest.reason || {};
-      const reasonBody = typeof reasonObj === "object" ? reasonObj.body : reasonObj;
-      const reasonUrl = typeof reasonObj === "object" ? reasonObj.url : null;
+      // Extract reason
+      const reason = payload.reason?.url || payload.reason || voteRequest.reason?.url || voteRequest.reason || "No reason provided";
 
-      // Extract voting information for display
-      const votedSvs = votesArray.map((v) => ({
-        party: v.svName,
-        vote: v.vote?.accept === true ? "accept" : v.vote?.accept === false ? "reject" : "pending",
-        reason: v.vote?.reason?.body || "",
-        castAt: v.vote?.optCastAt,
+      // Extract voting information
+      const votedSvs = Object.keys(votes).map((svParty) => ({
+        party: svParty,
+        vote: votes[svParty]?.accept || votes[svParty]?.Accept ? "accept" : "reject",
+        weight: votes[svParty]?.expiresAt || "N/A",
       }));
 
       // Determine status based on votes and threshold
@@ -406,25 +143,25 @@ const Governance = () => {
       else if (votesAgainst > svCount - threshold) status = "rejected";
 
       const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
-      const voteBefore = payload.voteBefore || voteRequest.voteBefore;
-      const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
+      const effectiveAt = payload.effectiveAt || voteRequest.effectiveAt;
+      const expiresAt = payload.expiresAt || voteRequest.expiresAt;
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
         trackingCid,
-        title: parsedAction.title,
-        actionType: parsedAction.type,
-        actionDetails: parsedAction.details,
-        reasonBody,
-        reasonUrl,
+        title,
+        actionType: actionKey,
+        actionData,
+        description: reason,
         requester,
+        requesterParty,
         status,
         votesFor,
         votesAgainst,
-        totalVotes: votesArray.length,
         votedSvs,
-        voteBefore,
-        targetEffectiveAt,
+        effectiveAt,
+        expiresAt,
+        createdAt: effectiveAt,
         rawData: voteRequest, // Keep full JSON for debugging
       };
     }) || [];
@@ -639,33 +376,19 @@ const Governance = () => {
                             <h4 className="font-semibold text-lg">{proposal.title}</h4>
                             <p className="text-sm text-muted-foreground">Proposal #{proposal.id}</p>
                             <p className="text-xs text-muted-foreground mt-1">
-                              Requested by: <span className="font-mono">{proposal.requester}</span>
+                              Requested by: <span className="font-mono">{proposal.requesterParty.slice(0, 40)}...</span>
                             </p>
                           </div>
                         </div>
                         <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
                       </div>
 
-                      {/* Action Details */}
-                      <ActionDetailsDisplay actionType={proposal.actionType} details={proposal.actionDetails} />
-
-                      {/* Reason */}
                       <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                         <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                        <p className="text-sm">{proposal.reasonBody || "No reason provided"}</p>
-                        {proposal.reasonUrl && (
-                          <a 
-                            href={proposal.reasonUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-xs text-primary hover:underline mt-2 inline-block"
-                          >
-                            {proposal.reasonUrl}
-                          </a>
-                        )}
+                        <p className="text-sm">{proposal.description}</p>
                       </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
                         <div className="p-3 rounded-lg bg-background/50">
                           <p className="text-xs text-muted-foreground mb-1">Votes For</p>
                           <p className="text-lg font-bold text-success">{proposal.votesFor || 0}</p>
@@ -675,67 +398,35 @@ const Governance = () => {
                           <p className="text-lg font-bold text-destructive">{proposal.votesAgainst || 0}</p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
+                          <p className="text-xs text-muted-foreground mb-1">Effective At</p>
                           <p className="text-xs font-mono">
-                            {proposal.targetEffectiveAt ? format(new Date(proposal.targetEffectiveAt), "MMM d, yyyy HH:mm") : "N/A"}
+                            {proposal.effectiveAt ? new Date(proposal.effectiveAt).toLocaleDateString() : "N/A"}
                           </p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Time Remaining</p>
-                          {proposal.voteBefore ? (
-                            <CountdownTimer deadline={proposal.voteBefore} />
-                          ) : (
-                            <p className="text-xs font-mono text-muted-foreground">N/A</p>
-                          )}
-                          {proposal.voteBefore && (
-                            <p className="text-xs text-muted-foreground mt-1">
-                              {format(new Date(proposal.voteBefore), "MMM d, HH:mm")}
-                            </p>
-                          )}
+                          <p className="text-xs text-muted-foreground mb-1">Expires At</p>
+                          <p className="text-xs font-mono">
+                            {proposal.expiresAt ? new Date(proposal.expiresAt).toLocaleDateString() : "N/A"}
+                          </p>
                         </div>
                       </div>
 
                       {proposal.votedSvs?.length > 0 && (
                         <div className="mb-4">
-                          <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                            Votes Cast ({proposal.totalVotes}):
-                          </p>
-                          <div className="space-y-2">
+                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast:</p>
+                          <div className="flex flex-wrap gap-2">
                             {proposal.votedSvs.map((sv: any, idx: number) => (
-                              <div 
+                              <Badge
                                 key={idx}
-                                className={`p-2 rounded-lg border ${
+                                variant="outline"
+                                className={
                                   sv.vote === "accept"
-                                    ? "border-success/30 bg-success/5"
-                                    : sv.vote === "reject"
-                                    ? "border-destructive/30 bg-destructive/5"
-                                    : "border-border/30 bg-muted/30"
-                                }`}
+                                    ? "border-success/50 text-success"
+                                    : "border-destructive/50 text-destructive"
+                                }
                               >
-                                <div className="flex items-center justify-between">
-                                  <span className="font-mono text-sm">{sv.party}</span>
-                                  <Badge
-                                    variant="outline"
-                                    className={
-                                      sv.vote === "accept"
-                                        ? "border-success/50 text-success"
-                                        : sv.vote === "reject"
-                                        ? "border-destructive/50 text-destructive"
-                                        : "border-muted-foreground/50"
-                                    }
-                                  >
-                                    {sv.vote}
-                                  </Badge>
-                                </div>
-                                {sv.reason && (
-                                  <p className="text-xs text-muted-foreground mt-1">{sv.reason}</p>
-                                )}
-                                {sv.castAt && (
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    Cast: {format(new Date(sv.castAt), "MMM d, yyyy HH:mm")}
-                                  </p>
-                                )}
-                              </div>
+                                {sv.party.slice(0, 20)}... - {sv.vote}
+                              </Badge>
                             ))}
                           </div>
                         </div>
