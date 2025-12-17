@@ -28,9 +28,11 @@ import {
   Filter,
   Search,
   X,
+  History,
 } from "lucide-react";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { cn } from "@/lib/utils";
+import { useGovernanceHistory, GovernanceAction } from "@/hooks/use-governance-history";
 
 interface TopicIdentifiers {
   cipNumber: string | null;
@@ -168,8 +170,11 @@ const GovernanceFlow = () => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [stageFilter, setStageFilter] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline'>('lifecycle');
+  const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline' | 'history'>('lifecycle');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  
+  // Fetch governance history from backfill data
+  const { data: historyData, isLoading: isHistoryLoading } = useGovernanceHistory(500);
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [datePreset, setDatePreset] = useState<string>('all');
@@ -1027,10 +1032,14 @@ const GovernanceFlow = () => {
         </div>
 
         {/* View Toggle */}
-        <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline')}>
+        <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline' | 'history')}>
           <TabsList>
             <TabsTrigger value="lifecycle">Lifecycle ({groupedRegularItems.length + tbdItems.length})</TabsTrigger>
             <TabsTrigger value="timeline">Timeline ({timelineData.length} months)</TabsTrigger>
+            <TabsTrigger value="history">
+              <History className="h-4 w-4 mr-1" />
+              History ({historyData?.length || 0})
+            </TabsTrigger>
             <TabsTrigger value="all">All Topics ({filteredTopics.length})</TabsTrigger>
           </TabsList>
 
@@ -1446,6 +1455,112 @@ const GovernanceFlow = () => {
                   ))}
                 </div>
               </div>
+            )}
+          </TabsContent>
+
+          {/* History View - Completed Governance Actions from Backfill */}
+          <TabsContent value="history" className="space-y-3 mt-4">
+            {isHistoryLoading ? (
+              Array.from({ length: 10 }).map((_, i) => (
+                <Skeleton key={i} className="h-20 w-full" />
+              ))
+            ) : !historyData || historyData.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <History className="h-12 w-12 text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-medium">No History Found</h3>
+                  <p className="text-muted-foreground text-sm mt-1">
+                    Governance history will appear here once backfill data is available
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <ScrollArea className="h-[calc(100vh-450px)] pr-4">
+                <div className="space-y-2">
+                  {historyData.map((action) => {
+                    const statusConfig = {
+                      passed: { color: 'bg-green-500/20 border-green-500/30 text-green-400', icon: CheckCircle2, label: 'Passed' },
+                      failed: { color: 'bg-red-500/20 border-red-500/30 text-red-400', icon: XCircle, label: 'Failed' },
+                      expired: { color: 'bg-yellow-500/20 border-yellow-500/30 text-yellow-400', icon: Clock, label: 'Expired' },
+                      executed: { color: 'bg-blue-500/20 border-blue-500/30 text-blue-400', icon: CheckCircle2, label: 'Executed' },
+                    };
+                    const config = statusConfig[action.status];
+                    const StatusIcon = config.icon;
+                    
+                    return (
+                      <div
+                        key={action.id}
+                        className={cn(
+                          "p-4 rounded-lg border transition-colors",
+                          config.color
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={cn(
+                            "shrink-0 w-10 h-10 rounded-full flex items-center justify-center",
+                            action.status === 'passed' ? 'bg-green-500/30' :
+                            action.status === 'failed' ? 'bg-red-500/30' :
+                            action.status === 'expired' ? 'bg-yellow-500/30' :
+                            'bg-blue-500/30'
+                          )}>
+                            <StatusIcon className="h-5 w-5" />
+                          </div>
+                          
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <h4 className="font-medium">
+                                  {action.actionTag}
+                                  {action.cipReference && (
+                                    <span className="ml-2 text-primary">
+                                      CIP-{parseInt(action.cipReference)}
+                                    </span>
+                                  )}
+                                </h4>
+                                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
+                                  <span className="flex items-center gap-1">
+                                    <Calendar className="h-3 w-3" />
+                                    {formatDate(action.effectiveAt)}
+                                  </span>
+                                  <Badge variant="outline" className={cn("text-[10px] h-5", config.color)}>
+                                    {config.label}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px] h-5">
+                                    {action.templateType}
+                                  </Badge>
+                                  {action.type === 'vote_completed' && (
+                                    <span className="flex items-center gap-1">
+                                      <Vote className="h-3 w-3" />
+                                      {action.votesFor} for / {action.votesAgainst} against
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              {action.reasonUrl && (
+                                <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
+                                  <a href={action.reasonUrl} target="_blank" rel="noopener noreferrer">
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </a>
+                                </Button>
+                              )}
+                            </div>
+                            {action.reason && (
+                              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                                {action.reason}
+                              </p>
+                            )}
+                            {action.requester && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Requester: <span className="font-mono">{action.requester.slice(0, 20)}...</span>
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
             )}
           </TabsContent>
 

@@ -29,7 +29,8 @@ const getEventsSource = () => {
   if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   
-  return `(${queries.join(' UNION ALL ')})`;
+  // Use UNION (not UNION ALL) to prevent duplicate records
+  return `(${queries.join(' UNION ')})`;
 };
 
 // Check what data sources are available
@@ -415,6 +416,97 @@ router.get('/member-traffic', async (req, res) => {
     res.json({ data: rows, count: rows.length, source: sources.primarySource });
   } catch (err) {
     console.error('Error fetching member traffic events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/governance-history - Get historical governance events (completed votes, rule changes)
+router.get('/governance-history', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
+    const offset = parseInt(req.query.offset) || 0;
+    const sources = getDataSources();
+    
+    // Templates for governance history
+    const governanceTemplates = [
+      'VoteRequest',
+      'Confirmation',
+      'DsoRules',
+      'AmuletRules',
+    ];
+    
+    if (sources.primarySource === 'binary') {
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        maxDays: 365 * 2, // 2 years of history
+        maxFilesToScan: 1000,
+        sortBy: 'effective_at',
+        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
+      });
+      
+      // Process to extract governance history details
+      const history = result.records.map(event => ({
+        event_id: event.event_id,
+        event_type: event.event_type,
+        contract_id: event.contract_id,
+        template_id: event.template_id,
+        effective_at: event.effective_at,
+        timestamp: event.timestamp,
+        // Extract action details from payload if available
+        action_tag: event.payload?.action?.tag || null,
+        requester: event.payload?.requester || null,
+        reason: event.payload?.reason || null,
+        votes: event.payload?.votes || [],
+        vote_before: event.payload?.voteBefore || null,
+      }));
+      
+      return res.json({ 
+        data: history, 
+        count: history.length, 
+        hasMore: result.hasMore, 
+        source: 'binary' 
+      });
+    }
+    
+    // Fallback to DuckDB query
+    const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    const sql = `
+      SELECT 
+        event_id,
+        event_type,
+        contract_id,
+        template_id,
+        effective_at,
+        timestamp,
+        payload
+      FROM ${getEventsSource()}
+      WHERE ${templateFilter}
+      ORDER BY effective_at DESC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    
+    // Process rows to extract governance details
+    const history = rows.map(row => ({
+      event_id: row.event_id,
+      event_type: row.event_type,
+      contract_id: row.contract_id,
+      template_id: row.template_id,
+      effective_at: row.effective_at,
+      timestamp: row.timestamp,
+      action_tag: row.payload?.action?.tag || null,
+      requester: row.payload?.requester || null,
+      reason: row.payload?.reason || null,
+      votes: row.payload?.votes || [],
+      vote_before: row.payload?.voteBefore || null,
+    }));
+    
+    res.json({ data: history, count: history.length, source: sources.primarySource });
+  } catch (err) {
+    console.error('Error fetching governance history:', err);
     res.status(500).json({ error: err.message });
   }
 });
