@@ -1371,10 +1371,12 @@ const GovernanceFlow = () => {
                               expired: 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400',
                             };
                             
+                            const proposalId = (payload?.trackingCid || vr.contract_id)?.slice(0, 12) || 'unknown';
+                            
                             return (
                               <a
                                 key={`${entry.type}-${vr.contract_id}-${idx}`}
-                                href={`/governance?proposal=${vr.contract_id?.slice(0, 12)}`}
+                                href={`/governance?proposal=${proposalId}`}
                                 className={cn(
                                   "flex gap-3 p-3 rounded-lg border transition-colors",
                                   isStartEntry 
