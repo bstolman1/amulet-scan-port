@@ -747,20 +747,23 @@ router.get('/templates/search', async (req, res) => {
 
     const { snapshot, source: acsSource } = getBestSnapshotAndSource();
 
-    // Normalize query for flexible matching (handle colon vs dot separators)
+    // Normalize query for flexible matching - handle all separator formats
     const query = String(q);
-    const variants = [
+    const variants = new Set([
       query,
-      query.replaceAll(':', '.'),
-      query.replaceAll('.', ':'),
-    ];
+      query.replaceAll(':', '.'),  // Splice:DsoRules:VoteRequest -> Splice.DsoRules.VoteRequest
+      query.replaceAll('.', ':'),  // Splice.DsoRules.VoteRequest -> Splice:DsoRules:VoteRequest
+      query.replaceAll(':', '_'),  // Splice:DsoRules:VoteRequest -> Splice_DsoRules_VoteRequest
+      query.replaceAll('.', '_'),  // Splice.DsoRules.VoteRequest -> Splice_DsoRules_VoteRequest
+      query.replaceAll('_', ':'),  // Splice_DsoRules_VoteRequest -> Splice:DsoRules:VoteRequest
+      query.replaceAll('_', '.'),  // Splice_DsoRules_VoteRequest -> Splice.DsoRules.VoteRequest
+    ]);
 
     const like = (col, v) => `${col} LIKE '%${v.replace(/'/g, "''")}%'`;
-    const where = variants
+    const where = [...variants]
       .flatMap((v) => [
         like('tid', v),
-        like('entity_name', v),
-        like('module_name', v),
+        like('entity_name', v.split(/[:._]/).pop() || v), // Also match just the entity name
       ])
       .join(' OR ');
 
@@ -893,29 +896,36 @@ router.get('/contracts', async (req, res) => {
 
     let whereClause = '1=1';
     if (template) {
-      // Normalize template query:
-      // UI sends e.g. "Splice:DsoRules:VoteRequest" but stored template_id is typically
-      // "<pkg-hash>:Splice.DsoRules:VoteRequest" (module path uses dots)
+      // Normalize template query to handle all separator formats:
+      // UI sends "Splice:DsoRules:VoteRequest" but stored format could be:
+      // - "<pkg-hash>:Splice.DsoRules:VoteRequest" (dots for module)
+      // - "<pkg-hash>_Splice_DsoRules_VoteRequest" (underscores)
       const t = String(template);
+      const entityName = t.split(/[:._]/).pop() || t;
+      
       const variants = new Set([
         t,
         t.replaceAll(':', '.'),
-        // replace module separators (all but last) with dots
-        t.split(':').length >= 3 ? (() => {
-          const parts = t.split(':');
-          const entity = parts.pop();
-          return `${parts.join('.')}:${entity}`;
-        })() : t,
+        t.replaceAll('.', ':'),
+        t.replaceAll(':', '_'),
+        t.replaceAll('.', '_'),
+        t.replaceAll('_', ':'),
+        t.replaceAll('_', '.'),
+        entityName, // Also try just the entity name
       ]);
 
       const likeClauses = [...variants]
         .filter(Boolean)
         .map((v) => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
+      
+      // Also match by entity_name directly
+      likeClauses.push(`entity_name = '${entityName.replace(/'/g, "''")}'`);
 
       whereClause = `(${likeClauses.join(' OR ')})`;
     } else if (entity) {
       // Match by entity_name OR template_id containing the entity name
-      whereClause = `(entity_name = '${String(entity).replace(/'/g, "''")}' OR template_id LIKE '%:${entity}:%' OR template_id LIKE '%:${entity}')`;
+      const e = String(entity).replace(/'/g, "''");
+      whereClause = `(entity_name = '${e}' OR template_id LIKE '%:${e}:%' OR template_id LIKE '%:${e}' OR template_id LIKE '%_${e}_%' OR template_id LIKE '%_${e}')`;
     }
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
