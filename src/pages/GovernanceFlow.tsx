@@ -526,11 +526,20 @@ const GovernanceFlow = () => {
     const actionTag = payload?.action?.tag || 'Unknown Action';
     const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
     const isExpired = voteBefore && voteBefore < new Date();
-    const votes = payload?.votes || [];
-    const votesFor = votes.filter(v => v.accept).length;
-    const votesAgainst = votes.filter(v => !v.accept).length;
-    const totalVotes = votes.length;
+    const votesRaw = payload?.votes || [];
     const reason = payload?.reason;
+    
+    // Parse votes properly - votes can be [svName, voteData] tuples or objects
+    let votesFor = 0;
+    let votesAgainst = 0;
+    for (const vote of votesRaw) {
+      const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
+      const isAccept = voteData?.accept === true || voteData?.Accept === true;
+      const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
+      if (isAccept) votesFor++;
+      else if (isReject) votesAgainst++;
+    }
+    const totalVotes = votesRaw.length;
     
     // Get the proposal ID (first 12 chars of tracking CID or contract ID)
     const proposalId = payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown';
