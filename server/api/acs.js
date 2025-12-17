@@ -1264,55 +1264,6 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// GET /api/acs/debug - Debug endpoint to show entity names and template IDs
-router.get('/debug', async (req, res) => {
-  try {
-    if (!hasACSData()) {
-      return res.json({ data: null, message: 'No ACS data available' });
-    }
-
-    // Get distinct entity_names
-    const entitySql = `
-      SELECT DISTINCT entity_name, COUNT(*) as count
-      FROM ${getACSSource()}
-      GROUP BY entity_name
-      ORDER BY count DESC
-      LIMIT 100
-    `;
-
-    // Get sample template_ids
-    const templateSql = `
-      SELECT DISTINCT template_id, COUNT(*) as count
-      FROM ${getACSSource()}
-      GROUP BY template_id
-      ORDER BY count DESC
-      LIMIT 100
-    `;
-
-    // Get sample of columns
-    const columnsSql = `
-      SELECT * FROM ${getACSSource()} LIMIT 1
-    `;
-
-    const [entities, templates, sample] = await Promise.all([
-      db.safeQuery(entitySql),
-      db.safeQuery(templateSql),
-      db.safeQuery(columnsSql),
-    ]);
-
-    res.json(serializeBigInt({
-      data: {
-        entity_names: entities,
-        template_ids: templates,
-        sample_columns: sample.length > 0 ? Object.keys(sample[0]) : [],
-        sample_record: sample[0] || null,
-      }
-    }));
-  } catch (err) {
-    console.error('ACS debug error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REAL-TIME SUPPLY: Snapshot + v2/updates delta calculation
