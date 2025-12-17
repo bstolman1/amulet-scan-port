@@ -656,6 +656,96 @@ router.get('/templates', async (req, res) => {
   }
 });
 
+// GET /api/acs/templates/search - Search for templates by suffix/pattern
+router.get('/templates/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) {
+      return res.status(400).json({ error: 'Missing query parameter "q"' });
+    }
+
+    if (!hasACSData()) {
+      return res.json({ data: [], found: false, query: q });
+    }
+
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    // Normalize query for flexible matching (handle colon vs dot separators)
+    const query = String(q);
+    const variants = [
+      query,
+      query.replaceAll(':', '.'),
+      query.replaceAll('.', ':'),
+    ];
+    
+    const likeClauses = variants.map(v => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
+    
+    const sql = `
+      SELECT 
+        template_id,
+        entity_name,
+        module_name,
+        COUNT(DISTINCT contract_id) as contract_count
+      FROM ${acsSource}
+      WHERE ${likeClauses.join(' OR ')}
+      GROUP BY template_id, entity_name, module_name
+      ORDER BY contract_count DESC
+      LIMIT 20
+    `;
+
+    const rows = await db.safeQuery(sql);
+    
+    console.log(`[ACS] Template search for "${q}": found ${rows.length} matching templates`);
+    
+    res.json(serializeBigInt({
+      data: rows,
+      found: rows.length > 0,
+      query: q,
+      snapshot: snapshot ? {
+        migration_id: snapshot.migrationId,
+        snapshot_time: snapshot.snapshotTime,
+        path: snapshot.path,
+      } : null,
+    }));
+  } catch (err) {
+    console.error('ACS template search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/acs/snapshot-info - Get info about the currently selected snapshot
+router.get('/snapshot-info', (req, res) => {
+  try {
+    const { snapshot, type } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: null, message: 'No snapshot available' });
+    }
+    
+    // Count files in the snapshot directory
+    let fileCount = 0;
+    try {
+      const files = fs.readdirSync(snapshot.path);
+      fileCount = files.filter(f => 
+        f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst')
+      ).length;
+    } catch {}
+    
+    res.json({
+      data: {
+        migration_id: snapshot.migrationId,
+        snapshot_time: snapshot.snapshotTime,
+        path: snapshot.path,
+        type, // 'complete', 'available', or 'fallback'
+        file_count: fileCount,
+      },
+    });
+  } catch (err) {
+    console.error('ACS snapshot-info error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/acs/contracts - Get contracts by template with parsed payload
 // Note: Not cached because it depends on template/entity query params and is paginated
 router.get('/contracts', async (req, res) => {
