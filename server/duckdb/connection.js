@@ -19,8 +19,10 @@ const WSL_DEFAULT_DATA_DIR = '/home/bstolz/canton-explorer/data';
 // 2) repo-local data/ (if present)
 // 3) WSL default path
 const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WSL_DEFAULT_DATA_DIR);
+// Ledger events/updates live under: <BASE_DATA_DIR>/raw
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
-const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
+// ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
+const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
 // In-memory DuckDB instance
 const db = new duckdb.Database(':memory:');
