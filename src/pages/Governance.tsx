@@ -1,7 +1,7 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
+import { apiFetch } from "@/lib/duckdb-api-client";
 
 const Governance = () => {
   const { data: dsoInfo } = useQuery({
@@ -25,6 +26,14 @@ const Governance = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEvents, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
+
+  // Fetch snapshot info for the banner
+  const { data: snapshotInfo } = useQuery({
+    queryKey: ["acs-snapshot-info"],
+    queryFn: () => apiFetch<{ data: { migration_id: number; snapshot_time: string; path: string; type: string; file_count: number } | null }>("/api/acs/snapshot-info"),
+    retry: 1,
+    staleTime: 60 * 1000,
+  });
 
   // Fetch vote requests FIRST - this is the PRIMARY governance data source
   const {
@@ -173,6 +182,27 @@ const Governance = () => {
             <p className="text-muted-foreground">DSO proposals and voting activity</p>
           </div>
         </div>
+
+        {/* Snapshot Info Banner */}
+        {snapshotInfo?.data && (
+          <Alert className="bg-muted/50 border-primary/20">
+            <Database className="h-4 w-4" />
+            <AlertDescription className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <span>
+                <strong>ACS Snapshot:</strong> Migration {snapshotInfo.data.migration_id}
+              </span>
+              <span>
+                <strong>Time:</strong> {format(new Date(snapshotInfo.data.snapshot_time), "PPpp")}
+              </span>
+              <span>
+                <strong>Files:</strong> {snapshotInfo.data.file_count}
+              </span>
+              <Badge variant="outline" className="text-xs">
+                {snapshotInfo.data.type}
+              </Badge>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
