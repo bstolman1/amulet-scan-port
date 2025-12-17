@@ -634,8 +634,19 @@ function correlateTopics(allTopics) {
       // Protocol upgrades are a special type (migration, splice version upgrades)
       type = 'protocol-upgrade';
     } else if (topic.flow === 'cip') {
-      // CIP groups are always CIP type
-      type = 'cip';
+      // CIP groups are usually CIP type, but occasionally non-CIP announcements land here.
+      // Be strict: only treat as CIP if there's an explicit CIP number / CIP vote proposal.
+      // Otherwise, fall back to strong subject heuristics (validator/featured-app).
+      if (topic.identifiers.isCipVoteProposal || hasCip) {
+        type = 'cip';
+      } else if (topic.identifiers.isValidatorVoteProposal || hasValidatorIndicator || isValidatorOperations) {
+        type = 'validator';
+      } else if (topic.identifiers.isFeaturedAppVoteProposal || hasAppIndicator) {
+        type = 'featured-app';
+      } else {
+        // Default for ambiguous items posted in CIP groups
+        type = 'other';
+      }
     } else if (topic.flow === 'featured-app') {
       // tokenomics-announce is specifically for featured-app flow
       type = 'featured-app';
