@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
+import { cn } from "@/lib/utils";
 
 // Safe date formatter that won't crash on invalid dates
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
@@ -30,6 +33,9 @@ const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = 
 };
 
 const Governance = () => {
+  const [searchParams] = useSearchParams();
+  const highlightedProposalId = searchParams.get("proposal");
+  const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
     queryFn: () => scanApi.fetchDsoInfo(),
@@ -98,6 +104,25 @@ const Governance = () => {
     confirmations: confirmationsData?.data?.length ?? "loading",
     events: governanceEvents?.length ?? "loading",
   });
+
+  // Scroll to highlighted proposal when data loads
+  useEffect(() => {
+    if (highlightedProposalId && !isLoading) {
+      // Small delay to ensure DOM is rendered
+      const timer = setTimeout(() => {
+        const element = proposalRefs.current.get(highlightedProposalId);
+        if (element) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+          // Add a brief flash effect
+          element.classList.add("ring-2", "ring-pink-500", "ring-offset-2", "ring-offset-background");
+          setTimeout(() => {
+            element.classList.remove("ring-2", "ring-pink-500", "ring-offset-2", "ring-offset-background");
+          }, 3000);
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [highlightedProposalId, isLoading]);
 
   const confirmations = confirmationsData?.data || [];
 
@@ -441,9 +466,23 @@ const Governance = () => {
               </div>
             ) : (
               <div className="space-y-4">
-                {proposals?.map((proposal: any, index: number) => (
-                  <Collapsible key={index}>
-                    <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth border border-border/50">
+                {proposals?.map((proposal: any, index: number) => {
+                  const isHighlighted = highlightedProposalId === proposal.id;
+                  return (
+                  <Collapsible key={index} defaultOpen={isHighlighted}>
+                    <div 
+                      ref={(el) => {
+                        if (el && proposal.id) {
+                          proposalRefs.current.set(proposal.id, el);
+                        }
+                      }}
+                      className={cn(
+                        "p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border",
+                        isHighlighted 
+                          ? "border-pink-500/50 bg-pink-500/10" 
+                          : "border-border/50"
+                      )}
+                    >
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center space-x-3">
                           <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
@@ -585,7 +624,8 @@ const Governance = () => {
                       </CollapsibleContent>
                     </div>
                   </Collapsible>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
