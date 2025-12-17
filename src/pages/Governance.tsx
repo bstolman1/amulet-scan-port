@@ -17,6 +17,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 
+// Safe date formatter that won't crash on invalid dates
+const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
+  if (!dateStr || typeof dateStr !== "string") return "N/A";
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return "N/A";
+    return format(date, formatStr);
+  } catch {
+    return "N/A";
+  }
+};
+
 const Governance = () => {
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -444,15 +456,19 @@ const Governance = () => {
                       </div>
 
                       {/* Action Details */}
-                      {proposal.actionDetails && (
+                      {proposal.actionDetails && typeof proposal.actionDetails === "object" && (
                         <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
                           <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                            {Object.entries(proposal.actionDetails).map(([key, value]: [string, any]) => (
+                            {Object.entries(proposal.actionDetails)
+                              .filter(([_, value]) => value !== null && value !== undefined)
+                              .map(([key, value]: [string, any]) => (
                               <div key={key} className="flex flex-col">
                                 <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
                                 <span className="font-mono text-xs break-all">
-                                  {typeof value === "string" ? value : JSON.stringify(value)}
+                                  {typeof value === "string" || typeof value === "number" 
+                                    ? String(value) 
+                                    : JSON.stringify(value)}
                                 </span>
                               </div>
                             ))}
@@ -463,10 +479,10 @@ const Governance = () => {
                       {/* Reason Section */}
                       <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                         <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                        {proposal.reasonBody && (
+                        {proposal.reasonBody && typeof proposal.reasonBody === "string" && (
                           <p className="text-sm mb-2">{proposal.reasonBody}</p>
                         )}
-                        {proposal.reasonUrl && (
+                        {proposal.reasonUrl && typeof proposal.reasonUrl === "string" && (
                           <a 
                             href={proposal.reasonUrl} 
                             target="_blank" 
@@ -476,7 +492,8 @@ const Governance = () => {
                             {proposal.reasonUrl}
                           </a>
                         )}
-                        {!proposal.reasonBody && !proposal.reasonUrl && (
+                        {(!proposal.reasonBody || typeof proposal.reasonBody !== "string") && 
+                         (!proposal.reasonUrl || typeof proposal.reasonUrl !== "string") && (
                           <p className="text-sm text-muted-foreground italic">No reason provided</p>
                         )}
                       </div>
@@ -494,17 +511,13 @@ const Governance = () => {
                         <div className="p-3 rounded-lg bg-background/50">
                           <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
                           <p className="text-xs font-mono">
-                            {proposal.targetEffectiveAt 
-                              ? format(new Date(proposal.targetEffectiveAt), "MMM d, yyyy HH:mm")
-                              : "N/A"}
+                            {safeFormatDate(proposal.targetEffectiveAt)}
                           </p>
                         </div>
                         <div className="p-3 rounded-lg bg-background/50">
                           <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
                           <p className="text-xs font-mono">
-                            {proposal.voteBefore 
-                              ? format(new Date(proposal.voteBefore), "MMM d, yyyy HH:mm")
-                              : "N/A"}
+                            {safeFormatDate(proposal.voteBefore)}
                           </p>
                         </div>
                       </div>
@@ -532,12 +545,12 @@ const Governance = () => {
                                     {sv.vote === "accept" ? "✓ Accept" : "✗ Reject"}
                                   </Badge>
                                 </div>
-                                {sv.reason && (
+                                {sv.reason && typeof sv.reason === "string" && (
                                   <p className="text-xs text-muted-foreground italic">"{sv.reason}"</p>
                                 )}
                                 {sv.castAt && (
                                   <p className="text-xs text-muted-foreground mt-1">
-                                    Cast: {format(new Date(sv.castAt), "MMM d, yyyy HH:mm")}
+                                    Cast: {safeFormatDate(sv.castAt)}
                                   </p>
                                 )}
                               </div>
