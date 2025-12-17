@@ -28,8 +28,18 @@ import {
   Filter,
   Search,
   X,
-  
+  MoreVertical,
+  Edit2,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { cn } from "@/lib/utils";
 
@@ -73,6 +83,8 @@ interface LifecycleItem {
   firstDate: string;
   lastDate: string;
   currentStage: string;
+  overrideApplied?: boolean;
+  overrideReason?: string;
 }
 
 interface GovernanceData {
@@ -235,6 +247,43 @@ const GovernanceFlow = () => {
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
+    }
+  };
+
+  const { toast } = useToast();
+  
+  // Handler to reclassify a lifecycle item
+  const handleReclassify = async (primaryId: string, newType: LifecycleItem['type']) => {
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          primaryId,
+          type: newType,
+          reason: 'Manual UI correction',
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to save override');
+      }
+      
+      toast({
+        title: "Classification updated",
+        description: `"${primaryId}" will now appear as ${TYPE_CONFIG[newType].label}`,
+      });
+      
+      // Refresh data to show the change
+      fetchData(false);
+    } catch (err) {
+      console.error('Failed to reclassify:', err);
+      toast({
+        title: "Error",
+        description: "Failed to save classification override",
+        variant: "destructive",
+      });
     }
   };
 
@@ -1193,13 +1242,55 @@ const GovernanceFlow = () => {
                                   </Badge>
                                 ) : null;
                               })()}
+                              {/* Override indicator */}
+                              {group.items[0]?.overrideApplied && (
+                                <Badge variant="outline" className="text-[10px] h-5 border-purple-500/50 text-purple-400 bg-purple-500/10">
+                                  ✎ Manually classified
+                                </Badge>
+                              )}
                             </div>
                             
-                            {isExpanded ? (
-                              <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
-                            ) : (
-                              <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {/* Reclassify dropdown */}
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="h-7 w-7 p-0"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="bg-popover">
+                                  <DropdownMenuLabel className="text-xs">Reclassify as...</DropdownMenuLabel>
+                                  <DropdownMenuSeparator />
+                                  {Object.entries(TYPE_CONFIG).map(([typeKey, config]) => (
+                                    <DropdownMenuItem
+                                      key={typeKey}
+                                      disabled={typeKey === group.type}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleReclassify(group.primaryId, typeKey as LifecycleItem['type']);
+                                      }}
+                                      className="text-xs"
+                                    >
+                                      <Badge className={cn("mr-2 text-[10px]", config.color)}>
+                                        {config.label}
+                                      </Badge>
+                                      {typeKey === group.type && <span className="text-muted-foreground">(current)</span>}
+                                    </DropdownMenuItem>
+                                  ))}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                              
+                              {isExpanded ? (
+                                <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                              )}
+                            </div>
                           </div>
                         </CardHeader>
                         

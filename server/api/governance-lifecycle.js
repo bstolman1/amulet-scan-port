@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
 const CACHE_DIR = path.join(BASE_DATA_DIR, 'cache');
 const CACHE_FILE = path.join(CACHE_DIR, 'governance-lifecycle.json');
+const OVERRIDES_FILE = path.join(CACHE_DIR, 'governance-overrides.json');
 
 // Inference confidence threshold - only override postedStage if confidence >= threshold
 const INFERENCE_THRESHOLD = 0.85;
@@ -962,6 +963,69 @@ function writeCache(data) {
   }
 }
 
+// ========== MANUAL OVERRIDES SYSTEM ==========
+// Allows manual correction of type classifications that persist across refreshes
+
+// Read overrides from file
+function readOverrides() {
+  try {
+    if (fs.existsSync(OVERRIDES_FILE)) {
+      return JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf-8'));
+    }
+  } catch (err) {
+    console.error('Error reading overrides:', err.message);
+  }
+  return { itemOverrides: {}, topicOverrides: {} };
+}
+
+// Write overrides to file
+function writeOverrides(overrides) {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(OVERRIDES_FILE, JSON.stringify(overrides, null, 2));
+    console.log(`✅ Saved overrides to ${OVERRIDES_FILE}`);
+    return true;
+  } catch (err) {
+    console.error('Error writing overrides:', err.message);
+    return false;
+  }
+}
+
+// Apply overrides to lifecycle data
+function applyOverrides(data) {
+  if (!data || !data.lifecycleItems) return data;
+  
+  const overrides = readOverrides();
+  if (!overrides.itemOverrides || Object.keys(overrides.itemOverrides).length === 0) {
+    return data;
+  }
+  
+  let appliedCount = 0;
+  data.lifecycleItems = data.lifecycleItems.map(item => {
+    // Check for override by item ID or primaryId
+    const override = overrides.itemOverrides[item.id] || overrides.itemOverrides[item.primaryId];
+    if (override) {
+      console.log(`Applying override: "${item.primaryId}" -> type=${override.type}`);
+      appliedCount++;
+      return {
+        ...item,
+        type: override.type,
+        overrideApplied: true,
+        overrideReason: override.reason || 'Manual correction',
+      };
+    }
+    return item;
+  });
+  
+  if (appliedCount > 0) {
+    console.log(`Applied ${appliedCount} manual overrides`);
+  }
+  
+  return data;
+}
+
 // Fetch fresh data from groups.io
 async function fetchFreshData() {
   console.log('Fetching fresh governance lifecycle data from groups.io...');
@@ -1111,7 +1175,9 @@ router.get('/', async (req, res) => {
     const cached = readCache();
     if (cached) {
       console.log(`Serving cached governance data from ${cached.cachedAt}`);
-      return res.json(cached);
+      // Apply manual overrides before returning
+      const withOverrides = applyOverrides(cached);
+      return res.json(withOverrides);
     }
   }
   
@@ -1121,7 +1187,8 @@ router.get('/', async (req, res) => {
     const staleCache = readCache();
     if (staleCache) {
       console.log('No API key configured, serving existing cache');
-      return res.json({ ...staleCache, stale: true, warning: 'GROUPS_IO_API_KEY not configured - showing cached data' });
+      const withOverrides = applyOverrides(staleCache);
+      return res.json({ ...withOverrides, stale: true, warning: 'GROUPS_IO_API_KEY not configured - showing cached data' });
     }
     
     // No cache AND no API key - return empty data with 200 (not 500) so UI can handle gracefully
@@ -1138,7 +1205,9 @@ router.get('/', async (req, res) => {
   try {
     const data = await fetchFreshData();
     writeCache(data);
-    return res.json(data);
+    // Apply manual overrides before returning
+    const withOverrides = applyOverrides(data);
+    return res.json(withOverrides);
 
   } catch (error) {
     console.error('Error fetching governance lifecycle:', error);
@@ -1147,7 +1216,8 @@ router.get('/', async (req, res) => {
     const cached = readCache();
     if (cached) {
       console.log('Serving stale cache due to fetch error');
-      return res.json({ ...cached, stale: true, error: error.message });
+      const withOverrides = applyOverrides(cached);
+      return res.json({ ...withOverrides, stale: true, error: error.message });
     }
     
     res.status(500).json({ 
@@ -1188,7 +1258,62 @@ router.get('/cache-info', (req, res) => {
   }
 });
 
-// ========== DIAGNOSTIC ENDPOINT (Phase 2) ==========
+// ========== MANUAL OVERRIDES ENDPOINTS ==========
+
+// Get all current overrides
+router.get('/overrides', (req, res) => {
+  const overrides = readOverrides();
+  res.json(overrides);
+});
+
+// Set/update an override for a lifecycle item
+router.post('/overrides', (req, res) => {
+  const { itemId, primaryId, type, reason } = req.body;
+  
+  if (!type || (!itemId && !primaryId)) {
+    return res.status(400).json({ error: 'Missing required fields: type and either itemId or primaryId' });
+  }
+  
+  const validTypes = ['cip', 'featured-app', 'validator', 'protocol-upgrade', 'outcome', 'other'];
+  if (!validTypes.includes(type)) {
+    return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+  }
+  
+  const overrides = readOverrides();
+  const key = primaryId || itemId;
+  
+  overrides.itemOverrides[key] = {
+    type,
+    reason: reason || 'Manual correction',
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Override set: "${key}" -> ${type} (${reason || 'Manual correction'})`);
+    res.json({ success: true, override: overrides.itemOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save override' });
+  }
+});
+
+// Delete an override
+router.delete('/overrides/:key', (req, res) => {
+  const { key } = req.params;
+  const overrides = readOverrides();
+  
+  if (overrides.itemOverrides[key]) {
+    delete overrides.itemOverrides[key];
+    if (writeOverrides(overrides)) {
+      res.json({ success: true, message: `Override removed for "${key}"` });
+    } else {
+      res.status(500).json({ error: 'Failed to save changes' });
+    }
+  } else {
+    res.status(404).json({ error: `No override found for "${key}"` });
+  }
+});
+
+
 // Shows high-confidence disagreements between postedStage and inferredStage
 // This is for observation only - does NOT change any behavior
 router.get('/inference-disagreements', (req, res) => {
