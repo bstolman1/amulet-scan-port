@@ -906,7 +906,7 @@ const Governance = () => {
                       <CollapsibleTrigger asChild>
                         <Button variant="ghost" size="sm" className="w-full mt-2">
                           <Code className="h-4 w-4 mr-2" />
-                          View IDs
+                          View Full JSON Data
                         </Button>
                       </CollapsibleTrigger>
 
@@ -915,9 +915,9 @@ const Governance = () => {
                           <p className="text-xs text-muted-foreground mb-2 font-semibold">
                             Contract ID: <span className="font-mono">{action.contractId}</span>
                           </p>
-                          <p className="text-xs text-muted-foreground font-semibold">
-                            Action ID: <span className="font-mono">{action.id}</span>
-                          </p>
+                          <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-96">
+                            {JSON.stringify(action.rawData, null, 2)}
+                          </pre>
                         </div>
                       </CollapsibleContent>
                     </div>
