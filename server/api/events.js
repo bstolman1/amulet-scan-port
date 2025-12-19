@@ -421,104 +421,56 @@ router.get('/member-traffic', async (req, res) => {
 });
 
 // GET /api/events/governance-history - Get historical governance events (completed votes, rule changes)
-// IMPORTANT: For VoteRequest, we use CREATED events (not exercised/archived) because:
-// - Each vote cast creates a NEW VoteRequest contract with updated votes array
-// - Exercised events have empty payload (no vote data)
-// - We group by trackingCid and take the LATEST created event for final vote count
 router.get('/governance-history', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
     const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
-
+    
+    // Templates for governance history
+    const governanceTemplates = [
+      'VoteRequest',
+      'Confirmation',
+      'DsoRules',
+      'AmuletRules',
+    ];
+    
     if (sources.primarySource === 'binary') {
-      // IMPORTANT: scanning the full backfill can take a long time.
-      // We do a targeted scan that stops early once we have enough unique VoteRequests.
-      const maxFilesToScan = Math.min(parseInt(req.query.maxFiles) || 5000, 10000);
-      const maxDays = 365 * 10;
-      const hardTimeLimitMs = 20_000;
-      const startedAt = Date.now();
-
-      const files = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', {
-        maxDays,
-        maxFiles: maxFilesToScan,
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit,
+        offset,
+        maxDays: 365 * 2, // 2 years of history
+        maxFilesToScan: 1000,
+        sortBy: 'effective_at',
+        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
       });
-
-      const voteRequestsByTrackingCid = new Map();
-      const confirmations = [];
-
-      // We need enough to paginate *after* grouping by trackingCid.
-      // Keep a buffer so grouping doesn't shrink below the requested page.
-      const targetUnique = offset + limit + 250;
-
-      for (let i = 0; i < files.length; i++) {
-        if (Date.now() - startedAt > hardTimeLimitMs) break;
-
-        const file = files[i];
-        try {
-          const result = await binaryReader.readBinaryFile(file);
-
-          for (const event of result.records) {
-            // VoteRequest: use CREATED events (full vote payload). Each new vote creates a new contract.
-            if (event.template_id?.includes('VoteRequest') && event.event_type === 'created') {
-              const trackingCid = event.payload?.trackingCid || event.contract_id;
-              const existing = voteRequestsByTrackingCid.get(trackingCid);
-              if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
-                voteRequestsByTrackingCid.set(trackingCid, event);
-              }
-              continue;
-            }
-
-            // Confirmation: executed actions
-            if (event.template_id?.includes('Confirmation') && event.event_type === 'created') {
-              confirmations.push(event);
-            }
-          }
-        } catch {
-          // ignore file read errors
-        }
-
-        if (voteRequestsByTrackingCid.size + confirmations.length >= targetUnique) {
-          break;
-        }
-      }
-
-      const allEvents = [
-        ...Array.from(voteRequestsByTrackingCid.values()),
-        ...confirmations,
-      ].sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
-
-      const paginatedEvents = allEvents.slice(offset, offset + limit);
-
-      const history = paginatedEvents.map((event) => ({
+      
+      // Process to extract governance history details
+      const history = result.records.map(event => ({
         event_id: event.event_id,
         event_type: event.event_type,
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: event.effective_at,
         timestamp: event.timestamp,
-        payload: event.payload,
-        signatories: event.signatories,
-        observers: event.observers,
+        // Extract action details from payload if available
+        action_tag: event.payload?.action?.tag || null,
+        requester: event.payload?.requester || null,
+        reason: event.payload?.reason || null,
+        votes: event.payload?.votes || [],
+        vote_before: event.payload?.voteBefore || null,
       }));
-
-      return res.json({
-        data: history,
-        count: history.length,
-        totalUnique: allEvents.length,
-        hasMore: offset + limit < allEvents.length,
-        source: 'binary',
-        meta: {
-          maxFilesToScan,
-          maxDays,
-          scannedWithinMs: Date.now() - startedAt,
-          stoppedEarly: voteRequestsByTrackingCid.size + confirmations.length >= targetUnique,
-          timedOut: Date.now() - startedAt > hardTimeLimitMs,
-        },
+      
+      return res.json({ 
+        data: history, 
+        count: history.length, 
+        hasMore: result.hasMore, 
+        source: 'binary' 
       });
     }
-
+    
     // Fallback to DuckDB query
+    const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
     const sql = `
       SELECT 
         event_id,
@@ -529,155 +481,32 @@ router.get('/governance-history', async (req, res) => {
         timestamp,
         payload
       FROM ${getEventsSource()}
-      WHERE (template_id LIKE '%VoteRequest%' AND event_type = 'created')
-         OR (template_id LIKE '%Confirmation%' AND event_type = 'created')
+      WHERE ${templateFilter}
       ORDER BY effective_at DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
-
+    
     const rows = await db.safeQuery(sql);
-
-    // Return full event data with payload for frontend processing
-    const history = rows.map((row) => ({
+    
+    // Process rows to extract governance details
+    const history = rows.map(row => ({
       event_id: row.event_id,
       event_type: row.event_type,
       contract_id: row.contract_id,
       template_id: row.template_id,
       effective_at: row.effective_at,
       timestamp: row.timestamp,
-      payload: row.payload,
-      signatories: row.signatories,
-      observers: row.observers,
+      action_tag: row.payload?.action?.tag || null,
+      requester: row.payload?.requester || null,
+      reason: row.payload?.reason || null,
+      votes: row.payload?.votes || [],
+      vote_before: row.payload?.voteBefore || null,
     }));
-
+    
     res.json({ data: history, count: history.length, source: sources.primarySource });
   } catch (err) {
     console.error('Error fetching governance history:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-// Specifically searches for VoteRequest events across ALL migrations
-router.get('/governance-debug', async (req, res) => {
-  try {
-    const sources = getDataSources();
-    
-    // Count binary files
-    const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
-    
-    // Find files across ALL migrations with very large range
-    const files = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', { 
-      maxDays: 365 * 10, // 10 years to cover all backfill
-      maxFiles: 5000     // Scan more files to find VoteRequest events
-    });
-    
-    // Specifically search for VoteRequest events (created and archived)
-    const voteRequestCreated = [];
-    const voteRequestArchived = [];
-    let filesScanned = 0;
-    let totalEventsScanned = 0;
-    
-    // Scan files until we find at least one created and one archived VoteRequest
-    for (const file of files) {
-      if (voteRequestCreated.length >= 3 && voteRequestArchived.length >= 3) break;
-      
-      try {
-        filesScanned++;
-        const result = await binaryReader.readBinaryFile(file);
-        totalEventsScanned += result.records.length;
-        
-        for (const e of result.records) {
-          // Only look for VoteRequest template
-          if (!e.template_id?.includes('VoteRequest')) continue;
-          
-          // For exercised events, choice data is in raw, not in protobuf fields
-          const isExercised = e.event_type === 'exercised' || e.event_type === 'archived';
-          
-          const eventInfo = {
-            file: file.split('/').slice(-5).join('/'),
-            event_id: e.event_id,
-            event_type: e.event_type,
-            template_id: e.template_id,
-            contract_id: e.contract_id,
-            effective_at: e.effective_at,
-            has_payload: !!e.payload,
-            payload_keys: e.payload ? Object.keys(e.payload) : [],
-            payload_full: e.payload,
-            // Exercised event fields - prefer raw over protobuf fields
-            choice: e.raw?.choice || e.choice,
-            choice_argument: e.raw?.choice_argument, // This is ONLY in raw!
-            consuming: e.raw?.consuming ?? e.consuming,
-            interface_id: e.raw?.interface_id || e.interface_id,
-            child_event_ids: e.raw?.child_event_ids || e.child_event_ids,
-            exercise_result: e.raw?.exercise_result || e.exercise_result,
-            acting_parties: e.raw?.acting_parties || e.acting_parties,
-            // Raw JSON
-            has_raw: !!e.raw,
-            raw_keys: e.raw ? Object.keys(e.raw) : [],
-          };
-          
-          if (e.event_type === 'created' && voteRequestCreated.length < 3) {
-            voteRequestCreated.push(eventInfo);
-          } else if ((e.event_type === 'archived' || e.event_type === 'exercised') && voteRequestArchived.length < 3) {
-            voteRequestArchived.push(eventInfo);
-          }
-        }
-      } catch (err) {
-        // Ignore file read errors, continue scanning
-      }
-      
-      // Stop after scanning 500 files if we still haven't found anything
-      if (filesScanned >= 500 && voteRequestCreated.length === 0 && voteRequestArchived.length === 0) {
-        break;
-      }
-    }
-    
-    // Also list what migrations exist
-    const fs = await import('fs');
-    const path = await import('path');
-    let migrations = [];
-    try {
-      const entries = fs.readdirSync(db.DATA_PATH, { withFileTypes: true });
-      migrations = entries
-        .filter(e => e.isDirectory() && e.name.startsWith('migration='))
-        .map(e => {
-          const migPath = path.join(db.DATA_PATH, e.name);
-          const subEntries = fs.readdirSync(migPath, { withFileTypes: true });
-          const hasYearPartitions = subEntries.some(se => se.isDirectory() && se.name.startsWith('year='));
-          const hasPbZst = subEntries.some(se => se.name.endsWith('.pb.zst'));
-          return {
-            name: e.name,
-            hasYearPartitions,
-            hasPbZstDirect: hasPbZst,
-            subDirs: subEntries.filter(se => se.isDirectory()).map(se => se.name).slice(0, 5),
-          };
-        });
-    } catch (err) {
-      migrations = [{ error: err.message }];
-    }
-    
-    res.json({
-      dataPath: db.DATA_PATH,
-      sources,
-      totalBinaryFiles: fileCount,
-      filesFound: files.length,
-      filesScanned,
-      totalEventsScanned,
-      migrations,
-      voteRequestCreated: {
-        count: voteRequestCreated.length,
-        samples: voteRequestCreated,
-      },
-      voteRequestArchived: {
-        count: voteRequestArchived.length,
-        samples: voteRequestArchived,
-      },
-      message: voteRequestCreated.length === 0 && voteRequestArchived.length === 0
-        ? 'No VoteRequest events found. Check if backfill data includes governance templates.'
-        : `Found ${voteRequestCreated.length} created and ${voteRequestArchived.length} archived VoteRequest events`,
-    });
-  } catch (err) {
-    console.error('Error in governance-debug:', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -24,8 +24,6 @@ interface ApiResponse<T> {
 export async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
-    // Prevent the UI from hanging forever if the local server is slow/unreachable.
-    signal: options?.signal ?? AbortSignal.timeout(10_000),
     headers: {
       'Content-Type': 'application/json',
       ...options?.headers,
