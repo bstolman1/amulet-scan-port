@@ -14,7 +14,7 @@ import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
 import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat } from './acs-schema.js';
-import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete } from './write-acs-parquet.js';
+import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete, cleanupOldSnapshots } from './write-acs-parquet.js';
 
 // TLS config (secure by default)
 // Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
@@ -140,6 +140,14 @@ async function fetchACSPage(migrationId, recordTime, after = null) {
  */
 async function runMigrationSnapshot(migrationId) {
   console.log(`\n📍 Starting ACS snapshot for migration ${migrationId}`);
+  
+  // Clean up old snapshots BEFORE starting new one
+  // This prevents data accumulation and corruption
+  console.log(`   🗑️ Cleaning up old snapshots for migration ${migrationId}...`);
+  const cleanupResult = cleanupOldSnapshots(migrationId);
+  if (cleanupResult.deleted > 0) {
+    console.log(`   ✅ Deleted ${cleanupResult.deleted} old snapshot(s)`);
+  }
   
   const recordTime = await getSnapshotTimestamp(migrationId);
   console.log(`   Record time: ${recordTime}`);

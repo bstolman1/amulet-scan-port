@@ -3,9 +3,12 @@
  * 
  * Handles writing ACS snapshot data to partitioned files.
  * Uses streaming writes to avoid memory limits.
+ * 
+ * IMPORTANT: Each new snapshot REPLACES the previous snapshot for the same migration.
+ * This prevents data accumulation and corruption from stale snapshots.
  */
 
-import { createWriteStream, mkdirSync, existsSync, readdirSync } from 'fs';
+import { createWriteStream, mkdirSync, existsSync, readdirSync, rmSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getACSPartitionPath, ACS_COLUMNS } from './acs-schema.js';
@@ -20,6 +23,9 @@ const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
+// Keep only this many snapshots per migration (set to 1 to only keep latest)
+const MAX_SNAPSHOTS_PER_MIGRATION = parseInt(process.env.MAX_SNAPSHOTS_PER_MIGRATION) || 1;
+
 // In-memory buffer for batching
 let contractsBuffer = [];
 let currentSnapshotTime = null;
@@ -31,6 +37,139 @@ let currentMigrationId = null;
 function ensureDir(dirPath) {
   if (!existsSync(dirPath)) {
     mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+/**
+ * Delete old snapshots for a migration, keeping only the most recent ones
+ * @param {number} migrationId - The migration ID to clean up
+ * @param {number} keepCount - Number of snapshots to keep (default: MAX_SNAPSHOTS_PER_MIGRATION)
+ */
+export function cleanupOldSnapshots(migrationId, keepCount = MAX_SNAPSHOTS_PER_MIGRATION) {
+  const migrationDir = join(DATA_DIR, 'acs', `migration=${migrationId}`);
+  
+  if (!existsSync(migrationDir)) {
+    console.log(`[ACS] No existing snapshots for migration ${migrationId}`);
+    return { deleted: 0, kept: 0 };
+  }
+  
+  // Collect all snapshot directories with their timestamps
+  const snapshots = [];
+  
+  try {
+    // Walk through year/month/day/snapshot structure
+    const years = readdirSync(migrationDir).filter(f => f.startsWith('year='));
+    
+    for (const year of years) {
+      const yearPath = join(migrationDir, year);
+      if (!statSync(yearPath).isDirectory()) continue;
+      
+      const months = readdirSync(yearPath).filter(f => f.startsWith('month='));
+      
+      for (const month of months) {
+        const monthPath = join(yearPath, month);
+        if (!statSync(monthPath).isDirectory()) continue;
+        
+        const days = readdirSync(monthPath).filter(f => f.startsWith('day='));
+        
+        for (const day of days) {
+          const dayPath = join(monthPath, day);
+          if (!statSync(dayPath).isDirectory()) continue;
+          
+          const snapshotDirs = readdirSync(dayPath).filter(f => f.startsWith('snapshot='));
+          
+          for (const snapshot of snapshotDirs) {
+            const snapshotPath = join(dayPath, snapshot);
+            if (!statSync(snapshotPath).isDirectory()) continue;
+            
+            // Parse timestamp from path structure
+            const y = year.replace('year=', '');
+            const m = month.replace('month=', '');
+            const d = day.replace('day=', '');
+            const s = snapshot.replace('snapshot=', '');
+            const hh = s.substring(0, 2);
+            const mm = s.substring(2, 4);
+            const ss = s.substring(4, 6) || '00';
+            
+            const timestamp = new Date(`${y}-${m}-${d}T${hh}:${mm}:${ss}Z`);
+            
+            snapshots.push({
+              path: snapshotPath,
+              timestamp,
+              isComplete: existsSync(join(snapshotPath, '_COMPLETE')),
+            });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[ACS] Error scanning snapshots: ${err.message}`);
+    return { deleted: 0, kept: 0, error: err.message };
+  }
+  
+  if (snapshots.length === 0) {
+    console.log(`[ACS] No snapshots found for migration ${migrationId}`);
+    return { deleted: 0, kept: 0 };
+  }
+  
+  // Sort by timestamp descending (newest first)
+  snapshots.sort((a, b) => b.timestamp - a.timestamp);
+  
+  // Keep the most recent 'keepCount' complete snapshots, delete the rest
+  const toKeep = [];
+  const toDelete = [];
+  
+  for (const snap of snapshots) {
+    if (toKeep.length < keepCount && snap.isComplete) {
+      toKeep.push(snap);
+    } else {
+      toDelete.push(snap);
+    }
+  }
+  
+  // Delete old snapshots
+  let deletedCount = 0;
+  for (const snap of toDelete) {
+    try {
+      console.log(`[ACS] 🗑️ Deleting old snapshot: ${snap.path}`);
+      rmSync(snap.path, { recursive: true, force: true });
+      deletedCount++;
+    } catch (err) {
+      console.error(`[ACS] Failed to delete ${snap.path}: ${err.message}`);
+    }
+  }
+  
+  // Clean up empty parent directories
+  cleanupEmptyDirs(migrationDir);
+  
+  console.log(`[ACS] Cleanup complete: deleted ${deletedCount} snapshots, keeping ${toKeep.length}`);
+  return { deleted: deletedCount, kept: toKeep.length };
+}
+
+/**
+ * Remove empty directories recursively (bottom-up)
+ */
+function cleanupEmptyDirs(dirPath) {
+  if (!existsSync(dirPath) || !statSync(dirPath).isDirectory()) return;
+  
+  const entries = readdirSync(dirPath);
+  
+  // First, recurse into subdirectories
+  for (const entry of entries) {
+    const fullPath = join(dirPath, entry);
+    if (statSync(fullPath).isDirectory()) {
+      cleanupEmptyDirs(fullPath);
+    }
+  }
+  
+  // Check again after recursion - directory may now be empty
+  const remainingEntries = readdirSync(dirPath);
+  if (remainingEntries.length === 0) {
+    try {
+      rmSync(dirPath, { recursive: true });
+    } catch {
+      // Ignore errors - may be the root acs directory
+    }
   }
 }
 
@@ -191,4 +330,5 @@ export default {
   clearBuffers,
   writeCompletionMarker,
   isSnapshotComplete,
+  cleanupOldSnapshots,
 };
