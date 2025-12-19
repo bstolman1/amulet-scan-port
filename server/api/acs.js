@@ -547,35 +547,20 @@ router.get('/snapshots', async (req, res) => {
     });
     
     // Transform to match the UI's expected format
-    // Check which snapshot has actual data files (not just markers)
     const snapshots = availableSnapshots.slice(0, 50).map((s) => {
       const snapshotTimeStr = new Date(s.snapshotTime).toISOString();
       const isComplete = s.isComplete || completeSet.has(`${s.migrationId}:${s.snapshotTime}`);
-      
-      // Check if this snapshot has actual data files
-      let hasDataFiles = false;
-      let fileCount = 0;
-      try {
-        if (s.path && fs.existsSync(s.path)) {
-          const files = fs.readdirSync(s.path);
-          const dataFiles = files.filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
-          fileCount = dataFiles.length;
-          hasDataFiles = fileCount > 0;
-        }
-      } catch {}
       
       return {
         id: `local-m${s.migrationId}-${snapshotTimeStr}`,
         timestamp: s.snapshotTime,
         migration_id: s.migrationId,
         record_time: s.snapshotTime,
-        entry_count: hasDataFiles ? null : 0, // null means "has data, count unknown"; 0 means archived
+        entry_count: 0, // Would require query to get exact count
         template_count: 0,
         status: isComplete ? 'completed' : 'in_progress',
         source: 'local',
         path: s.path,
-        has_data: hasDataFiles,
-        file_count: fileCount,
       };
     });
 
