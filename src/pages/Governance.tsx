@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useGovernanceHistory } from "@/hooks/use-governance-history";
 
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -71,6 +72,13 @@ const Governance = () => {
     undefined,
     "Splice:DsoRules:Confirmation",
   );
+
+  // Governance history comes from BACKFILL events (DuckDB local DB)
+  const {
+    data: historyActions,
+    isLoading: historyLoading,
+    isError: historyIsError,
+  } = useGovernanceHistory(500);
 
   // Check if local ACS has governance data
   const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
@@ -636,170 +644,132 @@ const Governance = () => {
           <div className="p-6">
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
               <History className="h-5 w-5" />
-              Historical Governance Proposals (DuckDB)
-              {proposals?.length ? (
+              Governance History (Backfill)
+              {historyActions?.length ? (
                 <Badge variant="outline" className="ml-2">
-                  {proposals.length} VoteRequests
+                  {historyActions.length} actions
                 </Badge>
               ) : null}
             </h3>
-            
-            {isLoading ? (
+
+            {historyIsError ? (
+              <div className="text-center py-12">
+                <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">Unable to load governance history from backfill events</p>
+                <p className="text-xs text-muted-foreground">
+                  Ensure the local server is running and that backfill event files exist (cd server && npm start).
+                </p>
+              </div>
+            ) : historyLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
+                  <Skeleton key={i} className="h-24 w-full" />
                 ))}
               </div>
-            ) : !proposals?.length ? (
+            ) : !historyActions?.length ? (
               <div className="text-center py-12">
-                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground mb-2">No governance proposals found</p>
-                <p className="text-xs text-muted-foreground">
-                  Governance data is loaded from local DuckDB ACS snapshot
-                </p>
+                <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">No historical governance actions found</p>
+                <p className="text-xs text-muted-foreground">This tab reads from the backfill ledger events in your local DuckDB.</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {proposals.map((proposal: any, index: number) => (
-                  <Collapsible key={proposal.contractId || `history-${index}`}>
+                {historyActions.map((action) => (
+                  <Collapsible key={action.id}>
                     <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center space-x-3">
-                          <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
+                          <div className="gradient-accent p-2 rounded-lg">
+                            {action.type === "vote_completed" ? <Vote className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
+                          </div>
                           <div className="flex-1">
-                            <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                            <h4 className="font-semibold text-lg">{action.actionTag}</h4>
                             <p className="text-sm text-muted-foreground">
-                              {proposal.id}
+                              <span className="font-mono text-xs">{action.templateType}</span>
                               <span className="mx-2">•</span>
-                              <span className="font-mono text-xs">{proposal.actionType}</span>
+                              Effective: <span className="font-mono text-xs">{safeFormatDate(action.effectiveAt)}</span>
+                              {action.cipReference ? (
+                                <>
+                                  <span className="mx-2">•</span>
+                                  CIP-{action.cipReference}
+                                </>
+                              ) : null}
                             </p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              Requested by: <span className="font-medium text-foreground">{proposal.requester}</span>
-                            </p>
+                            {action.requester ? (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Requested by: <span className="font-medium text-foreground">{action.requester}</span>
+                              </p>
+                            ) : null}
                           </div>
                         </div>
-                        <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
+                        <Badge className={(() => {
+                          switch (action.status) {
+                            case "passed":
+                              return "bg-success/10 text-success border-success/20";
+                            case "failed":
+                              return "bg-destructive/10 text-destructive border-destructive/20";
+                            case "expired":
+                              return "bg-warning/10 text-warning border-warning/20";
+                            case "executed":
+                              return "bg-primary/10 text-primary border-primary/20";
+                            default:
+                              return "bg-muted text-muted-foreground";
+                          }
+                        })()}
+                        >
+                          {action.status}
+                        </Badge>
                       </div>
 
-                      {/* Action Details */}
-                      {proposal.actionDetails && typeof proposal.actionDetails === "object" && Object.keys(proposal.actionDetails).length > 0 && (
-                        <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
-                          <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                            {Object.entries(proposal.actionDetails)
-                              .filter(([_, value]) => value !== null && value !== undefined)
-                              .slice(0, 8)
-                              .map(([key, value]: [string, any]) => (
-                              <div key={key} className="flex flex-col">
-                                <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
-                                <span className="font-mono text-xs break-all">
-                                  {typeof value === "string" || typeof value === "number" 
-                                    ? String(value).slice(0, 100) 
-                                    : JSON.stringify(value).slice(0, 100)}
-                                </span>
-                              </div>
-                            ))}
+                      {action.type === "vote_completed" && (
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                            <p className="text-lg font-bold text-success">{action.votesFor}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                            <p className="text-lg font-bold text-destructive">{action.votesAgainst}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Total Votes</p>
+                            <p className="text-lg font-bold">{action.totalVotes}</p>
                           </div>
                         </div>
                       )}
 
-                      {/* Reason Section */}
-                      <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
-                        <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                        {proposal.reasonBody && typeof proposal.reasonBody === "string" && (
-                          <p className="text-sm mb-2">{proposal.reasonBody}</p>
-                        )}
-                        {proposal.reasonUrl && typeof proposal.reasonUrl === "string" && (
-                          <a 
-                            href={proposal.reasonUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-sm text-primary hover:underline break-all"
-                          >
-                            {proposal.reasonUrl}
-                          </a>
-                        )}
-                        {(!proposal.reasonBody || typeof proposal.reasonBody !== "string") && 
-                         (!proposal.reasonUrl || typeof proposal.reasonUrl !== "string") && (
-                          <p className="text-sm text-muted-foreground italic">No reason provided</p>
-                        )}
-                      </div>
-
-                      {/* Stats Grid */}
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                        <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Votes For</p>
-                          <p className="text-lg font-bold text-success">{proposal.votesFor}</p>
+                      {action.reason ? (
+                        <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                          <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                          <p className="text-sm mb-2">{action.reason}</p>
+                          {action.reasonUrl ? (
+                            <a
+                              href={action.reasonUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-primary hover:underline break-all"
+                            >
+                              {action.reasonUrl}
+                            </a>
+                          ) : null}
                         </div>
-                        <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
-                          <p className="text-lg font-bold text-destructive">{proposal.votesAgainst}</p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Threshold</p>
-                          <p className="text-lg font-bold">{votingThreshold}</p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
-                          <p className="text-xs font-mono">
-                            {safeFormatDate(proposal.targetEffectiveAt)}
-                          </p>
-                        </div>
-                        <div className="p-3 rounded-lg bg-background/50">
-                          <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
-                          <p className="text-xs font-mono">
-                            {safeFormatDate(proposal.voteBefore)}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Votes Cast */}
-                      {proposal.votedSvs?.length > 0 && (
-                        <div className="mb-4">
-                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast ({proposal.votedSvs.length}):</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                            {proposal.votedSvs.slice(0, 10).map((sv: any, idx: number) => (
-                              <div 
-                                key={idx}
-                                className={`p-2 rounded border text-sm ${
-                                  sv.vote === "accept" 
-                                    ? "bg-success/5 border-success/30" 
-                                    : "bg-destructive/5 border-destructive/30"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="font-medium text-xs truncate max-w-[200px]">{sv.party}</span>
-                                  <Badge 
-                                    variant="outline" 
-                                    className={`text-xs ${sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}`}
-                                  >
-                                    {sv.vote === "accept" ? "✓" : "✗"}
-                                  </Badge>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                          {proposal.votedSvs.length > 10 && (
-                            <p className="text-xs text-muted-foreground mt-2">... and {proposal.votedSvs.length - 10} more votes</p>
-                          )}
-                        </div>
-                      )}
+                      ) : null}
 
                       <CollapsibleTrigger asChild>
                         <Button variant="ghost" size="sm" className="w-full mt-2">
                           <Code className="h-4 w-4 mr-2" />
-                          View Full JSON Data
+                          View IDs
                         </Button>
                       </CollapsibleTrigger>
 
                       <CollapsibleContent className="mt-4">
                         <div className="p-4 rounded-lg bg-background/70 border border-border/50">
                           <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                            Contract ID: <span className="font-mono">{proposal.contractId}</span>
+                            Contract ID: <span className="font-mono">{action.contractId}</span>
                           </p>
-                          <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-96">
-                            {JSON.stringify(proposal.rawData, null, 2)}
-                          </pre>
+                          <p className="text-xs text-muted-foreground font-semibold">
+                            Action ID: <span className="font-mono">{action.id}</span>
+                          </p>
                         </div>
                       </CollapsibleContent>
                     </div>
