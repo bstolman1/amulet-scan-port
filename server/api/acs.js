@@ -2102,4 +2102,70 @@ router.post('/trigger-snapshot', async (req, res) => {
   }
 });
 
+// POST /api/acs/purge - Purge all local ACS data
+router.post('/purge', async (req, res) => {
+  try {
+    console.log('[ACS] Purge requested');
+    
+    if (!fs.existsSync(ACS_DATA_PATH)) {
+      return res.json({ 
+        success: true, 
+        message: 'No ACS data directory found - nothing to purge',
+        deletedFiles: 0,
+        deletedDirs: 0
+      });
+    }
+
+    let deletedFiles = 0;
+    let deletedDirs = 0;
+
+    // Recursively delete all files and directories in the ACS data path
+    const deleteRecursive = (dirPath) => {
+      if (!fs.existsSync(dirPath)) return;
+      
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        
+        if (entry.isDirectory()) {
+          deleteRecursive(fullPath);
+          try {
+            fs.rmdirSync(fullPath);
+            deletedDirs++;
+          } catch (e) {
+            console.warn(`[ACS] Could not remove dir ${fullPath}: ${e.message}`);
+          }
+        } else {
+          try {
+            fs.unlinkSync(fullPath);
+            deletedFiles++;
+          } catch (e) {
+            console.warn(`[ACS] Could not remove file ${fullPath}: ${e.message}`);
+          }
+        }
+      }
+    };
+
+    deleteRecursive(ACS_DATA_PATH);
+
+    // Invalidate all ACS-related caches
+    invalidateCache('acs');
+    invalidateCache('supply');
+    invalidateCache('rich-list');
+
+    console.log(`[ACS] Purge complete: ${deletedFiles} files, ${deletedDirs} directories deleted`);
+
+    res.json({ 
+      success: true, 
+      message: `Purged ${deletedFiles} files and ${deletedDirs} directories`,
+      deletedFiles,
+      deletedDirs
+    });
+  } catch (err) {
+    console.error('[ACS] Purge error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;
