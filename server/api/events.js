@@ -436,11 +436,12 @@ router.get('/governance-history', async (req, res) => {
     ];
     
     if (sources.primarySource === 'binary') {
+      // Use a much longer maxDays for governance history since backfill spans years
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
-        maxDays: 365 * 2, // 2 years of history
-        maxFilesToScan: 1000,
+        maxDays: 365 * 5, // 5 years of history to cover all backfill data
+        maxFilesToScan: 2000, // Scan more files for governance
         sortBy: 'effective_at',
         filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
       });
@@ -502,6 +503,66 @@ router.get('/governance-history', async (req, res) => {
     res.json({ data: history, count: history.length, source: sources.primarySource });
   } catch (err) {
     console.error('Error fetching governance history:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/governance-debug - Debug endpoint to diagnose backfill governance data
+router.get('/governance-debug', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    
+    // Count binary files
+    const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
+    
+    // Find files (with extended range for backfill)
+    const files = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', { maxDays: 365 * 5, maxFiles: 100 });
+    
+    // Try to read a sample of governance events from the first few files
+    const governanceTemplates = ['VoteRequest', 'Confirmation', 'DsoRules', 'AmuletRules'];
+    const sampleEvents = [];
+    let filesScanned = 0;
+    
+    for (const file of files.slice(0, 20)) {
+      try {
+        filesScanned++;
+        const result = await binaryReader.readBinaryFile(file);
+        const govEvents = result.records.filter(e => 
+          governanceTemplates.some(t => e.template_id?.includes(t))
+        );
+        
+        for (const e of govEvents.slice(0, 3)) {
+          sampleEvents.push({
+            file: file.split('/').slice(-4).join('/'), // Last 4 path segments
+            event_id: e.event_id,
+            event_type: e.event_type,
+            template_id: e.template_id,
+            contract_id: e.contract_id?.slice(0, 20) + '...',
+            effective_at: e.effective_at,
+            has_payload: !!e.payload,
+            payload_keys: e.payload ? Object.keys(e.payload) : [],
+            payload_sample: e.payload ? JSON.stringify(e.payload).slice(0, 500) : null,
+          });
+        }
+        
+        if (sampleEvents.length >= 10) break;
+      } catch (err) {
+        // Ignore file read errors
+      }
+    }
+    
+    res.json({
+      dataPath: db.DATA_PATH,
+      sources,
+      totalBinaryFiles: fileCount,
+      filesFound: files.length,
+      filesScanned,
+      sampleFilePaths: files.slice(0, 10).map(f => f.split('/').slice(-4).join('/')),
+      governanceEventsFound: sampleEvents.length,
+      sampleEvents,
+    });
+  } catch (err) {
+    console.error('Error in governance-debug:', err);
     res.status(500).json({ error: err.message });
   }
 });
