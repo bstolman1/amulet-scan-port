@@ -19,15 +19,18 @@ export function useAggregatedTemplateData(
 
       // Use DuckDB for all template data queries
       console.log(`[useAggregatedTemplateData] Using DuckDB for template=${templateSuffix}`);
-      
-      const response = await getLocalACSContracts({ 
+
+      // Avoid huge requests that can stall the UI; for most templates we only need recent/active contracts.
+      const response = await getLocalACSContracts({
         template: templateSuffix,
-        limit: 100000 
+        limit: 5000,
       });
-      
+
       const totalCount = response.count ?? response.data?.length ?? 0;
-      
-      console.log(`[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts (total: ${totalCount}) for template=${templateSuffix}`);
+
+      console.log(
+        `[useAggregatedTemplateData] DuckDB returned ${response.data?.length || 0} contracts (total: ${totalCount}) for template=${templateSuffix}`,
+      );
       
       return {
         data: response.data || [],

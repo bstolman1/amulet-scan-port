@@ -320,66 +320,114 @@ export async function readBinaryFile(filePath) {
 /**
  * Fast file finder that uses partition structure for recent data
  * Returns files sorted by data date (newest first) without scanning all 55k+ files
+ * 
+ * IMPORTANT: Handles MIXED layouts where some migrations have year/month/day partitions
+ * and others (backfill) have flat or different structures.
  */
 export function findBinaryFilesFast(dirPath, type = 'events', options = {}) {
-  const { maxDays = 7, maxFiles = 1000 } = options;
+  const { maxDays = 7, maxFiles = 1000, scanAllMigrations = false } = options;
   const files = [];
-  
-  // Generate date paths for the last N days (most likely to have recent data)
-  const today = new Date();
-  const datePaths = [];
-  
-  for (let i = 0; i < maxDays; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    datePaths.push({ year, month, day, dateMs: d.getTime() });
-  }
-  
+
   // Scan migration folders
   const migrations = [];
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory() && entry.name.startsWith('migration=')) {
-        migrations.push(path.join(dirPath, entry.name));
+        migrations.push({
+          path: path.join(dirPath, entry.name),
+          name: entry.name,
+          id: parseInt(entry.name.replace('migration=', '')) || 0,
+        });
       }
     }
-  } catch { }
-  
-  // For each date (newest first), scan for files
-  for (const { year, month, day, dateMs } of datePaths) {
-    for (const migrationDir of migrations) {
-      const dayDir = path.join(migrationDir, `year=${year}`, `month=${month}`, `day=${day}`);
-      try {
-        if (fs.existsSync(dayDir)) {
-          const entries = fs.readdirSync(dayDir, { withFileTypes: true });
-          for (const entry of entries) {
-            if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
-              files.push({
-                path: path.join(dayDir, entry.name),
-                dataDateMs: dateMs,
-                writeTs: extractWriteTimestampFromPath(path.join(dayDir, entry.name))
-              });
+    // Sort migrations by ID descending (newest first)
+    migrations.sort((a, b) => b.id - a.id);
+  } catch {
+    // ignore
+  }
+
+  // For each migration, detect its layout and scan appropriately
+  for (const migration of migrations) {
+    if (files.length >= maxFiles) break;
+
+    // Check if this migration has date partitions
+    let hasDatePartitions = false;
+    try {
+      const entries = fs.readdirSync(migration.path, { withFileTypes: true });
+      hasDatePartitions = entries.some((e) => e.isDirectory() && e.name.startsWith('year='));
+    } catch {
+      // ignore
+    }
+
+    if (hasDatePartitions) {
+      // Partitioned layout: scan by date
+      const today = new Date();
+      for (let i = 0; i < maxDays && files.length < maxFiles; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const dateMs = d.getTime();
+
+        const dayDir = path.join(migration.path, `year=${year}`, `month=${month}`, `day=${day}`);
+        try {
+          if (fs.existsSync(dayDir)) {
+            const entries = fs.readdirSync(dayDir, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
+                const fullPath = path.join(dayDir, entry.name);
+                files.push({
+                  path: fullPath,
+                  dataDateMs: dateMs,
+                  writeTs: extractWriteTimestampFromPath(fullPath),
+                  migrationId: migration.id,
+                });
+                if (files.length >= maxFiles) break;
+              }
             }
           }
+        } catch {
+          // ignore
         }
-      } catch { }
+      }
+    } else {
+      // Flat/backfill layout: recursive scan with limit
+      // For backfill migrations, we want to scan all files (up to maxFiles)
+      const stack = [migration.path];
+      while (stack.length && files.length < maxFiles) {
+        const dir = stack.pop();
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              stack.push(fullPath);
+            } else if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
+              files.push({
+                path: fullPath,
+                dataDateMs: extractDataDateFromPath(fullPath),
+                writeTs: extractWriteTimestampFromPath(fullPath),
+                migrationId: migration.id,
+              });
+              if (files.length >= maxFiles) break;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
-    
-    // Stop if we have enough files
-    if (files.length >= maxFiles) break;
   }
-  
+
   // Sort by data date desc, then write timestamp desc
   files.sort((a, b) => {
     if (a.dataDateMs !== b.dataDateMs) return b.dataDateMs - a.dataDateMs;
     return b.writeTs - a.writeTs;
   });
-  
-  return files.slice(0, maxFiles).map(f => f.path);
+
+  return files.slice(0, maxFiles).map((f) => f.path);
 }
 
 /**
@@ -464,6 +512,9 @@ export function hasBinaryFiles(dirPath, type = 'events') {
 
 // Configurable scan limit via env var (default 500, up from 200)
 const MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_MAX_FILES) || 500;
+// Absolute safety cap to avoid accidentally scanning the entire dataset in one request.
+// Governance history/backfill debugging may intentionally request higher limits.
+const HARD_MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_HARD_MAX_FILES) || 10000;
 
 // Stream records with pagination (memory efficient for large datasets)
 export async function streamRecords(dirPath, type = 'events', options = {}) {
@@ -475,11 +526,12 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     maxDays = 30,
     maxFilesToScan: maxFilesToScanOverride,
   } = options;
-  
-  const maxFilesToScanLimit = Math.min(
-    typeof maxFilesToScanOverride === 'number' ? maxFilesToScanOverride : MAX_FILES_TO_SCAN,
-    MAX_FILES_TO_SCAN,
-  );
+
+  // If the caller explicitly requests a higher scan depth, honor it (within a hard cap).
+  // Otherwise fall back to the default MAX_FILES_TO_SCAN.
+  const maxFilesToScanLimit = typeof maxFilesToScanOverride === 'number'
+    ? Math.min(Math.max(0, maxFilesToScanOverride), HARD_MAX_FILES_TO_SCAN)
+    : MAX_FILES_TO_SCAN;
   
   // Use FAST finder that leverages partition structure instead of scanning 55k+ files
   const files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });

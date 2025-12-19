@@ -1,21 +1,23 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { useGovernanceEvents } from "@/hooks/use-governance-events";
+import { useGovernanceHistory } from "@/hooks/use-governance-history";
+
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
@@ -43,7 +45,7 @@ const Governance = () => {
   });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
-  const { data: governanceEvents, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
+  
 
   // Fetch snapshot info for the banner
   const { data: snapshotInfo } = useQuery({
@@ -71,6 +73,31 @@ const Governance = () => {
     undefined,
     "Splice:DsoRules:Confirmation",
   );
+
+  // Governance history pagination state
+  const [historyLimit, setHistoryLimit] = useState(50);
+  const [historyOffset, setHistoryOffset] = useState(0);
+
+  // Governance history comes from BACKFILL events (DuckDB local DB)
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    isError: historyIsError,
+  } = useGovernanceHistory(historyLimit, historyOffset);
+
+  const historyActions = historyData?.actions || [];
+  const historySummary = historyData?.summary;
+  const historyHasMore = historyData?.hasMore ?? false;
+  const historyPage = Math.floor(historyOffset / historyLimit) + 1;
+
+  // If history is empty, fetch backend debug info to diagnose missing DuckDB data
+  const { data: duckdbEventsDebug } = useQuery({
+    queryKey: ["duckdb-events-debug"],
+    queryFn: () => apiFetch<any>("/api/events/debug"),
+    enabled: !historyLoading && !historyIsError && historyActions.length === 0,
+    retry: 1,
+    staleTime: 30_000,
+  });
 
   // Check if local ACS has governance data
   const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
@@ -102,7 +129,6 @@ const Governance = () => {
     usingLiveFallback: isUsingLiveFallback,
     dsoRules: dsoRulesData?.data?.length ?? "loading",
     confirmations: confirmationsData?.data?.length ?? "loading",
-    events: governanceEvents?.length ?? "loading",
   });
 
   // Scroll to highlighted proposal when data loads
@@ -635,78 +661,269 @@ const Governance = () => {
       <TabsContent value="history">
         <Card className="glass-card">
           <div className="p-6">
-            <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-              <History className="h-5 w-5" />
-              Historical Governance Events
-            </h3>
-            
-            {eventsLoading ? (
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                <History className="h-5 w-5" />
+                Governance History (Backfill)
+                {historyActions.length ? (
+                  <Badge variant="outline" className="ml-2">
+                    {historyActions.length} on page {historyPage}
+                  </Badge>
+                ) : null}
+              </h3>
+
+              {/* Pagination Controls */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Show:</span>
+                  <Select
+                    value={String(historyLimit)}
+                    onValueChange={(val) => {
+                      setHistoryLimit(Number(val));
+                      setHistoryOffset(0);
+                    }}
+                  >
+                    <SelectTrigger className="w-20 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="25">25</SelectItem>
+                      <SelectItem value="50">50</SelectItem>
+                      <SelectItem value="100">100</SelectItem>
+                      <SelectItem value="200">200</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={historyOffset === 0}
+                    onClick={() => setHistoryOffset(Math.max(0, historyOffset - historyLimit))}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-sm px-2 text-muted-foreground">Page {historyPage}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!historyHasMore}
+                    onClick={() => setHistoryOffset(historyOffset + historyLimit)}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* Summary Stats Cards */}
+            {historySummary && historySummary.totalRequests > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+                <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                  <p className="text-xs text-muted-foreground mb-1">Total Requests</p>
+                  <p className="text-xl font-bold text-foreground">{historySummary.totalRequests}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+                  <p className="text-xs text-muted-foreground mb-1">In Progress</p>
+                  <p className="text-xl font-bold text-primary">{historySummary.inProgress}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-success/10 border border-success/20">
+                  <p className="text-xs text-muted-foreground mb-1">Executed</p>
+                  <p className="text-xl font-bold text-success">{historySummary.executed}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                  <p className="text-xs text-muted-foreground mb-1">Rejected</p>
+                  <p className="text-xl font-bold text-destructive">{historySummary.rejected}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-warning/10 border border-warning/20">
+                  <p className="text-xs text-muted-foreground mb-1">Expired</p>
+                  <p className="text-xl font-bold text-warning">{historySummary.expired}</p>
+                </div>
+              </div>
+            )}
+
+            {historyIsError ? (
+              <div className="text-center py-12">
+                <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">Unable to load governance history from backfill events</p>
+                <p className="text-xs text-muted-foreground">
+                  Ensure the local server is running and that backfill event files exist (cd server && npm start).
+                </p>
+              </div>
+            ) : historyLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-20 w-full" />
+                  <Skeleton key={i} className="h-24 w-full" />
                 ))}
               </div>
-            ) : !governanceEvents?.length ? (
+            ) : !historyActions.length ? (
               <div className="text-center py-12">
-                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No historical governance events found</p>
+                <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">No historical governance actions found</p>
+                <p className="text-xs text-muted-foreground">This tab reads from the backfill ledger events in your local DuckDB.</p>
+
+                {duckdbEventsDebug ? (
+                  <div className="mt-6 mx-auto max-w-2xl text-left">
+                    <Alert className="bg-muted/30">
+                      <Database className="h-4 w-4" />
+                      <AlertDescription className="text-xs leading-relaxed">
+                        <div className="grid gap-1">
+                          <div>
+                            <span className="font-semibold">DuckDB DATA_PATH:</span>{" "}
+                            <span className="font-mono break-all">{duckdbEventsDebug.dataPath}</span>
+                          </div>
+                          <div>
+                            <span className="font-semibold">Primary source:</span>{" "}
+                            <span className="font-mono">{duckdbEventsDebug.sources?.primarySource}</span>
+                          </div>
+                          {typeof duckdbEventsDebug.totalBinaryFiles === "number" ? (
+                            <div>
+                              <span className="font-semibold">Binary event files:</span>{" "}
+                              <span className="font-mono">{duckdbEventsDebug.totalBinaryFiles}</span>
+                            </div>
+                          ) : null}
+                          {duckdbEventsDebug.newestByDataDate?.[0]?.dataDate ? (
+                            <div>
+                              <span className="font-semibold">Newest partition:</span>{" "}
+                              <span className="font-mono">{duckdbEventsDebug.newestByDataDate[0].dataDate}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-muted-foreground">
+                          If DATA_PATH is wrong, set <span className="font-mono">DATA_DIR</span> in <span className="font-mono">server/.env</span> to your data folder and restart the server.
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  </div>
+                ) : null}
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Event Type</TableHead>
-                    <TableHead>Round</TableHead>
-                    <TableHead>Template</TableHead>
-                    <TableHead>Timestamp</TableHead>
-                    <TableHead>Details</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {governanceEvents.slice(0, 100).map((event: any, idx: number) => {
-                    const ts = event.timestamp || event.effective_at || event.created_at;
-                    const date = ts ? new Date(ts) : null;
-                    const timestampLabel = date && !Number.isNaN(date.getTime())
-                      ? format(date, "MMM d, yyyy HH:mm")
-                      : "-";
+              <div className="space-y-4">
+                {historyActions.map((action) => (
+                  <Collapsible key={action.id}>
+                    <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <div className="gradient-accent p-2 rounded-lg">
+                            {action.templateType === "VoteRequest" ? <Vote className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
+                          </div>
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-lg">{action.title}</h4>
+                            <p className="text-sm text-muted-foreground">
+                              <span className="font-mono text-xs">{action.templateType}</span>
+                              <span className="mx-2">•</span>
+                              Effective: <span className="font-mono text-xs">{safeFormatDate(action.effectiveAt)}</span>
+                            </p>
+                            {action.requester ? (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Requested by: <span className="font-medium text-foreground">{action.requester}</span>
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                        <Badge className={(() => {
+                          switch (action.status) {
+                            case "executed":
+                              return "bg-success/10 text-success border-success/20";
+                            case "rejected":
+                              return "bg-destructive/10 text-destructive border-destructive/20";
+                            case "expired":
+                              return "bg-warning/10 text-warning border-warning/20";
+                            case "in_progress":
+                              return "bg-primary/10 text-primary border-primary/20";
+                            default:
+                              return "bg-muted text-muted-foreground";
+                          }
+                        })()}
+                        >
+                          {action.status === 'in_progress' ? 'In Progress' : action.status}
+                        </Badge>
+                      </div>
 
-                    return (
-                      <TableRow key={event.event_id || event.contract_id || `${event.event_type}-${idx}`}>
-                        <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                        <TableCell>{typeof event.round === "number" ? event.round.toLocaleString() : "-"}</TableCell>
-                        <TableCell className="text-xs truncate max-w-[200px]">
-                          {event.template_id?.split(":").pop() || "-"}
-                        </TableCell>
-                        <TableCell className="text-xs">{timestampLabel}</TableCell>
-                        <TableCell>
-                          <Collapsible>
-                            <CollapsibleTrigger asChild>
-                              <Button variant="ghost" size="sm">
-                                <Code className="h-3 w-3" />
-                              </Button>
-                            </CollapsibleTrigger>
-                            <CollapsibleContent>
-                              <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
-                                {JSON.stringify(
-                                  event.payload || event.exercise_result || event.event_data || event.raw || {
-                                    event_id: event.event_id,
-                                    event_type: event.event_type,
-                                    contract_id: event.contract_id,
-                                    choice: event.choice,
-                                    template_id: event.template_id,
-                                  },
-                                  null,
-                                  2
+                      {action.templateType === "VoteRequest" && (action.votesFor + action.votesAgainst) > 0 && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                            <p className="text-lg font-bold text-success">{action.votesFor}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                            <p className="text-lg font-bold text-destructive">{action.votesAgainst}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Total Votes</p>
+                            <p className="text-lg font-bold">{action.votesFor + action.votesAgainst}</p>
+                          </div>
+                          {action.voteBefore && (
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
+                              <p className="text-sm font-medium">{safeFormatDate(action.voteBefore)}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Voted SVs list - like Active Proposals */}
+                      {action.votedSvs && action.votedSvs.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-sm font-semibold text-muted-foreground mb-2">Votes Cast:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {action.votedSvs.map((sv, idx) => (
+                              <Badge
+                                key={idx}
+                                variant="outline"
+                                className={cn(
+                                  sv.vote === "accept" && "border-success/50 text-success",
+                                  sv.vote === "reject" && "border-destructive/50 text-destructive",
+                                  sv.vote === "abstain" && "border-muted-foreground/50 text-muted-foreground"
                                 )}
-                              </pre>
-                            </CollapsibleContent>
-                          </Collapsible>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                              >
+                                {sv.party.split("::")[0]} ({sv.vote})
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {action.reasonBody ? (
+                        <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                          <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                          <p className="text-sm mb-2">{action.reasonBody}</p>
+                          {action.reasonUrl ? (
+                            <a
+                              href={action.reasonUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-primary hover:underline break-all"
+                            >
+                              {action.reasonUrl}
+                            </a>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full mt-2">
+                          <Code className="h-4 w-4 mr-2" />
+                          View Full JSON Data
+                        </Button>
+                      </CollapsibleTrigger>
+
+                      <CollapsibleContent className="mt-4">
+                        <div className="p-4 rounded-lg bg-background/70 border border-border/50">
+                          <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                            Contract ID: <span className="font-mono">{action.contractId}</span>
+                          </p>
+                          <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-96">
+                            {JSON.stringify(action.rawData, null, 2)}
+                          </pre>
+                        </div>
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                ))}
+              </div>
             )}
           </div>
         </Card>
