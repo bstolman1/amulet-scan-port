@@ -278,6 +278,50 @@ router.get('/debug', async (req, res) => {
   }
 });
 
+// GET /api/events/templates-sample - Debug endpoint to show what templates exist in recent data
+router.get('/templates-sample', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    const templateCounts = {};
+    
+    if (sources.primarySource === 'binary') {
+      // Scan a sample of files to see what templates exist
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 10000, // Get a good sample
+        offset: 0,
+        maxDays: 30,
+        maxFilesToScan: 100,
+        sortBy: 'effective_at',
+      });
+      
+      for (const record of result.records) {
+        const template = record.template_id || 'unknown';
+        // Extract just the template name (last part after colon)
+        const shortName = template.includes(':') ? template.split(':').pop() : template;
+        templateCounts[shortName] = (templateCounts[shortName] || 0) + 1;
+      }
+      
+      // Sort by count descending
+      const sorted = Object.entries(templateCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 50);
+      
+      return res.json({
+        filesScanned: result.filesScanned,
+        totalRecordsSampled: result.records.length,
+        templates: sorted.map(([name, count]) => ({ name, count })),
+        hasGovernance: sorted.some(([name]) => 
+          ['VoteRequest', 'Confirmation', 'DsoRules', 'AmuletRules'].some(g => name.includes(g))
+        ),
+      });
+    }
+    
+    res.json({ error: 'Only binary source supported for this debug endpoint' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/governance - Get governance-related events (VoteRequest, Confirmation, etc.)
 router.get('/governance', async (req, res) => {
   try {
@@ -427,7 +471,7 @@ router.get('/governance-history', async (req, res) => {
     const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     
-    // Templates for governance history
+    // Templates for governance history - match on template suffix (after the colon)
     const governanceTemplates = [
       'VoteRequest',
       'Confirmation',
@@ -436,14 +480,22 @@ router.get('/governance-history', async (req, res) => {
     ];
     
     if (sources.primarySource === 'binary') {
+      // Scan MORE files for governance since these events are rare (maybe 1 in 1000 events)
+      // Also scan ALL days available, not just recent ones
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
         offset,
-        maxDays: 365 * 2, // 2 years of history
-        maxFilesToScan: 1000,
+        maxDays: 365 * 5, // 5 years of history (scan all available partitions)
+        maxFilesToScan: 5000, // Scan many more files since governance is rare
         sortBy: 'effective_at',
-        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
+        filter: (e) => {
+          if (!e.template_id) return false;
+          // Match governance templates - template_id format is like "Splice.DsoRules:VoteRequest"
+          return governanceTemplates.some(t => e.template_id.includes(t));
+        }
       });
+      
+      console.log(`📋 Governance history: scanned ${result.filesScanned || 'unknown'} files, found ${result.records.length} matching records`);
       
       // Return full event data with payload for frontend processing
       const history = result.records.map(event => ({
@@ -461,7 +513,9 @@ router.get('/governance-history', async (req, res) => {
       return res.json({ 
         data: history, 
         count: history.length, 
-        hasMore: result.hasMore, 
+        hasMore: result.hasMore,
+        filesScanned: result.filesScanned,
+        totalFilesAvailable: result.totalFiles,
         source: 'binary' 
       });
     }
