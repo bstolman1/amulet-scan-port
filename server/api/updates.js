@@ -23,7 +23,8 @@ const getUpdatesSource = () => {
   if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`);
   if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
-  return `(${queries.join(' UNION ALL ')})`;
+  // Use UNION (not UNION ALL) to prevent duplicate records
+  return `(${queries.join(' UNION ')})`;
 };
 
 function getDataSources() {

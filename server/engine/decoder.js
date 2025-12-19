@@ -48,16 +48,34 @@ function eventToPlain(record) {
     id: record.id || null,
     update_id: record.updateId || null,
     type: record.type || null,
+    type_original: record.typeOriginal || null,
     synchronizer: record.synchronizer || null,
     effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
     recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
+    created_at_ts: record.createdAtTs ? new Date(Number(record.createdAtTs)).toISOString() : null,
     contract_id: record.contractId || null,
     party: record.party || null,
     template: record.template || null,
     package_name: record.packageName || null,
+    migration_id: record.migrationId || null,
     signatories: record.signatories || [],
     observers: record.observers || [],
+    acting_parties: record.actingParties || [],
+    witness_parties: record.witnessParties || [],
     payload: record.payloadJson ? tryParseJson(record.payloadJson) : null,
+    contract_key: record.contractKeyJson ? tryParseJson(record.contractKeyJson) : null,
+    // Exercised event fields
+    choice: record.choice || null,
+    consuming: record.consuming ?? null,
+    interface_id: record.interfaceId || null,
+    child_event_ids: record.childEventIds || [],
+    exercise_result: record.exerciseResultJson ? tryParseJson(record.exerciseResultJson) : null,
+    // Reassignment fields
+    source_synchronizer: record.sourceSynchronizer || null,
+    target_synchronizer: record.targetSynchronizer || null,
+    unassign_id: record.unassignId || null,
+    submitter: record.submitter || null,
+    reassignment_counter: record.reassignmentCounter || null,
     raw_json: record.rawJson ? tryParseJson(record.rawJson) : null,
   };
 }
@@ -68,16 +86,30 @@ function eventToPlain(record) {
 function updateToPlain(record) {
   return {
     id: record.id || null,
+    type: record.type || null,
     synchronizer: record.synchronizer || null,
+    // Timestamps
     effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
     recorded_at: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
-    type: record.type || null,
+    record_time: record.recordTime ? new Date(Number(record.recordTime)).toISOString() : null,
+    // Transaction metadata
     command_id: record.commandId || null,
     workflow_id: record.workflowId || null,
     kind: record.kind || null,
     migration_id: record.migrationId ? Number(record.migrationId) : null,
-    offset_val: record.offset ? Number(record.offset) : null,
+    offset: record.offset ? Number(record.offset) : null,
     event_count: record.eventCount || 0,
+    // Event tree traversal
+    root_event_ids: record.rootEventIds || [],
+    // Reassignment fields
+    source_synchronizer: record.sourceSynchronizer || null,
+    target_synchronizer: record.targetSynchronizer || null,
+    unassign_id: record.unassignId || null,
+    submitter: record.submitter || null,
+    reassignment_counter: record.reassignmentCounter ? Number(record.reassignmentCounter) : null,
+    // Full data preservation
+    trace_context: record.traceContextJson ? tryParseJson(record.traceContextJson) : null,
+    update_data: record.updateDataJson ? tryParseJson(record.updateDataJson) : null,
   };
 }
 

@@ -44,6 +44,13 @@ const fixCursors = args.includes('--fix-cursors');
 const verbose = args.includes('--verbose') || args.includes('-v');
 
 /**
+ * Critical fields that MUST be present per parquet schema
+ */
+const CRITICAL_UPDATE_FIELDS = ['update_id', 'migration_id', 'record_time', 'update_type', 'synchronizer_id'];
+const CRITICAL_EVENT_FIELDS = ['event_id', 'update_id', 'migration_id', 'contract_id', 'template_id', 'event_type'];
+const IMPORTANT_EVENT_FIELDS = ['synchronizer_id', 'effective_at', 'package_name'];
+
+/**
  * Results accumulator
  */
 const results = {
@@ -58,12 +65,12 @@ const results = {
   coverage: {},
   errors: [],
   startTime: Date.now(),
-  // New: File sampling stats
+  // File sampling stats
   fileSampling: {
     updates: { sampled: 0, totalRecords: 0, minRecords: Infinity, maxRecords: 0, sizes: [] },
     events: { sampled: 0, totalRecords: 0, minRecords: Infinity, maxRecords: 0, sizes: [] },
   },
-  // New: Cursor vs File reconciliation
+  // Cursor vs File reconciliation
   reconciliation: {
     cursorTotalUpdates: 0,
     cursorTotalEvents: 0,
@@ -73,6 +80,19 @@ const results = {
     eventsDiff: 0,
     updatesDiffPercent: 0,
     eventsDiffPercent: 0,
+  },
+  // Field validation stats
+  fieldValidation: {
+    updates: {
+      total: 0,
+      missingFields: {}, // field -> count
+      sampleMissing: [], // Sample records with missing critical fields
+    },
+    events: {
+      total: 0,
+      missingFields: {},
+      sampleMissing: [],
+    },
   },
 };
 
@@ -237,10 +257,34 @@ function extractFileTimeRange(filePath) {
 }
 
 /**
+ * Validate fields in a record against critical/important field lists
+ */
+function validateRecordFields(record, type) {
+  const criticalFields = type === 'updates' ? CRITICAL_UPDATE_FIELDS : CRITICAL_EVENT_FIELDS;
+  const importantFields = type === 'events' ? IMPORTANT_EVENT_FIELDS : [];
+  const missing = [];
+  
+  for (const field of criticalFields) {
+    if (record[field] === undefined || record[field] === null || record[field] === '') {
+      missing.push(field);
+    }
+  }
+  
+  for (const field of importantFields) {
+    if (record[field] === undefined || record[field] === null || record[field] === '') {
+      missing.push(`~${field}`); // ~ prefix for important (not critical)
+    }
+  }
+  
+  return missing;
+}
+
+/**
  * Validate a single file's integrity
  */
 async function validateFile(filePath, quickScan = false) {
   const basename = path.basename(filePath);
+  const fileType = basename.startsWith('updates-') ? 'updates' : 'events';
   
   try {
     if (quickScan) {
@@ -258,22 +302,47 @@ async function validateFile(filePath, quickScan = false) {
     // Full decode to validate all records
     const data = await readBinaryFile(filePath);
     
-    // Extract time range from records without keeping records in memory
-    // Use effective_at primarily (actual event time), fall back to recorded_at
+    // Extract time range and validate fields
     let minTime = null;
     let maxTime = null;
     const sampleIds = []; // Keep only first few IDs for duplicate sampling
+    const fieldStats = results.fieldValidation[fileType];
     
     for (let i = 0; i < data.records.length; i++) {
       const record = data.records[i];
-      const time = record.effective_at || record.recorded_at;
+      const time = record.effective_at || record.recorded_at || record.record_time;
       if (time) {
         if (!minTime || time < minTime) minTime = time;
         if (!maxTime || time > maxTime) maxTime = time;
       }
+      
+      // Validate critical fields
+      fieldStats.total++;
+      const missing = validateRecordFields(record, fileType);
+      for (const field of missing) {
+        const cleanField = field.replace('~', '');
+        fieldStats.missingFields[cleanField] = (fieldStats.missingFields[cleanField] || 0) + 1;
+      }
+      
+      // Sample records with missing critical fields (first 5)
+      const criticalMissing = missing.filter(f => !f.startsWith('~'));
+      if (criticalMissing.length > 0 && fieldStats.sampleMissing.length < 5) {
+        fieldStats.sampleMissing.push({
+          file: basename,
+          index: i,
+          missingFields: criticalMissing,
+          record: {
+            update_id: record.update_id,
+            event_id: record.event_id,
+            contract_id: record.contract_id,
+            template_id: record.template_id,
+          },
+        });
+      }
+      
       // Only keep first 10 IDs for duplicate detection (memory-efficient sampling)
       if (i < 10) {
-        const id = record.id || record.transaction_id || record.update_id;
+        const id = record.event_id || record.update_id || record.id;
         if (id) sampleIds.push(id);
       }
     }
@@ -290,7 +359,7 @@ async function validateFile(filePath, quickScan = false) {
       chunks: data.chunksRead,
       minTime,
       maxTime,
-      sampleIds, // Only sample IDs, not full records
+      sampleIds,
     };
     
   } catch (err) {
@@ -590,6 +659,45 @@ function printReport() {
     console.log(`      ✅ Within tolerance`);
   }
   
+  // === Field Validation ===
+  console.log('\n🔍 FIELD VALIDATION:');
+  const fvUpdates = results.fieldValidation.updates;
+  const fvEvents = results.fieldValidation.events;
+  
+  console.log(`   UPDATES (${fvUpdates.total.toLocaleString()} records):`);
+  const updateMissingFields = Object.entries(fvUpdates.missingFields).sort((a, b) => b[1] - a[1]);
+  if (updateMissingFields.length === 0) {
+    console.log('      ✅ All critical fields present');
+  } else {
+    for (const [field, count] of updateMissingFields.slice(0, 10)) {
+      const pct = fvUpdates.total > 0 ? ((count / fvUpdates.total) * 100).toFixed(2) : 0;
+      const isCritical = CRITICAL_UPDATE_FIELDS.includes(field);
+      console.log(`      ${isCritical ? '❌' : '⚠️'} ${field}: ${count.toLocaleString()} missing (${pct}%)`);
+    }
+  }
+  
+  console.log(`   EVENTS (${fvEvents.total.toLocaleString()} records):`);
+  const eventMissingFields = Object.entries(fvEvents.missingFields).sort((a, b) => b[1] - a[1]);
+  if (eventMissingFields.length === 0) {
+    console.log('      ✅ All critical fields present');
+  } else {
+    for (const [field, count] of eventMissingFields.slice(0, 10)) {
+      const pct = fvEvents.total > 0 ? ((count / fvEvents.total) * 100).toFixed(2) : 0;
+      const isCritical = CRITICAL_EVENT_FIELDS.includes(field);
+      console.log(`      ${isCritical ? '❌' : '⚠️'} ${field}: ${count.toLocaleString()} missing (${pct}%)`);
+    }
+  }
+  
+  // Show sample records with missing critical fields
+  if (verbose && (fvUpdates.sampleMissing.length > 0 || fvEvents.sampleMissing.length > 0)) {
+    console.log('\n   Sample records with missing critical fields:');
+    for (const sample of [...fvUpdates.sampleMissing, ...fvEvents.sampleMissing].slice(0, 5)) {
+      console.log(`      • File: ${sample.file}, Index: ${sample.index}`);
+      console.log(`        Missing: ${sample.missingFields.join(', ')}`);
+      console.log(`        Record: ${JSON.stringify(sample.record)}`);
+    }
+  }
+  
   // Gaps
   console.log('\n⏱️ TIME GAPS:');
   if (results.gapsFound.length === 0) {
@@ -658,9 +766,17 @@ function printReport() {
   console.log('═'.repeat(80) + '\n');
   
   // Exit code based on issues found
+  // Check for critical missing fields (event_id, update_id, migration_id are most critical)
+  const criticalEventsMissing = ['event_id', 'update_id', 'migration_id', 'contract_id']
+    .some(f => (results.fieldValidation.events.missingFields[f] || 0) > 0);
+  const criticalUpdatesMissing = ['update_id', 'migration_id', 'record_time']
+    .some(f => (results.fieldValidation.updates.missingFields[f] || 0) > 0);
+  
   const hasIssues = results.filesCorrupted > 0 || 
                    results.gapsFound.length > 0 || 
                    results.cursorIssues.length > 0 ||
+                   criticalEventsMissing ||
+                   criticalUpdatesMissing ||
                    Math.abs(results.reconciliation.eventsDiff) > 10000; // Flag significant data loss
   
   return hasIssues ? 1 : 0;

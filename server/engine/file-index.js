@@ -6,11 +6,17 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { query } from '../duckdb/connection.js';
 
-// Support both Windows (C:/ledger_raw) and WSL (/mnt/c/ledger_raw) paths
-const DATA_DIR = process.env.DATA_DIR || (process.platform === 'win32' ? 'C:/ledger_raw' : '/mnt/c/ledger_raw');
-const RAW_DIR = path.join(DATA_DIR, 'raw');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Match the same path resolution logic as connection.js
+const REPO_DATA_DIR = path.join(__dirname, '../../data');
+const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
+const WSL_DEFAULT_DATA_DIR = '/home/bstolz/canton-explorer/data';
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WSL_DEFAULT_DATA_DIR);
+const RAW_DIR = path.join(BASE_DATA_DIR, 'raw');
 
 /**
  * Walk directory tree and find all .pb.zst files

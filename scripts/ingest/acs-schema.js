@@ -13,10 +13,17 @@ export const EXPECTED_TEMPLATES = {
   'Splice.Amulet:Amulet': { required: true, description: 'Amulet tokens' },
   'Splice.Amulet:LockedAmulet': { required: false, description: 'Locked amulet tokens' },
   'Splice.Amulet:FeaturedAppRight': { required: false, description: 'Featured app rights' },
+  'Splice.Amulet:FeaturedAppActivityMarker': { required: false, description: 'Featured app activity markers' },
+  'Splice.Amulet:ValidatorRight': { required: false, description: 'Validator rights' },
+  'Splice.Amulet:AppRewardCoupon': { required: false, description: 'App reward coupons' },
+  'Splice.Amulet:SvRewardCoupon': { required: false, description: 'SV reward coupons' },
+  'Splice.Amulet:ValidatorRewardCoupon': { required: false, description: 'Validator reward coupons' },
+  'Splice.Amulet:UnclaimedReward': { required: false, description: 'Unclaimed rewards' },
   
   // Validator templates
   'Splice.ValidatorLicense:ValidatorLicense': { required: true, description: 'Validator licenses' },
   'Splice.ValidatorLicense:ValidatorFaucetCoupon': { required: false, description: 'Validator faucet coupons' },
+  'Splice.ValidatorLicense:ValidatorLivenessActivityRecord': { required: false, description: 'Validator liveness records' },
   
   // DSO/Governance templates
   'Splice.DsoRules:DsoRules': { required: false, description: 'DSO rules configuration' },
@@ -24,10 +31,21 @@ export const EXPECTED_TEMPLATES = {
   'Splice.DsoRules:Confirmation': { required: false, description: 'Governance confirmations' },
   'Splice.DsoRules:ElectionRequest': { required: false, description: 'Election requests' },
   
+  // DSO SV State templates
+  'Splice.DSO.SvState:SvNodeState': { required: false, description: 'SV node state' },
+  'Splice.DSO.SvState:SvRewardState': { required: false, description: 'SV reward state' },
+  'Splice.DSO.SvState:SvStatusReport': { required: false, description: 'SV status reports' },
+  
+  // DSO Amulet Price templates
+  'Splice.DSO.AmuletPrice:AmuletPriceVote': { required: false, description: 'Amulet price votes' },
+  
   // Amulet Rules templates
   'Splice.AmuletRules:AmuletRules': { required: false, description: 'Amulet rules configuration' },
   'Splice.AmuletRules:TransferPreapproval': { required: false, description: 'Transfer pre-approvals' },
   'Splice.AmuletRules:ExternalPartySetupProposal': { required: false, description: 'External party setup' },
+  
+  // External Party templates
+  'Splice.ExternalPartyAmuletRules:ExternalPartyAmuletRules': { required: false, description: 'External party amulet rules' },
   
   // Round templates
   'Splice.Round:OpenMiningRound': { required: false, description: 'Open mining rounds' },
@@ -38,6 +56,8 @@ export const EXPECTED_TEMPLATES = {
   // ANS templates
   'Splice.Ans:AnsEntry': { required: false, description: 'ANS name entries' },
   'Splice.Ans:AnsEntryContext': { required: false, description: 'ANS entry contexts' },
+  'Splice.Ans:AnsRules': { required: false, description: 'ANS rules configuration' },
+  'Splice.Ans.AmuletConversionRateFeed:AmuletConversionRateFeed': { required: false, description: 'Amulet conversion rate feed' },
   
   // Traffic templates
   'Splice.DecentralizedSynchronizer:MemberTraffic': { required: false, description: 'Member traffic records' },
@@ -58,6 +78,7 @@ export const EXPECTED_TEMPLATES = {
 
 export const ACS_CONTRACTS_SCHEMA = {
   contract_id: 'STRING',
+  event_id: 'STRING',
   template_id: 'STRING',
   package_name: 'STRING',
   module_name: 'STRING',
@@ -68,10 +89,12 @@ export const ACS_CONTRACTS_SCHEMA = {
   signatories: 'LIST<STRING>',
   observers: 'LIST<STRING>',
   payload: 'JSON',
+  raw: 'JSON',
 };
 
 export const ACS_COLUMNS = [
   'contract_id',
+  'event_id',
   'template_id',
   'package_name',
   'module_name',
@@ -81,6 +104,23 @@ export const ACS_COLUMNS = [
   'snapshot_time',
   'signatories',
   'observers',
+  'payload',
+  'raw',
+];
+
+// Field validation - critical fields that MUST have values
+export const CRITICAL_CONTRACT_FIELDS = [
+  'contract_id',
+  'template_id',
+  'migration_id',
+  'record_time',
+];
+
+// Important fields that SHOULD have values
+export const IMPORTANT_CONTRACT_FIELDS = [
+  'module_name',
+  'entity_name',
+  'signatories',
   'payload',
 ];
 
@@ -155,7 +195,9 @@ export function normalizeACSContract(event, migrationId, recordTime, snapshotTim
   const { packageName, moduleName, entityName } = parseTemplateId(templateId);
   
   return {
+    // Preserve BOTH contract_id and event_id (API returns both)
     contract_id: event.contract_id || event.event_id,
+    event_id: event.event_id || null,
     template_id: templateId,
     package_name: packageName,
     module_name: moduleName,
@@ -166,6 +208,8 @@ export function normalizeACSContract(event, migrationId, recordTime, snapshotTim
     signatories: event.signatories || [],
     observers: event.observers || [],
     payload: event.create_arguments ? JSON.stringify(event.create_arguments) : null,
+    // CRITICAL: Preserve raw API response for full data recovery
+    raw: JSON.stringify(event),
   };
 }
 
@@ -183,6 +227,33 @@ export function isTemplate(event, moduleName, entityName) {
   const targetModule = moduleName.replace(/_/g, '.');
   
   return normalizedModule === targetModule && parsed.entityName === entityName;
+}
+
+/**
+ * Validate a single contract's fields
+ * Returns object with arrays of missing critical and important fields
+ */
+export function validateContractFields(contract) {
+  const missingCritical = [];
+  const missingImportant = [];
+  
+  for (const field of CRITICAL_CONTRACT_FIELDS) {
+    const value = contract[field];
+    if (value === null || value === undefined || value === '') {
+      missingCritical.push(field);
+    }
+  }
+  
+  for (const field of IMPORTANT_CONTRACT_FIELDS) {
+    const value = contract[field];
+    const isEmpty = value === null || value === undefined || value === '' ||
+      (Array.isArray(value) && value.length === 0);
+    if (isEmpty) {
+      missingImportant.push(field);
+    }
+  }
+  
+  return { missingCritical, missingImportant };
 }
 
 /**

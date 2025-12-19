@@ -3,12 +3,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { inferStagesBatch } from '../inference/inferStage.js';
+import { classifyTopicsBatch, isLLMAvailable } from '../inference/llm-classifier.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
 const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
 const CACHE_DIR = path.join(BASE_DATA_DIR, 'cache');
 const CACHE_FILE = path.join(CACHE_DIR, 'governance-lifecycle.json');
+const OVERRIDES_FILE = path.join(CACHE_DIR, 'governance-overrides.json');
 
 // Inference confidence threshold - only override postedStage if confidence >= threshold
 const INFERENCE_THRESHOLD = 0.85;
@@ -212,20 +214,32 @@ function extractIdentifiers(text) {
     keywords: [],
   };
   
-  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123) and format as 4-digit
+  // Extract CIP numbers (e.g., CIP-123, CIP 123, CIP#123, CIP - 0066, or standalone "0054 Add Figment...")
   // Check for TBD/unassigned CIPs first
-  const tbdMatch = text.match(/CIP[#\-\s]*(TBD|00XX|XXXX|\?\?|unassigned)/i);
+  const tbdMatch = text.match(/CIP\s*[-#]?\s*(TBD|00XX|XXXX|\?\?|unassigned)/i);
   if (tbdMatch) {
     identifiers.cipNumber = 'CIP-00XX';
   } else {
-    const cipMatch = text.match(/CIP[#\-\s]?(\d+)/i);
+    // Handle various CIP formats: "CIP-0066", "CIP 0066", "CIP#0066", "CIP - 0066"
+    const cipMatch = text.match(/CIP\s*[-#]?\s*(\d{2,})/i);
     if (cipMatch) {
       identifiers.cipNumber = `CIP-${cipMatch[1].padStart(4, '0')}`;
+      console.log(`EXTRACTED CIP: "${identifiers.cipNumber}" from "${text.slice(0, 60)}"`);
+    } else {
+      // Also check for standalone 4-digit number at the start (e.g., "0054 Add Figment...")
+      // This catches CIP announcements that don't include "CIP-" prefix
+      const standaloneMatch = text.match(/^\s*0*(\d{4})\s+/);
+      if (standaloneMatch) {
+        identifiers.cipNumber = `CIP-${standaloneMatch[1]}`;
+        console.log(`EXTRACTED standalone CIP: "${identifiers.cipNumber}" from "${text.slice(0, 60)}"`);
+      }
     }
   }
   
-  // Check if this is a CIP discussion (even without a number) - e.g., "CIP Discuss-"
-  const isCipDiscussion = /\bCIP\s*(?:Discuss|Discussion|Vote|Announce)/i.test(text);
+  // Check if this is a CIP discussion (even without a number)
+  // Only set this if it's clearly a CIP-specific topic, not just any mention of CIP
+  // e.g., "CIP Discussion:", "CIP-XXXX:", "New CIP Proposal" - but NOT "discussed CIP requirements"
+  const isCipDiscussion = /^\s*(?:re:\s*)?CIP[#\-\s]|^(?:re:\s*)?(?:new\s+)?CIP\s+(?:discuss|proposal|draft)/i.test(text);
   
   // Detect network (testnet or mainnet)
   if (/testnet|test\s*net|tn\b/i.test(text)) {
@@ -234,18 +248,35 @@ function extractIdentifiers(text) {
     identifiers.network = 'mainnet';
   }
   
+  // Check for Vote Proposal patterns - distinguish between CIP votes and other votes
+  // CIP Vote Proposals contain a CIP number or are specifically about CIP governance
+  // Featured App Vote Proposals mention "featured app" or network (MainNet/TestNet)
+  const isVoteProposal = /\bVote\s+Proposal\b/i.test(text);
+  const isCipVoteProposal = isVoteProposal && (
+    /CIP[#\-\s]?\d+/i.test(text) || 
+    /\bCIP\s+(?:vote|voting|approval)\b/i.test(text)
+  );
+  const isFeaturedAppVoteProposal = isVoteProposal && (
+    /featured\s*app|featured\s*application|app\s+rights/i.test(text) ||
+    /(?:mainnet|testnet|main\s*net|test\s*net):/i.test(text)
+  );
+  const isValidatorVoteProposal = isVoteProposal && (
+    /validator\s+(?:operator|onboarding|license)/i.test(text)
+  );
+  
   // Check if text contains featured app indicators - BUT NOT if it's a CIP discussion about featured apps
   // Also detect "Vote Proposal on MainNet/TestNet:" patterns as featured app related
   const isFeaturedApp = !isCipDiscussion && (
     /featured\s*app|featured\s*application|app\s+(?:application|listing|request|tokenomics|vote|approved)|application\s+status\s+for/i.test(text) ||
-    /vote\s+proposal\s+(?:on|for)\s+(?:mainnet|testnet|main\s*net|test\s*net)/i.test(text) ||
+    isFeaturedAppVoteProposal ||
     /featured\s+app\s+rights/i.test(text)
   );
   
   // Check if text contains validator indicators - including "validator approved" and "validator operator approved"
-  // BUT exclude "Vote Proposal" patterns which are typically CIP-related even if they mention validators
-  const isVoteProposal = /\bvote\s+proposal\b/i.test(text);
-  const isValidator = !isVoteProposal && /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text);
+  const isValidator = (
+    /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text) ||
+    isValidatorVoteProposal
+  );
   
   // Extract the primary entity name (now returns { name, isMultiEntity })
   const entityResult = extractPrimaryEntityName(text);
@@ -254,6 +285,11 @@ function extractIdentifiers(text) {
   
   // Add CIP discussion flag to identifiers
   identifiers.isCipDiscussion = isCipDiscussion;
+  
+  // Add vote proposal type flags for better type determination
+  identifiers.isCipVoteProposal = isCipVoteProposal;
+  identifiers.isFeaturedAppVoteProposal = isFeaturedAppVoteProposal;
+  identifiers.isValidatorVoteProposal = isValidatorVoteProposal;
   
   // Debug log for featured app detection
   if (text.toLowerCase().includes('featured app approved')) {
@@ -607,21 +643,43 @@ function correlateTopics(allTopics) {
       // Protocol upgrades are a special type (migration, splice version upgrades)
       type = 'protocol-upgrade';
     } else if (topic.flow === 'cip') {
-      // CIP groups are always CIP type
-      type = 'cip';
+      // CIP groups are usually CIP type, but occasionally non-CIP announcements land here.
+      // Be strict: only treat as CIP if there's an explicit CIP number / CIP vote proposal.
+      // Otherwise, fall back to strong subject heuristics (validator/featured-app).
+      if (topic.identifiers.isCipVoteProposal || hasCip) {
+        type = 'cip';
+      } else if (topic.identifiers.isValidatorVoteProposal || hasValidatorIndicator || isValidatorOperations) {
+        type = 'validator';
+      } else if (topic.identifiers.isFeaturedAppVoteProposal || hasAppIndicator) {
+        type = 'featured-app';
+      } else {
+        // Default for ambiguous items posted in CIP groups
+        type = 'other';
+      }
     } else if (topic.flow === 'featured-app') {
       // tokenomics-announce is specifically for featured-app flow
       type = 'featured-app';
     } else if (topic.flow === 'shared') {
       // Shared groups (tokenomics, sv-announce) need subject-line disambiguation
-      // Priority: Vote Proposal (CIP) > CIP number/discussion > Validator Operations > Featured App
-      if (isVoteProposal || hasCip || isCipDiscussion) {
-        // "Vote Proposal" patterns are CIP-related even if they mention validators
+      // Use specific vote proposal type flags for better accuracy
+      // STRICT CIP detection: only classify as CIP if there's an actual CIP number
+      // isCipDiscussion alone is NOT enough - many topics mention "CIP" without being CIPs
+      if (topic.identifiers.isCipVoteProposal || hasCip) {
+        // Only CIP-specific vote proposals or topics with explicit CIP numbers
         type = 'cip';
-      } else if (isValidatorOperations || hasValidatorIndicator) {
+      } else if (topic.identifiers.isValidatorVoteProposal || isValidatorOperations || hasValidatorIndicator) {
         type = 'validator';
-      } else if (hasAppIndicator) {
+      } else if (topic.identifiers.isFeaturedAppVoteProposal || hasAppIndicator) {
         type = 'featured-app';
+      } else if (isVoteProposal) {
+        // Generic vote proposal without clear indicators - check for network prefix
+        // "Vote Proposal on MainNet:" is typically featured app
+        if (/(?:mainnet|testnet|main\s*net|test\s*net):/i.test(subjectTrimmed)) {
+          type = 'featured-app';
+        } else {
+          // Default generic vote proposals to featured-app (most common in practice)
+          type = 'featured-app';
+        }
       } else {
         // Default shared group topics to featured-app (most common)
         type = 'featured-app';
@@ -641,7 +699,7 @@ function correlateTopics(allTopics) {
       const formattedDate = topicDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       primaryId = `Outcomes - ${formattedDate}`;
     } else {
-      primaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject.slice(0, 40);
+      primaryId = topic.identifiers.cipNumber || topicEntityName || topic.subject;
     }
     
     // Create a new lifecycle item
@@ -748,12 +806,20 @@ function correlateTopics(allTopics) {
         } else if (candidate.flow === 'featured-app') {
           candidateType = 'featured-app';
         } else if (candidate.flow === 'shared') {
-          if (candidateIsVoteProposal || candidateHasCip || candidateIsCipDiscussion) {
+          // Use specific vote proposal type flags for better accuracy
+          if (candidate.identifiers.isCipVoteProposal || candidateHasCip || candidateIsCipDiscussion) {
             candidateType = 'cip';
-          } else if (candidateIsValidatorOperations || candidate.identifiers.validatorName) {
+          } else if (candidate.identifiers.isValidatorVoteProposal || candidateIsValidatorOperations || candidate.identifiers.validatorName) {
             candidateType = 'validator';
-          } else if (candidate.identifiers.appName) {
+          } else if (candidate.identifiers.isFeaturedAppVoteProposal || candidate.identifiers.appName) {
             candidateType = 'featured-app';
+          } else if (candidateIsVoteProposal) {
+            // Generic vote proposal - check for network prefix
+            if (/(?:mainnet|testnet|main\s*net|test\s*net):/i.test(candidateSubject)) {
+              candidateType = 'featured-app';
+            } else {
+              candidateType = 'featured-app';
+            }
           } else {
             candidateType = 'featured-app';
           }
@@ -878,6 +944,54 @@ function fixLifecycleItemTypes(data) {
   return data;
 }
 
+// LLM-based classification for ambiguous items
+async function classifyAmbiguousItems(lifecycleItems) {
+  if (!isLLMAvailable()) {
+    console.log('⚠️ LLM classification unavailable (OPENAI_API_KEY not set)');
+    return lifecycleItems;
+  }
+  
+  // Find items still classified as 'other'
+  const ambiguousItems = lifecycleItems.filter(item => item.type === 'other');
+  
+  if (ambiguousItems.length === 0) {
+    console.log('✅ No ambiguous items to classify');
+    return lifecycleItems;
+  }
+  
+  console.log(`🤖 Classifying ${ambiguousItems.length} ambiguous items with LLM...`);
+  
+  // Prepare topics for batch classification
+  const topicsToClassify = ambiguousItems.map(item => {
+    const firstTopic = item.topics?.[0];
+    return {
+      id: item.id,
+      subject: firstTopic?.subject || item.primaryId,
+      groupName: firstTopic?.groupName || 'unknown',
+    };
+  });
+  
+  // Batch classify
+  const classifications = await classifyTopicsBatch(topicsToClassify);
+  
+  // Apply classifications
+  let classified = 0;
+  for (const item of lifecycleItems) {
+    if (item.type === 'other' && classifications.has(item.id)) {
+      const result = classifications.get(item.id);
+      if (result.type && result.type !== 'other') {
+        console.log(`  ✓ "${item.primaryId}" -> ${result.type}`);
+        item.type = result.type;
+        item.llmClassified = true;
+        classified++;
+      }
+    }
+  }
+  
+  console.log(`🤖 LLM classified ${classified}/${ambiguousItems.length} items`);
+  return lifecycleItems;
+}
+
 // Helper to read cached data
 function readCache() {
   try {
@@ -903,6 +1017,142 @@ function writeCache(data) {
   } catch (err) {
     console.error('Error writing cache:', err.message);
   }
+}
+
+// ========== MANUAL OVERRIDES SYSTEM ==========
+// Allows manual correction of type classifications that persist across refreshes
+
+// Read overrides from file
+function readOverrides() {
+  try {
+    if (fs.existsSync(OVERRIDES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(OVERRIDES_FILE, 'utf-8'));
+      // Ensure all override types exist
+      return {
+        itemOverrides: data.itemOverrides || {},
+        topicOverrides: data.topicOverrides || {},
+        mergeOverrides: data.mergeOverrides || {},
+      };
+    }
+  } catch (err) {
+    console.error('Error reading overrides:', err.message);
+  }
+  return { itemOverrides: {}, topicOverrides: {}, mergeOverrides: {} };
+}
+
+// Write overrides to file
+function writeOverrides(overrides) {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(OVERRIDES_FILE, JSON.stringify(overrides, null, 2));
+    console.log(`✅ Saved overrides to ${OVERRIDES_FILE}`);
+    return true;
+  } catch (err) {
+    console.error('Error writing overrides:', err.message);
+    return false;
+  }
+}
+
+// Apply overrides to lifecycle data (type changes and merges)
+function applyOverrides(data) {
+  if (!data || !data.lifecycleItems) return data;
+  
+  const overrides = readOverrides();
+  const hasItemOverrides = overrides.itemOverrides && Object.keys(overrides.itemOverrides).length > 0;
+  const hasMergeOverrides = overrides.mergeOverrides && Object.keys(overrides.mergeOverrides).length > 0;
+  
+  if (!hasItemOverrides && !hasMergeOverrides) {
+    return data;
+  }
+  
+  let appliedCount = 0;
+  let mergeCount = 0;
+  
+  // First pass: Apply type overrides
+  if (hasItemOverrides) {
+    data.lifecycleItems = data.lifecycleItems.map(item => {
+      const override = overrides.itemOverrides[item.id] || overrides.itemOverrides[item.primaryId];
+      if (override) {
+        console.log(`Applying type override: "${item.primaryId}" -> type=${override.type}`);
+        appliedCount++;
+        return {
+          ...item,
+          type: override.type,
+          overrideApplied: true,
+          overrideReason: override.reason || 'Manual correction',
+        };
+      }
+      return item;
+    });
+  }
+  
+  // Second pass: Apply merge overrides
+  if (hasMergeOverrides) {
+    const itemsToMerge = [];
+    const targetItems = new Map();
+    
+    // Identify items to merge and their targets
+    data.lifecycleItems.forEach(item => {
+      const mergeOverride = overrides.mergeOverrides[item.id] || overrides.mergeOverrides[item.primaryId];
+      if (mergeOverride) {
+        itemsToMerge.push({ item, targetCip: mergeOverride.mergeInto });
+      }
+    });
+    
+    // Find target items
+    data.lifecycleItems.forEach(item => {
+      if (item.primaryId) {
+        targetItems.set(item.primaryId.toUpperCase(), item);
+      }
+    });
+    
+    // Perform merges
+    itemsToMerge.forEach(({ item, targetCip }) => {
+      const normalizedTarget = targetCip.toUpperCase();
+      const target = targetItems.get(normalizedTarget);
+      if (target) {
+        console.log(`Merging "${item.primaryId}" into "${target.primaryId}"`);
+        // Merge topics into target
+        item.topics.forEach(topic => {
+          if (!target.topics.find(t => t.id === topic.id)) {
+            target.topics.push(topic);
+            // Also add to the appropriate stage
+            const stage = topic.stage;
+            if (!target.stages[stage]) target.stages[stage] = [];
+            if (!target.stages[stage].find(t => t.id === topic.id)) {
+              target.stages[stage].push(topic);
+            }
+          }
+        });
+        // Update date range
+        if (new Date(item.firstDate) < new Date(target.firstDate)) {
+          target.firstDate = item.firstDate;
+        }
+        if (new Date(item.lastDate) > new Date(target.lastDate)) {
+          target.lastDate = item.lastDate;
+        }
+        target.mergedFrom = target.mergedFrom || [];
+        target.mergedFrom.push(item.primaryId);
+        mergeCount++;
+      }
+    });
+    
+    // Remove merged items from the list
+    if (itemsToMerge.length > 0) {
+      const mergedIds = new Set(itemsToMerge.map(m => m.item.id));
+      const mergedPrimaryIds = new Set(itemsToMerge.map(m => m.item.primaryId));
+      data.lifecycleItems = data.lifecycleItems.filter(item => 
+        !mergedIds.has(item.id) && !mergedPrimaryIds.has(item.primaryId)
+      );
+    }
+  }
+  
+  if (appliedCount > 0) console.log(`Applied ${appliedCount} type overrides`);
+  if (mergeCount > 0) console.log(`Applied ${mergeCount} merge overrides`);
+  
+  return data;
 }
 
 // Fetch fresh data from groups.io
@@ -994,7 +1244,15 @@ async function fetchFreshData() {
   // ========== END INFERENCE STEP ==========
   
   // Correlate topics into lifecycle items
-  const lifecycleItems = correlateTopics(allTopics);
+  let lifecycleItems = correlateTopics(allTopics);
+  
+  // ========== LLM CLASSIFICATION STEP ==========
+  // Classify ambiguous items (type='other') using LLM
+  const ambiguousBefore = lifecycleItems.filter(i => i.type === 'other').length;
+  if (ambiguousBefore > 0) {
+    lifecycleItems = await classifyAmbiguousItems(lifecycleItems);
+  }
+  // ========== END LLM CLASSIFICATION ==========
   
   // Count topics in lifecycle items to verify none are dropped
   const topicsInItems = lifecycleItems.reduce((sum, item) => sum + (item.topics?.length || 0), 0);
@@ -1054,7 +1312,9 @@ router.get('/', async (req, res) => {
     const cached = readCache();
     if (cached) {
       console.log(`Serving cached governance data from ${cached.cachedAt}`);
-      return res.json(cached);
+      // Apply manual overrides before returning
+      const withOverrides = applyOverrides(cached);
+      return res.json(withOverrides);
     }
   }
   
@@ -1064,7 +1324,8 @@ router.get('/', async (req, res) => {
     const staleCache = readCache();
     if (staleCache) {
       console.log('No API key configured, serving existing cache');
-      return res.json({ ...staleCache, stale: true, warning: 'GROUPS_IO_API_KEY not configured - showing cached data' });
+      const withOverrides = applyOverrides(staleCache);
+      return res.json({ ...withOverrides, stale: true, warning: 'GROUPS_IO_API_KEY not configured - showing cached data' });
     }
     
     // No cache AND no API key - return empty data with 200 (not 500) so UI can handle gracefully
@@ -1081,7 +1342,9 @@ router.get('/', async (req, res) => {
   try {
     const data = await fetchFreshData();
     writeCache(data);
-    return res.json(data);
+    // Apply manual overrides before returning
+    const withOverrides = applyOverrides(data);
+    return res.json(withOverrides);
 
   } catch (error) {
     console.error('Error fetching governance lifecycle:', error);
@@ -1090,7 +1353,8 @@ router.get('/', async (req, res) => {
     const cached = readCache();
     if (cached) {
       console.log('Serving stale cache due to fetch error');
-      return res.json({ ...cached, stale: true, error: error.message });
+      const withOverrides = applyOverrides(cached);
+      return res.json({ ...withOverrides, stale: true, error: error.message });
     }
     
     res.status(500).json({ 
@@ -1131,7 +1395,117 @@ router.get('/cache-info', (req, res) => {
   }
 });
 
-// ========== DIAGNOSTIC ENDPOINT (Phase 2) ==========
+// ========== MANUAL OVERRIDES ENDPOINTS ==========
+
+// Get all current overrides
+router.get('/overrides', (req, res) => {
+  const overrides = readOverrides();
+  res.json(overrides);
+});
+
+// Set/update an override for a lifecycle item
+router.post('/overrides', (req, res) => {
+  const { itemId, primaryId, type, reason } = req.body;
+  
+  if (!type || (!itemId && !primaryId)) {
+    return res.status(400).json({ error: 'Missing required fields: type and either itemId or primaryId' });
+  }
+  
+  const validTypes = ['cip', 'featured-app', 'validator', 'protocol-upgrade', 'outcome', 'other'];
+  if (!validTypes.includes(type)) {
+    return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+  }
+  
+  const overrides = readOverrides();
+  const key = primaryId || itemId;
+  
+  overrides.itemOverrides[key] = {
+    type,
+    reason: reason || 'Manual correction',
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Override set: "${key}" -> ${type} (${reason || 'Manual correction'})`);
+    res.json({ success: true, override: overrides.itemOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save override' });
+  }
+});
+
+// Delete an override
+router.delete('/overrides/:key', (req, res) => {
+  const { key } = req.params;
+  const overrides = readOverrides();
+  
+  if (overrides.itemOverrides[key]) {
+    delete overrides.itemOverrides[key];
+    if (writeOverrides(overrides)) {
+      res.json({ success: true, message: `Override removed for "${key}"` });
+    } else {
+      res.status(500).json({ error: 'Failed to save changes' });
+    }
+  } else {
+    res.status(404).json({ error: `No override found for "${key}"` });
+  }
+});
+
+// Set a merge override (merge one item into another CIP)
+router.post('/overrides/merge', (req, res) => {
+  const { sourceId, sourcePrimaryId, mergeInto, reason } = req.body;
+  
+  if (!mergeInto || (!sourceId && !sourcePrimaryId)) {
+    return res.status(400).json({ error: 'Missing required fields: mergeInto and either sourceId or sourcePrimaryId' });
+  }
+  
+  // Normalize the target CIP number
+  const normalizedTarget = mergeInto.toUpperCase().replace(/^CIP\s*[-#]?\s*0*/, 'CIP-').padEnd(8, '0');
+  
+  const overrides = readOverrides();
+  if (!overrides.mergeOverrides) {
+    overrides.mergeOverrides = {};
+  }
+  
+  const key = sourcePrimaryId || sourceId;
+  overrides.mergeOverrides[key] = {
+    mergeInto: normalizedTarget,
+    reason: reason || 'Manual merge',
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Merge override set: "${key}" -> ${normalizedTarget}`);
+    res.json({ success: true, override: overrides.mergeOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save merge override' });
+  }
+});
+
+// Get list of existing CIP items (for merge target selection)
+router.get('/cip-list', (req, res) => {
+  const cached = readCache();
+  if (!cached || !cached.lifecycleItems) {
+    return res.json({ cips: [] });
+  }
+  
+  const cips = cached.lifecycleItems
+    .filter(item => item.type === 'cip' && item.primaryId.match(/^CIP-\d+$/i))
+    .map(item => ({
+      primaryId: item.primaryId,
+      firstDate: item.firstDate,
+      lastDate: item.lastDate,
+      topicCount: item.topics.length,
+    }))
+    .sort((a, b) => {
+      const numA = parseInt(a.primaryId.match(/\d+/)?.[0] || '0');
+      const numB = parseInt(b.primaryId.match(/\d+/)?.[0] || '0');
+      return numB - numA;
+    });
+  
+  res.json({ cips });
+});
+
+
 // Shows high-confidence disagreements between postedStage and inferredStage
 // This is for observation only - does NOT change any behavior
 router.get('/inference-disagreements', (req, res) => {
