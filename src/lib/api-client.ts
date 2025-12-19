@@ -1146,11 +1146,16 @@ export const scanApi = {
       const latest = await this.fetchLatestRound();
       const snap = await this.fetchAcsSnapshotTimestamp(latest.effectiveAt, 0);
 
+      // NOTE: Scan API expects template IDs in the form "package_name:module_name:entity_name".
+      // The VoteRequest/CloseVoteRequestResult templates live in the splice-amulet package.
       const acs = await this.fetchStateAcs({
         migration_id: 0,
         record_time: snap.record_time,
         page_size: 1000,
-        templates: ["Splice.DsoRules:VoteRequest", "Splice.DsoRules:DsoRules_CloseVoteRequestResult"],
+        templates: [
+          "splice-amulet:Splice.DsoRules:VoteRequest",
+          "splice-amulet:Splice.DsoRules:DsoRules_CloseVoteRequestResult",
+        ],
       });
 
       const proposals: any[] = [];
