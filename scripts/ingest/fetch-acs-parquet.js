@@ -141,14 +141,6 @@ async function fetchACSPage(migrationId, recordTime, after = null) {
 async function runMigrationSnapshot(migrationId) {
   console.log(`\n📍 Starting ACS snapshot for migration ${migrationId}`);
   
-  // Clean up old snapshots BEFORE starting new one
-  // This prevents data accumulation and corruption
-  console.log(`   🗑️ Cleaning up old snapshots for migration ${migrationId}...`);
-  const cleanupResult = cleanupOldSnapshots(migrationId);
-  if (cleanupResult.deleted > 0) {
-    console.log(`   ✅ Deleted ${cleanupResult.deleted} old snapshot(s)`);
-  }
-  
   const recordTime = await getSnapshotTimestamp(migrationId);
   console.log(`   Record time: ${recordTime}`);
   
@@ -317,6 +309,14 @@ async function runMigrationSnapshot(migrationId) {
     },
   };
   await writeCompletionMarker(snapshotRunTime, migrationId, stats);
+  
+  // Clean up old snapshots AFTER the new one is complete
+  // This ensures there's always valid data available during the snapshot process
+  console.log(`\n   🗑️ Cleaning up old snapshots for migration ${migrationId}...`);
+  const cleanupResult = cleanupOldSnapshots(migrationId);
+  if (cleanupResult.deleted > 0) {
+    console.log(`   ✅ Deleted ${cleanupResult.deleted} old snapshot(s), keeping ${cleanupResult.kept}`);
+  }
   
   return {
     migrationId,
