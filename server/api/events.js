@@ -508,6 +508,7 @@ router.get('/governance-history', async (req, res) => {
 });
 
 // GET /api/events/governance-debug - Debug endpoint to diagnose backfill governance data
+// Specifically searches for VoteRequest events across ALL migrations
 router.get('/governance-debug', async (req, res) => {
   try {
     const sources = getDataSources();
@@ -515,40 +516,85 @@ router.get('/governance-debug', async (req, res) => {
     // Count binary files
     const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
     
-    // Find files (with extended range for backfill)
-    const files = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', { maxDays: 365 * 5, maxFiles: 100 });
+    // Find files across ALL migrations with very large range
+    const files = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', { 
+      maxDays: 365 * 10, // 10 years to cover all backfill
+      maxFiles: 5000     // Scan more files to find VoteRequest events
+    });
     
-    // Try to read a sample of governance events from the first few files
-    const governanceTemplates = ['VoteRequest', 'Confirmation', 'DsoRules', 'AmuletRules'];
-    const sampleEvents = [];
+    // Specifically search for VoteRequest events (created and archived)
+    const voteRequestCreated = [];
+    const voteRequestArchived = [];
     let filesScanned = 0;
+    let totalEventsScanned = 0;
     
-    for (const file of files.slice(0, 20)) {
+    // Scan files until we find at least one created and one archived VoteRequest
+    for (const file of files) {
+      if (voteRequestCreated.length >= 3 && voteRequestArchived.length >= 3) break;
+      
       try {
         filesScanned++;
         const result = await binaryReader.readBinaryFile(file);
-        const govEvents = result.records.filter(e => 
-          governanceTemplates.some(t => e.template_id?.includes(t))
-        );
+        totalEventsScanned += result.records.length;
         
-        for (const e of govEvents.slice(0, 3)) {
-          sampleEvents.push({
-            file: file.split('/').slice(-4).join('/'), // Last 4 path segments
+        for (const e of result.records) {
+          // Only look for VoteRequest template
+          if (!e.template_id?.includes('VoteRequest')) continue;
+          
+          const eventInfo = {
+            file: file.split('/').slice(-5).join('/'), // Last 5 path segments (includes migration)
             event_id: e.event_id,
             event_type: e.event_type,
             template_id: e.template_id,
-            contract_id: e.contract_id?.slice(0, 20) + '...',
+            contract_id: e.contract_id,
             effective_at: e.effective_at,
             has_payload: !!e.payload,
             payload_keys: e.payload ? Object.keys(e.payload) : [],
-            payload_sample: e.payload ? JSON.stringify(e.payload).slice(0, 500) : null,
-          });
+            // Show more of the payload for debugging
+            payload_full: e.payload,
+            // Also check raw field
+            has_raw: !!e.raw,
+            raw_keys: e.raw ? Object.keys(e.raw) : [],
+          };
+          
+          if (e.event_type === 'created' && voteRequestCreated.length < 3) {
+            voteRequestCreated.push(eventInfo);
+          } else if ((e.event_type === 'archived' || e.event_type === 'exercised') && voteRequestArchived.length < 3) {
+            voteRequestArchived.push(eventInfo);
+          }
         }
-        
-        if (sampleEvents.length >= 10) break;
       } catch (err) {
-        // Ignore file read errors
+        // Ignore file read errors, continue scanning
       }
+      
+      // Stop after scanning 500 files if we still haven't found anything
+      if (filesScanned >= 500 && voteRequestCreated.length === 0 && voteRequestArchived.length === 0) {
+        break;
+      }
+    }
+    
+    // Also list what migrations exist
+    const fs = await import('fs');
+    const path = await import('path');
+    let migrations = [];
+    try {
+      const entries = fs.readdirSync(db.DATA_PATH, { withFileTypes: true });
+      migrations = entries
+        .filter(e => e.isDirectory() && e.name.startsWith('migration='))
+        .map(e => {
+          const migPath = path.join(db.DATA_PATH, e.name);
+          const subEntries = fs.readdirSync(migPath, { withFileTypes: true });
+          const hasYearPartitions = subEntries.some(se => se.isDirectory() && se.name.startsWith('year='));
+          const hasPbZst = subEntries.some(se => se.name.endsWith('.pb.zst'));
+          return {
+            name: e.name,
+            hasYearPartitions,
+            hasPbZstDirect: hasPbZst,
+            subDirs: subEntries.filter(se => se.isDirectory()).map(se => se.name).slice(0, 5),
+          };
+        });
+    } catch (err) {
+      migrations = [{ error: err.message }];
     }
     
     res.json({
@@ -557,9 +603,19 @@ router.get('/governance-debug', async (req, res) => {
       totalBinaryFiles: fileCount,
       filesFound: files.length,
       filesScanned,
-      sampleFilePaths: files.slice(0, 10).map(f => f.split('/').slice(-4).join('/')),
-      governanceEventsFound: sampleEvents.length,
-      sampleEvents,
+      totalEventsScanned,
+      migrations,
+      voteRequestCreated: {
+        count: voteRequestCreated.length,
+        samples: voteRequestCreated,
+      },
+      voteRequestArchived: {
+        count: voteRequestArchived.length,
+        samples: voteRequestArchived,
+      },
+      message: voteRequestCreated.length === 0 && voteRequestArchived.length === 0
+        ? 'No VoteRequest events found. Check if backfill data includes governance templates.'
+        : `Found ${voteRequestCreated.length} created and ${voteRequestArchived.length} archived VoteRequest events`,
     });
   } catch (err) {
     console.error('Error in governance-debug:', err);
