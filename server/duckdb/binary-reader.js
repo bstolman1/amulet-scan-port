@@ -512,6 +512,9 @@ export function hasBinaryFiles(dirPath, type = 'events') {
 
 // Configurable scan limit via env var (default 500, up from 200)
 const MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_MAX_FILES) || 500;
+// Absolute safety cap to avoid accidentally scanning the entire dataset in one request.
+// Governance history/backfill debugging may intentionally request higher limits.
+const HARD_MAX_FILES_TO_SCAN = parseInt(process.env.BINARY_READER_HARD_MAX_FILES) || 10000;
 
 // Stream records with pagination (memory efficient for large datasets)
 export async function streamRecords(dirPath, type = 'events', options = {}) {
@@ -523,11 +526,12 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     maxDays = 30,
     maxFilesToScan: maxFilesToScanOverride,
   } = options;
-  
-  const maxFilesToScanLimit = Math.min(
-    typeof maxFilesToScanOverride === 'number' ? maxFilesToScanOverride : MAX_FILES_TO_SCAN,
-    MAX_FILES_TO_SCAN,
-  );
+
+  // If the caller explicitly requests a higher scan depth, honor it (within a hard cap).
+  // Otherwise fall back to the default MAX_FILES_TO_SCAN.
+  const maxFilesToScanLimit = typeof maxFilesToScanOverride === 'number'
+    ? Math.min(Math.max(0, maxFilesToScanOverride), HARD_MAX_FILES_TO_SCAN)
+    : MAX_FILES_TO_SCAN;
   
   // Use FAST finder that leverages partition structure instead of scanning 55k+ files
   const files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });
