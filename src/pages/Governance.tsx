@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,6 +17,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
@@ -73,12 +74,20 @@ const Governance = () => {
     "Splice:DsoRules:Confirmation",
   );
 
+  // Governance history pagination state
+  const [historyLimit, setHistoryLimit] = useState(50);
+  const [historyOffset, setHistoryOffset] = useState(0);
+
   // Governance history comes from BACKFILL events (DuckDB local DB)
   const {
-    data: historyActions,
+    data: historyData,
     isLoading: historyLoading,
     isError: historyIsError,
-  } = useGovernanceHistory(500);
+  } = useGovernanceHistory(historyLimit, historyOffset);
+
+  const historyActions = historyData?.actions || [];
+  const historyHasMore = historyData?.hasMore ?? false;
+  const historyPage = Math.floor(historyOffset / historyLimit) + 1;
 
   // Check if local ACS has governance data
   const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
@@ -642,15 +651,61 @@ const Governance = () => {
       <TabsContent value="history">
         <Card className="glass-card">
           <div className="p-6">
-            <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-              <History className="h-5 w-5" />
-              Governance History (Backfill)
-              {historyActions?.length ? (
-                <Badge variant="outline" className="ml-2">
-                  {historyActions.length} actions
-                </Badge>
-              ) : null}
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                <History className="h-5 w-5" />
+                Governance History (Backfill)
+                {historyActions.length ? (
+                  <Badge variant="outline" className="ml-2">
+                    {historyActions.length} on page {historyPage}
+                  </Badge>
+                ) : null}
+              </h3>
+
+              {/* Pagination Controls */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Show:</span>
+                  <Select
+                    value={String(historyLimit)}
+                    onValueChange={(val) => {
+                      setHistoryLimit(Number(val));
+                      setHistoryOffset(0);
+                    }}
+                  >
+                    <SelectTrigger className="w-20 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="25">25</SelectItem>
+                      <SelectItem value="50">50</SelectItem>
+                      <SelectItem value="100">100</SelectItem>
+                      <SelectItem value="200">200</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={historyOffset === 0}
+                    onClick={() => setHistoryOffset(Math.max(0, historyOffset - historyLimit))}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-sm px-2 text-muted-foreground">Page {historyPage}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!historyHasMore}
+                    onClick={() => setHistoryOffset(historyOffset + historyLimit)}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
 
             {historyIsError ? (
               <div className="text-center py-12">
@@ -666,7 +721,7 @@ const Governance = () => {
                   <Skeleton key={i} className="h-24 w-full" />
                 ))}
               </div>
-            ) : !historyActions?.length ? (
+            ) : !historyActions.length ? (
               <div className="text-center py-12">
                 <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">No historical governance actions found</p>

@@ -40,6 +40,12 @@ export interface GovernanceAction {
   cipReference: string | null;
 }
 
+export interface GovernanceHistoryResult {
+  actions: GovernanceAction[];
+  totalRawEvents: number;
+  hasMore: boolean;
+}
+
 // Extract CIP reference from reason text
 const extractCipReference = (reason: { url?: string; body?: string } | null): string | null => {
   if (!reason) return null;
@@ -72,12 +78,13 @@ const getTemplateType = (templateId: string): GovernanceAction['templateType'] =
   return 'VoteRequest';
 };
 
-export function useGovernanceHistory(limit = 500) {
+export function useGovernanceHistory(limit = 50, offset = 0) {
   return useQuery({
-    queryKey: ["governanceHistory", limit],
-    queryFn: async (): Promise<GovernanceAction[]> => {
-      const response = await apiFetch<HistoryResponse>(`/api/events/governance-history?limit=${limit}`);
+    queryKey: ["governanceHistory", limit, offset],
+    queryFn: async (): Promise<GovernanceHistoryResult> => {
+      const response = await apiFetch<HistoryResponse>(`/api/events/governance-history?limit=${limit}&offset=${offset}`);
       const events = response.data || [];
+      const hasMore = response.hasMore ?? false;
       
       // Process events into governance actions
       // Focus on archived VoteRequests (completed votes) and created DsoRules/AmuletRules
@@ -166,9 +173,15 @@ export function useGovernanceHistory(limit = 500) {
       }
       
       // Sort by effective date descending
-      return actions.sort((a, b) => 
+      const sortedActions = actions.sort((a, b) => 
         new Date(b.effectiveAt).getTime() - new Date(a.effectiveAt).getTime()
       );
+      
+      return {
+        actions: sortedActions,
+        totalRawEvents: response.count,
+        hasMore,
+      };
     },
     staleTime: 60_000, // 1 minute
   });
