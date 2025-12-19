@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
+import { useGovernanceHistory, GovernanceAction } from "@/hooks/use-governance-history";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ const Governance = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEvents, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
+  const { data: governanceHistory, isLoading: historyLoading } = useGovernanceHistory(500);
 
   // Fetch snapshot info for the banner
   const { data: snapshotInfo } = useQuery({
@@ -72,27 +74,37 @@ const Governance = () => {
     "Splice:DsoRules:Confirmation",
   );
 
-  // Fetch available templates from local ACS for debugging
-  const { data: availableTemplates } = useQuery({
-    queryKey: ["acs-available-templates"],
-    queryFn: () => apiFetch<{ data: Array<{ template_name: string; contract_count: number }> }>("/api/acs/templates"),
+  // Check if local ACS has governance data
+  const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
+
+  // FALLBACK: Fetch from live Canton Scan API if local ACS has no governance data
+  const { data: liveVoteRequestsData, isLoading: liveLoading } = useQuery({
+    queryKey: ["live-vote-requests"],
+    queryFn: async () => {
+      const proposals = await scanApi.fetchGovernanceProposals();
+      return { data: proposals, source: "live" };
+    },
+    enabled: !localLoading && !localHasGovernanceData,
     staleTime: 60 * 1000,
+    retry: 1,
   });
 
-  // Use local data only - NO LIVE FALLBACK
-  const voteRequestsData = localVoteRequestsData;
+  // Use local data if available, otherwise use live fallback
+  const voteRequestsData = localHasGovernanceData ? localVoteRequestsData : liveVoteRequestsData;
   const dsoRulesData = localDsoRulesData;
   const confirmationsData = localConfirmationsData;
-  const isLoading = localLoading;
-  const isError = localError;
+  const isLoading = localLoading || (liveLoading && !localHasGovernanceData);
+  const isError = localError && !liveVoteRequestsData;
+  const isUsingLiveFallback = !localHasGovernanceData && !!liveVoteRequestsData;
 
   // Debug: Log data loading status
   console.log("🔍 Governance Data Status:", {
     localVoteRequests: localVoteRequestsData?.data?.length ?? "loading",
+    liveVoteRequests: liveVoteRequestsData?.data?.length ?? "not loaded",
+    usingLiveFallback: isUsingLiveFallback,
     dsoRules: dsoRulesData?.data?.length ?? "loading",
     confirmations: confirmationsData?.data?.length ?? "loading",
     events: governanceEvents?.length ?? "loading",
-    availableTemplates: availableTemplates?.data?.length ?? "loading",
   });
 
   // Scroll to highlighted proposal when data loads
@@ -319,35 +331,16 @@ const Governance = () => {
           </Alert>
         )}
 
-        {/* Debug: Available Templates */}
-        <Collapsible>
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground">
-              <Database className="h-4 w-4" />
-              Debug: Local ACS Data ({availableTemplates?.data?.length ?? 0} templates)
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <Alert className="mt-2 bg-muted/50">
-              <AlertDescription className="text-xs font-mono space-y-2">
-                <div><strong>VoteRequests:</strong> {localVoteRequestsData?.data?.length ?? 0} contracts</div>
-                <div><strong>DsoRules:</strong> {localDsoRulesData?.data?.length ?? 0} contracts</div>
-                <div><strong>Confirmations:</strong> {localConfirmationsData?.data?.length ?? 0} contracts</div>
-                <div className="pt-2 border-t border-border">
-                  <strong>All Templates in ACS:</strong>
-                  <div className="mt-1 max-h-48 overflow-auto grid grid-cols-2 gap-1">
-                    {availableTemplates?.data?.map((t) => (
-                      <div key={t.template_name} className="flex justify-between">
-                        <span className="truncate">{t.template_name.split(":").pop()}</span>
-                        <Badge variant="outline" className="ml-2 text-xs">{t.contract_count}</Badge>
-                      </div>
-                    )) ?? <span>Loading...</span>}
-                  </div>
-                </div>
-              </AlertDescription>
-            </Alert>
-          </CollapsibleContent>
-        </Collapsible>
+        {/* Live Fallback Warning */}
+        {isUsingLiveFallback && (
+          <Alert className="bg-yellow-500/10 border-yellow-500/30">
+            <AlertTriangle className="h-4 w-4 text-yellow-500" />
+            <AlertDescription className="text-sm">
+              <strong>Using live Canton Scan API</strong> — Local ACS snapshot doesn't contain VoteRequest contracts. 
+              Governance data is being fetched from the live network.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -647,46 +640,89 @@ const Governance = () => {
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
               <History className="h-5 w-5" />
               Historical Governance Events
+              {governanceHistory?.length ? (
+                <Badge variant="outline" className="ml-2">
+                  {governanceHistory.length} actions
+                </Badge>
+              ) : null}
             </h3>
             
-            {eventsLoading ? (
+            {historyLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-20 w-full" />
                 ))}
               </div>
-            ) : !governanceEvents?.length ? (
+            ) : !governanceHistory?.length ? (
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground">No historical governance events found</p>
+                <p className="text-muted-foreground mb-2">No historical governance events found</p>
+                <p className="text-xs text-muted-foreground">
+                  Governance history is extracted from local DuckDB backfill data
+                </p>
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Event Type</TableHead>
-                    <TableHead>Round</TableHead>
-                    <TableHead>Template</TableHead>
-                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Votes</TableHead>
+                    <TableHead>Effective At</TableHead>
                     <TableHead>Details</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {governanceEvents.slice(0, 100).map((event: any, idx: number) => {
-                    const ts = event.timestamp || event.effective_at || event.created_at;
-                    const date = ts ? new Date(ts) : null;
-                    const timestampLabel = date && !Number.isNaN(date.getTime())
-                      ? format(date, "MMM d, yyyy HH:mm")
-                      : "-";
+                  {governanceHistory.map((action: GovernanceAction) => {
+                    const statusColors: Record<string, string> = {
+                      passed: "bg-success/10 text-success border-success/20",
+                      failed: "bg-destructive/10 text-destructive border-destructive/20",
+                      expired: "bg-muted text-muted-foreground border-border",
+                      executed: "bg-primary/10 text-primary border-primary/20",
+                    };
 
                     return (
-                      <TableRow key={event.event_id || event.contract_id || `${event.event_type}-${idx}`}>
-                        <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                        <TableCell>{typeof event.round === "number" ? event.round.toLocaleString() : "-"}</TableCell>
-                        <TableCell className="text-xs truncate max-w-[200px]">
-                          {event.template_id?.split(":").pop() || "-"}
+                      <TableRow key={action.id}>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <span className="font-medium text-sm">{action.actionTag}</span>
+                            {action.cipReference && (
+                              <Badge variant="outline" className="w-fit text-xs">
+                                CIP-{action.cipReference}
+                              </Badge>
+                            )}
+                            {action.requester && (
+                              <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                                by {action.requester}
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
-                        <TableCell className="text-xs">{timestampLabel}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {action.templateType}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={statusColors[action.status] || "bg-muted"}>
+                            {action.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {action.totalVotes > 0 ? (
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="text-success">{action.votesFor} ✓</span>
+                              <span className="text-muted-foreground">/</span>
+                              <span className="text-destructive">{action.votesAgainst} ✗</span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {safeFormatDate(action.effectiveAt)}
+                        </TableCell>
                         <TableCell>
                           <Collapsible>
                             <CollapsibleTrigger asChild>
@@ -695,19 +731,30 @@ const Governance = () => {
                               </Button>
                             </CollapsibleTrigger>
                             <CollapsibleContent>
-                              <pre className="text-xs bg-muted p-2 rounded mt-2 overflow-auto max-h-48">
-                                {JSON.stringify(
-                                  event.payload || event.exercise_result || event.event_data || event.raw || {
-                                    event_id: event.event_id,
-                                    event_type: event.event_type,
-                                    contract_id: event.contract_id,
-                                    choice: event.choice,
-                                    template_id: event.template_id,
-                                  },
-                                  null,
-                                  2
+                              <div className="text-xs bg-muted p-3 rounded mt-2 space-y-2">
+                                <div>
+                                  <span className="text-muted-foreground">Contract: </span>
+                                  <span className="font-mono break-all">{action.contractId}</span>
+                                </div>
+                                {action.reason && (
+                                  <div>
+                                    <span className="text-muted-foreground">Reason: </span>
+                                    <span>{action.reason}</span>
+                                  </div>
                                 )}
-                              </pre>
+                                {action.reasonUrl && (
+                                  <div>
+                                    <a 
+                                      href={action.reasonUrl} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer"
+                                      className="text-primary hover:underline break-all"
+                                    >
+                                      {action.reasonUrl}
+                                    </a>
+                                  </div>
+                                )}
+                              </div>
                             </CollapsibleContent>
                           </Collapsible>
                         </TableCell>
