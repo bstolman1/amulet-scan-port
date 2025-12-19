@@ -89,6 +89,15 @@ const Governance = () => {
   const historyHasMore = historyData?.hasMore ?? false;
   const historyPage = Math.floor(historyOffset / historyLimit) + 1;
 
+  // If history is empty, fetch backend debug info to diagnose missing DuckDB data
+  const { data: duckdbEventsDebug } = useQuery({
+    queryKey: ["duckdb-events-debug"],
+    queryFn: () => apiFetch<any>("/api/events/debug"),
+    enabled: !historyLoading && !historyIsError && historyActions.length === 0,
+    retry: 1,
+    staleTime: 30_000,
+  });
+
   // Check if local ACS has governance data
   const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
 
@@ -726,6 +735,41 @@ const Governance = () => {
                 <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">No historical governance actions found</p>
                 <p className="text-xs text-muted-foreground">This tab reads from the backfill ledger events in your local DuckDB.</p>
+
+                {duckdbEventsDebug ? (
+                  <div className="mt-6 mx-auto max-w-2xl text-left">
+                    <Alert className="bg-muted/30">
+                      <Database className="h-4 w-4" />
+                      <AlertDescription className="text-xs leading-relaxed">
+                        <div className="grid gap-1">
+                          <div>
+                            <span className="font-semibold">DuckDB DATA_PATH:</span>{" "}
+                            <span className="font-mono break-all">{duckdbEventsDebug.dataPath}</span>
+                          </div>
+                          <div>
+                            <span className="font-semibold">Primary source:</span>{" "}
+                            <span className="font-mono">{duckdbEventsDebug.sources?.primarySource}</span>
+                          </div>
+                          {typeof duckdbEventsDebug.totalBinaryFiles === "number" ? (
+                            <div>
+                              <span className="font-semibold">Binary event files:</span>{" "}
+                              <span className="font-mono">{duckdbEventsDebug.totalBinaryFiles}</span>
+                            </div>
+                          ) : null}
+                          {duckdbEventsDebug.newestByDataDate?.[0]?.dataDate ? (
+                            <div>
+                              <span className="font-semibold">Newest partition:</span>{" "}
+                              <span className="font-mono">{duckdbEventsDebug.newestByDataDate[0].dataDate}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-muted-foreground">
+                          If DATA_PATH is wrong, set <span className="font-mono">DATA_DIR</span> in <span className="font-mono">server/.env</span> to your data folder and restart the server.
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-4">
