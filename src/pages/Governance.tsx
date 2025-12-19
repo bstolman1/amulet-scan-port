@@ -86,6 +86,7 @@ const Governance = () => {
   } = useGovernanceHistory(historyLimit, historyOffset);
 
   const historyActions = historyData?.actions || [];
+  const historySummary = historyData?.summary;
   const historyHasMore = historyData?.hasMore ?? false;
   const historyPage = Math.floor(historyOffset / historyLimit) + 1;
 
@@ -716,6 +717,32 @@ const Governance = () => {
               </div>
             </div>
 
+            {/* Summary Stats Cards */}
+            {historySummary && historySummary.totalRequests > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+                <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                  <p className="text-xs text-muted-foreground mb-1">Total Requests</p>
+                  <p className="text-xl font-bold text-foreground">{historySummary.totalRequests}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+                  <p className="text-xs text-muted-foreground mb-1">In Progress</p>
+                  <p className="text-xl font-bold text-primary">{historySummary.inProgress}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-success/10 border border-success/20">
+                  <p className="text-xs text-muted-foreground mb-1">Executed</p>
+                  <p className="text-xl font-bold text-success">{historySummary.executed}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                  <p className="text-xs text-muted-foreground mb-1">Rejected</p>
+                  <p className="text-xl font-bold text-destructive">{historySummary.rejected}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-warning/10 border border-warning/20">
+                  <p className="text-xs text-muted-foreground mb-1">Expired</p>
+                  <p className="text-xl font-bold text-warning">{historySummary.expired}</p>
+                </div>
+              </div>
+            )}
+
             {historyIsError ? (
               <div className="text-center py-12">
                 <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -803,25 +830,25 @@ const Governance = () => {
                         </div>
                         <Badge className={(() => {
                           switch (action.status) {
-                            case "passed":
+                            case "executed":
                               return "bg-success/10 text-success border-success/20";
-                            case "failed":
+                            case "rejected":
                               return "bg-destructive/10 text-destructive border-destructive/20";
                             case "expired":
                               return "bg-warning/10 text-warning border-warning/20";
-                            case "executed":
+                            case "in_progress":
                               return "bg-primary/10 text-primary border-primary/20";
                             default:
                               return "bg-muted text-muted-foreground";
                           }
                         })()}
                         >
-                          {action.status}
+                          {action.status === 'in_progress' ? 'In Progress' : action.status}
                         </Badge>
                       </div>
 
-                      {action.type === "vote_completed" && (
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                      {(action.type === "vote_completed" || action.type === "vote_request") && action.totalVotes > 0 && (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                           <div className="p-3 rounded-lg bg-background/50">
                             <p className="text-xs text-muted-foreground mb-1">Votes For</p>
                             <p className="text-lg font-bold text-success">{action.votesFor}</p>
@@ -834,6 +861,12 @@ const Governance = () => {
                             <p className="text-xs text-muted-foreground mb-1">Total Votes</p>
                             <p className="text-lg font-bold">{action.totalVotes}</p>
                           </div>
+                          {action.voteBefore && (
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
+                              <p className="text-sm font-medium">{safeFormatDate(action.voteBefore)}</p>
+                            </div>
+                          )}
                         </div>
                       )}
 
