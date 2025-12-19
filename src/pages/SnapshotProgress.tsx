@@ -31,6 +31,9 @@ interface Snapshot {
   error_message?: string | null;
   updated_at?: string | null;
   source?: string;
+  // New fields for data availability
+  has_data?: boolean;
+  file_count?: number;
   // Computed fields
   processed_pages?: number;
   processed_events?: number;
@@ -478,6 +481,11 @@ const SnapshotProgress = () => {
                         Local
                       </Badge>
                     )}
+                    {snapshot.has_data === false && (
+                      <Badge variant="outline" className="text-muted-foreground border-muted-foreground/50">
+                        Archived
+                      </Badge>
+                    )}
                   </CardTitle>
                   <CardDescription>
                     {snapshot.record_time 
@@ -516,38 +524,45 @@ const SnapshotProgress = () => {
                 </div>
               </div>
 
-              {/* Stats Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Database className="w-4 h-4" />
-                    Contracts
-                  </div>
-                  <p className="text-2xl font-bold">
-                    {(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || 0}
-                  </p>
+              {/* Stats Grid - show different content for archived snapshots */}
+              {snapshot.has_data === false ? (
+                <div className="text-center py-4 text-muted-foreground">
+                  <p className="text-sm">Data files have been purged to save disk space.</p>
+                  <p className="text-xs mt-1">Only metadata remains from this snapshot.</p>
                 </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Database className="w-4 h-4" />
+                      Contracts
+                    </div>
+                    <p className="text-2xl font-bold">
+                      {(isLatestSnapshot ? localStats?.total_contracts : snapshot.entry_count)?.toLocaleString() || '—'}
+                    </p>
+                  </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <FileText className="w-4 h-4" />
-                    Templates
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <FileText className="w-4 h-4" />
+                      Templates
+                    </div>
+                    <p className="text-2xl font-bold">
+                      {(isLatestSnapshot ? localStats?.total_templates : snapshot.template_count)?.toLocaleString() || '—'}
+                    </p>
                   </div>
-                  <p className="text-2xl font-bold">
-                    {(isLatestSnapshot ? localStats?.total_templates : snapshot.template_count)?.toLocaleString() || 0}
-                  </p>
-                </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Clock className="w-4 h-4" />
-                    Snapshot Time
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Clock className="w-4 h-4" />
+                      Snapshot Time
+                    </div>
+                    <p className="text-lg font-medium">
+                      {new Date(snapshot.timestamp).toLocaleDateString()}
+                    </p>
                   </div>
-                  <p className="text-lg font-medium">
-                    {new Date(snapshot.timestamp).toLocaleDateString()}
-                  </p>
                 </div>
-              </div>
+              )}
 
 
               {/* Template Stats */}
