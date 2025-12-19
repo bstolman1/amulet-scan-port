@@ -11,7 +11,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
-import { useGovernanceHistory, GovernanceAction } from "@/hooks/use-governance-history";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -45,7 +44,6 @@ const Governance = () => {
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEvents, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
-  const { data: governanceHistory, isLoading: historyLoading } = useGovernanceHistory(500);
 
   // Fetch snapshot info for the banner
   const { data: snapshotInfo } = useQuery({
@@ -639,21 +637,21 @@ const Governance = () => {
           <div className="p-6">
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
               <History className="h-5 w-5" />
-              Historical Governance Events
-              {governanceHistory?.length ? (
+              Historical Governance Events (DuckDB)
+              {governanceEvents?.length ? (
                 <Badge variant="outline" className="ml-2">
-                  {governanceHistory.length} actions
+                  {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} VoteRequests
                 </Badge>
               ) : null}
             </h3>
             
-            {historyLoading ? (
+            {eventsLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-20 w-full" />
+                  <Skeleton key={i} className="h-32 w-full" />
                 ))}
               </div>
-            ) : !governanceHistory?.length ? (
+            ) : !governanceEvents?.length ? (
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">No historical governance events found</p>
@@ -662,107 +660,198 @@ const Governance = () => {
                 </p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Votes</TableHead>
-                    <TableHead>Effective At</TableHead>
-                    <TableHead>Details</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {governanceHistory.map((action: GovernanceAction) => {
-                    const statusColors: Record<string, string> = {
-                      passed: "bg-success/10 text-success border-success/20",
-                      failed: "bg-destructive/10 text-destructive border-destructive/20",
-                      expired: "bg-muted text-muted-foreground border-border",
-                      executed: "bg-primary/10 text-primary border-primary/20",
-                    };
-
+              <div className="space-y-4">
+                {governanceEvents
+                  .filter((event: any) => event.template_id?.includes('VoteRequest'))
+                  .slice(0, 100)
+                  .map((event: any, index: number) => {
+                    // Parse the event the same way as active proposals
+                    const payload = event.payload || event.event_data || event;
+                    const action = payload.action || {};
+                    const { title, actionType, actionDetails } = parseAction(action);
+                    
+                    const votesRaw = payload.votes || [];
+                    const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
+                    
+                    const requester = payload.requester || "Unknown";
+                    const reasonObj = payload.reason || {};
+                    const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
+                    const reasonUrl = reasonObj?.url || "";
+                    const voteBefore = payload.voteBefore;
+                    const targetEffectiveAt = payload.targetEffectiveAt;
+                    const trackingCid = payload.trackingCid || event.contract_id;
+                    
+                    // Determine status
+                    const threshold = votingThreshold || svCount || 1;
+                    let status: "approved" | "rejected" | "pending" | "archived" = "archived";
+                    const now = new Date();
+                    const voteDeadline = voteBefore ? new Date(voteBefore) : null;
+                    const isExpired = voteDeadline && voteDeadline < now;
+                    
+                    if (votesFor >= threshold) {
+                      status = "approved";
+                    } else if (isExpired && votesFor < threshold) {
+                      status = "rejected";
+                    } else if (event.event_type === "archived") {
+                      status = "archived";
+                    }
+                    
+                    const eventTs = event.effective_at || event.timestamp || event.created_at;
+                    
                     return (
-                      <TableRow key={action.id}>
-                        <TableCell>
-                          <div className="flex flex-col gap-1">
-                            <span className="font-medium text-sm">{action.actionTag}</span>
-                            {action.cipReference && (
-                              <Badge variant="outline" className="w-fit text-xs">
-                                CIP-{action.cipReference}
-                              </Badge>
+                      <Collapsible key={event.event_id || `${event.contract_id}-${index}`}>
+                        <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex items-center space-x-3">
+                              <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(status)}</div>
+                              <div className="flex-1">
+                                <h4 className="font-semibold text-lg">{title}</h4>
+                                <p className="text-sm text-muted-foreground">
+                                  {trackingCid?.slice(0, 12) || "unknown"}
+                                  <span className="mx-2">•</span>
+                                  <span className="font-mono text-xs">{actionType}</span>
+                                  <span className="mx-2">•</span>
+                                  <span className="text-xs">{event.event_type}</span>
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  Requested by: <span className="font-medium text-foreground">{requester}</span>
+                                </p>
+                              </div>
+                            </div>
+                            <Badge className={getStatusColor(status)}>{status}</Badge>
+                          </div>
+
+                          {/* Action Details */}
+                          {actionDetails && typeof actionDetails === "object" && Object.keys(actionDetails).length > 0 && (
+                            <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                              <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                                {Object.entries(actionDetails)
+                                  .filter(([_, value]) => value !== null && value !== undefined)
+                                  .slice(0, 8)
+                                  .map(([key, value]: [string, any]) => (
+                                  <div key={key} className="flex flex-col">
+                                    <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                                    <span className="font-mono text-xs break-all">
+                                      {typeof value === "string" || typeof value === "number" 
+                                        ? String(value).slice(0, 100) 
+                                        : JSON.stringify(value).slice(0, 100)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Reason Section */}
+                          <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                            <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                            {reasonBody && typeof reasonBody === "string" && (
+                              <p className="text-sm mb-2">{reasonBody}</p>
                             )}
-                            {action.requester && (
-                              <span className="text-xs text-muted-foreground truncate max-w-[200px]">
-                                by {action.requester}
-                              </span>
+                            {reasonUrl && typeof reasonUrl === "string" && (
+                              <a 
+                                href={reasonUrl} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-sm text-primary hover:underline break-all"
+                              >
+                                {reasonUrl}
+                              </a>
+                            )}
+                            {(!reasonBody || typeof reasonBody !== "string") && 
+                             (!reasonUrl || typeof reasonUrl !== "string") && (
+                              <p className="text-sm text-muted-foreground italic">No reason provided</p>
                             )}
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-xs">
-                            {action.templateType}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge className={statusColors[action.status] || "bg-muted"}>
-                            {action.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {action.totalVotes > 0 ? (
-                            <div className="flex items-center gap-2 text-xs">
-                              <span className="text-success">{action.votesFor} ✓</span>
-                              <span className="text-muted-foreground">/</span>
-                              <span className="text-destructive">{action.votesAgainst} ✗</span>
+
+                          {/* Stats Grid */}
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                              <p className="text-lg font-bold text-success">{votesFor}</p>
                             </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {safeFormatDate(action.effectiveAt)}
-                        </TableCell>
-                        <TableCell>
-                          <Collapsible>
-                            <CollapsibleTrigger asChild>
-                              <Button variant="ghost" size="sm">
-                                <Code className="h-3 w-3" />
-                              </Button>
-                            </CollapsibleTrigger>
-                            <CollapsibleContent>
-                              <div className="text-xs bg-muted p-3 rounded mt-2 space-y-2">
-                                <div>
-                                  <span className="text-muted-foreground">Contract: </span>
-                                  <span className="font-mono break-all">{action.contractId}</span>
-                                </div>
-                                {action.reason && (
-                                  <div>
-                                    <span className="text-muted-foreground">Reason: </span>
-                                    <span>{action.reason}</span>
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                              <p className="text-lg font-bold text-destructive">{votesAgainst}</p>
+                            </div>
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Event Time</p>
+                              <p className="text-xs font-mono">
+                                {safeFormatDate(eventTs)}
+                              </p>
+                            </div>
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
+                              <p className="text-xs font-mono">
+                                {safeFormatDate(targetEffectiveAt)}
+                              </p>
+                            </div>
+                            <div className="p-3 rounded-lg bg-background/50">
+                              <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
+                              <p className="text-xs font-mono">
+                                {safeFormatDate(voteBefore)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Votes Cast */}
+                          {votedSvs?.length > 0 && (
+                            <div className="mb-4">
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast ({votedSvs.length}):</p>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {votedSvs.slice(0, 10).map((sv: any, idx: number) => (
+                                  <div 
+                                    key={idx}
+                                    className={`p-2 rounded border text-sm ${
+                                      sv.vote === "accept" 
+                                        ? "bg-success/5 border-success/30" 
+                                        : "bg-destructive/5 border-destructive/30"
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-medium text-xs truncate max-w-[200px]">{sv.party}</span>
+                                      <Badge 
+                                        variant="outline" 
+                                        className={`text-xs ${sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}`}
+                                      >
+                                        {sv.vote === "accept" ? "✓" : "✗"}
+                                      </Badge>
+                                    </div>
                                   </div>
-                                )}
-                                {action.reasonUrl && (
-                                  <div>
-                                    <a 
-                                      href={action.reasonUrl} 
-                                      target="_blank" 
-                                      rel="noopener noreferrer"
-                                      className="text-primary hover:underline break-all"
-                                    >
-                                      {action.reasonUrl}
-                                    </a>
-                                  </div>
-                                )}
+                                ))}
                               </div>
-                            </CollapsibleContent>
-                          </Collapsible>
-                        </TableCell>
-                      </TableRow>
+                              {votedSvs.length > 10 && (
+                                <p className="text-xs text-muted-foreground mt-2">... and {votedSvs.length - 10} more votes</p>
+                              )}
+                            </div>
+                          )}
+
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="w-full mt-2">
+                              <Code className="h-4 w-4 mr-2" />
+                              View Full JSON Data
+                            </Button>
+                          </CollapsibleTrigger>
+
+                          <CollapsibleContent className="mt-4">
+                            <div className="p-4 rounded-lg bg-background/70 border border-border/50">
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                                Event ID: <span className="font-mono">{event.event_id}</span>
+                              </p>
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                                Contract ID: <span className="font-mono">{event.contract_id}</span>
+                              </p>
+                              <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-96">
+                                {JSON.stringify(event, null, 2)}
+                              </pre>
+                            </div>
+                          </CollapsibleContent>
+                        </div>
+                      </Collapsible>
                     );
                   })}
-                </TableBody>
-              </Table>
+              </div>
             )}
           </div>
         </Card>
