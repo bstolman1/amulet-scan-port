@@ -430,85 +430,94 @@ router.get('/governance-history', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
     const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
-    
+
     if (sources.primarySource === 'binary') {
-      // Scan for VoteRequest CREATED events specifically
-      // Use extended range to cover all backfill data
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: limit * 3, // Get more to allow for grouping by trackingCid
-        offset: 0, // Start from beginning, we'll handle offset after grouping
-        maxDays: 365 * 10, // 10 years to cover all backfill
-        maxFilesToScan: 5000, // Scan more files for governance
-        sortBy: 'effective_at',
-        filter: (e) => {
-          // Only VoteRequest CREATED events (they have the full vote data)
-          if (e.template_id?.includes('VoteRequest') && e.event_type === 'created') {
-            return true;
-          }
-          // Also include Confirmation created events (executed actions)
-          if (e.template_id?.includes('Confirmation') && e.event_type === 'created') {
-            return true;
-          }
-          return false;
-        }
+      // IMPORTANT: scanning the full backfill can take a long time.
+      // We do a targeted scan that stops early once we have enough unique VoteRequests.
+      const maxFilesToScan = Math.min(parseInt(req.query.maxFiles) || 5000, 10000);
+      const maxDays = 365 * 10;
+      const hardTimeLimitMs = 20_000;
+      const startedAt = Date.now();
+
+      const files = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', {
+        maxDays,
+        maxFiles: maxFilesToScan,
       });
-      
-      // Group VoteRequest events by trackingCid and take the LATEST for each
-      // (Each vote cast creates a new contract, so latest has final vote count)
+
       const voteRequestsByTrackingCid = new Map();
       const confirmations = [];
-      
-      for (const event of result.records) {
-        if (event.template_id?.includes('VoteRequest')) {
-          const trackingCid = event.payload?.trackingCid;
-          if (trackingCid) {
-            const existing = voteRequestsByTrackingCid.get(trackingCid);
-            if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
-              voteRequestsByTrackingCid.set(trackingCid, event);
+
+      // We need enough to paginate *after* grouping by trackingCid.
+      // Keep a buffer so grouping doesn't shrink below the requested page.
+      const targetUnique = offset + limit + 250;
+
+      for (let i = 0; i < files.length; i++) {
+        if (Date.now() - startedAt > hardTimeLimitMs) break;
+
+        const file = files[i];
+        try {
+          const result = await binaryReader.readBinaryFile(file);
+
+          for (const event of result.records) {
+            // VoteRequest: use CREATED events (full vote payload). Each new vote creates a new contract.
+            if (event.template_id?.includes('VoteRequest') && event.event_type === 'created') {
+              const trackingCid = event.payload?.trackingCid || event.contract_id;
+              const existing = voteRequestsByTrackingCid.get(trackingCid);
+              if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
+                voteRequestsByTrackingCid.set(trackingCid, event);
+              }
+              continue;
             }
-          } else {
-            // No trackingCid, use contract_id as key
-            const existing = voteRequestsByTrackingCid.get(event.contract_id);
-            if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
-              voteRequestsByTrackingCid.set(event.contract_id, event);
+
+            // Confirmation: executed actions
+            if (event.template_id?.includes('Confirmation') && event.event_type === 'created') {
+              confirmations.push(event);
             }
           }
-        } else if (event.template_id?.includes('Confirmation')) {
-          confirmations.push(event);
+        } catch {
+          // ignore file read errors
+        }
+
+        if (voteRequestsByTrackingCid.size + confirmations.length >= targetUnique) {
+          break;
         }
       }
-      
-      // Combine and sort by effective_at
+
       const allEvents = [
         ...Array.from(voteRequestsByTrackingCid.values()),
         ...confirmations,
       ].sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
-      
-      // Apply pagination
+
       const paginatedEvents = allEvents.slice(offset, offset + limit);
-      
-      // Return full event data with payload for frontend processing
-      const history = paginatedEvents.map(event => ({
+
+      const history = paginatedEvents.map((event) => ({
         event_id: event.event_id,
         event_type: event.event_type,
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: event.effective_at,
         timestamp: event.timestamp,
-        payload: event.payload, // Full payload with votes, action, requester, etc.
+        payload: event.payload,
         signatories: event.signatories,
         observers: event.observers,
       }));
-      
-      return res.json({ 
-        data: history, 
-        count: history.length, 
+
+      return res.json({
+        data: history,
+        count: history.length,
         totalUnique: allEvents.length,
-        hasMore: offset + limit < allEvents.length, 
-        source: 'binary' 
+        hasMore: offset + limit < allEvents.length,
+        source: 'binary',
+        meta: {
+          maxFilesToScan,
+          maxDays,
+          scannedWithinMs: Date.now() - startedAt,
+          stoppedEarly: voteRequestsByTrackingCid.size + confirmations.length >= targetUnique,
+          timedOut: Date.now() - startedAt > hardTimeLimitMs,
+        },
       });
     }
-    
+
     // Fallback to DuckDB query
     const sql = `
       SELECT 
@@ -526,11 +535,11 @@ router.get('/governance-history', async (req, res) => {
       LIMIT ${limit}
       OFFSET ${offset}
     `;
-    
+
     const rows = await db.safeQuery(sql);
-    
+
     // Return full event data with payload for frontend processing
-    const history = rows.map(row => ({
+    const history = rows.map((row) => ({
       event_id: row.event_id,
       event_type: row.event_type,
       contract_id: row.contract_id,
@@ -541,7 +550,7 @@ router.get('/governance-history', async (req, res) => {
       signatories: row.signatories,
       observers: row.observers,
     }));
-    
+
     res.json({ data: history, count: history.length, source: sources.primarySource });
   } catch (err) {
     console.error('Error fetching governance history:', err);
