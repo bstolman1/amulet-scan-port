@@ -25,10 +25,11 @@ interface HistoryResponse {
 // Processed governance action for display
 export interface GovernanceAction {
   id: string;
-  type: 'vote_completed' | 'rule_change' | 'confirmation';
+  type: 'vote_request' | 'vote_completed' | 'rule_change' | 'confirmation';
   actionTag: string;
   templateType: 'VoteRequest' | 'DsoRules' | 'AmuletRules' | 'Confirmation';
-  status: 'passed' | 'failed' | 'expired' | 'executed';
+  status: 'in_progress' | 'executed' | 'rejected' | 'expired';
+  eventType: 'created' | 'archived';
   effectiveAt: string;
   requester: string | null;
   reason: string | null;
@@ -38,10 +39,20 @@ export interface GovernanceAction {
   totalVotes: number;
   contractId: string;
   cipReference: string | null;
+  voteBefore: string | null;
+}
+
+export interface GovernanceHistorySummary {
+  totalRequests: number;
+  inProgress: number;
+  executed: number;
+  rejected: number;
+  expired: number;
 }
 
 export interface GovernanceHistoryResult {
   actions: GovernanceAction[];
+  summary: GovernanceHistorySummary;
   totalRawEvents: number;
   hasMore: boolean;
 }
@@ -78,6 +89,35 @@ const getTemplateType = (templateId: string): GovernanceAction['templateType'] =
   return 'VoteRequest';
 };
 
+// Determine VoteRequest status based on votes, deadline, and event type
+const determineVoteRequestStatus = (
+  event: GovernanceHistoryEvent,
+  votesFor: number,
+  totalVotes: number,
+  threshold: number
+): GovernanceAction['status'] => {
+  // If this is a created event (not archived), it's still in progress
+  if (event.event_type === 'created') {
+    // Check if voting deadline has passed
+    const now = new Date();
+    const voteBefore = event.vote_before ? new Date(event.vote_before) : null;
+    
+    if (voteBefore && voteBefore < now) {
+      // Deadline passed - determine outcome
+      if (votesFor >= threshold) return 'executed';
+      if (totalVotes === 0) return 'expired';
+      return 'rejected';
+    }
+    
+    return 'in_progress';
+  }
+  
+  // Archived event - vote is completed
+  if (votesFor >= threshold) return 'executed';
+  if (totalVotes === 0) return 'expired';
+  return 'rejected';
+};
+
 export function useGovernanceHistory(limit = 50, offset = 0) {
   return useQuery({
     queryKey: ["governanceHistory", limit, offset],
@@ -87,43 +127,60 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
       const hasMore = response.hasMore ?? false;
       
       // Process events into governance actions
-      // Focus on archived VoteRequests (completed votes) and created DsoRules/AmuletRules
-      const actions: GovernanceAction[] = [];
-      const seenContracts = new Set<string>();
+      // Track contract states to handle create/archive pairs
+      const contractStates = new Map<string, { created?: GovernanceHistoryEvent; archived?: GovernanceHistoryEvent }>();
       
+      // First pass: group events by contract_id
       for (const event of events) {
         const templateType = getTemplateType(event.template_id);
+        if (templateType !== 'VoteRequest') continue;
         
-        // For VoteRequests, we care about archived events (completed votes)
-        if (templateType === 'VoteRequest' && event.event_type === 'archived') {
-          if (seenContracts.has(event.contract_id)) continue;
-          seenContracts.add(event.contract_id);
-          
-          const { votesFor, votesAgainst } = parseVotes(event.votes);
-          const totalVotes = votesFor + votesAgainst;
-          const threshold = 10; // Standard threshold
-          
-          let status: GovernanceAction['status'] = 'failed';
-          if (votesFor >= threshold) status = 'passed';
-          else if (totalVotes === 0) status = 'expired';
-          
-          actions.push({
-            id: event.event_id || event.contract_id,
-            type: 'vote_completed',
-            actionTag: event.action_tag || 'Unknown',
-            templateType,
-            status,
-            effectiveAt: event.effective_at || event.timestamp,
-            requester: event.requester,
-            reason: event.reason?.body || null,
-            reasonUrl: event.reason?.url || null,
-            votesFor,
-            votesAgainst,
-            totalVotes,
-            contractId: event.contract_id,
-            cipReference: extractCipReference(event.reason),
-          });
-        }
+        const state = contractStates.get(event.contract_id) || {};
+        if (event.event_type === 'created') state.created = event;
+        if (event.event_type === 'archived') state.archived = event;
+        contractStates.set(event.contract_id, state);
+      }
+      
+      const actions: GovernanceAction[] = [];
+      const seenContracts = new Set<string>();
+      const threshold = 9; // Standard threshold from DSO (voting_threshold from API)
+      
+      // Process VoteRequests - prefer archived (completed) over created (in-progress)
+      for (const [contractId, state] of contractStates) {
+        if (seenContracts.has(contractId)) continue;
+        seenContracts.add(contractId);
+        
+        // Use archived event if available (completed vote), otherwise created (in-progress)
+        const event = state.archived || state.created;
+        if (!event) continue;
+        
+        const { votesFor, votesAgainst } = parseVotes(event.votes);
+        const totalVotes = votesFor + votesAgainst;
+        const status = determineVoteRequestStatus(event, votesFor, totalVotes, threshold);
+        
+        actions.push({
+          id: event.event_id || contractId,
+          type: state.archived ? 'vote_completed' : 'vote_request',
+          actionTag: event.action_tag || 'Unknown Action',
+          templateType: 'VoteRequest',
+          status,
+          eventType: event.event_type as 'created' | 'archived',
+          effectiveAt: event.effective_at || event.timestamp,
+          requester: event.requester,
+          reason: event.reason?.body || null,
+          reasonUrl: event.reason?.url || null,
+          votesFor,
+          votesAgainst,
+          totalVotes,
+          contractId,
+          cipReference: extractCipReference(event.reason),
+          voteBefore: event.vote_before,
+        });
+      }
+      
+      // Process non-VoteRequest events
+      for (const event of events) {
+        const templateType = getTemplateType(event.template_id);
         
         // For DsoRules/AmuletRules, we care about created events (rule changes)
         if ((templateType === 'DsoRules' || templateType === 'AmuletRules') && event.event_type === 'created') {
@@ -136,6 +193,7 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
             actionTag: templateType === 'DsoRules' ? 'DSO Rules Update' : 'Amulet Rules Update',
             templateType,
             status: 'executed',
+            eventType: 'created',
             effectiveAt: event.effective_at || event.timestamp,
             requester: null,
             reason: null,
@@ -145,6 +203,7 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
             totalVotes: 0,
             contractId: event.contract_id,
             cipReference: null,
+            voteBefore: null,
           });
         }
         
@@ -159,6 +218,7 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
             actionTag: event.action_tag || 'Confirmation',
             templateType,
             status: 'executed',
+            eventType: 'created',
             effectiveAt: event.effective_at || event.timestamp,
             requester: event.requester,
             reason: event.reason?.body || null,
@@ -168,9 +228,20 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
             totalVotes: 0,
             contractId: event.contract_id,
             cipReference: extractCipReference(event.reason),
+            voteBefore: null,
           });
         }
       }
+      
+      // Calculate summary stats
+      const voteRequests = actions.filter(a => a.templateType === 'VoteRequest');
+      const summary: GovernanceHistorySummary = {
+        totalRequests: voteRequests.length,
+        inProgress: voteRequests.filter(a => a.status === 'in_progress').length,
+        executed: voteRequests.filter(a => a.status === 'executed').length,
+        rejected: voteRequests.filter(a => a.status === 'rejected').length,
+        expired: voteRequests.filter(a => a.status === 'expired').length,
+      };
       
       // Sort by effective date descending
       const sortedActions = actions.sort((a, b) => 
@@ -179,6 +250,7 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
       
       return {
         actions: sortedActions,
+        summary,
         totalRawEvents: response.count,
         hasMore,
       };
