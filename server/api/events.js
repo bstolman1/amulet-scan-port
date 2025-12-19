@@ -590,17 +590,18 @@ router.get('/governance-debug', async (req, res) => {
             effective_at: e.effective_at,
             has_payload: !!e.payload,
             payload_keys: e.payload ? Object.keys(e.payload) : [],
-            // Show more of the payload for debugging
             payload_full: e.payload,
-            // Also check raw field
+            // Exercised event fields (direct on event, not in raw)
+            choice: e.choice,
+            consuming: e.consuming,
+            interface_id: e.interface_id,
+            child_event_ids: e.child_event_ids,
+            exercise_result: e.exercise_result,
+            acting_parties: e.acting_parties,
+            // Raw JSON if present
             has_raw: !!e.raw,
             raw_keys: e.raw ? Object.keys(e.raw) : [],
-            // For exercised events, extract choice info from raw
-            choice: e.raw?.choice,
-            choice_argument: e.raw?.choice_argument,
-            exercise_result: e.raw?.exercise_result,
-            consuming: e.raw?.consuming,
-            acting_parties: e.raw?.acting_parties,
+            raw_full: e.raw, // Show full raw for debugging
           };
           
           if (e.event_type === 'created' && voteRequestCreated.length < 3) {
