@@ -445,7 +445,7 @@ router.get('/governance-history', async (req, res) => {
         filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
       });
       
-      // Process to extract governance history details
+      // Return full event data with payload for frontend processing
       const history = result.records.map(event => ({
         event_id: event.event_id,
         event_type: event.event_type,
@@ -453,12 +453,9 @@ router.get('/governance-history', async (req, res) => {
         template_id: event.template_id,
         effective_at: event.effective_at,
         timestamp: event.timestamp,
-        // Extract action details from payload if available
-        action_tag: event.payload?.action?.tag || null,
-        requester: event.payload?.requester || null,
-        reason: event.payload?.reason || null,
-        votes: event.payload?.votes || [],
-        vote_before: event.payload?.voteBefore || null,
+        payload: event.payload, // Return FULL payload for frontend to process like Active Proposals
+        signatories: event.signatories,
+        observers: event.observers,
       }));
       
       return res.json({ 
@@ -489,7 +486,7 @@ router.get('/governance-history', async (req, res) => {
     
     const rows = await db.safeQuery(sql);
     
-    // Process rows to extract governance details
+    // Return full event data with payload for frontend processing
     const history = rows.map(row => ({
       event_id: row.event_id,
       event_type: row.event_type,
@@ -497,11 +494,9 @@ router.get('/governance-history', async (req, res) => {
       template_id: row.template_id,
       effective_at: row.effective_at,
       timestamp: row.timestamp,
-      action_tag: row.payload?.action?.tag || null,
-      requester: row.payload?.requester || null,
-      reason: row.payload?.reason || null,
-      votes: row.payload?.votes || [],
-      vote_before: row.payload?.voteBefore || null,
+      payload: row.payload, // Return FULL payload for frontend to process
+      signatories: row.signatories,
+      observers: row.observers,
     }));
     
     res.json({ data: history, count: history.length, source: sources.primarySource });

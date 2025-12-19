@@ -806,20 +806,14 @@ const Governance = () => {
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center space-x-3">
                           <div className="gradient-accent p-2 rounded-lg">
-                            {action.type === "vote_completed" ? <Vote className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
+                            {action.templateType === "VoteRequest" ? <Vote className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
                           </div>
                           <div className="flex-1">
-                            <h4 className="font-semibold text-lg">{action.actionTag}</h4>
+                            <h4 className="font-semibold text-lg">{action.title}</h4>
                             <p className="text-sm text-muted-foreground">
                               <span className="font-mono text-xs">{action.templateType}</span>
                               <span className="mx-2">•</span>
                               Effective: <span className="font-mono text-xs">{safeFormatDate(action.effectiveAt)}</span>
-                              {action.cipReference ? (
-                                <>
-                                  <span className="mx-2">•</span>
-                                  CIP-{action.cipReference}
-                                </>
-                              ) : null}
                             </p>
                             {action.requester ? (
                               <p className="text-xs text-muted-foreground mt-1">
@@ -847,7 +841,7 @@ const Governance = () => {
                         </Badge>
                       </div>
 
-                      {(action.type === "vote_completed" || action.type === "vote_request") && action.totalVotes > 0 && (
+                      {action.templateType === "VoteRequest" && (action.votesFor + action.votesAgainst) > 0 && (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
                           <div className="p-3 rounded-lg bg-background/50">
                             <p className="text-xs text-muted-foreground mb-1">Votes For</p>
@@ -859,7 +853,7 @@ const Governance = () => {
                           </div>
                           <div className="p-3 rounded-lg bg-background/50">
                             <p className="text-xs text-muted-foreground mb-1">Total Votes</p>
-                            <p className="text-lg font-bold">{action.totalVotes}</p>
+                            <p className="text-lg font-bold">{action.votesFor + action.votesAgainst}</p>
                           </div>
                           {action.voteBefore && (
                             <div className="p-3 rounded-lg bg-background/50">
@@ -870,10 +864,32 @@ const Governance = () => {
                         </div>
                       )}
 
-                      {action.reason ? (
+                      {/* Voted SVs list - like Active Proposals */}
+                      {action.votedSvs && action.votedSvs.length > 0 && (
+                        <div className="mb-4">
+                          <p className="text-sm font-semibold text-muted-foreground mb-2">Votes Cast:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {action.votedSvs.map((sv, idx) => (
+                              <Badge
+                                key={idx}
+                                variant="outline"
+                                className={cn(
+                                  sv.vote === "accept" && "border-success/50 text-success",
+                                  sv.vote === "reject" && "border-destructive/50 text-destructive",
+                                  sv.vote === "abstain" && "border-muted-foreground/50 text-muted-foreground"
+                                )}
+                              >
+                                {sv.party.split("::")[0]} ({sv.vote})
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {action.reasonBody ? (
                         <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                           <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                          <p className="text-sm mb-2">{action.reason}</p>
+                          <p className="text-sm mb-2">{action.reasonBody}</p>
                           {action.reasonUrl ? (
                             <a
                               href={action.reasonUrl}
