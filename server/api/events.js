@@ -421,40 +421,81 @@ router.get('/member-traffic', async (req, res) => {
 });
 
 // GET /api/events/governance-history - Get historical governance events (completed votes, rule changes)
+// IMPORTANT: For VoteRequest, we use CREATED events (not exercised/archived) because:
+// - Each vote cast creates a NEW VoteRequest contract with updated votes array
+// - Exercised events have empty payload (no vote data)
+// - We group by trackingCid and take the LATEST created event for final vote count
 router.get('/governance-history', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
     const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     
-    // Templates for governance history
-    const governanceTemplates = [
-      'VoteRequest',
-      'Confirmation',
-      'DsoRules',
-      'AmuletRules',
-    ];
-    
     if (sources.primarySource === 'binary') {
-      // Use a much longer maxDays for governance history since backfill spans years
+      // Scan for VoteRequest CREATED events specifically
+      // Use extended range to cover all backfill data
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 365 * 5, // 5 years of history to cover all backfill data
-        maxFilesToScan: 2000, // Scan more files for governance
+        limit: limit * 3, // Get more to allow for grouping by trackingCid
+        offset: 0, // Start from beginning, we'll handle offset after grouping
+        maxDays: 365 * 10, // 10 years to cover all backfill
+        maxFilesToScan: 5000, // Scan more files for governance
         sortBy: 'effective_at',
-        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
+        filter: (e) => {
+          // Only VoteRequest CREATED events (they have the full vote data)
+          if (e.template_id?.includes('VoteRequest') && e.event_type === 'created') {
+            return true;
+          }
+          // Also include Confirmation created events (executed actions)
+          if (e.template_id?.includes('Confirmation') && e.event_type === 'created') {
+            return true;
+          }
+          return false;
+        }
       });
       
+      // Group VoteRequest events by trackingCid and take the LATEST for each
+      // (Each vote cast creates a new contract, so latest has final vote count)
+      const voteRequestsByTrackingCid = new Map();
+      const confirmations = [];
+      
+      for (const event of result.records) {
+        if (event.template_id?.includes('VoteRequest')) {
+          const trackingCid = event.payload?.trackingCid;
+          if (trackingCid) {
+            const existing = voteRequestsByTrackingCid.get(trackingCid);
+            if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
+              voteRequestsByTrackingCid.set(trackingCid, event);
+            }
+          } else {
+            // No trackingCid, use contract_id as key
+            const existing = voteRequestsByTrackingCid.get(event.contract_id);
+            if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
+              voteRequestsByTrackingCid.set(event.contract_id, event);
+            }
+          }
+        } else if (event.template_id?.includes('Confirmation')) {
+          confirmations.push(event);
+        }
+      }
+      
+      // Combine and sort by effective_at
+      const allEvents = [
+        ...Array.from(voteRequestsByTrackingCid.values()),
+        ...confirmations,
+      ].sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
+      
+      // Apply pagination
+      const paginatedEvents = allEvents.slice(offset, offset + limit);
+      
       // Return full event data with payload for frontend processing
-      const history = result.records.map(event => ({
+      const history = paginatedEvents.map(event => ({
         event_id: event.event_id,
         event_type: event.event_type,
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: event.effective_at,
         timestamp: event.timestamp,
-        payload: event.payload, // Return FULL payload for frontend to process like Active Proposals
+        payload: event.payload, // Full payload with votes, action, requester, etc.
         signatories: event.signatories,
         observers: event.observers,
       }));
@@ -462,13 +503,13 @@ router.get('/governance-history', async (req, res) => {
       return res.json({ 
         data: history, 
         count: history.length, 
-        hasMore: result.hasMore, 
+        totalUnique: allEvents.length,
+        hasMore: offset + limit < allEvents.length, 
         source: 'binary' 
       });
     }
     
     // Fallback to DuckDB query
-    const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
     const sql = `
       SELECT 
         event_id,
@@ -479,7 +520,8 @@ router.get('/governance-history', async (req, res) => {
         timestamp,
         payload
       FROM ${getEventsSource()}
-      WHERE ${templateFilter}
+      WHERE (template_id LIKE '%VoteRequest%' AND event_type = 'created')
+         OR (template_id LIKE '%Confirmation%' AND event_type = 'created')
       ORDER BY effective_at DESC
       LIMIT ${limit}
       OFFSET ${offset}
@@ -495,7 +537,7 @@ router.get('/governance-history', async (req, res) => {
       template_id: row.template_id,
       effective_at: row.effective_at,
       timestamp: row.timestamp,
-      payload: row.payload, // Return FULL payload for frontend to process
+      payload: row.payload,
       signatories: row.signatories,
       observers: row.observers,
     }));
@@ -506,8 +548,6 @@ router.get('/governance-history', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// GET /api/events/governance-debug - Debug endpoint to diagnose backfill governance data
 // Specifically searches for VoteRequest events across ALL migrations
 router.get('/governance-debug', async (req, res) => {
   try {

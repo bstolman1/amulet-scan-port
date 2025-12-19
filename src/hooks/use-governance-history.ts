@@ -168,126 +168,61 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
       const events = response.data || [];
       const hasMore = response.hasMore ?? false;
       
-      // Process events exactly like Active Proposals does
+      // Process events - backend already filters for VoteRequest CREATED events
+      // and groups by trackingCid to get latest vote state
       const actions: GovernanceAction[] = [];
-      const seenContracts = new Set<string>();
       const threshold = 9; // Standard threshold from DSO (voting_threshold)
       
-      // Group events by contract_id to prefer archived over created
-      const contractEvents = new Map<string, { created?: GovernanceHistoryEvent; archived?: GovernanceHistoryEvent }>();
-      
       for (const event of events) {
         const templateType = getTemplateType(event.template_id);
-        if (templateType !== 'VoteRequest') continue;
-        
-        const state = contractEvents.get(event.contract_id) || {};
-        if (event.event_type === 'created') state.created = event;
-        if (event.event_type === 'archived') state.archived = event;
-        contractEvents.set(event.contract_id, state);
-      }
-      
-      // Process VoteRequests - prefer archived (completed) over created (in-progress)
-      for (const [contractId, state] of contractEvents) {
-        if (seenContracts.has(contractId)) continue;
-        seenContracts.add(contractId);
-        
-        const event = state.archived || state.created;
-        if (!event) continue;
-        
-        // Process exactly like Active Proposals
         const payload = event.payload || {};
         
-        // Parse action
-        const actionRaw = payload.action || {};
-        const { title, actionType, actionDetails } = parseAction(actionRaw);
-        
-        // Parse votes
-        const votesRaw = payload.votes || [];
-        const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
-        const totalVotes = votesFor + votesAgainst;
-        
-        // Extract requester information
-        const requester = payload.requester || "Unknown";
-        
-        // Extract reason (has url and body)
-        const reasonObj = payload.reason || {};
-        const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
-        const reasonUrl = reasonObj?.url || "";
-        
-        // Extract timing fields
-        const voteBefore = payload.voteBefore || null;
-        const targetEffectiveAt = payload.targetEffectiveAt || null;
-        const trackingCid = payload.trackingCid || contractId;
-        
-        // Determine status
-        const status = determineStatus(event.event_type, votesFor, totalVotes, threshold, voteBefore);
-        
-        actions.push({
-          id: trackingCid?.slice(0, 12) || contractId.slice(0, 12),
-          contractId,
-          trackingCid,
-          title,
-          actionType,
-          actionDetails,
-          action: actionRaw,
-          reasonBody,
-          reasonUrl,
-          requester,
-          status,
-          votesFor,
-          votesAgainst,
-          votedSvs,
-          voteBefore,
-          targetEffectiveAt,
-          templateType: 'VoteRequest',
-          eventType: event.event_type as 'created' | 'archived',
-          effectiveAt: event.effective_at || event.timestamp,
-          rawData: event,
-        });
-      }
-      
-      // Process non-VoteRequest events (DsoRules, AmuletRules, Confirmation)
-      for (const event of events) {
-        const templateType = getTemplateType(event.template_id);
-        
-        // Skip VoteRequests (already processed above)
-        if (templateType === 'VoteRequest') continue;
-        
-        // For DsoRules/AmuletRules, we care about created events (rule changes)
-        if ((templateType === 'DsoRules' || templateType === 'AmuletRules') && event.event_type === 'created') {
-          if (seenContracts.has(event.contract_id)) continue;
-          seenContracts.add(event.contract_id);
+        if (templateType === 'VoteRequest') {
+          // VoteRequest created events have full vote data
+          const actionRaw = payload.action || {};
+          const { title, actionType, actionDetails } = parseAction(actionRaw);
+          
+          // Parse votes
+          const votesRaw = payload.votes || [];
+          const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
+          const totalVotes = votesFor + votesAgainst;
+          
+          // Extract fields
+          const requester = payload.requester || "Unknown";
+          const reasonObj = payload.reason || {};
+          const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
+          const reasonUrl = reasonObj?.url || "";
+          const voteBefore = payload.voteBefore || null;
+          const targetEffectiveAt = payload.targetEffectiveAt || null;
+          const trackingCid = payload.trackingCid || event.contract_id;
+          
+          // Determine status based on votes and deadline
+          const status = determineStatus('created', votesFor, totalVotes, threshold, voteBefore);
           
           actions.push({
-            id: event.contract_id.slice(0, 12),
+            id: trackingCid?.slice(0, 12) || event.contract_id.slice(0, 12),
             contractId: event.contract_id,
-            trackingCid: event.contract_id,
-            title: templateType === 'DsoRules' ? 'DSO Rules Update' : 'Amulet Rules Update',
-            actionType: templateType,
-            actionDetails: event.payload,
-            action: null,
-            reasonBody: '',
-            reasonUrl: '',
-            requester: '',
-            status: 'executed',
-            votesFor: 0,
-            votesAgainst: 0,
-            votedSvs: [],
-            voteBefore: null,
-            targetEffectiveAt: null,
-            templateType,
+            trackingCid,
+            title,
+            actionType,
+            actionDetails,
+            action: actionRaw,
+            reasonBody,
+            reasonUrl,
+            requester,
+            status,
+            votesFor,
+            votesAgainst,
+            votedSvs,
+            voteBefore,
+            targetEffectiveAt,
+            templateType: 'VoteRequest',
             eventType: 'created',
             effectiveAt: event.effective_at || event.timestamp,
             rawData: event,
           });
-        }
-        
-        // For Confirmations (executed actions)
-        if (templateType === 'Confirmation' && event.event_type === 'created') {
-          if (seenContracts.has(event.contract_id)) continue;
-          seenContracts.add(event.contract_id);
-          
-          const payload = event.payload || {};
+        } else if (templateType === 'Confirmation') {
+          // Confirmation events (executed actions)
           const actionRaw = payload.action || {};
           const { title } = parseAction(actionRaw);
           
@@ -326,13 +261,9 @@ export function useGovernanceHistory(limit = 50, offset = 0) {
         expired: voteRequests.filter(a => a.status === 'expired').length,
       };
       
-      // Sort by effective date descending
-      const sortedActions = actions.sort((a, b) => 
-        new Date(b.effectiveAt).getTime() - new Date(a.effectiveAt).getTime()
-      );
-      
+      // Already sorted by backend
       return {
-        actions: sortedActions,
+        actions,
         summary,
         totalRawEvents: response.count,
         hasMore,
