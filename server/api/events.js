@@ -595,6 +595,12 @@ router.get('/governance-debug', async (req, res) => {
             // Also check raw field
             has_raw: !!e.raw,
             raw_keys: e.raw ? Object.keys(e.raw) : [],
+            // For exercised events, extract choice info from raw
+            choice: e.raw?.choice,
+            choice_argument: e.raw?.choice_argument,
+            exercise_result: e.raw?.exercise_result,
+            consuming: e.raw?.consuming,
+            acting_parties: e.raw?.acting_parties,
           };
           
           if (e.event_type === 'created' && voteRequestCreated.length < 3) {
