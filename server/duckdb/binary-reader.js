@@ -324,20 +324,7 @@ export async function readBinaryFile(filePath) {
 export function findBinaryFilesFast(dirPath, type = 'events', options = {}) {
   const { maxDays = 7, maxFiles = 1000 } = options;
   const files = [];
-  
-  // Generate date paths for the last N days (most likely to have recent data)
-  const today = new Date();
-  const datePaths = [];
-  
-  for (let i = 0; i < maxDays; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    datePaths.push({ year, month, day, dateMs: d.getTime() });
-  }
-  
+
   // Scan migration folders
   const migrations = [];
   try {
@@ -347,8 +334,75 @@ export function findBinaryFilesFast(dirPath, type = 'events', options = {}) {
         migrations.push(path.join(dirPath, entry.name));
       }
     }
-  } catch { }
-  
+  } catch {
+    // ignore
+  }
+
+  // Detect whether this dataset uses year/month/day partitioning under each migration
+  let hasDatePartitions = false;
+  for (const migrationDir of migrations) {
+    try {
+      const entries = fs.readdirSync(migrationDir, { withFileTypes: true });
+      if (entries.some((e) => e.isDirectory() && e.name.startsWith('year='))) {
+        hasDatePartitions = true;
+        break;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // If there are no year/month/day partitions (your backfill layout), fall back to a bounded recursive scan.
+  // This is still fast enough because we stop once we collect maxFiles.
+  if (!hasDatePartitions) {
+    for (const migrationDir of migrations) {
+      const stack = [migrationDir];
+      while (stack.length && files.length < maxFiles) {
+        const dir = stack.pop();
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              stack.push(fullPath);
+            } else if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
+              files.push({
+                path: fullPath,
+                // If no partitions exist, extractDataDateFromPath() falls back to write timestamp
+                dataDateMs: extractDataDateFromPath(fullPath),
+                writeTs: extractWriteTimestampFromPath(fullPath),
+              });
+              if (files.length >= maxFiles) break;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (files.length >= maxFiles) break;
+    }
+
+    // Sort by inferred data date desc, then write timestamp desc
+    files.sort((a, b) => {
+      if (a.dataDateMs !== b.dataDateMs) return b.dataDateMs - a.dataDateMs;
+      return b.writeTs - a.writeTs;
+    });
+
+    return files.slice(0, maxFiles).map((f) => f.path);
+  }
+
+  // Partitioned layout: Generate date paths for the last N days (most likely to have recent data)
+  const today = new Date();
+  const datePaths = [];
+  for (let i = 0; i < maxDays; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    datePaths.push({ year, month, day, dateMs: d.getTime() });
+  }
+
   // For each date (newest first), scan for files
   for (const { year, month, day, dateMs } of datePaths) {
     for (const migrationDir of migrations) {
@@ -358,28 +412,31 @@ export function findBinaryFilesFast(dirPath, type = 'events', options = {}) {
           const entries = fs.readdirSync(dayDir, { withFileTypes: true });
           for (const entry of entries) {
             if (entry.isFile() && entry.name.startsWith(`${type}-`) && entry.name.endsWith('.pb.zst')) {
+              const fullPath = path.join(dayDir, entry.name);
               files.push({
-                path: path.join(dayDir, entry.name),
+                path: fullPath,
                 dataDateMs: dateMs,
-                writeTs: extractWriteTimestampFromPath(path.join(dayDir, entry.name))
+                writeTs: extractWriteTimestampFromPath(fullPath),
               });
             }
           }
         }
-      } catch { }
+      } catch {
+        // ignore
+      }
     }
-    
+
     // Stop if we have enough files
     if (files.length >= maxFiles) break;
   }
-  
+
   // Sort by data date desc, then write timestamp desc
   files.sort((a, b) => {
     if (a.dataDateMs !== b.dataDateMs) return b.dataDateMs - a.dataDateMs;
     return b.writeTs - a.writeTs;
   });
-  
-  return files.slice(0, maxFiles).map(f => f.path);
+
+  return files.slice(0, maxFiles).map((f) => f.path);
 }
 
 /**
