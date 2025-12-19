@@ -14,9 +14,6 @@ interface GovernanceEvent {
   created_at?: string;
   payload?: Record<string, unknown>;
   event_data?: Record<string, unknown>;
-  exercise_result?: Record<string, unknown>;
-  raw?: Record<string, unknown>;
-  choice?: string;
   signatories?: string[];
   observers?: string[];
 }

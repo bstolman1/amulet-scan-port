@@ -1,11 +1,10 @@
 import { Router } from 'express';
-import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync } from 'fs';
 import { join, dirname, basename as pathBasename } from 'path';
 import { fileURLToPath } from 'url';
 import db from '../duckdb/connection.js';
 import { getLastGapDetection } from '../engine/gap-detector.js';
 import { triggerGapDetection } from '../engine/worker.js';
-import { decodeFile, getFileType } from '../engine/decoder.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -915,124 +914,6 @@ router.post('/gaps/recover', async (req, res) => {
     } else {
       res.status(500).json({ error: err.message });
     }
-  }
-});
-
-/**
- * GET /api/backfill/sample-raw
- * Sample and decode raw .pb.zst files to verify data integrity
- * Query params:
- *   - limit: max records to return (default 10)
- *   - type: 'events' or 'updates' (default both)
- *   - template: filter by template (for events)
- */
-router.get('/sample-raw', async (req, res) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit) || 10, 100);
-    const typeFilter = req.query.type; // 'events', 'updates', or undefined for both
-    const templateFilter = req.query.template;
-    
-    const rawDir = join(DATA_DIR, 'raw');
-    if (!existsSync(rawDir)) {
-      return res.json({ error: 'No raw data directory found', path: rawDir });
-    }
-    
-    // Find .pb.zst files recursively
-    const files = [];
-    function scanDir(dir) {
-      try {
-        const entries = readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.isDirectory()) {
-            scanDir(join(dir, entry.name));
-          } else if (entry.name.endsWith('.pb.zst')) {
-            const filePath = join(dir, entry.name);
-            const fileType = getFileType(filePath);
-            if (!typeFilter || fileType === typeFilter) {
-              const stat = statSync(filePath);
-              files.push({
-                path: filePath,
-                name: entry.name,
-                type: fileType,
-                size: stat.size,
-                mtime: stat.mtime,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`Error scanning ${dir}:`, err.message);
-      }
-    }
-    scanDir(rawDir);
-    
-    if (files.length === 0) {
-      return res.json({ 
-        error: 'No .pb.zst files found',
-        path: rawDir,
-        typeFilter,
-      });
-    }
-    
-    // Sort by modification time (newest first) and take a sample
-    files.sort((a, b) => b.mtime - a.mtime);
-    const sampleFiles = files.slice(0, 5);
-    
-    const results = {
-      totalFiles: files.length,
-      sampledFiles: sampleFiles.length,
-      typeFilter,
-      templateFilter,
-      samples: [],
-    };
-    
-    for (const file of sampleFiles) {
-      const fileSample = {
-        file: file.name,
-        path: file.path.replace(DATA_DIR, ''),
-        type: file.type,
-        size: file.size,
-        records: [],
-        recordCount: 0,
-        error: null,
-      };
-      
-      try {
-        let count = 0;
-        for await (const record of decodeFile(file.path)) {
-          // Apply template filter if specified
-          if (templateFilter && record.template && !record.template.includes(templateFilter)) {
-            continue;
-          }
-          
-          fileSample.records.push(record);
-          count++;
-          
-          if (count >= limit) break;
-        }
-        fileSample.recordCount = count;
-      } catch (err) {
-        fileSample.error = err.message;
-      }
-      
-      results.samples.push(fileSample);
-    }
-    
-    // Summary stats
-    const allRecords = results.samples.flatMap(s => s.records);
-    results.summary = {
-      totalRecordsReturned: allRecords.length,
-      hasPayload: allRecords.filter(r => r.payload !== null).length,
-      hasExerciseResult: allRecords.filter(r => r.exercise_result !== null).length,
-      hasRawJson: allRecords.filter(r => r.raw_json !== null).length,
-      eventTypes: [...new Set(allRecords.map(r => r.type).filter(Boolean))],
-      templates: [...new Set(allRecords.map(r => r.template).filter(Boolean))].slice(0, 20),
-    };
-    
-    res.json(results);
-  } catch (err) {
-    console.error('Error sampling raw files:', err);
-    res.status(500).json({ error: err.message });
   }
 });
 

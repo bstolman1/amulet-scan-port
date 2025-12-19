@@ -21,31 +21,15 @@ import {
   ChevronDown,
   ChevronUp,
   CheckCircle2,
-  XCircle,
   Clock,
   Vote,
   ArrowRight,
   Filter,
   Search,
   X,
-  MoreVertical,
-  Edit2,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
-} from "@/components/ui/dropdown-menu";
-import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { cn } from "@/lib/utils";
-
 
 interface TopicIdentifiers {
   cipNumber: string | null;
@@ -86,9 +70,6 @@ interface LifecycleItem {
   firstDate: string;
   lastDate: string;
   currentStage: string;
-  overrideApplied?: boolean;
-  overrideReason?: string;
-  llmClassified?: boolean;
 }
 
 interface GovernanceData {
@@ -188,7 +169,6 @@ const GovernanceFlow = () => {
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline'>('lifecycle');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [datePreset, setDatePreset] = useState<string>('all');
@@ -254,98 +234,8 @@ const GovernanceFlow = () => {
     }
   };
 
-  const { toast } = useToast();
-  
-  // Handler to reclassify a lifecycle item
-  const handleReclassify = async (primaryId: string, newType: LifecycleItem['type']) => {
-    try {
-      const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          primaryId,
-          type: newType,
-          reason: 'Manual UI correction',
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save override');
-      }
-      
-      toast({
-        title: "Classification updated",
-        description: `"${primaryId}" will now appear as ${TYPE_CONFIG[newType].label}`,
-      });
-      
-      // Refresh data to show the change
-      fetchData(false);
-    } catch (err) {
-      console.error('Failed to reclassify:', err);
-      toast({
-        title: "Error",
-        description: "Failed to save classification override",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // State for CIP list (for merge dropdown)
-  const [cipList, setCipList] = useState<{ primaryId: string; topicCount: number }[]>([]);
-  
-  // Fetch CIP list for merge dropdown
-  const fetchCipList = async () => {
-    try {
-      const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/cip-list`);
-      if (response.ok) {
-        const { cips } = await response.json();
-        setCipList(cips || []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch CIP list:', err);
-    }
-  };
-  
-  // Handler to merge an item into a CIP
-  const handleMergeInto = async (sourcePrimaryId: string, targetCip: string) => {
-    try {
-      const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/merge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourcePrimaryId,
-          mergeInto: targetCip,
-          reason: 'Manual merge via UI',
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save merge override');
-      }
-      
-      toast({
-        title: "Merge saved",
-        description: `"${sourcePrimaryId}" will be merged into ${targetCip}`,
-      });
-      
-      // Refresh data to show the change
-      fetchData(false);
-    } catch (err) {
-      console.error('Failed to merge:', err);
-      toast({
-        title: "Error",
-        description: "Failed to save merge override",
-        variant: "destructive",
-      });
-    }
-  };
-
   useEffect(() => {
     fetchData();
-    fetchCipList();
   }, []);
 
   // Fetch VoteRequests from local ACS
@@ -514,22 +404,8 @@ const GovernanceFlow = () => {
   const getTopicType = (topic: Topic): string => {
     const subjectTrimmed = topic.subject.trim();
     const isOutcome = /\bTokenomics\s+Outcomes\b/i.test(subjectTrimmed);
-    const isProtocolUpgrade = /\b(?:synchronizer\s+migration|splice\s+\d+\.\d+|protocol\s+upgrade|network\s+upgrade|hard\s*fork|migration\s+to\s+splice)\b/i.test(subjectTrimmed);
     const isVoteProposal = /\bVote\s+Proposal\b/i.test(subjectTrimmed);
-    const isValidatorOperations = /\bValidator\s+Operations\b/i.test(subjectTrimmed);
-    
-    // Specific vote proposal type detection
-    const isCipVoteProposal = isVoteProposal && (
-      /CIP[#\-\s]?\d+/i.test(subjectTrimmed) || 
-      /\bCIP\s+(?:vote|voting|approval)\b/i.test(subjectTrimmed)
-    );
-    const isFeaturedAppVoteProposal = isVoteProposal && (
-      /featured\s*app|featured\s*application|app\s+rights/i.test(subjectTrimmed) ||
-      /(?:mainnet|testnet|main\s*net|test\s*net):/i.test(subjectTrimmed)
-    );
-    const isValidatorVoteProposal = isVoteProposal && (
-      /validator\s+(?:operator|onboarding|license)/i.test(subjectTrimmed)
-    );
+    const isProtocolUpgrade = /\b(?:synchronizer\s+migration|splice\s+\d+\.\d+|protocol\s+upgrade|network\s+upgrade|hard\s*fork|migration\s+to\s+splice)\b/i.test(subjectTrimmed);
     
     if (isOutcome) return 'outcome';
     if (isProtocolUpgrade) return 'protocol-upgrade';
@@ -537,20 +413,13 @@ const GovernanceFlow = () => {
     if (topic.flow === 'featured-app') return 'featured-app';
     if (topic.flow === 'shared') {
       // Shared groups need subject-line disambiguation (matching backend logic)
-      if (isCipVoteProposal || topic.identifiers.cipNumber || topic.identifiers.isCipDiscussion) {
+      if (isVoteProposal || topic.identifiers.cipNumber || topic.identifiers.isCipDiscussion) {
         return 'cip';
       }
-      if (isValidatorVoteProposal || isValidatorOperations || topic.identifiers.validatorName) {
+      if (/\bValidator\s+Operations\b/i.test(subjectTrimmed) || topic.identifiers.validatorName) {
         return 'validator';
       }
-      if (isFeaturedAppVoteProposal || topic.identifiers.appName) {
-        return 'featured-app';
-      }
-      if (isVoteProposal) {
-        // Generic vote proposal - check for network prefix
-        if (/(?:mainnet|testnet|main\s*net|test\s*net):/i.test(subjectTrimmed)) {
-          return 'featured-app';
-        }
+      if (topic.identifiers.appName) {
         return 'featured-app';
       }
       return 'featured-app'; // Default for shared
@@ -624,73 +493,32 @@ const GovernanceFlow = () => {
   };
 
   // Timeline data - group events by month
-  // Create timeline entries from vote requests
-  type TimelineEntry = 
-    | { type: 'topic'; data: Topic; date: Date }
-    | { type: 'vote-started'; data: VoteRequest; date: Date; cipRef: string | null }
-    | { type: 'vote-ended'; data: VoteRequest; date: Date; cipRef: string | null; status: 'passed' | 'failed' | 'expired' };
-
   const timelineData = useMemo(() => {
-    const entries: TimelineEntry[] = [];
+    if (!filteredTopics.length) return [];
     
-    // Add topics as entries
+    const monthGroups: Record<string, Topic[]> = {};
     filteredTopics.forEach(topic => {
-      entries.push({ type: 'topic', data: topic, date: new Date(topic.date) });
-    });
-    
-    // Add vote requests as timeline entries
-    voteRequests.forEach(vr => {
-      const cipRef = extractCipReference(vr);
-      const recordTime = vr.record_time ? new Date(vr.record_time) : null;
-      const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
-      
-      // "Vote Started" entry - use record_time if available
-      if (recordTime) {
-        entries.push({ type: 'vote-started', data: vr, date: recordTime, cipRef });
-      }
-      
-      // "Vote Ended" entry - only if vote deadline has passed
-      if (voteBefore && voteBefore < new Date()) {
-        // Calculate vote result
-        const votesRaw = vr.payload?.votes || [];
-        let votesFor = 0;
-        for (const vote of votesRaw) {
-          const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-          const isAccept = voteData?.accept === true || voteData?.Accept === true;
-          if (isAccept) votesFor++;
-        }
-        const threshold = 10; // Assuming threshold
-        const status: 'passed' | 'failed' | 'expired' = votesFor >= threshold ? 'passed' : votesRaw.length > 0 ? 'failed' : 'expired';
-        entries.push({ type: 'vote-ended', data: vr, date: voteBefore, cipRef, status });
-      }
-    });
-    
-    if (entries.length === 0) return [];
-    
-    // Group by month
-    const monthGroups: Record<string, TimelineEntry[]> = {};
-    entries.forEach(entry => {
-      const monthKey = `${entry.date.getFullYear()}-${String(entry.date.getMonth() + 1).padStart(2, '0')}`;
+      const date = new Date(topic.date);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
       if (!monthGroups[monthKey]) {
         monthGroups[monthKey] = [];
       }
-      monthGroups[monthKey].push(entry);
+      monthGroups[monthKey].push(topic);
     });
     
     return Object.entries(monthGroups)
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([month, monthEntries]) => {
+      .map(([month, topics]) => {
+        // Parse month correctly - use explicit year/month to avoid timezone issues
         const [year, monthNum] = month.split('-').map(Number);
-        const monthDate = new Date(year, monthNum - 1, 1);
+        const monthDate = new Date(year, monthNum - 1, 1); // month is 0-indexed
         return {
           month,
           label: monthDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' }),
-          entries: monthEntries.sort((a, b) => b.date.getTime() - a.date.getTime()),
-          topicCount: monthEntries.filter(e => e.type === 'topic').length,
-          voteCount: monthEntries.filter(e => e.type === 'vote-started' || e.type === 'vote-ended').length,
+          topics: topics.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
         };
       });
-  }, [filteredTopics, voteRequests]);
+  }, [filteredTopics]);
 
   // Helper to render VoteRequest card
   const renderVoteRequestCard = (vr: VoteRequest) => {
@@ -698,20 +526,11 @@ const GovernanceFlow = () => {
     const actionTag = payload?.action?.tag || 'Unknown Action';
     const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
     const isExpired = voteBefore && voteBefore < new Date();
-    const votesRaw = payload?.votes || [];
+    const votes = payload?.votes || [];
+    const votesFor = votes.filter(v => v.accept).length;
+    const votesAgainst = votes.filter(v => !v.accept).length;
+    const totalVotes = votes.length;
     const reason = payload?.reason;
-    
-    // Parse votes properly - votes can be [svName, voteData] tuples or objects
-    let votesFor = 0;
-    let votesAgainst = 0;
-    for (const vote of votesRaw) {
-      const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-      const isAccept = voteData?.accept === true || voteData?.Accept === true;
-      const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
-      if (isAccept) votesFor++;
-      else if (isReject) votesAgainst++;
-    }
-    const totalVotes = votesRaw.length;
     
     // Get the proposal ID (first 12 chars of tracking CID or contract ID)
     const proposalId = payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown';
@@ -732,6 +551,9 @@ const GovernanceFlow = () => {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
+              <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30">
+                {actionTag.replace(/([A-Z])/g, ' $1').trim()}
+              </Badge>
               <Badge 
                 variant="outline" 
                 className={cn(
@@ -747,7 +569,7 @@ const GovernanceFlow = () => {
             <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Vote className="h-3 w-3" />
-                {votesFor} for / {votesAgainst} against ({totalVotes} total)
+                {votesFor}/{totalVotes} votes for
               </span>
               {voteBefore && (
                 <span className="flex items-center gap-1">
@@ -1299,89 +1121,13 @@ const GovernanceFlow = () => {
                                   </Badge>
                                 ) : null;
                               })()}
-                              {/* Override indicator */}
-                              {group.items[0]?.overrideApplied && (
-                                <Badge variant="outline" className="text-[10px] h-5 border-purple-500/50 text-purple-400 bg-purple-500/10">
-                                  ✎ Manually classified
-                                </Badge>
-                              )}
-                              {/* LLM classification indicator */}
-                              {group.items[0]?.llmClassified && !group.items[0]?.overrideApplied && (
-                                <Badge variant="outline" className="text-[10px] h-5 border-cyan-500/50 text-cyan-400 bg-cyan-500/10">
-                                  🤖 AI classified
-                                </Badge>
-                              )}
                             </div>
                             
-                            <div className="flex items-center gap-1 shrink-0">
-                              {/* Reclassify dropdown */}
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm" 
-                                    className="h-7 w-7 p-0"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <MoreVertical className="h-4 w-4 text-muted-foreground" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="bg-popover w-56">
-                                  <DropdownMenuLabel className="text-xs">Reclassify as...</DropdownMenuLabel>
-                                  <DropdownMenuSeparator />
-                                  {Object.entries(TYPE_CONFIG).map(([typeKey, config]) => (
-                                    <DropdownMenuItem
-                                      key={typeKey}
-                                      disabled={typeKey === group.type}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleReclassify(group.primaryId, typeKey as LifecycleItem['type']);
-                                      }}
-                                      className="text-xs"
-                                    >
-                                      <Badge className={cn("mr-2 text-[10px]", config.color)}>
-                                        {config.label}
-                                      </Badge>
-                                      {typeKey === group.type && <span className="text-muted-foreground">(current)</span>}
-                                    </DropdownMenuItem>
-                                  ))}
-                                  
-                                  {/* Merge into CIP submenu - only show for non-CIP items */}
-                                  {!group.primaryId.match(/^CIP-\d+$/i) && cipList.length > 0 && (
-                                    <>
-                                      <DropdownMenuSeparator />
-                                      <DropdownMenuSub>
-                                        <DropdownMenuSubTrigger className="text-xs">
-                                          <Edit2 className="mr-2 h-3 w-3" />
-                                          Merge into CIP...
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuSubContent className="bg-popover max-h-64 overflow-y-auto">
-                                          {cipList.slice(0, 20).map((cip) => (
-                                            <DropdownMenuItem
-                                              key={cip.primaryId}
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleMergeInto(group.primaryId, cip.primaryId);
-                                              }}
-                                              className="text-xs"
-                                            >
-                                              <span className="font-mono">{cip.primaryId}</span>
-                                              <span className="ml-2 text-muted-foreground">({cip.topicCount} topics)</span>
-                                            </DropdownMenuItem>
-                                          ))}
-                                        </DropdownMenuSubContent>
-                                      </DropdownMenuSub>
-                                    </>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                              
-                              {isExpanded ? (
-                                <ChevronUp className="h-5 w-5 text-muted-foreground" />
-                              ) : (
-                                <ChevronDown className="h-5 w-5 text-muted-foreground" />
-                              )}
-                            </div>
+                            {isExpanded ? (
+                              <ChevronUp className="h-5 w-5 text-muted-foreground shrink-0" />
+                            ) : (
+                              <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                            )}
                           </div>
                         </CardHeader>
                         
@@ -1497,153 +1243,54 @@ const GovernanceFlow = () => {
                         <h3 className="text-lg font-semibold sticky top-0 bg-background py-2 z-10">
                           {monthData.label}
                           <Badge variant="secondary" className="ml-2 text-xs">
-                            {monthData.topicCount} topics
+                            {monthData.topics.length} topics
                           </Badge>
-                          {monthData.voteCount > 0 && (
-                            <Badge className="ml-2 text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30">
-                              🗳️ {monthData.voteCount} votes
-                            </Badge>
-                          )}
                         </h3>
                         
                         <div className="space-y-2">
-                          {monthData.entries.map((entry, idx) => {
-                            if (entry.type === 'topic') {
-                              const topic = entry.data;
-                              const stageConfig = STAGE_CONFIG[topic.stage as keyof typeof STAGE_CONFIG];
-                              const StageIcon = stageConfig?.icon || FileText;
-                              
-                              return (
-                                <div 
-                                  key={topic.id}
-                                  className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors"
-                                >
-                                  <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${stageConfig?.color || 'bg-muted'}`}>
-                                    <StageIcon className="h-4 w-4" />
-                                  </div>
-                                  
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <h4 className="font-medium text-sm">{topic.subject}</h4>
-                                        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
-                                          <span>{formatDate(topic.date)}</span>
-                                          <Badge variant="outline" className="text-[10px] h-5">
-                                            {topic.groupLabel}
-                                          </Badge>
-                                          <Badge className={`text-[10px] h-5 ${stageConfig?.color || ''}`}>
-                                            {stageConfig?.label || topic.stage}
-                                          </Badge>
-                                        </div>
-                                      </div>
-                                      {topic.sourceUrl && (
-                                        <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
-                                          <a href={topic.sourceUrl} target="_blank" rel="noopener noreferrer">
-                                            <ExternalLink className="h-3.5 w-3.5" />
-                                          </a>
-                                        </Button>
-                                      )}
-                                    </div>
-                                    {topic.excerpt && (
-                                      <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
-                                        {topic.excerpt}
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            }
-                            
-                            // Vote timeline entries
-                            const vr = entry.data;
-                            const payload = vr.payload;
-                            const reason = payload?.reason;
-                            const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
-                            const votesRaw = payload?.votes || [];
-                            let votesFor = 0;
-                            let votesAgainst = 0;
-                            for (const vote of votesRaw) {
-                              const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-                              const isAccept = voteData?.accept === true || (voteData as any)?.Accept === true;
-                              const isReject = voteData?.accept === false || (voteData as any)?.reject === true || (voteData as any)?.Reject === true;
-                              if (isAccept) votesFor++;
-                              else if (isReject) votesAgainst++;
-                            }
-                            
-                            const isStartEntry = entry.type === 'vote-started';
-                            const statusColors = {
-                              passed: 'bg-green-500/20 border-green-500/50 text-green-400',
-                              failed: 'bg-red-500/20 border-red-500/50 text-red-400',
-                              expired: 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400',
-                            };
-                            
-                            const proposalId = (payload?.trackingCid || vr.contract_id)?.slice(0, 12) || 'unknown';
+                          {monthData.topics.map((topic) => {
+                            const stageConfig = STAGE_CONFIG[topic.stage as keyof typeof STAGE_CONFIG];
+                            const StageIcon = stageConfig?.icon || FileText;
                             
                             return (
-                              <a
-                                key={`${entry.type}-${vr.contract_id}-${idx}`}
-                                href={`/governance?proposal=${proposalId}`}
-                                className={cn(
-                                  "flex gap-3 p-3 rounded-lg border transition-colors",
-                                  isStartEntry 
-                                    ? "bg-pink-500/10 border-pink-500/30 hover:border-pink-500/50"
-                                    : entry.type === 'vote-ended' && statusColors[entry.status]
-                                )}
+                              <div 
+                                key={topic.id}
+                                className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors"
                               >
-                                <div className={cn(
-                                  "shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
-                                  isStartEntry ? "bg-pink-500/30" : 
-                                  entry.type === 'vote-ended' && entry.status === 'passed' ? "bg-green-500/30" :
-                                  entry.type === 'vote-ended' && entry.status === 'failed' ? "bg-red-500/30" :
-                                  "bg-yellow-500/30"
-                                )}>
-                                  {isStartEntry ? (
-                                    <Vote className="h-4 w-4 text-pink-400" />
-                                  ) : entry.type === 'vote-ended' && entry.status === 'passed' ? (
-                                    <CheckCircle2 className="h-4 w-4 text-green-400" />
-                                  ) : entry.type === 'vote-ended' && entry.status === 'failed' ? (
-                                    <XCircle className="h-4 w-4 text-red-400" />
-                                  ) : (
-                                    <Clock className="h-4 w-4 text-yellow-400" />
-                                  )}
+                                {/* Stage indicator */}
+                                <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${stageConfig?.color || 'bg-muted'}`}>
+                                  <StageIcon className="h-4 w-4" />
                                 </div>
                                 
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                      <h4 className="font-medium text-sm">
-                                        {isStartEntry ? '🗳️ Vote Opened' : 
-                                          entry.type === 'vote-ended' && entry.status === 'passed' ? '✅ Vote Passed' :
-                                          entry.type === 'vote-ended' && entry.status === 'failed' ? '❌ Vote Failed' :
-                                          '⏳ Vote Expired'}
-                                        {entry.cipRef && ` for CIP-${parseInt(entry.cipRef)}`}
-                                      </h4>
+                                      <h4 className="font-medium text-sm">{topic.subject}</h4>
                                       <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
-                                        <span>{formatDate(entry.date.toISOString())}</span>
+                                        <span>{formatDate(topic.date)}</span>
                                         <Badge variant="outline" className="text-[10px] h-5">
-                                          On-chain Vote
+                                          {topic.groupLabel}
                                         </Badge>
-                                        <span className="flex items-center gap-1">
-                                          <Vote className="h-3 w-3" />
-                                          {votesFor} for / {votesAgainst} against
-                                        </span>
-                                        {isStartEntry && voteBefore && (
-                                          <span className="flex items-center gap-1 text-yellow-400">
-                                            <Clock className="h-3 w-3" />
-                                            Due {format(voteBefore, 'MMM d, yyyy')}
-                                          </span>
-                                        )}
+                                        <Badge className={`text-[10px] h-5 ${stageConfig?.color || ''}`}>
+                                          {stageConfig?.label || topic.stage}
+                                        </Badge>
                                       </div>
                                     </div>
-                                    <ExternalLink className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                    {topic.sourceUrl && (
+                                      <Button variant="ghost" size="sm" asChild className="h-7 w-7 p-0 shrink-0">
+                                        <a href={topic.sourceUrl} target="_blank" rel="noopener noreferrer">
+                                          <ExternalLink className="h-3.5 w-3.5" />
+                                        </a>
+                                      </Button>
+                                    )}
                                   </div>
-                                  {reason?.body && (
+                                  {topic.excerpt && (
                                     <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
-                                      {reason.body}
+                                      {topic.excerpt}
                                     </p>
                                   )}
                                 </div>
-                              </a>
+                              </div>
                             );
                           })}
                         </div>

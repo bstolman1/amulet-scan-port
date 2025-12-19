@@ -290,8 +290,7 @@ function getSnapshotFilesSource(snapshotPath) {
   if (parts.length === 0) return null;
   
   console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl')).length} files)`);
-  // Use UNION (not UNION ALL) to prevent duplicate records across file types
-  return `(${parts.join(' UNION ')})`;
+  return `(${parts.join(' UNION ALL ')})`;
 }
 
 // Get the best snapshot and its source (returns both snapshot info and optimized DuckDB source)
@@ -547,35 +546,20 @@ router.get('/snapshots', async (req, res) => {
     });
     
     // Transform to match the UI's expected format
-    // Check which snapshot has actual data files (not just markers)
     const snapshots = availableSnapshots.slice(0, 50).map((s) => {
       const snapshotTimeStr = new Date(s.snapshotTime).toISOString();
       const isComplete = s.isComplete || completeSet.has(`${s.migrationId}:${s.snapshotTime}`);
-      
-      // Check if this snapshot has actual data files
-      let hasDataFiles = false;
-      let fileCount = 0;
-      try {
-        if (s.path && fs.existsSync(s.path)) {
-          const files = fs.readdirSync(s.path);
-          const dataFiles = files.filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
-          fileCount = dataFiles.length;
-          hasDataFiles = fileCount > 0;
-        }
-      } catch {}
       
       return {
         id: `local-m${s.migrationId}-${snapshotTimeStr}`,
         timestamp: s.snapshotTime,
         migration_id: s.migrationId,
         record_time: s.snapshotTime,
-        entry_count: hasDataFiles ? null : 0, // null means "has data, count unknown"; 0 means archived
+        entry_count: 0, // Would require query to get exact count
         template_count: 0,
         status: isComplete ? 'completed' : 'in_progress',
         source: 'local',
         path: s.path,
-        has_data: hasDataFiles,
-        file_count: fileCount,
       };
     });
 
@@ -953,9 +937,9 @@ router.get('/contracts', async (req, res) => {
       console.log('[ACS] No snapshot found, falling back to full scan');
     }
     
-    // First get total count (deduplicated by contract_id)
+    // First get total count
     const countSql = `
-      SELECT COUNT(DISTINCT contract_id) as total_count
+      SELECT COUNT(*) as total_count
       FROM ${acsSource} acs
       WHERE ${whereClause}
     `;
@@ -963,21 +947,19 @@ router.get('/contracts', async (req, res) => {
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
     
-    // Use GROUP BY contract_id to deduplicate (handles any duplicate records)
     const sql = `
       SELECT 
         contract_id,
-        any_value(template_id) as template_id,
-        any_value(entity_name) as entity_name,
-        any_value(module_name) as module_name,
-        any_value(signatories) as signatories,
-        any_value(observers) as observers,
-        any_value(payload) as payload,
-        any_value(record_time) as record_time,
-        any_value(snapshot_time) as snapshot_time
+        template_id,
+        entity_name,
+        module_name,
+        signatories,
+        observers,
+        payload,
+        record_time,
+        snapshot_time
       FROM ${acsSource} acs
       WHERE ${whereClause}
-      GROUP BY contract_id
       ORDER BY contract_id
       LIMIT ${limit}
       OFFSET ${offset}

@@ -5,12 +5,11 @@ const router = Router();
 
 // Helper to get the correct read function for JSONL files (supports .jsonl, .jsonl.gz, .jsonl.zst)
 // Uses UNION for cross-platform compatibility (Windows doesn't support brace expansion)
-// Use UNION (not UNION ALL) to prevent duplicate records
 const getUpdatesSource = () => `(
   SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)
-  UNION
+  UNION ALL
   SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  UNION
+  UNION ALL
   SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)
 )`;
 
