@@ -581,8 +581,11 @@ router.get('/governance-debug', async (req, res) => {
           // Only look for VoteRequest template
           if (!e.template_id?.includes('VoteRequest')) continue;
           
+          // For exercised events, choice data is in raw, not in protobuf fields
+          const isExercised = e.event_type === 'exercised' || e.event_type === 'archived';
+          
           const eventInfo = {
-            file: file.split('/').slice(-5).join('/'), // Last 5 path segments (includes migration)
+            file: file.split('/').slice(-5).join('/'),
             event_id: e.event_id,
             event_type: e.event_type,
             template_id: e.template_id,
@@ -591,17 +594,17 @@ router.get('/governance-debug', async (req, res) => {
             has_payload: !!e.payload,
             payload_keys: e.payload ? Object.keys(e.payload) : [],
             payload_full: e.payload,
-            // Exercised event fields (direct on event, not in raw)
-            choice: e.choice,
-            consuming: e.consuming,
-            interface_id: e.interface_id,
-            child_event_ids: e.child_event_ids,
-            exercise_result: e.exercise_result,
-            acting_parties: e.acting_parties,
-            // Raw JSON if present
+            // Exercised event fields - prefer raw over protobuf fields
+            choice: e.raw?.choice || e.choice,
+            choice_argument: e.raw?.choice_argument, // This is ONLY in raw!
+            consuming: e.raw?.consuming ?? e.consuming,
+            interface_id: e.raw?.interface_id || e.interface_id,
+            child_event_ids: e.raw?.child_event_ids || e.child_event_ids,
+            exercise_result: e.raw?.exercise_result || e.exercise_result,
+            acting_parties: e.raw?.acting_parties || e.acting_parties,
+            // Raw JSON
             has_raw: !!e.raw,
             raw_keys: e.raw ? Object.keys(e.raw) : [],
-            raw_full: e.raw, // Show full raw for debugging
           };
           
           if (e.event_type === 'created' && voteRequestCreated.length < 3) {
