@@ -231,6 +231,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
       const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
       
+      // Normalize reason - can be string or object
+      const rawReason = event.payload?.reason;
+      const reasonStr = rawReason 
+        ? (typeof rawReason === 'string' ? rawReason : JSON.stringify(rawReason))
+        : null;
+      
       const voteRequest = {
         event_id: event.event_id,
         contract_id: event.contract_id,
@@ -241,7 +247,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         action_tag: event.payload?.action?.tag || null,
         action_value: event.payload?.action?.value ? JSON.stringify(event.payload.action.value) : null,
         requester: event.payload?.requester || null,
-        reason: event.payload?.reason || null,
+        reason: reasonStr,
         votes: event.payload?.votes ? JSON.stringify(event.payload.votes) : '[]',
         vote_count: event.payload?.votes?.length || 0,
         vote_before: voteBefore || null,
