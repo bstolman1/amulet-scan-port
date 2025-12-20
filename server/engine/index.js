@@ -23,3 +23,11 @@ export {
 } from './aggregations.js';
 export { startEngineWorker, stopEngineWorker, triggerCycle, getEngineStatus } from './worker.js';
 export { default as engineRouter } from './api.js';
+export { 
+  buildVoteRequestIndex, 
+  queryVoteRequests, 
+  getVoteRequestStats, 
+  getIndexState,
+  isIndexPopulated,
+  isIndexingInProgress 
+} from './vote-request-indexer.js';
