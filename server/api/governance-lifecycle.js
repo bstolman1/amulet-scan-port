@@ -831,7 +831,12 @@ function correlateTopics(allTopics) {
         } else if (candidate.flow === 'cip') {
           candidateType = 'cip';
         } else if (candidate.flow === 'featured-app') {
-          candidateType = 'featured-app';
+          // tokenomics-announce is primarily featured-app flow, but can contain validator approvals
+          if (/validator.*approved|approved.*validator|validator\s*operator.*approved/i.test(candidateSubject)) {
+            candidateType = 'validator';
+          } else {
+            candidateType = 'featured-app';
+          }
         } else if (candidate.flow === 'shared') {
           // Use specific vote proposal type flags for better accuracy
           if (candidate.identifiers.isCipVoteProposal || candidateHasCip || candidateIsCipDiscussion) {
