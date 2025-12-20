@@ -628,4 +628,116 @@ router.get('/governance-history', async (req, res) => {
   }
 });
 
+// GET /api/events/template-scan - Scan all binary files to find unique templates (for debugging)
+router.get('/template-scan', async (req, res) => {
+  try {
+    const maxFiles = Math.min(parseInt(req.query.maxFiles) || 5000, 20000);
+    const searchTemplate = req.query.template || null;
+    const sources = getDataSources();
+    
+    console.log(`\n🔍 TEMPLATE-SCAN: Scanning up to ${maxFiles} files...`);
+    if (searchTemplate) {
+      console.log(`   Searching for template containing: "${searchTemplate}"`);
+    }
+    
+    if (sources.primarySource !== 'binary') {
+      return res.json({ error: 'Template scan only works with binary source', source: sources.primarySource });
+    }
+    
+    const templateCounts = {};
+    const choiceCounts = {};
+    const sampleEvents = [];
+    let totalEvents = 0;
+    let filesScanned = 0;
+    let oldestDate = null;
+    let newestDate = null;
+    
+    // Scan with wide date range
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: 100000, // High limit to scan many records
+      offset: 0,
+      maxDays: 365 * 3, // 3 years
+      maxFilesToScan: maxFiles,
+      sortBy: 'effective_at',
+      filter: (e) => {
+        totalEvents++;
+        
+        // Track date range
+        if (e.effective_at) {
+          const d = new Date(e.effective_at);
+          if (!oldestDate || d < oldestDate) oldestDate = d;
+          if (!newestDate || d > newestDate) newestDate = d;
+        }
+        
+        // Extract template name
+        const templateParts = e.template_id?.split(':') || [];
+        const template = templateParts[templateParts.length - 1] || 'unknown';
+        templateCounts[template] = (templateCounts[template] || 0) + 1;
+        
+        // Track choices
+        if (e.choice) {
+          choiceCounts[e.choice] = (choiceCounts[e.choice] || 0) + 1;
+        }
+        
+        // If searching for a specific template, collect samples
+        if (searchTemplate && e.template_id?.toLowerCase().includes(searchTemplate.toLowerCase())) {
+          if (sampleEvents.length < 5) {
+            sampleEvents.push({
+              event_id: e.event_id,
+              template_id: e.template_id,
+              event_type: e.event_type,
+              choice: e.choice,
+              effective_at: e.effective_at,
+              payload_keys: e.payload ? Object.keys(e.payload) : null,
+              has_action: !!e.payload?.action,
+              has_votes: !!e.payload?.votes,
+              has_requester: !!e.payload?.requester,
+            });
+          }
+          return true; // Include in results
+        }
+        
+        return false; // Don't include in results (we just want counts)
+      }
+    });
+    
+    // Sort templates by count
+    const sortedTemplates = Object.entries(templateCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 50);
+    
+    // Find governance-related templates
+    const governanceTemplates = Object.entries(templateCounts)
+      .filter(([name]) => 
+        name.includes('VoteRequest') || 
+        name.includes('Confirmation') || 
+        name.includes('Election') ||
+        name.includes('DsoRules')
+      )
+      .sort((a, b) => b[1] - a[1]);
+    
+    console.log(`\n   📊 Scanned ${totalEvents} events`);
+    console.log(`   📅 Date range: ${oldestDate?.toISOString().split('T')[0]} to ${newestDate?.toISOString().split('T')[0]}`);
+    console.log(`   📈 Unique templates: ${Object.keys(templateCounts).length}`);
+    console.log(`   🏛️ Governance templates found:`, governanceTemplates);
+    
+    res.json({
+      totalEventsScanned: totalEvents,
+      dateRange: {
+        oldest: oldestDate?.toISOString(),
+        newest: newestDate?.toISOString(),
+      },
+      uniqueTemplates: Object.keys(templateCounts).length,
+      uniqueChoices: Object.keys(choiceCounts).length,
+      topTemplates: sortedTemplates,
+      governanceTemplates,
+      topChoices: Object.entries(choiceCounts).sort((a, b) => b[1] - a[1]).slice(0, 30),
+      sampleEvents: sampleEvents.length > 0 ? sampleEvents : undefined,
+    });
+  } catch (err) {
+    console.error('Error in template scan:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
