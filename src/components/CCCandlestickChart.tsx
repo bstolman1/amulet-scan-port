@@ -235,7 +235,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
               <SelectTrigger className="w-[140px] h-8 text-sm">
                 <SelectValue placeholder="Exchange" />
               </SelectTrigger>
-              <SelectContent className="max-h-[300px]">
+              <SelectContent className="z-50 max-h-[300px] bg-popover">
                 {CC_EXCHANGES.map((ex) => (
                   <SelectItem key={ex.value} value={ex.value}>
                     {ex.label}
@@ -244,10 +244,10 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
               </SelectContent>
             </Select>
             <Select value={selectedInstrument} onValueChange={handleInstrumentSelect}>
-              <SelectTrigger className="w-[100px] h-8 text-sm">
+              <SelectTrigger className="w-[110px] h-8 text-sm">
                 <SelectValue placeholder="Pair" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="z-50 bg-popover">
                 {availableInstruments.map((inst) => (
                   <SelectItem key={inst} value={inst}>
                     {inst.toUpperCase()}
@@ -275,11 +275,11 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
             No chart data available
           </div>
         ) : (
-          <div style={{ width: '100%', height: 450 * zoomLevel, minHeight: 450, maxHeight: 900 }}>
+          <div style={{ width: '100%', height: 480 * zoomLevel, minHeight: 480, maxHeight: 980 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart 
                 data={chartData} 
-                margin={{ top: 20, right: 30, left: 0, bottom: 80 }}
+                margin={{ top: 20, right: 30, left: 0, bottom: 120 }}
               >
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis 
@@ -289,6 +289,8 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                   tickLine={false}
                   axisLine={false}
                   interval="preserveStartEnd"
+                  height={50}
+                  tickMargin={12}
                 />
                 <YAxis 
                   domain={[minPrice, maxPrice]}
@@ -346,11 +348,12 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                   stroke="transparent"
                   shape={<CandlestickShape />}
                 />
-                <Brush 
+                <Brush
                   dataKey="time"
-                  height={30}
+                  height={28}
                   stroke="hsl(var(--primary))"
                   fill="hsl(var(--muted))"
+                  travellerWidth={10}
                   startIndex={brushStartIndex}
                   endIndex={brushEndIndex}
                   onChange={handleBrushChange}
