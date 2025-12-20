@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subYears } from "date-fns";
 import { 
   ExternalLink, 
@@ -30,6 +31,8 @@ import {
   X,
   MoreVertical,
   Edit2,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -195,6 +198,10 @@ const GovernanceFlow = () => {
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [voteRequests, setVoteRequests] = useState<VoteRequest[]>([]);
   
+  // Bulk selection state
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [bulkSelectMode, setBulkSelectMode] = useState(false);
+  
   // Map CIP numbers to their active VoteRequests
   const cipVoteRequestMap = useMemo(() => {
     const map = new Map<string, VoteRequest[]>();
@@ -338,6 +345,66 @@ const GovernanceFlow = () => {
       toast({
         title: "Error",
         description: "Failed to save merge override",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Bulk selection handlers
+  const toggleItemSelection = (primaryId: string) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(primaryId)) {
+        next.delete(primaryId);
+      } else {
+        next.add(primaryId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    const allIds = groupedRegularItems.map(g => g.primaryId);
+    setSelectedItems(new Set(allIds));
+  };
+
+  const clearSelection = () => {
+    setSelectedItems(new Set());
+  };
+
+  // Bulk reclassify handler
+  const handleBulkReclassify = async (newType: LifecycleItem['type']) => {
+    if (selectedItems.size === 0) return;
+    
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const promises = Array.from(selectedItems).map(primaryId =>
+        fetch(`${baseUrl}/api/governance-lifecycle/overrides`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            primaryId,
+            type: newType,
+            reason: 'Bulk reclassification via UI',
+          }),
+        })
+      );
+      
+      await Promise.all(promises);
+      
+      toast({
+        title: "Bulk reclassification complete",
+        description: `${selectedItems.size} items updated to ${TYPE_CONFIG[newType].label}`,
+      });
+      
+      clearSelection();
+      setBulkSelectMode(false);
+      fetchData(false);
+    } catch (err) {
+      console.error('Failed to bulk reclassify:', err);
+      toast({
+        title: "Error",
+        description: "Failed to complete bulk reclassification",
         variant: "destructive",
       });
     }
@@ -1156,6 +1223,59 @@ const GovernanceFlow = () => {
           )}
         </div>
 
+        {/* Bulk Selection Toggle & Action Bar */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button
+            variant={bulkSelectMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setBulkSelectMode(!bulkSelectMode);
+              if (bulkSelectMode) clearSelection();
+            }}
+            className="gap-2"
+          >
+            {bulkSelectMode ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+            {bulkSelectMode ? "Exit Bulk Select" : "Bulk Select"}
+          </Button>
+          
+          {bulkSelectMode && (
+            <>
+              <Button variant="outline" size="sm" onClick={selectAllVisible}>
+                Select All ({groupedRegularItems.length})
+              </Button>
+              <Button variant="outline" size="sm" onClick={clearSelection} disabled={selectedItems.size === 0}>
+                Clear ({selectedItems.size})
+              </Button>
+              
+              {selectedItems.size > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" className="gap-2">
+                      <Edit2 className="h-4 w-4" />
+                      Reclassify {selectedItems.size} items
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="bg-popover">
+                    <DropdownMenuLabel className="text-xs">Reclassify selected as...</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {Object.entries(TYPE_CONFIG).map(([typeKey, config]) => (
+                      <DropdownMenuItem
+                        key={typeKey}
+                        onClick={() => handleBulkReclassify(typeKey as LifecycleItem['type'])}
+                        className="text-xs"
+                      >
+                        <Badge className={cn("mr-2 text-[10px]", config.color)}>
+                          {config.label}
+                        </Badge>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </>
+          )}
+        </div>
+
         {/* View Toggle */}
         <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline')}>
           <TabsList>
@@ -1186,7 +1306,7 @@ const GovernanceFlow = () => {
                 </CardContent>
               </Card>
             ) : (
-              <ScrollArea className="h-[calc(100vh-450px)] pr-4">
+              <ScrollArea className="h-[calc(100vh-500px)] pr-4">
                 <div className="space-y-3">
                   {/* Pending CIP Section */}
                   {tbdItems.length > 0 && (
@@ -1227,14 +1347,37 @@ const GovernanceFlow = () => {
                     const groupId = `group-${group.primaryId.toLowerCase()}`;
                     const isExpanded = expandedIds.has(groupId);
                     const typeConfig = TYPE_CONFIG[group.type];
+                    const isSelected = selectedItems.has(group.primaryId);
                     
                     return (
-                      <Card key={groupId} className="hover:border-primary/30 transition-colors">
+                      <Card 
+                        key={groupId} 
+                        className={cn(
+                          "hover:border-primary/30 transition-colors",
+                          isSelected && "ring-2 ring-primary/50 border-primary/50"
+                        )}
+                      >
                         <CardHeader 
                           className="pb-3 cursor-pointer" 
-                          onClick={() => toggleExpand(groupId)}
+                          onClick={() => !bulkSelectMode && toggleExpand(groupId)}
                         >
                           <div className="flex items-center justify-between">
+                            {/* Checkbox for bulk selection */}
+                            {bulkSelectMode && (
+                              <div 
+                                className="shrink-0 mr-3"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleItemSelection(group.primaryId);
+                                }}
+                              >
+                                <Checkbox 
+                                  checked={isSelected}
+                                  onCheckedChange={() => toggleItemSelection(group.primaryId)}
+                                />
+                              </div>
+                            )}
+                            
                             <div className="space-y-2 flex-1">
                               {/* Type and Network Badges */}
                               <div className="flex items-center gap-2 flex-wrap">
