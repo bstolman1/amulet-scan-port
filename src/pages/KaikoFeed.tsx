@@ -6,8 +6,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { useKaikoOHLCV, useKaikoStatus, KaikoCandle } from "@/hooks/use-kaiko-ohlcv";
-import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, AssetMetricData } from "@/hooks/use-kaiko-ohlcv";
+import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const EXCHANGES = [
@@ -29,6 +30,23 @@ const INTERVALS = [
   { value: '1m', label: '1 Minute' },
   { value: '5m', label: '5 Minutes' },
   { value: '15m', label: '15 Minutes' },
+  { value: '1h', label: '1 Hour' },
+  { value: '4h', label: '4 Hours' },
+  { value: '1d', label: '1 Day' },
+];
+
+const ASSETS = [
+  { value: 'btc', label: 'Bitcoin (BTC)' },
+  { value: 'eth', label: 'Ethereum (ETH)' },
+  { value: 'sol', label: 'Solana (SOL)' },
+  { value: 'usdt', label: 'Tether (USDT)' },
+  { value: 'usdc', label: 'USD Coin (USDC)' },
+  { value: 'xrp', label: 'XRP' },
+  { value: 'ada', label: 'Cardano (ADA)' },
+  { value: 'matic', label: 'Polygon (MATIC)' },
+];
+
+const ASSET_INTERVALS = [
   { value: '1h', label: '1 Hour' },
   { value: '4h', label: '4 Hours' },
   { value: '1d', label: '1 Day' },
@@ -85,6 +103,11 @@ export default function KaikoFeed() {
   const [exchange, setExchange] = useState('cbse');
   const [instrument, setInstrument] = useState('btc-usd');
   const [interval, setInterval] = useState('1h');
+  const [activeTab, setActiveTab] = useState('ohlcv');
+  
+  // Asset Metrics state
+  const [asset, setAsset] = useState('btc');
+  const [assetInterval, setAssetInterval] = useState('1h');
 
   const { data: status } = useKaikoStatus();
   const { data, isLoading, error, refetch, isFetching } = useKaikoOHLCV({
@@ -92,7 +115,19 @@ export default function KaikoFeed() {
     instrument,
     interval,
     pageSize: 50,
-  }, status?.configured);
+  }, status?.configured && activeTab === 'ohlcv');
+
+  const { 
+    data: assetData, 
+    isLoading: assetLoading, 
+    error: assetError, 
+    refetch: refetchAsset, 
+    isFetching: assetFetching 
+  } = useKaikoAssetMetrics({
+    asset,
+    interval: assetInterval,
+    pageSize: 50,
+  }, status?.configured && activeTab === 'assets');
 
   const candles = data?.data || [];
   const latestCandle = candles[0];
@@ -104,21 +139,33 @@ export default function KaikoFeed() {
     ? candles.reduce((sum, c) => sum + parseFloat(c.price || '0'), 0) / candles.filter(c => c.price).length
     : 0;
 
+  // Asset metrics data
+  const assetMetrics = assetData?.data || [];
+  const latestMetric = assetMetrics[0];
+
+  const handleRefresh = () => {
+    if (activeTab === 'ohlcv') {
+      refetch();
+    } else {
+      refetchAsset();
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-3xl font-bold">Kaiko Feed</h1>
-            <p className="text-muted-foreground">Trade Count, OHLCV & VWAP Market Data</p>
+            <p className="text-muted-foreground">Market Data: OHLCV, Asset Metrics & Analytics</p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
+            onClick={handleRefresh}
+            disabled={isFetching || assetFetching}
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 mr-2 ${(isFetching || assetFetching) ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
@@ -133,171 +180,377 @@ export default function KaikoFeed() {
           </Alert>
         )}
 
-        {/* Filters */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Filters</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-4">
-              <div className="space-y-1">
-                <label className="text-sm text-muted-foreground">Exchange</label>
-                <Select value={exchange} onValueChange={setExchange}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EXCHANGES.map((ex) => (
-                      <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm text-muted-foreground">Instrument</label>
-                <Select value={instrument} onValueChange={setInstrument}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {INSTRUMENTS.map((inst) => (
-                      <SelectItem key={inst.value} value={inst.value}>{inst.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm text-muted-foreground">Interval</label>
-                <Select value={interval} onValueChange={setInterval}>
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {INTERVALS.map((int) => (
-                      <SelectItem key={int.value} value={int.value}>{int.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="ohlcv" className="gap-2">
+              <BarChart3 className="h-4 w-4" />
+              OHLCV
+            </TabsTrigger>
+            <TabsTrigger value="assets" className="gap-2">
+              <Coins className="h-4 w-4" />
+              Asset Metrics
+            </TabsTrigger>
+          </TabsList>
 
-        {/* Stats */}
-        {status?.configured && (
-          <div className="grid gap-4 md:grid-cols-4">
-            <StatCard
-              title="Latest Close"
-              value={isLoading ? '...' : `$${formatPrice(latestCandle?.close)}`}
-              icon={Activity}
-            />
-            <StatCard
-              title="Avg VWAP"
-              value={isLoading ? '...' : `$${formatPrice(String(avgVWAP))}`}
-              icon={BarChart3}
-            />
-            <StatCard
-              title="Total Volume"
-              value={isLoading ? '...' : formatVolume(String(totalVolume))}
-              icon={TrendingUp}
-            />
-            <StatCard
-              title="Trade Count"
-              value={isLoading ? '...' : totalTrades.toLocaleString()}
-              icon={Activity}
-            />
-          </div>
-        )}
+          {/* OHLCV Tab */}
+          <TabsContent value="ohlcv" className="space-y-6">
+            {/* Filters */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Filters</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-4">
+                  <div className="space-y-1">
+                    <label className="text-sm text-muted-foreground">Exchange</label>
+                    <Select value={exchange} onValueChange={setExchange}>
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {EXCHANGES.map((ex) => (
+                          <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm text-muted-foreground">Instrument</label>
+                    <Select value={instrument} onValueChange={setInstrument}>
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {INSTRUMENTS.map((inst) => (
+                          <SelectItem key={inst.value} value={inst.value}>{inst.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm text-muted-foreground">Interval</label>
+                    <Select value={interval} onValueChange={setInterval}>
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {INTERVALS.map((int) => (
+                          <SelectItem key={int.value} value={int.value}>{int.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        {/* Data Table */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5" />
-              OHLCV Data
-              {data?.query && (
-                <Badge variant="secondary" className="ml-2">
-                  {data.query.exchange.toUpperCase()} / {data.query.instrument.toUpperCase()}
-                </Badge>
-              )}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {error && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error.message}</AlertDescription>
-              </Alert>
+            {/* Stats */}
+            {status?.configured && (
+              <div className="grid gap-4 md:grid-cols-4">
+                <StatCard
+                  title="Latest Close"
+                  value={isLoading ? '...' : `$${formatPrice(latestCandle?.close)}`}
+                  icon={Activity}
+                />
+                <StatCard
+                  title="Avg VWAP"
+                  value={isLoading ? '...' : `$${formatPrice(String(avgVWAP))}`}
+                  icon={BarChart3}
+                />
+                <StatCard
+                  title="Total Volume"
+                  value={isLoading ? '...' : formatVolume(String(totalVolume))}
+                  icon={TrendingUp}
+                />
+                <StatCard
+                  title="Trade Count"
+                  value={isLoading ? '...' : totalTrades.toLocaleString()}
+                  icon={Activity}
+                />
+              </div>
             )}
 
-            {isLoading ? (
-              <div className="space-y-2">
-                {Array.from({ length: 10 }).map((_, i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Time</TableHead>
-                      <TableHead className="text-right">Open</TableHead>
-                      <TableHead className="text-right">High</TableHead>
-                      <TableHead className="text-right">Low</TableHead>
-                      <TableHead className="text-right">Close</TableHead>
-                      <TableHead className="text-right">Change</TableHead>
-                      <TableHead className="text-right">Volume</TableHead>
-                      <TableHead className="text-right">VWAP</TableHead>
-                      <TableHead className="text-right">Trades</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {candles.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                          No data available
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      candles.map((candle, idx) => (
-                        <TableRow key={candle.timestamp}>
-                          <TableCell className="font-mono text-sm">
-                            {formatTimestamp(candle.timestamp)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            ${formatPrice(candle.open)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-green-500">
-                            ${formatPrice(candle.high)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-red-500">
-                            ${formatPrice(candle.low)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono font-semibold">
-                            ${formatPrice(candle.close)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <PriceChange open={candle.open} close={candle.close} />
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {formatVolume(candle.volume)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            ${formatPrice(candle.price)}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {candle.count.toLocaleString()}
-                          </TableCell>
+            {/* Data Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5" />
+                  OHLCV Data
+                  {data?.query && (
+                    <Badge variant="secondary" className="ml-2">
+                      {data.query.exchange.toUpperCase()} / {data.query.instrument.toUpperCase()}
+                    </Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {error && (
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{error.message}</AlertDescription>
+                  </Alert>
+                )}
+
+                {isLoading ? (
+                  <div className="space-y-2">
+                    {Array.from({ length: 10 }).map((_, i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Time</TableHead>
+                          <TableHead className="text-right">Open</TableHead>
+                          <TableHead className="text-right">High</TableHead>
+                          <TableHead className="text-right">Low</TableHead>
+                          <TableHead className="text-right">Close</TableHead>
+                          <TableHead className="text-right">Change</TableHead>
+                          <TableHead className="text-right">Volume</TableHead>
+                          <TableHead className="text-right">VWAP</TableHead>
+                          <TableHead className="text-right">Trades</TableHead>
                         </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {candles.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                              No data available
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          candles.map((candle) => (
+                            <TableRow key={candle.timestamp}>
+                              <TableCell className="font-mono text-sm">
+                                {formatTimestamp(candle.timestamp)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                ${formatPrice(candle.open)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-green-500">
+                                ${formatPrice(candle.high)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-red-500">
+                                ${formatPrice(candle.low)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-semibold">
+                                ${formatPrice(candle.close)}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <PriceChange open={candle.open} close={candle.close} />
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {formatVolume(candle.volume)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                ${formatPrice(candle.price)}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {candle.count.toLocaleString()}
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Asset Metrics Tab */}
+          <TabsContent value="assets" className="space-y-6">
+            {/* Asset Filters */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Asset Selection</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-4">
+                  <div className="space-y-1">
+                    <label className="text-sm text-muted-foreground">Asset</label>
+                    <Select value={asset} onValueChange={setAsset}>
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ASSETS.map((a) => (
+                          <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm text-muted-foreground">Interval</label>
+                    <Select value={assetInterval} onValueChange={setAssetInterval}>
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ASSET_INTERVALS.map((int) => (
+                          <SelectItem key={int.value} value={int.value}>{int.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Asset Stats */}
+            {status?.configured && latestMetric && (
+              <div className="grid gap-4 md:grid-cols-4">
+                <StatCard
+                  title="Price (USD)"
+                  value={assetLoading ? '...' : `$${latestMetric.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}`}
+                  icon={Coins}
+                />
+                <StatCard
+                  title="Total Volume (USD)"
+                  value={assetLoading ? '...' : formatVolume(String(latestMetric.total_volume_usd || 0))}
+                  icon={TrendingUp}
+                />
+                <StatCard
+                  title="Total Trades"
+                  value={assetLoading ? '...' : latestMetric.total_trade_count?.toLocaleString() || '0'}
+                  icon={Activity}
+                />
+                <StatCard
+                  title="Off-Chain Volume"
+                  value={assetLoading ? '...' : formatVolume(String(latestMetric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0))}
+                  icon={Database}
+                />
               </div>
             )}
-          </CardContent>
-        </Card>
+
+            {/* Asset Metrics Table */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Coins className="h-5 w-5" />
+                  Asset Metrics
+                  <Badge variant="secondary" className="ml-2">
+                    {asset.toUpperCase()}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {assetError && (
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{assetError.message}</AlertDescription>
+                  </Alert>
+                )}
+
+                {assetLoading ? (
+                  <div className="space-y-2">
+                    {Array.from({ length: 10 }).map((_, i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Time</TableHead>
+                          <TableHead className="text-right">Price (USD)</TableHead>
+                          <TableHead className="text-right">Volume (USD)</TableHead>
+                          <TableHead className="text-right">Volume (Asset)</TableHead>
+                          <TableHead className="text-right">Total Trades</TableHead>
+                          <TableHead className="text-right">Off-Chain Vol</TableHead>
+                          <TableHead className="text-right">On-Chain Vol</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {assetMetrics.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                              No data available
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          assetMetrics.map((metric) => (
+                            <TableRow key={metric.timestamp}>
+                              <TableCell className="font-mono text-sm">
+                                {new Date(metric.timestamp).toLocaleString()}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-semibold">
+                                ${metric.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {formatVolume(String(metric.total_volume_usd || 0))}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {formatVolume(String(metric.total_volume_asset || 0))}
+                              </TableCell>
+                              <TableCell className="text-right font-mono">
+                                {metric.total_trade_count?.toLocaleString() || '0'}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-blue-500">
+                                {formatVolume(String(metric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0))}
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-purple-500">
+                                {formatVolume(String(metric.on_chain_liquidity_data?.total_on_chain_volume_usd || 0))}
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Exchange Breakdown */}
+            {latestMetric?.off_chain_liquidity_data?.trade_data && latestMetric.off_chain_liquidity_data.trade_data.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Database className="h-5 w-5" />
+                    Exchange Breakdown (Off-Chain)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Exchange</TableHead>
+                          <TableHead className="text-right">Volume (USD)</TableHead>
+                          <TableHead className="text-right">Volume (Asset)</TableHead>
+                          <TableHead className="text-right">Trade Count</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {latestMetric.off_chain_liquidity_data.trade_data.map((trade) => (
+                          <TableRow key={trade.exchange}>
+                            <TableCell className="font-mono font-semibold">
+                              {trade.exchange.toUpperCase()}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatVolume(String(trade.volume_usd))}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {formatVolume(String(trade.volume_asset))}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {trade.trade_count.toLocaleString()}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
     </DashboardLayout>
   );

@@ -79,3 +79,101 @@ export function useKaikoStatus() {
     staleTime: 5 * 60_000,
   });
 }
+
+// Asset Metrics types
+export interface AssetTradeData {
+  exchange: string;
+  volume_usd: number;
+  volume_asset: number;
+  trade_count: number;
+}
+
+export interface MarketDepth {
+  exchange: string;
+  volume_assets: Record<string, number>;
+  volume_usds: Record<string, number>;
+}
+
+export interface TokenInfo {
+  blockchain: string;
+  token_address: string;
+  nb_of_holders: number;
+  main_holders: Array<{
+    address: string;
+    amount: number;
+    percentage: number;
+  }>;
+  total_supply: number;
+}
+
+export interface AssetMetricData {
+  timestamp: string;
+  price: number | null;
+  total_volume_usd: number;
+  total_volume_asset: number;
+  total_trade_count: number;
+  off_chain_liquidity_data?: {
+    total_off_chain_volume_usd: number;
+    total_off_chain_volume_asset: number;
+    total_off_chain_trade_count: number;
+    trade_data: AssetTradeData[];
+    buy_market_depths?: MarketDepth[];
+    sell_market_depths?: MarketDepth[];
+    total_buy_market_depth?: { volume_assets: Record<string, number>; volume_usds: Record<string, number> };
+    total_sell_market_depth?: { volume_assets: Record<string, number>; volume_usds: Record<string, number> };
+  };
+  on_chain_liquidity_data?: {
+    total_on_chain_volume_usd: number;
+    total_on_chain_volume_asset: number;
+    total_on_chain_trade_count: number;
+    trades_data: AssetTradeData[];
+    token_information?: TokenInfo[];
+  };
+}
+
+export interface AssetMetricsResponse {
+  data: AssetMetricData[];
+  result?: string;
+  continuation_token?: string;
+  next_url?: string;
+}
+
+export interface AssetMetricsParams {
+  asset?: string;
+  startTime?: string;
+  endTime?: string;
+  interval?: string;
+  sources?: boolean;
+  pageSize?: number;
+}
+
+export function useKaikoAssetMetrics(params: AssetMetricsParams = {}, enabled = true) {
+  const {
+    asset = 'btc',
+    startTime,
+    endTime,
+    interval = '1h',
+    sources = true,
+    pageSize = 100,
+  } = params;
+
+  return useQuery<AssetMetricsResponse, Error>({
+    queryKey: ['kaiko-asset-metrics', asset, startTime, endTime, interval, sources, pageSize],
+    queryFn: async () => {
+      const searchParams = new URLSearchParams({
+        asset,
+        interval,
+        sources: String(sources),
+        page_size: String(pageSize),
+      });
+      
+      if (startTime) searchParams.set('start_time', startTime);
+      if (endTime) searchParams.set('end_time', endTime);
+
+      return apiFetch<AssetMetricsResponse>(`/api/kaiko/asset-metrics?${searchParams.toString()}`);
+    },
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}

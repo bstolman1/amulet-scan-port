@@ -79,6 +79,78 @@ router.get('/ohlcv', async (req, res) => {
 });
 
 /**
+ * GET /api/kaiko/asset-metrics
+ * Fetches asset metrics data from Kaiko API (volumes, trades, liquidity, supply)
+ * 
+ * Query params:
+ * - asset: Asset code (required, e.g., btc, eth, sol)
+ * - start_time: ISO 8601 start time (required)
+ * - end_time: ISO 8601 end time (required)
+ * - interval: Time interval (default: 1h)
+ * - sources: Include exchange breakdown (default: true)
+ * - page_size: Number of results (default: 100)
+ */
+router.get('/asset-metrics', async (req, res) => {
+  if (!KAIKO_API_KEY) {
+    return res.status(500).json({ 
+      error: 'KAIKO_API_KEY not configured',
+      message: 'Please set KAIKO_API_KEY in your server/.env file'
+    });
+  }
+
+  const {
+    asset = 'btc',
+    start_time,
+    end_time,
+    interval = '1h',
+    sources = 'true',
+    page_size = '100',
+  } = req.query;
+
+  // Default to last 24 hours if no time range specified
+  const now = new Date();
+  const defaultEnd = now.toISOString();
+  const defaultStart = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+  const url = new URL('https://us.market-api.kaiko.io/v2/data/analytics.v2/asset_metrics');
+  
+  url.searchParams.set('asset', asset);
+  url.searchParams.set('start_time', start_time || defaultStart);
+  url.searchParams.set('end_time', end_time || defaultEnd);
+  url.searchParams.set('interval', interval);
+  url.searchParams.set('sources', sources);
+  url.searchParams.set('page_size', page_size);
+
+  console.log(`📊 Fetching Kaiko Asset Metrics: ${asset} (${interval})`);
+
+  try {
+    const response = await fetch(url.toString(), {
+      headers: {
+        'Accept': 'application/json',
+        'X-Api-Key': KAIKO_API_KEY,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Kaiko API error (${response.status}):`, errorText);
+      return res.status(response.status).json({ 
+        error: `Kaiko API error: ${response.status}`,
+        message: errorText 
+      });
+    }
+
+    const data = await response.json();
+    console.log(`✅ Kaiko returned ${data.data?.length || 0} asset metric records`);
+    
+    res.json(data);
+  } catch (err) {
+    console.error('❌ Kaiko asset metrics fetch failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/kaiko/status
  * Check if Kaiko API is configured
  */
