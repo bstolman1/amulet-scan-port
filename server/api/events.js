@@ -2,6 +2,10 @@ import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
+import {
+  getFilesForTemplate,
+  isTemplateIndexPopulated,
+} from '../engine/template-file-index.js';
 
 const router = Router();
 
@@ -763,36 +767,88 @@ router.get('/vote-requests', async (req, res) => {
       } else {
         console.log(`   Scanning binary files (cache expired or missing)...`);
         
-        // VoteRequest events are VERY sparse; for full historical coverage we must scan all partitions/files.
-        // NOTE: this can be slow on cold cache; results are cached for 5 minutes.
-        const FULL_HISTORY_MAX_DAYS = 365 * 50;
-        const FULL_HISTORY_MAX_FILES = Number.MAX_SAFE_INTEGER;
-      
-        const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-          limit: 10000,
-          offset: 0,
-          maxDays: FULL_HISTORY_MAX_DAYS,
-          maxFilesToScan: FULL_HISTORY_MAX_FILES,
-          sortBy: 'effective_at',
-          filter: (e) => {
-            return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
+        // Prefer template-to-file index to avoid scanning all 35K+ files.
+        const templateIndexReady = await isTemplateIndexPopulated();
+        let voteRequestFiles = [];
+        
+        if (templateIndexReady) {
+          voteRequestFiles = await getFilesForTemplate('VoteRequest');
+          console.log(`   📋 Template index available → ${voteRequestFiles.length} VoteRequest files to scan`);
+        }
+        
+        const scanVoteRequestFiles = async (files, kind) => {
+          const records = [];
+          let filesScanned = 0;
+          const start = Date.now();
+          let lastLog = start;
+          
+          for (const file of files) {
+            try {
+              const result = await binaryReader.readBinaryFile(file);
+              const fileRecords = result.records || [];
+              
+              for (const e of fileRecords) {
+                if (!e.template_id?.includes('VoteRequest')) continue;
+                if (kind === 'created') {
+                  if (e.event_type === 'created') records.push(e);
+                } else {
+                  if (e.event_type !== 'exercised') continue;
+                  if (e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'))) {
+                    records.push(e);
+                  }
+                }
+              }
+              
+              filesScanned++;
+              const now = Date.now();
+              if (now - lastLog > 5000) {
+                const pct = files.length ? ((filesScanned / files.length) * 100).toFixed(0) : '0';
+                console.log(`   📂 [${pct}%] ${filesScanned}/${files.length} VoteRequest files | ${records.length} ${kind}`);
+                lastLog = now;
+              }
+            } catch {
+              // ignore unreadable files
+            }
           }
-        });
+          
+          return { records, filesScanned, elapsedMs: Date.now() - start };
+        };
 
-        const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-          limit: 100000,
-          offset: 0,
-          maxDays: FULL_HISTORY_MAX_DAYS,
-          maxFilesToScan: FULL_HISTORY_MAX_FILES,
-          sortBy: 'effective_at',
-          filter: (e) => {
-            if (!e.template_id?.includes('VoteRequest')) return false;
-            if (e.event_type !== 'exercised') return false;
-            return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
-          }
-        });
+        let createdResult;
+        let exercisedResult;
 
-        const [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
+        if (templateIndexReady && voteRequestFiles.length > 0) {
+          // Fast path: only scan files known to contain VoteRequest events
+          [createdResult, exercisedResult] = await Promise.all([
+            scanVoteRequestFiles(voteRequestFiles, 'created'),
+            scanVoteRequestFiles(voteRequestFiles, 'exercised'),
+          ]);
+        } else {
+          // Fallback: full scan (slow, but safe)
+          console.log('   ⚠️ Template index not ready/empty → full scan fallback');
+
+          const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+            limit: 10000,
+            offset: 0,
+            fullScan: true,
+            sortBy: 'effective_at',
+            filter: (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
+          });
+
+          const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+            limit: 100000,
+            offset: 0,
+            fullScan: true,
+            sortBy: 'effective_at',
+            filter: (e) => {
+              if (!e.template_id?.includes('VoteRequest')) return false;
+              if (e.event_type !== 'exercised') return false;
+              return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
+            }
+          });
+
+          [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
+        }
 
         console.log(`   Created scan: ${createdResult.filesScanned || '?'} files scanned`);
         console.log(`   Exercised scan: ${exercisedResult.filesScanned || '?'} files scanned`);
