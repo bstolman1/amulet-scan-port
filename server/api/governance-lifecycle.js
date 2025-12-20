@@ -84,14 +84,6 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 0a-pre: "Node as a Service" patterns - extract this as entity name for validator approvals
-  const naasMatch = cleanText.match(/^(node\s+as\s+a\s+service)\s+(?:reviewed\s+and\s+)?approved/i);
-  if (naasMatch) {
-    const name = 'Node as a Service';
-    console.log(`EXTRACT: "Node as a Service" pattern matched, extracted: "${name}" from "${cleanText.slice(0, 60)}"`);
-    return { name, isMultiEntity: false };
-  }
-  
   // Pattern 0a: "Validator Approved: EntityName" - extract entity name from validator approval announcements
   const validatorApprovedMatch = cleanText.match(/validator\s*(?:approved|operator\s+approved)[:\s-]+(.+?)$/i);
   if (validatorApprovedMatch) {
@@ -311,7 +303,6 @@ function extractIdentifiers(text) {
   identifiers.isCipVoteProposal = isCipVoteProposal;
   identifiers.isFeaturedAppVoteProposal = isFeaturedAppVoteProposal;
   identifiers.isValidatorVoteProposal = isValidatorVoteProposal;
-  identifiers.isValidator = isValidator;  // Direct validator indicator flag
   
   // Debug log for featured app detection
   if (text.toLowerCase().includes('featured app approved')) {
@@ -670,7 +661,7 @@ function correlateTopics(allTopics) {
       // Otherwise, fall back to strong subject heuristics (validator/featured-app).
       if (topic.identifiers.isCipVoteProposal || hasCip) {
         type = 'cip';
-      } else if (topic.identifiers.isValidatorVoteProposal || topic.identifiers.isValidator || hasValidatorIndicator || isValidatorOperations) {
+      } else if (topic.identifiers.isValidatorVoteProposal || hasValidatorIndicator || isValidatorOperations) {
         type = 'validator';
       } else if (topic.identifiers.isFeaturedAppVoteProposal || hasAppIndicator) {
         type = 'featured-app';
@@ -689,7 +680,7 @@ function correlateTopics(allTopics) {
       if (topic.identifiers.isCipVoteProposal || hasCip) {
         // Only CIP-specific vote proposals or topics with explicit CIP numbers
         type = 'cip';
-      } else if (topic.identifiers.isValidatorVoteProposal || topic.identifiers.isValidator || isValidatorOperations || hasValidatorIndicator) {
+      } else if (topic.identifiers.isValidatorVoteProposal || isValidatorOperations || hasValidatorIndicator) {
         type = 'validator';
       } else if (topic.identifiers.isFeaturedAppVoteProposal || hasAppIndicator) {
         type = 'featured-app';
