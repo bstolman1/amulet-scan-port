@@ -5,9 +5,8 @@
  * a persistent table for instant historical queries.
  */
 
-import { query, queryOne } from '../duckdb/connection.js';
+import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
 import * as binaryReader from '../duckdb/binary-reader.js';
-import * as db from '../duckdb/connection.js';
 
 let indexingInProgress = false;
 
@@ -163,7 +162,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     
     // Scan for all VoteRequest created events using FULL SCAN for historical data
     console.log('   Scanning for VoteRequest created events (full scan)...');
-    const createdResult = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+    const createdResult = await binaryReader.streamRecords(DATA_PATH, 'events', {
       limit: Number.MAX_SAFE_INTEGER,
       offset: 0,
       fullScan: true, // Critical: scan ALL files, not just recent ones
@@ -175,7 +174,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     
     // Scan for exercised events to determine closed status
     console.log('   Scanning for VoteRequest exercised events (full scan)...');
-    const exercisedResult = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+    const exercisedResult = await binaryReader.streamRecords(DATA_PATH, 'events', {
       limit: Number.MAX_SAFE_INTEGER,
       offset: 0,
       fullScan: true, // Critical: scan ALL files
@@ -261,12 +260,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.target_effective_at ? `'${voteRequest.target_effective_at}'` : 'NULL'},
             ${voteRequest.tracking_cid ? `'${voteRequest.tracking_cid}'` : 'NULL'},
             ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
-            CURRENT_TIMESTAMP
+            now()
           )
           ON CONFLICT (event_id) DO UPDATE SET
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = now()
         `);
         inserted++;
       } catch (err) {
@@ -281,9 +280,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // Update index state
     await query(`
       INSERT INTO vote_request_index_state (id, last_indexed_at, total_indexed)
-      VALUES (1, CURRENT_TIMESTAMP, ${inserted})
+      VALUES (1, now(), ${inserted})
       ON CONFLICT (id) DO UPDATE SET
-        last_indexed_at = CURRENT_TIMESTAMP,
+        last_indexed_at = now(),
         total_indexed = ${inserted}
     `);
     
