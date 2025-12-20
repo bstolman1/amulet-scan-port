@@ -1613,5 +1613,120 @@ router.get('/inference-disagreements', (req, res) => {
   });
 });
 
+// Analyze overrides to help improve regex patterns
+// Returns all overrides with their original detected types from cached data
+router.get('/overrides/analysis', (req, res) => {
+  const overrides = readOverrides();
+  const cached = readCache();
+  
+  if (!cached || !cached.lifecycleItems) {
+    return res.json({
+      overrides: overrides.itemOverrides || {},
+      mergeOverrides: overrides.mergeOverrides || {},
+      analysis: [],
+      suggestions: [],
+    });
+  }
+  
+  // Build a map of primaryId -> original data from topics before overrides were applied
+  // We need to look at topics to understand what the regex originally detected
+  const analysis = [];
+  
+  // For each override, find the original item and its topics
+  for (const [key, override] of Object.entries(overrides.itemOverrides || {})) {
+    // Find matching lifecycle item (check both current and with override removed)
+    const item = cached.lifecycleItems.find(li => 
+      li.primaryId === key || li.id === key
+    );
+    
+    // Also search through all topics to find what was detected
+    const matchingTopics = cached.allTopics?.filter(topic => {
+      const subjectLower = topic.subject.toLowerCase();
+      const keyLower = key.toLowerCase();
+      return (
+        subjectLower.includes(keyLower) ||
+        topic.identifiers?.appName?.toLowerCase() === keyLower ||
+        topic.identifiers?.validatorName?.toLowerCase() === keyLower ||
+        topic.identifiers?.entityName?.toLowerCase() === keyLower
+      );
+    }) || [];
+    
+    analysis.push({
+      key,
+      overrideType: override.type,
+      overrideReason: override.reason,
+      createdAt: override.createdAt,
+      originalType: item?.type,
+      wasLLMClassified: item?.llmClassified || false,
+      topicCount: item?.topics?.length || matchingTopics.length,
+      sampleSubjects: (item?.topics || matchingTopics).slice(0, 5).map(t => t.subject),
+      // Indicators from topics that might help improve regex
+      hasValidatorKeywords: (item?.topics || matchingTopics).some(t => 
+        /validator|node\s+as\s+a\s+service|sv\s+onboarding/i.test(t.subject)
+      ),
+      hasFeaturedAppKeywords: (item?.topics || matchingTopics).some(t =>
+        /featured\s+app|to\s+feature|app\s+rights/i.test(t.subject)
+      ),
+      hasApprovedKeyword: (item?.topics || matchingTopics).some(t =>
+        /\bapproved\b/i.test(t.subject)
+      ),
+    });
+  }
+  
+  // Generate suggestions based on patterns in overrides
+  const suggestions = [];
+  
+  // Count type corrections
+  const corrections = {};
+  for (const item of analysis) {
+    if (item.originalType && item.originalType !== item.overrideType) {
+      const correctionKey = `${item.originalType} -> ${item.overrideType}`;
+      corrections[correctionKey] = corrections[correctionKey] || [];
+      corrections[correctionKey].push(item);
+    }
+  }
+  
+  // Suggest regex improvements based on common corrections
+  for (const [correction, items] of Object.entries(corrections)) {
+    if (items.length >= 2) {
+      const subjects = items.flatMap(i => i.sampleSubjects);
+      suggestions.push({
+        correction,
+        count: items.length,
+        suggestion: `Consider adding regex pattern for: "${correction}" (${items.length} manual corrections)`,
+        affectedItems: items.map(i => i.key),
+        sampleSubjects: subjects.slice(0, 10),
+      });
+    }
+  }
+  
+  // Log summary
+  console.log('\n========== OVERRIDES ANALYSIS ==========');
+  console.log(`Total item overrides: ${Object.keys(overrides.itemOverrides || {}).length}`);
+  console.log(`Total merge overrides: ${Object.keys(overrides.mergeOverrides || {}).length}`);
+  console.log('\nCorrections by type:');
+  for (const [correction, items] of Object.entries(corrections)) {
+    console.log(`  ${correction}: ${items.length} items`);
+    items.slice(0, 3).forEach(item => {
+      console.log(`    - ${item.key}`);
+    });
+  }
+  console.log('=========================================\n');
+  
+  res.json({
+    overrides: overrides.itemOverrides || {},
+    mergeOverrides: overrides.mergeOverrides || {},
+    analysis,
+    suggestions,
+    summary: {
+      totalItemOverrides: Object.keys(overrides.itemOverrides || {}).length,
+      totalMergeOverrides: Object.keys(overrides.mergeOverrides || {}).length,
+      correctionsByType: Object.fromEntries(
+        Object.entries(corrections).map(([k, v]) => [k, v.length])
+      ),
+    },
+  });
+});
+
 export { fetchFreshData, writeCache, readCache };
 export default router;
