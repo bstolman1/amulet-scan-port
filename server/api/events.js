@@ -428,28 +428,62 @@ router.get('/governance-history', async (req, res) => {
     const verbose = req.query.verbose === 'true';
     const sources = getDataSources();
     
-    // Templates for governance history
+    // Templates specifically for governance (NOT AmuletRules which is too broad)
     const governanceTemplates = [
-      'VoteRequest',
-      'Confirmation',
-      'DsoRules',
-      'AmuletRules',
+      'VoteRequest',           // Vote proposals
+      'Confirmation',          // Confirmed governance actions
+      'ElectionRequest',       // Election-related
+    ];
+    
+    // Governance-related choices to look for in any template
+    const governanceChoices = [
+      // DsoRules governance choices
+      'DsoRules_ConfirmAction',
+      'DsoRules_AddConfirmedAction', 
+      'DsoRules_CloseVoteRequest',
+      'DsoRules_CastVote',
+      'DsoRules_ExecuteConfirmedAction',
+      // VoteRequest choices
+      'VoteRequest_CastVote',
+      'VoteRequest_ExpireVoteRequest',
+      'VoteRequest_Accept',
+      'VoteRequest_Reject',
+      // AmuletRules governance choices (featured apps, validators)
+      'AmuletRules_DevNet_AddFeaturedAppRight',
+      'AmuletRules_AddFeaturedAppRight',
+      'AmuletRules_RemoveFeaturedAppRight',
+      // Confirmation choices
+      'Confirmation_Confirm',
+      'Confirmation_Expire',
     ];
     
     console.log(`\n📊 GOVERNANCE-HISTORY: Fetching with limit=${limit}, offset=${offset}, verbose=${verbose}`);
     console.log(`   Primary source: ${sources.primarySource}`);
+    console.log(`   Looking for templates: ${governanceTemplates.join(', ')}`);
+    console.log(`   OR choices: ${governanceChoices.slice(0, 5).join(', ')}...`);
     
     if (sources.primarySource === 'binary') {
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
+        limit: limit * 10, // Fetch more to filter down
         offset,
         maxDays: 365 * 2, // 2 years of history
         maxFilesToScan: 1000,
         sortBy: 'effective_at',
-        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
+        filter: (e) => {
+          // Match by template (VoteRequest, Confirmation, etc.)
+          const templateMatch = governanceTemplates.some(t => e.template_id?.includes(t));
+          // OR match by governance choice
+          const choiceMatch = governanceChoices.includes(e.choice);
+          // OR match DsoRules template with any choice (DsoRules is governance-specific)
+          const dsoRulesMatch = e.template_id?.includes('DsoRules');
+          return templateMatch || choiceMatch || dsoRulesMatch;
+        }
       });
       
-      console.log(`   Found ${result.records.length} governance events from binary files`);
+      console.log(`   Found ${result.records.length} potential governance events from binary files`);
+      
+      // Take only the requested limit
+      const limitedRecords = result.records.slice(0, limit);
       
       // Group by template and event type for summary
       const templateCounts = {};
@@ -457,9 +491,10 @@ router.get('/governance-history', async (req, res) => {
       const choiceCounts = {};
       
       // Process to extract governance history details
-      const history = result.records.map((event, idx) => {
-        // Count templates
-        const template = event.template_id?.split(':').pop() || 'unknown';
+      const history = limitedRecords.map((event, idx) => {
+        // Count templates - extract just the template name
+        const templateParts = event.template_id?.split(':') || [];
+        const template = templateParts[templateParts.length - 1] || 'unknown';
         templateCounts[template] = (templateCounts[template] || 0) + 1;
         
         // Count event types
@@ -535,30 +570,33 @@ router.get('/governance-history', async (req, res) => {
       return res.json({ 
         data: history, 
         count: history.length, 
-        hasMore: result.hasMore, 
+        hasMore: result.hasMore || limitedRecords.length < result.records.length, 
         source: 'binary',
         _debug: {
           templateCounts,
           eventTypeCounts,
           choiceCounts,
-          fieldCoverage: { withAction, withRequester, withReason, withVotes, withExerciseResult }
+          fieldCoverage: { withAction, withRequester, withReason, withVotes, withExerciseResult },
+          totalScanned: result.records.length,
         }
       });
     }
     
     // Fallback to DuckDB query
     const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    const choiceFilter = governanceChoices.map(c => `choice = '${c}'`).join(' OR ');
     const sql = `
       SELECT 
         event_id,
         event_type,
+        choice,
         contract_id,
         template_id,
         effective_at,
         timestamp,
         payload
       FROM ${getEventsSource()}
-      WHERE ${templateFilter}
+      WHERE (${templateFilter}) OR (${choiceFilter}) OR template_id LIKE '%DsoRules%'
       ORDER BY effective_at DESC
       LIMIT ${limit}
       OFFSET ${offset}
@@ -571,6 +609,7 @@ router.get('/governance-history', async (req, res) => {
     const history = rows.map(row => ({
       event_id: row.event_id,
       event_type: row.event_type,
+      choice: row.choice || null,
       contract_id: row.contract_id,
       template_id: row.template_id,
       effective_at: row.effective_at,
