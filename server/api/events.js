@@ -552,7 +552,8 @@ router.get('/governance-history', async (req, res) => {
           if (event.payload) {
             console.log(`      payload.action: ${event.payload.action ? JSON.stringify(event.payload.action).slice(0, 200) : 'null'}`);
             console.log(`      payload.requester: ${event.payload.requester || 'null'}`);
-            console.log(`      payload.reason: ${event.payload.reason?.slice(0, 100) || 'null'}`);
+            const reason = event.payload.reason;
+            console.log(`      payload.reason: ${typeof reason === 'string' ? reason.slice(0, 100) : JSON.stringify(reason)?.slice(0, 100) || 'null'}`);
             console.log(`      payload.votes: ${event.payload.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
             console.log(`      payload.voteBefore: ${event.payload.voteBefore || 'null'}`);
           }
@@ -613,14 +614,16 @@ router.get('/governance-history', async (req, res) => {
       return res.json({ 
         data: history, 
         count: history.length, 
-        hasMore: result.hasMore || limitedRecords.length < result.records.length, 
+        hasMore: limitedRecords.length < dedupedRecords.length, 
         source: 'binary',
         _debug: {
           templateCounts,
           eventTypeCounts,
           choiceCounts,
           fieldCoverage: { withAction, withRequester, withConfirmer, withReason, withVotes, withExerciseResult },
-          totalScanned: result.records.length,
+          totalScanned: dedupedRecords.length,
+          voteRequestsFound: voteRequestResult.records.length,
+          otherGovernanceFound: otherResult.records.length,
         }
       });
     }
