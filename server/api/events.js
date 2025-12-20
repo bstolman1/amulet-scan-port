@@ -465,7 +465,7 @@ router.get('/governance-history', async (req, res) => {
     if (sources.primarySource === 'binary') {
       // Governance events are rare - scan MORE files to find them
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: limit * 50, // Fetch many more to filter down (governance is sparse)
+        limit: limit * 100, // Fetch many more to filter down (governance is sparse)
         offset,
         maxDays: 365 * 3, // 3 years of history
         maxFilesToScan: 5000, // Scan many more files for rare governance events
@@ -473,11 +473,22 @@ router.get('/governance-history', async (req, res) => {
         filter: (e) => {
           // Match by governance template (VoteRequest, Confirmation, etc.)
           const templateMatch = governanceTemplates.some(t => e.template_id?.includes(t));
-          // OR match by governance choice
+          // OR match by governance choice (not Archive - those have empty payloads)
           const choiceMatch = governanceChoices.includes(e.choice);
-          // OR match DsoRules template (governance-specific)
-          const dsoRulesMatch = e.template_id?.includes('DsoRules');
-          return templateMatch || choiceMatch || dsoRulesMatch;
+          // OR match DsoRules template with governance choices (not Archive)
+          const dsoRulesMatch = e.template_id?.includes('DsoRules') && e.choice !== 'Archive';
+          
+          // For VoteRequest/Confirmation, prefer "created" events (have full payload)
+          // For exercised events, skip "Archive" (empty payload) unless it's DsoRules with other choices
+          if (templateMatch) {
+            // VoteRequest/Confirmation/ElectionRequest - created events have the data
+            if (e.event_type === 'created') return true;
+            // Exercised events on these templates only if not Archive
+            if (e.choice && e.choice !== 'Archive') return true;
+            return false;
+          }
+          
+          return choiceMatch || dsoRulesMatch;
         }
       });
       
