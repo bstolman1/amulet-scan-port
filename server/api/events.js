@@ -689,7 +689,8 @@ router.get('/vote-requests', async (req, res) => {
           console.log(`      effective_at: ${event.effective_at}`);
           console.log(`      action.tag: ${event.payload?.action?.tag || 'null'}`);
           console.log(`      requester: ${event.payload?.requester || 'null'}`);
-          console.log(`      reason: ${event.payload?.reason?.slice(0, 100) || 'null'}`);
+          const reason = event.payload?.reason;
+          console.log(`      reason: ${typeof reason === 'string' ? reason.slice(0, 100) : JSON.stringify(reason)?.slice(0, 100) || 'null'}`);
           console.log(`      votes: ${event.payload?.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
           console.log(`      voteBefore: ${event.payload?.voteBefore || 'null'}`);
         }
