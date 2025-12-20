@@ -776,8 +776,10 @@ router.get('/vote-requests', async (req, res) => {
           console.log(`   📋 Template index available → ${voteRequestFiles.length} VoteRequest files to scan`);
         }
         
-        const scanVoteRequestFiles = async (files, kind) => {
-          const records = [];
+        // SINGLE PASS: Scan files once and collect both created and exercised events
+        const scanVoteRequestFilesSinglePass = async (files) => {
+          const created = [];
+          const exercised = [];
           let filesScanned = 0;
           const start = Date.now();
           let lastLog = start;
@@ -789,12 +791,12 @@ router.get('/vote-requests', async (req, res) => {
               
               for (const e of fileRecords) {
                 if (!e.template_id?.includes('VoteRequest')) continue;
-                if (kind === 'created') {
-                  if (e.event_type === 'created') records.push(e);
-                } else {
-                  if (e.event_type !== 'exercised') continue;
+                
+                if (e.event_type === 'created') {
+                  created.push(e);
+                } else if (e.event_type === 'exercised') {
                   if (e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'))) {
-                    records.push(e);
+                    exercised.push(e);
                   }
                 }
               }
@@ -803,7 +805,7 @@ router.get('/vote-requests', async (req, res) => {
               const now = Date.now();
               if (now - lastLog > 5000) {
                 const pct = files.length ? ((filesScanned / files.length) * 100).toFixed(0) : '0';
-                console.log(`   📂 [${pct}%] ${filesScanned}/${files.length} VoteRequest files | ${records.length} ${kind}`);
+                console.log(`   📂 [${pct}%] ${filesScanned}/${files.length} files | ${created.length} created, ${exercised.length} exercised`);
                 lastLog = now;
               }
             } catch {
@@ -811,43 +813,46 @@ router.get('/vote-requests', async (req, res) => {
             }
           }
           
-          return { records, filesScanned, elapsedMs: Date.now() - start };
+          return { 
+            created: { records: created, filesScanned, elapsedMs: Date.now() - start },
+            exercised: { records: exercised, filesScanned, elapsedMs: Date.now() - start }
+          };
         };
 
         let createdResult;
         let exercisedResult;
 
         if (templateIndexReady && voteRequestFiles.length > 0) {
-          // Fast path: only scan files known to contain VoteRequest events
-          [createdResult, exercisedResult] = await Promise.all([
-            scanVoteRequestFiles(voteRequestFiles, 'created'),
-            scanVoteRequestFiles(voteRequestFiles, 'exercised'),
-          ]);
+          // Fast path: single pass scan of files known to contain VoteRequest events
+          const scanResult = await scanVoteRequestFilesSinglePass(voteRequestFiles);
+          createdResult = scanResult.created;
+          exercisedResult = scanResult.exercised;
         } else {
-          // Fallback: full scan (slow, but safe)
+          // Fallback: full scan (slow, but safe) - still uses single pass
           console.log('   ⚠️ Template index not ready/empty → full scan fallback');
 
-          const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-            limit: 10000,
-            offset: 0,
-            fullScan: true,
-            sortBy: 'effective_at',
-            filter: (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
-          });
-
-          const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+          const allVoteRecords = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
             limit: 100000,
             offset: 0,
             fullScan: true,
             sortBy: 'effective_at',
-            filter: (e) => {
-              if (!e.template_id?.includes('VoteRequest')) return false;
-              if (e.event_type !== 'exercised') return false;
-              return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
-            }
+            filter: (e) => e.template_id?.includes('VoteRequest')
           });
-
-          [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
+          
+          const created = [];
+          const exercised = [];
+          for (const e of allVoteRecords.records || []) {
+            if (e.event_type === 'created') {
+              created.push(e);
+            } else if (e.event_type === 'exercised') {
+              if (e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'))) {
+                exercised.push(e);
+              }
+            }
+          }
+          
+          createdResult = { records: created, filesScanned: allVoteRecords.filesScanned || 0 };
+          exercisedResult = { records: exercised, filesScanned: allVoteRecords.filesScanned || 0 };
         }
 
         console.log(`   Created scan: ${createdResult.filesScanned || '?'} files scanned`);
