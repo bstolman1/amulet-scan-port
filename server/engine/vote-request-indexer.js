@@ -170,7 +170,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     
     // Check if template index is available for faster scanning
     const templateIndexPopulated = await isTemplateIndexPopulated();
-    let createdResult, exercisedResult;
+    let createdRecords = [];
+    let exercisedRecords = [];
     
     if (templateIndexPopulated) {
       // FAST PATH: Use template index to scan only relevant files
@@ -182,31 +183,31 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       if (voteRequestFiles.length === 0) {
         console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
-        createdResult = await scanAllFilesForVoteRequests('created');
-        exercisedResult = await scanAllFilesForVoteRequests('exercised');
+        const result = await scanAllFilesForVoteRequestsSinglePass();
+        createdRecords = result.created;
+        exercisedRecords = result.exercised;
       } else {
-        // Scan only the relevant files
-        console.log('   Scanning VoteRequest files for created events...');
-        createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
-        
-        console.log('   Scanning VoteRequest files for exercised events...');
-        exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
+        // SINGLE PASS: Scan files once and collect both event types
+        console.log('   📊 Scanning files for VoteRequest events (single pass)...');
+        const result = await scanFilesForVoteRequestsSinglePass(voteRequestFiles);
+        createdRecords = result.created;
+        exercisedRecords = result.exercised;
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
       console.log('   ⚠️ Template index not available, using full scan (this will be slow)');
       console.log('   💡 Run template index build first for faster VoteRequest indexing');
       
-      createdResult = await scanAllFilesForVoteRequests('created');
-      exercisedResult = await scanAllFilesForVoteRequests('exercised');
+      const result = await scanAllFilesForVoteRequestsSinglePass();
+      createdRecords = result.created;
+      exercisedRecords = result.exercised;
     }
     
-    console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
-    console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events`);
+    console.log(`   ✓ Found ${createdRecords.length} created, ${exercisedRecords.length} exercised`);
     
     // Build set of closed contract IDs
     const closedContractIds = new Set(
-      exercisedResult.records.map(r => r.contract_id).filter(Boolean)
+      exercisedRecords.map(r => r.contract_id).filter(Boolean)
     );
     
     const now = new Date();
@@ -225,7 +226,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let inserted = 0;
     let updated = 0;
     
-    for (const event of createdResult.records) {
+    for (const event of createdRecords) {
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
@@ -336,10 +337,11 @@ export function isIndexingInProgress() {
 }
 
 /**
- * Scan specific files for VoteRequest events (fast path using template index)
+ * Scan specific files for VoteRequest events - SINGLE PASS collecting both created and exercised
  */
-async function scanFilesForVoteRequests(files, eventType) {
-  const records = [];
+async function scanFilesForVoteRequestsSinglePass(files) {
+  const created = [];
+  const exercised = [];
   let filesProcessed = 0;
   const startTime = Date.now();
   let lastLogTime = startTime;
@@ -352,11 +354,11 @@ async function scanFilesForVoteRequests(files, eventType) {
       for (const record of fileRecords) {
         if (!record.template_id?.includes('VoteRequest')) continue;
         
-        if (eventType === 'created' && record.event_type === 'created') {
-          records.push(record);
-        } else if (eventType === 'exercised' && record.event_type === 'exercised') {
+        if (record.event_type === 'created') {
+          created.push(record);
+        } else if (record.event_type === 'exercised') {
           if (record.choice === 'Archive' || (typeof record.choice === 'string' && record.choice.startsWith('VoteRequest_'))) {
-            records.push(record);
+            exercised.push(record);
           }
         }
       }
@@ -368,7 +370,7 @@ async function scanFilesForVoteRequests(files, eventType) {
       if (filesProcessed % 50 === 0 || (now - lastLogTime > 5000)) {
         const elapsed = (now - startTime) / 1000;
         const pct = ((filesProcessed / files.length) * 100).toFixed(0);
-        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} files | ${records.length} ${eventType} events | ${elapsed.toFixed(1)}s`);
+        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} files | ${created.length} created, ${exercised.length} exercised | ${elapsed.toFixed(1)}s`);
         lastLogTime = now;
       }
     } catch (err) {
@@ -376,27 +378,36 @@ async function scanFilesForVoteRequests(files, eventType) {
     }
   }
   
-  return { records, filesScanned: filesProcessed };
+  return { created, exercised, filesScanned: filesProcessed };
 }
 
 /**
- * Scan all files for VoteRequest events (slow fallback path)
+ * Scan all files for VoteRequest events - SINGLE PASS (slow fallback path)
  */
-async function scanAllFilesForVoteRequests(eventType) {
-  const filter = eventType === 'created'
-    ? (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
-    : (e) => {
-        if (!e.template_id?.includes('VoteRequest')) return false;
-        if (e.event_type !== 'exercised') return false;
-        return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
-      };
+async function scanAllFilesForVoteRequestsSinglePass() {
+  console.log(`   Scanning all files for VoteRequest events (full scan, single pass)...`);
   
-  console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
-  return binaryReader.streamRecords(DATA_PATH, 'events', {
+  const created = [];
+  const exercised = [];
+  
+  // Use streamRecords with a filter that captures both event types
+  const allResults = await binaryReader.streamRecords(DATA_PATH, 'events', {
     limit: Number.MAX_SAFE_INTEGER,
     offset: 0,
     fullScan: true,
     sortBy: 'effective_at',
-    filter
+    filter: (e) => e.template_id?.includes('VoteRequest')
   });
+  
+  for (const record of allResults.records || []) {
+    if (record.event_type === 'created') {
+      created.push(record);
+    } else if (record.event_type === 'exercised') {
+      if (record.choice === 'Archive' || (typeof record.choice === 'string' && record.choice.startsWith('VoteRequest_'))) {
+        exercised.push(record);
+      }
+    }
+  }
+  
+  return { created, exercised, filesScanned: allResults.filesScanned || 0 };
 }
