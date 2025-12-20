@@ -2,8 +2,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCCMarketOverview, CCExchangeData } from "@/hooks/use-kaiko-ohlcv";
-import { TrendingUp, TrendingDown, Building2, ArrowUpDown } from "lucide-react";
+import { useCCMarketOverview, useKaikoStatus } from "@/hooks/use-kaiko-ohlcv";
+import { Building2, ArrowUpDown, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import { useState, useMemo } from "react";
 import { Progress } from "@/components/ui/progress";
 
@@ -27,23 +27,23 @@ interface CCExchangeComparisonProps {
 
 export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonProps) {
   const { data, isLoading, error } = useCCMarketOverview(enabled);
+  const kaikoStatus = useKaikoStatus();
+
   const [sortKey, setSortKey] = useState<SortKey>('volume');
   const [sortAsc, setSortAsc] = useState(false);
 
   // Filter out exchanges with no actual trading data (volume 0 or no price)
   const validExchanges = useMemo(() => {
     if (!data?.exchanges) return [];
-    return data.exchanges.filter(e => 
-      e.volume > 0 && e.tradeCount > 0 && e.price !== null
-    );
+    return data.exchanges.filter((e) => e.volume > 0 && e.tradeCount > 0 && e.price !== null);
   }, [data?.exchanges]);
 
   const sortedExchanges = useMemo(() => {
     if (!validExchanges.length) return [];
-    
+
     return [...validExchanges].sort((a, b) => {
       let aVal: number, bVal: number;
-      
+
       switch (sortKey) {
         case 'volume':
           aVal = a.volume || 0;
@@ -64,14 +64,14 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
         default:
           return 0;
       }
-      
+
       return sortAsc ? aVal - bVal : bVal - aVal;
     });
   }, [validExchanges, sortKey, sortAsc]);
 
   const maxVolume = useMemo(() => {
     if (!validExchanges.length) return 0;
-    return Math.max(...validExchanges.map(e => e.volume || 0));
+    return Math.max(...validExchanges.map((e) => e.volume || 0));
   }, [validExchanges]);
 
   const handleSort = (key: SortKey) => {
@@ -104,6 +104,8 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
   }
 
   if (error || !data) {
+    const statusConfigured = kaikoStatus.data?.configured;
+
     return (
       <Card>
         <CardHeader>
@@ -113,23 +115,38 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">Unable to load exchange data</p>
+          <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
+            <div className="mt-0.5 text-muted-foreground">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="font-medium">Unable to load exchange data</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {statusConfigured === false
+                  ? "Your local API server isn't configured with KAIKO_API_KEY. Set it in server/.env and restart the server."
+                  : (error?.message || "Request failed. Make sure the local API server is running on http://localhost:3001.")}
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
     );
   }
 
   const SortableHeader = ({ label, sortKeyName }: { label: string; sortKeyName: SortKey }) => (
-    <TableHead 
+    <TableHead
       className="cursor-pointer hover:bg-muted/50 transition-colors text-right"
       onClick={() => handleSort(sortKeyName)}
     >
       <div className="flex items-center justify-end gap-1">
         {label}
-        <ArrowUpDown className={`h-3 w-3 ${sortKey === sortKeyName ? 'text-primary' : 'text-muted-foreground'}`} />
+        <ArrowUpDown
+          className={`h-3 w-3 ${sortKey === sortKeyName ? 'text-primary' : 'text-muted-foreground'}`}
+        />
       </div>
     </TableHead>
   );
+
 
   return (
     <Card>
