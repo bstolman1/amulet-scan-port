@@ -137,7 +137,10 @@ export function CCTimeframeComparison({ enabled = true }: { enabled?: boolean })
                       borderRadius: 8,
                       boxShadow: "0 10px 30px -12px hsl(var(--foreground) / 0.25)",
                     }}
-                    labelFormatter={(ts) => new Date(Number(ts)).toLocaleString()}
+                    labelFormatter={(_, payload) => {
+                      const ts = payload?.[0]?.payload?.ts;
+                      return ts ? new Date(ts).toLocaleString() : "";
+                    }}
                     formatter={(value: number) => [`$${value.toFixed(4)}`, "Close"]}
                   />
                   <Line
