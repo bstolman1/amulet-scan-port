@@ -703,30 +703,53 @@ router.get('/vote-requests', async (req, res) => {
     
     if (sources.primarySource === 'binary') {
       // VoteRequest events are VERY sparse (~26 per 275K events)
-      // Scan ALL files to get complete history
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      // Also: many VoteRequests quickly become historical via an exercised (Archive/Accept/Reject/Expire) event.
+      // Strategy: scan for BOTH created VoteRequests (payload-rich) and exercised VoteRequest events (closure signal).
+
+      const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit: 10000, // Get as many as possible
         offset: 0,
-        maxDays: 365 * 10, // 10 years - get everything
-        maxFilesToScan: 500000, // Scan ALL files
+        maxDays: 365 * 10, // 10 years - get everything we have
+        maxFilesToScan: 500000, // Scan as many files as exist
         sortBy: 'effective_at',
         filter: (e) => {
-          // Only VoteRequest template
-          if (!e.template_id?.includes('VoteRequest')) return false;
-          // Only created events (have full payload with votes, requester, reason)
-          if (e.event_type !== 'created') return false;
-          return true;
+          return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
         }
       });
-      
-      console.log(`   Found ${result.records.length} VoteRequest created events from binary files`);
-      
+
+      const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 100000, // exercised events can be more common; we only need contract_id + choice
+        offset: 0,
+        maxDays: 365 * 10,
+        maxFilesToScan: 500000,
+        sortBy: 'effective_at',
+        filter: (e) => {
+          if (!e.template_id?.includes('VoteRequest')) return false;
+          if (e.event_type !== 'exercised') return false;
+          // Archive is empty payload but is the main closure signal; keep other terminal choices too
+          return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
+        }
+      });
+
+      const [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
+
+      const closedContractIds = new Set(
+        (exercisedResult.records || [])
+          .map(r => r.contract_id)
+          .filter(Boolean)
+      );
+
+      console.log(`   Found ${createdResult.records.length} VoteRequest created events from binary files`);
+      console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events (closure signals)`);
+      console.log(`   Unique closed contracts: ${closedContractIds.size}`);
+
       // Process to extract full VoteRequest details with active/historical status
-      const allVoteRequests = result.records.map((event, idx) => {
+      const allVoteRequests = createdResult.records.map((event, idx) => {
         const voteBefore = event.payload?.voteBefore;
         const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-        const isActive = voteBeforeDate ? voteBeforeDate > now : false;
-        
+        const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
+        const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
+
         if (verbose && idx < 3) {
           console.log(`\n   📝 VoteRequest #${idx + 1}:`);
           console.log(`      effective_at: ${event.effective_at}`);
@@ -736,9 +759,10 @@ router.get('/vote-requests', async (req, res) => {
           console.log(`      reason: ${typeof reason === 'string' ? reason.slice(0, 100) : JSON.stringify(reason)?.slice(0, 100) || 'null'}`);
           console.log(`      votes: ${event.payload?.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
           console.log(`      voteBefore: ${voteBefore || 'null'}`);
+          console.log(`      closedByExercise: ${isClosed}`);
           console.log(`      status: ${isActive ? 'ACTIVE' : 'HISTORICAL'}`);
         }
-        
+
         return {
           event_id: event.event_id,
           contract_id: event.contract_id,
@@ -747,6 +771,7 @@ router.get('/vote-requests', async (req, res) => {
           timestamp: event.timestamp,
           // Status
           status: isActive ? 'active' : 'historical',
+          is_closed: isClosed,
           // VoteRequest-specific fields
           action_tag: event.payload?.action?.tag || null,
           action_value: event.payload?.action?.value || null,
