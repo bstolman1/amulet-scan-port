@@ -56,12 +56,14 @@ export function useGovernanceEvents() {
         "/api/events/vote-requests?status=historical&limit=1000&ensureFresh=true",
       );
 
-      const seen = new Set<string>();
+      // Dedupe by contract_id (each VoteRequest contract is unique) rather than event_id
+      // This handles duplicates from multiple migration_ids or ingestion passes
+      const seenContracts = new Set<string>();
       const mapped = (response.data || [])
         .filter((r) => {
-          if (!r?.event_id) return false;
-          if (seen.has(r.event_id)) return false;
-          seen.add(r.event_id);
+          if (!r?.contract_id) return false;
+          if (seenContracts.has(r.contract_id)) return false;
+          seenContracts.add(r.contract_id);
           return true;
         })
         .map((r) => {

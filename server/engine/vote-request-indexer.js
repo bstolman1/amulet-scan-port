@@ -110,10 +110,12 @@ export async function isIndexPopulated() {
 async function ensureIndexTables() {
   try {
     // Create vote_requests table if it doesn't exist
+    // Use contract_id as primary key since each VoteRequest contract is unique
+    // (event_id can have duplicates across migration_ids)
     await query(`
       CREATE TABLE IF NOT EXISTS vote_requests (
-        event_id VARCHAR PRIMARY KEY,
-        contract_id VARCHAR,
+        contract_id VARCHAR PRIMARY KEY,
+        event_id VARCHAR,
         template_id VARCHAR,
         effective_at TIMESTAMP,
         status VARCHAR,
@@ -203,7 +205,20 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       exercisedRecords = result.exercised;
     }
     
-    console.log(`   ✓ Found ${createdRecords.length} created, ${exercisedRecords.length} exercised`);
+    // Dedupe created records by contract_id (keep newest by effective_at)
+    // This handles duplicates from multiple migration_ids or ingestion passes
+    const contractMap = new Map();
+    for (const event of createdRecords) {
+      const cid = event.contract_id;
+      if (!cid) continue;
+      const existing = contractMap.get(cid);
+      if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
+        contractMap.set(cid, event);
+      }
+    }
+    const dedupedRecords = Array.from(contractMap.values());
+    
+    console.log(`   ✓ Found ${createdRecords.length} created (${dedupedRecords.length} unique), ${exercisedRecords.length} exercised`);
     
     // Build set of closed contract IDs
     const closedContractIds = new Set(
@@ -226,7 +241,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let inserted = 0;
     let updated = 0;
     
-    for (const event of createdRecords) {
+    for (const event of dedupedRecords) {
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
@@ -258,17 +273,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       };
       
       try {
-        // Upsert - insert or update on conflict
+        // Upsert - insert or update on conflict by contract_id (unique per VoteRequest)
         await query(`
           INSERT INTO vote_requests (
-            event_id, contract_id, template_id, effective_at,
+            contract_id, event_id, template_id, effective_at,
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
             updated_at
           ) VALUES (
-            '${voteRequest.event_id}',
             '${voteRequest.contract_id}',
+            '${voteRequest.event_id}',
             ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
             ${voteRequest.effective_at ? `'${voteRequest.effective_at}'` : 'NULL'},
             '${voteRequest.status}',
@@ -285,15 +300,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
             now()
           )
-          ON CONFLICT (event_id) DO UPDATE SET
+          ON CONFLICT (contract_id) DO UPDATE SET
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
+            votes = EXCLUDED.votes,
+            vote_count = EXCLUDED.vote_count,
             updated_at = now()
         `);
         inserted++;
       } catch (err) {
         if (!err.message?.includes('duplicate')) {
-          console.error(`   Error inserting vote request ${voteRequest.event_id}:`, err.message);
+          console.error(`   Error inserting vote request ${voteRequest.contract_id}:`, err.message);
         } else {
           updated++;
         }
