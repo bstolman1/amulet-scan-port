@@ -4,6 +4,11 @@ import binaryReader from '../duckdb/binary-reader.js';
 
 const router = Router();
 
+// VoteRequest cache - refreshes every 5 minutes
+let voteRequestCache = null;
+let voteRequestCacheTime = 0;
+const VOTE_REQUEST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Helper to get the correct read function for Parquet files (primary) or JSONL files (fallback)
 const getEventsSource = () => {
   const hasParquet = db.hasFileType('events', '.parquet');
@@ -702,98 +707,115 @@ router.get('/vote-requests', async (req, res) => {
     console.log(`   Primary source: ${sources.primarySource}`);
     
     if (sources.primarySource === 'binary') {
-      // VoteRequest events are VERY sparse (~26 per 275K events)
-      // Also: many VoteRequests quickly become historical via an exercised (Archive/Accept/Reject/Expire) event.
-      // Strategy: scan for BOTH created VoteRequests (payload-rich) and exercised VoteRequest events (closure signal).
-
-      // VoteRequest events are VERY sparse - need to scan many files but not absurdly many
-      // Practical limit: 10K files covers ~30-60 days depending on activity
-      const MAX_PRACTICAL_FILES = 10000;
+      // Check cache first
+      const cacheAge = Date.now() - voteRequestCacheTime;
+      const useCache = voteRequestCache && cacheAge < VOTE_REQUEST_CACHE_TTL;
       
-      const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 10000, // Get as many as possible
-        offset: 0,
-        maxDays: 365 * 10, // 10 years - get everything we have
-        maxFilesToScan: MAX_PRACTICAL_FILES,
-        sortBy: 'effective_at',
-        filter: (e) => {
-          return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
-        }
-      });
+      let allVoteRequests;
+      let debugInfo;
+      
+      if (useCache) {
+        console.log(`   Using cached data (age: ${Math.round(cacheAge / 1000)}s)`);
+        allVoteRequests = voteRequestCache.allVoteRequests;
+        debugInfo = { ...voteRequestCache.debugInfo, fromCache: true, cacheAgeSeconds: Math.round(cacheAge / 1000) };
+      } else {
+        console.log(`   Scanning binary files (cache expired or missing)...`);
+        
+        // VoteRequest events are VERY sparse - need to scan many files but not absurdly many
+        const MAX_PRACTICAL_FILES = 10000;
+      
+        const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+          limit: 10000,
+          offset: 0,
+          maxDays: 365 * 10,
+          maxFilesToScan: MAX_PRACTICAL_FILES,
+          sortBy: 'effective_at',
+          filter: (e) => {
+            return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
+          }
+        });
 
-      const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 100000,
-        offset: 0,
-        maxDays: 365 * 10,
-        maxFilesToScan: MAX_PRACTICAL_FILES,
-        sortBy: 'effective_at',
-        filter: (e) => {
-          if (!e.template_id?.includes('VoteRequest')) return false;
-          if (e.event_type !== 'exercised') return false;
-          return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
-        }
-      });
+        const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+          limit: 100000,
+          offset: 0,
+          maxDays: 365 * 10,
+          maxFilesToScan: MAX_PRACTICAL_FILES,
+          sortBy: 'effective_at',
+          filter: (e) => {
+            if (!e.template_id?.includes('VoteRequest')) return false;
+            if (e.event_type !== 'exercised') return false;
+            return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
+          }
+        });
 
-      const [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
+        const [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
 
-      // Debug: log file scan stats
-      console.log(`   Created scan: ${createdResult.filesScanned || '?'} files scanned, ${createdResult.totalFiles || '?'} total files found`);
-      console.log(`   Exercised scan: ${exercisedResult.filesScanned || '?'} files scanned, ${exercisedResult.totalFiles || '?'} total files found`);
+        console.log(`   Created scan: ${createdResult.filesScanned || '?'} files scanned`);
+        console.log(`   Exercised scan: ${exercisedResult.filesScanned || '?'} files scanned`);
 
-      const closedContractIds = new Set(
-        (exercisedResult.records || [])
-          .map(r => r.contract_id)
+        const closedContractIds = new Set(
+          (exercisedResult.records || [])
+            .map(r => r.contract_id)
+            .filter(Boolean)
+        );
+
+        console.log(`   Found ${createdResult.records.length} VoteRequest created, ${exercisedResult.records.length} exercised`);
+
+        // Process to extract full VoteRequest details
+        allVoteRequests = createdResult.records.map((event) => {
+          const voteBefore = event.payload?.voteBefore;
+          const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
+          const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
+          const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
+
+          return {
+            event_id: event.event_id,
+            contract_id: event.contract_id,
+            template_id: event.template_id,
+            effective_at: event.effective_at,
+            timestamp: event.timestamp,
+            status: isActive ? 'active' : 'historical',
+            is_closed: isClosed,
+            action_tag: event.payload?.action?.tag || null,
+            action_value: event.payload?.action?.value || null,
+            requester: event.payload?.requester || null,
+            reason: event.payload?.reason || null,
+            votes: event.payload?.votes || [],
+            vote_count: event.payload?.votes?.length || 0,
+            vote_before: voteBefore || null,
+            target_effective_at: event.payload?.targetEffectiveAt || null,
+            tracking_cid: event.payload?.trackingCid || null,
+            dso: event.payload?.dso || null,
+          };
+        });
+        
+        // Get date range of scanned data
+        const allDates = [...createdResult.records, ...(exercisedResult.records || [])]
+          .map(r => r.effective_at)
           .filter(Boolean)
-      );
-
-      console.log(`   Found ${createdResult.records.length} VoteRequest created events from binary files`);
-      console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events (closure signals)`);
-      console.log(`   Unique closed contracts: ${closedContractIds.size}`);
-
-      // Process to extract full VoteRequest details with active/historical status
-      const allVoteRequests = createdResult.records.map((event, idx) => {
-        const voteBefore = event.payload?.voteBefore;
-        const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-        const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
-        const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
-
-        if (verbose && idx < 3) {
-          console.log(`\n   📝 VoteRequest #${idx + 1}:`);
-          console.log(`      effective_at: ${event.effective_at}`);
-          console.log(`      action.tag: ${event.payload?.action?.tag || 'null'}`);
-          console.log(`      requester: ${event.payload?.requester || 'null'}`);
-          const reason = event.payload?.reason;
-          console.log(`      reason: ${typeof reason === 'string' ? reason.slice(0, 100) : JSON.stringify(reason)?.slice(0, 100) || 'null'}`);
-          console.log(`      votes: ${event.payload?.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
-          console.log(`      voteBefore: ${voteBefore || 'null'}`);
-          console.log(`      closedByExercise: ${isClosed}`);
-          console.log(`      status: ${isActive ? 'ACTIVE' : 'HISTORICAL'}`);
-        }
-
-        return {
-          event_id: event.event_id,
-          contract_id: event.contract_id,
-          template_id: event.template_id,
-          effective_at: event.effective_at,
-          timestamp: event.timestamp,
-          // Status
-          status: isActive ? 'active' : 'historical',
-          is_closed: isClosed,
-          // VoteRequest-specific fields
-          action_tag: event.payload?.action?.tag || null,
-          action_value: event.payload?.action?.value || null,
-          requester: event.payload?.requester || null,
-          reason: event.payload?.reason || null,
-          votes: event.payload?.votes || [],
-          vote_count: event.payload?.votes?.length || 0,
-          vote_before: voteBefore || null,
-          target_effective_at: event.payload?.targetEffectiveAt || null,
-          tracking_cid: event.payload?.trackingCid || null,
-          dso: event.payload?.dso || null,
+          .sort();
+        
+        // Build debug info
+        debugInfo = {
+          createdEventsFound: createdResult.records.length,
+          exercisedEventsFound: (exercisedResult.records || []).length,
+          closedContractIds: closedContractIds.size,
+          createdFilesScanned: createdResult.filesScanned || 0,
+          createdTotalFiles: createdResult.totalFiles || 0,
+          dateRangeCovered: { 
+            oldest: allDates[0] || null, 
+            newest: allDates[allDates.length - 1] || null 
+          },
+          fromCache: false,
         };
-      });
+        
+        // Cache the results
+        voteRequestCache = { allVoteRequests, debugInfo };
+        voteRequestCacheTime = Date.now();
+        console.log(`   Cached ${allVoteRequests.length} VoteRequests`);
+      }
       
-      // Filter by status if requested
+      // Filter by status
       let filteredVoteRequests = allVoteRequests;
       if (status === 'active') {
         filteredVoteRequests = allVoteRequests.filter(v => v.status === 'active');
@@ -812,28 +834,6 @@ router.get('/vote-requests', async (req, res) => {
       const withVotes = voteRequests.filter(v => v.votes?.length > 0).length;
       const actionTags = [...new Set(voteRequests.map(v => v.action_tag).filter(Boolean))];
       
-      console.log(`\n   📊 VoteRequest stats:`);
-      console.log(`      Total found: ${allVoteRequests.length}`);
-      console.log(`      Active: ${activeCount}`);
-      console.log(`      Historical: ${historicalCount}`);
-      console.log(`      Closed by exercise: ${closedCount}`);
-      console.log(`      Returned: ${voteRequests.length} (filtered by: ${status})`);
-      console.log(`      With reason: ${withReason}`);
-      console.log(`      With votes: ${withVotes}`);
-      console.log(`      Action types: ${actionTags.join(', ')}`);
-      
-      // Debug: sample contract IDs from created vs exercised
-      const sampleCreatedIds = createdResult.records.slice(0, 3).map(r => r.contract_id?.slice(0, 40));
-      const sampleExercisedIds = (exercisedResult.records || []).slice(0, 3).map(r => r.contract_id?.slice(0, 40));
-      
-      // Get date range of scanned data
-      const allDates = [...createdResult.records, ...(exercisedResult.records || [])]
-        .map(r => r.effective_at)
-        .filter(Boolean)
-        .sort();
-      const oldestDate = allDates[0] || null;
-      const newestDate = allDates[allDates.length - 1] || null;
-      
       return res.json({
         data: voteRequests,
         count: voteRequests.length,
@@ -848,18 +848,7 @@ router.get('/vote-requests', async (req, res) => {
           actionTags,
           statusFilter: status,
         },
-        _debug: {
-          createdEventsFound: createdResult.records.length,
-          exercisedEventsFound: (exercisedResult.records || []).length,
-          closedContractIds: closedContractIds.size,
-          createdFilesScanned: createdResult.filesScanned || 0,
-          createdTotalFiles: createdResult.totalFiles || 0,
-          exercisedFilesScanned: exercisedResult.filesScanned || 0,
-          exercisedTotalFiles: exercisedResult.totalFiles || 0,
-          dateRangeCovered: { oldest: oldestDate, newest: newestDate },
-          sampleCreatedContractIds: sampleCreatedIds,
-          sampleExercisedContractIds: sampleExercisedIds,
-        }
+        _debug: debugInfo,
       });
     }
     
