@@ -12,13 +12,14 @@ import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { useACSStatus } from "@/hooks/use-local-acs";
+import { ACSStatusBanner } from "@/components/ACSStatusBanner";
 
 const ValidatorLicenses = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 100;
-  const { data: localAcsAvailable } = useLocalACSAvailable();
+  const { data: acsStatus } = useACSStatus();
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
@@ -93,11 +94,12 @@ const ValidatorLicenses = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
+        <ACSStatusBanner />
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Award className="h-8 w-8 text-primary" />
             <h1 className="text-3xl font-bold">Validator Licenses & Coupons</h1>
-            {localAcsAvailable && (
+            {acsStatus?.available && (
               <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                 <Database className="h-3 w-3 mr-1" />
                 Local ACS

@@ -6,14 +6,44 @@ import {
   getACSContracts,
   getACSStats,
   getACSSupply,
+  getACSStatus,
   isApiAvailable,
   type ACSSnapshot,
   type ACSTemplateStats,
   type ACSStats,
+  type ACSStatusResponse,
 } from "@/lib/duckdb-api-client";
 
 /**
+ * Hook to get ACS availability status (for graceful degradation during snapshots)
+ */
+export function useACSStatus() {
+  return useQuery({
+    queryKey: ["acsStatus"],
+    queryFn: async () => {
+      try {
+        return await getACSStatus();
+      } catch (err) {
+        return {
+          available: false,
+          snapshotInProgress: false,
+          completeSnapshotCount: 0,
+          inProgressSnapshotCount: 0,
+          latestComplete: null,
+          message: 'Unable to check ACS status',
+          error: err instanceof Error ? err.message : 'Unknown error',
+        } as ACSStatusResponse;
+      }
+    },
+    staleTime: 10_000, // Check status more frequently
+    refetchInterval: 15_000, // Auto-refresh every 15 seconds when snapshot in progress
+    retry: 1,
+  });
+}
+
+/**
  * Hook to check if DuckDB API is available for ACS data
+ * Now uses the status endpoint for better accuracy during snapshots
  */
 export function useLocalACSAvailable() {
   return useQuery({
@@ -22,16 +52,24 @@ export function useLocalACSAvailable() {
       try {
         // First check if API is reachable at all
         const available = await isApiAvailable();
-        if (!available) return false;
+        if (!available) return { available: false, reason: 'api_unreachable' };
         
-        // Then verify ACS data actually exists
-        const stats = await getACSStats();
-        return stats?.data?.total_contracts > 0;
+        // Use status endpoint to check for complete snapshots
+        const status = await getACSStatus();
+        if (status.available) {
+          return { available: true, reason: 'complete_snapshot_available' };
+        }
+        
+        if (status.snapshotInProgress) {
+          return { available: false, reason: 'snapshot_in_progress', message: status.message };
+        }
+        
+        return { available: false, reason: 'no_data' };
       } catch {
-        return false;
+        return { available: false, reason: 'error' };
       }
     },
-    staleTime: 60_000,
+    staleTime: 10_000,
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -130,4 +168,4 @@ export function useLocalACSSupply() {
   });
 }
 
-export type { ACSSnapshot, ACSTemplateStats, ACSStats };
+export type { ACSSnapshot, ACSTemplateStats, ACSStats, ACSStatusResponse };

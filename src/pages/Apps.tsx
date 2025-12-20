@@ -8,10 +8,11 @@ import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data"
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { useACSStatus } from "@/hooks/use-local-acs";
+import { ACSStatusBanner } from "@/components/ACSStatusBanner";
 
 const Apps = () => {
-  const { data: localAcsAvailable } = useLocalACSAvailable();
+  const { data: acsStatus } = useACSStatus();
   const { data: latestSnapshot } = useLatestACSSnapshot();
 
   const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight");
@@ -45,11 +46,12 @@ const Apps = () => {
   return (
     <DashboardLayout>
       <div className="space-y-8">
+        <ACSStatusBanner />
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Package className="h-8 w-8 text-primary" />
             <h1 className="text-3xl font-bold">Canton Network Apps</h1>
-            {localAcsAvailable && (
+            {acsStatus?.available && (
               <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                 <Database className="h-3 w-3 mr-1" />
                 Local ACS

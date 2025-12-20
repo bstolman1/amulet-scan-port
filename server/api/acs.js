@@ -517,6 +517,55 @@ router.post('/cache/invalidate', (req, res) => {
   res.json({ status: 'ok', message: 'Cache invalidated' });
 });
 
+// GET /api/acs/status - Get ACS availability status (for graceful degradation during snapshots)
+router.get('/status', (req, res) => {
+  try {
+    const completeSnapshots = findCompleteSnapshots();
+    const availableSnapshots = findAvailableSnapshots();
+    
+    // Find in-progress snapshots (available but not complete)
+    const completeSet = new Set(
+      completeSnapshots.map(s => `${s.migrationId}:${s.snapshotTime}`)
+    );
+    const inProgressSnapshots = availableSnapshots.filter(s => 
+      !s.isComplete && !completeSet.has(`${s.migrationId}:${s.snapshotTime}`)
+    );
+    
+    const hasCompleteSnapshot = completeSnapshots.length > 0;
+    const hasInProgressSnapshot = inProgressSnapshots.length > 0;
+    
+    // Get info about the best available snapshot
+    const bestSnapshot = completeSnapshots.length > 0 
+      ? completeSnapshots.sort((a, b) => {
+          if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
+          return new Date(b.snapshotTime) - new Date(a.snapshotTime);
+        })[0]
+      : null;
+    
+    res.json({
+      available: hasCompleteSnapshot,
+      snapshotInProgress: hasInProgressSnapshot,
+      completeSnapshotCount: completeSnapshots.length,
+      inProgressSnapshotCount: inProgressSnapshots.length,
+      latestComplete: bestSnapshot ? {
+        migrationId: bestSnapshot.migrationId,
+        snapshotTime: bestSnapshot.snapshotTime,
+      } : null,
+      message: hasCompleteSnapshot 
+        ? (hasInProgressSnapshot ? 'Data available, snapshot update in progress' : 'Data available')
+        : (hasInProgressSnapshot ? 'Snapshot in progress, please wait...' : 'No ACS data available'),
+    });
+  } catch (err) {
+    console.error('ACS status error:', err);
+    res.status(500).json({ 
+      available: false, 
+      snapshotInProgress: false,
+      error: err.message,
+      message: 'Error checking ACS status',
+    });
+  }
+});
+
 // GET /api/acs/snapshots - List all available snapshots (uses filesystem scan, not data query)
 router.get('/snapshots', async (req, res) => {
   try {

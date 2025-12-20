@@ -565,3 +565,24 @@ export async function isApiAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACS Status API (for graceful degradation during snapshots)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ACSStatusResponse {
+  available: boolean;
+  snapshotInProgress: boolean;
+  completeSnapshotCount: number;
+  inProgressSnapshotCount: number;
+  latestComplete: {
+    migrationId: number;
+    snapshotTime: string;
+  } | null;
+  message: string;
+  error?: string;
+}
+
+export async function getACSStatus(): Promise<ACSStatusResponse> {
+  return apiFetch('/api/acs/status');
+}

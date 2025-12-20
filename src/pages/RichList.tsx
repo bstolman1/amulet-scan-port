@@ -6,13 +6,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
-import { useLocalACSAvailable } from "@/hooks/use-local-acs";
+import { useACSStatus } from "@/hooks/use-local-acs";
+import { ACSStatusBanner } from "@/components/ACSStatusBanner";
 import { useQuery } from "@tanstack/react-query";
 import { getRealtimeRichList, isApiAvailable } from "@/lib/duckdb-api-client";
 
 const RichList = () => {
   const [searchTerm, setSearchTerm] = useState("");
-  const { data: localAcsAvailable } = useLocalACSAvailable();
+  const { data: acsStatus } = useACSStatus();
 
   // Use real-time rich list endpoint (snapshot + v2/updates delta)
   const { data: richListData, isLoading, error } = useQuery({
@@ -25,7 +26,7 @@ const RichList = () => {
       return getRealtimeRichList({ limit: 100, search: searchTerm || undefined });
     },
     staleTime: 30_000, // Shorter stale time for real-time data
-    enabled: true,
+    enabled: acsStatus?.available !== false,
   });
 
   const topHolders = richListData?.data || [];
@@ -48,10 +49,11 @@ const RichList = () => {
   return (
     <DashboardLayout>
       <div className="space-y-6">
+        <ACSStatusBanner />
         <div>
         <div className="flex items-center gap-2 mb-2">
           <h2 className="text-3xl font-bold">Rich List</h2>
-          {localAcsAvailable && (
+          {acsStatus?.available && (
             <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
               <Database className="h-3 w-3 mr-1" />
               {richListData?.isRealtime ? "Real-time" : "Snapshot"}
