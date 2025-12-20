@@ -475,6 +475,7 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     sortBy = 'effective_at',
     maxDays = 30,
     maxFilesToScan: maxFilesToScanOverride,
+    fullScan = false, // If true, use full directory scan instead of date-based fast scan
   } = options;
   
   // Allow override to exceed the default - important for rare event scanning like VoteRequest
@@ -482,8 +483,16 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     ? maxFilesToScanOverride 
     : MAX_FILES_TO_SCAN_DEFAULT;
   
-  // Use FAST finder that leverages partition structure instead of scanning 55k+ files
-  const files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });
+  // Use full scan for historical data that spans many years (like VoteRequests)
+  // or fast scan for recent data
+  let files;
+  if (fullScan) {
+    console.log(`   📂 Full scan mode: scanning all files in ${dirPath}...`);
+    files = findBinaryFiles(dirPath, type);
+    console.log(`   📂 Found ${files.length} total ${type} files`);
+  } else {
+    files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });
+  }
   
   if (files.length === 0) {
     return { records: [], total: 0, hasMore: false };
@@ -491,13 +500,15 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
   
   // Files are already sorted by data date desc from findBinaryFilesFast
   const allRecords = [];
-  const maxFilesToScan = Math.min(files.length, maxFilesToScanLimit);
+  const maxFilesToScan = fullScan ? files.length : Math.min(files.length, maxFilesToScanLimit);
   
+  let filesProcessed = 0;
   for (let i = 0; i < maxFilesToScan; i++) {
     const file = files[i];
     try {
       const result = await readBinaryFile(file);
       let fileRecords = result.records;
+      filesProcessed++;
       
       // Apply filter if provided
       if (filter) {
@@ -506,14 +517,22 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
       
       allRecords.push(...fileRecords);
       
-      // Early stop once we have comfortably more than we need.
-      // Since files are ordered newest data date → oldest, later files are unlikely to contain newer records.
-      if (allRecords.length >= offset + limit + 2000) {
+      // Log progress every 1000 files for full scan
+      if (fullScan && filesProcessed % 1000 === 0) {
+        console.log(`   📂 Processed ${filesProcessed}/${maxFilesToScan} files, found ${allRecords.length} matching records`);
+      }
+      
+      // For non-full scans, early stop once we have comfortably more than we need.
+      if (!fullScan && allRecords.length >= offset + limit + 2000) {
         break;
       }
     } catch (err) {
       console.error(`Failed to read ${file}: ${err.message}`);
     }
+  }
+  
+  if (fullScan) {
+    console.log(`   📂 Full scan complete: ${filesProcessed} files, ${allRecords.length} matching records`);
   }
   
   // Sort all collected records by the requested field (default: effective_at descending)
@@ -531,7 +550,7 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     total: allRecords.length,
     hasMore: offset + limit < allRecords.length,
     source: 'binary',
-    filesScanned: maxFilesToScan,
+    filesScanned: filesProcessed,
     totalFiles: files.length,
   };
 }

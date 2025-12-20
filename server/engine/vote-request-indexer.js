@@ -161,13 +161,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // Ensure tables exist first
     await ensureIndexTables();
     
-    // Scan for all VoteRequest created events
-    console.log('   Scanning for VoteRequest created events...');
+    // Scan for all VoteRequest created events using FULL SCAN for historical data
+    console.log('   Scanning for VoteRequest created events (full scan)...');
     const createdResult = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-      limit: 100000,
+      limit: Number.MAX_SAFE_INTEGER,
       offset: 0,
-      maxDays: 365 * 50,
-      maxFilesToScan: Number.MAX_SAFE_INTEGER,
+      fullScan: true, // Critical: scan ALL files, not just recent ones
       sortBy: 'effective_at',
       filter: (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
     });
@@ -175,12 +174,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
     
     // Scan for exercised events to determine closed status
-    console.log('   Scanning for VoteRequest exercised events...');
+    console.log('   Scanning for VoteRequest exercised events (full scan)...');
     const exercisedResult = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-      limit: 500000,
+      limit: Number.MAX_SAFE_INTEGER,
       offset: 0,
-      maxDays: 365 * 50,
-      maxFilesToScan: Number.MAX_SAFE_INTEGER,
+      fullScan: true, // Critical: scan ALL files
       sortBy: 'effective_at',
       filter: (e) => {
         if (!e.template_id?.includes('VoteRequest')) return false;
