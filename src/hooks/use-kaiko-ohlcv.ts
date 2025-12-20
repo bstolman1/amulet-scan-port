@@ -177,3 +177,45 @@ export function useKaikoAssetMetrics(params: AssetMetricsParams = {}, enabled = 
     refetchInterval: 60_000,
   });
 }
+
+// CC Market Overview types
+export interface CCExchangeData {
+  exchange: string;
+  exchangeName: string;
+  instrument: string;
+  instrumentClass: string;
+  price: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number;
+  vwap: number | null;
+  tradeCount: number;
+  previousClose: number | null;
+  change24h: number | null;
+}
+
+export interface CCMarketOverview {
+  result: string;
+  timestamp: string;
+  summary: {
+    price: number | null;
+    change24h: number | null;
+    vwap: number | null;
+    totalVolume: number;
+    totalTrades: number;
+    activeExchanges: number;
+  };
+  exchanges: CCExchangeData[];
+}
+
+export function useCCMarketOverview(enabled = true) {
+  return useQuery<CCMarketOverview, Error>({
+    queryKey: ['cc-market-overview'],
+    queryFn: () => apiFetch<CCMarketOverview>('/api/kaiko/cc-market-overview'),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}

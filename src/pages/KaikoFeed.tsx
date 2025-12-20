@@ -8,8 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, AssetMetricData } from "@/hooks/use-kaiko-ohlcv";
-import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database } from "lucide-react";
+import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CCPriceChart } from "@/components/CCPriceChart";
+import { CCMarketOverview } from "@/components/CCMarketOverview";
+import { CCExchangeComparison } from "@/components/CCExchangeComparison";
 
 // All available Kaiko exchanges
 const EXCHANGES = [
@@ -153,7 +156,7 @@ export default function KaikoFeed() {
   const [exchange, setExchange] = useState('krkn');
   const [instrument, setInstrument] = useState('cc-usd');
   const [interval, setInterval] = useState('1h');
-  const [activeTab, setActiveTab] = useState('ohlcv');
+  const [activeTab, setActiveTab] = useState('cc-overview');
   
   // Asset Metrics state - default to Canton Coin
   const [asset, setAsset] = useState('cc');
@@ -165,7 +168,7 @@ export default function KaikoFeed() {
     instrument,
     interval,
     pageSize: 50,
-  }, status?.configured && activeTab === 'ohlcv');
+  }, status?.configured && (activeTab === 'ohlcv' || activeTab === 'cc-overview'));
 
   const { 
     data: assetData, 
@@ -232,15 +235,37 @@ export default function KaikoFeed() {
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList>
+            <TabsTrigger value="cc-overview" className="gap-2">
+              <Coins className="h-4 w-4" />
+              CC Overview
+            </TabsTrigger>
             <TabsTrigger value="ohlcv" className="gap-2">
               <BarChart3 className="h-4 w-4" />
               OHLCV
             </TabsTrigger>
             <TabsTrigger value="assets" className="gap-2">
-              <Coins className="h-4 w-4" />
+              <Activity className="h-4 w-4" />
               Asset Metrics
             </TabsTrigger>
+            <TabsTrigger value="exchanges" className="gap-2">
+              <Building2 className="h-4 w-4" />
+              Exchanges
+            </TabsTrigger>
           </TabsList>
+
+          {/* CC Overview Tab */}
+          <TabsContent value="cc-overview" className="space-y-6">
+            <CCMarketOverview enabled={status?.configured && activeTab === 'cc-overview'} />
+            
+            <CCPriceChart 
+              candles={candles} 
+              isLoading={isLoading}
+              exchange={exchange}
+              instrument={instrument}
+            />
+            
+            <CCExchangeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
+          </TabsContent>
 
           {/* OHLCV Tab */}
           <TabsContent value="ohlcv" className="space-y-6">
@@ -632,6 +657,11 @@ export default function KaikoFeed() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          {/* Exchanges Tab */}
+          <TabsContent value="exchanges" className="space-y-6">
+            <CCExchangeComparison enabled={status?.configured && activeTab === 'exchanges'} />
           </TabsContent>
         </Tabs>
       </div>
