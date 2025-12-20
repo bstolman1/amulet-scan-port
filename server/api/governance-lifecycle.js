@@ -681,7 +681,7 @@ function correlateTopics(allTopics) {
     } else if (topic.flow === 'featured-app') {
       // tokenomics-announce is specifically for featured-app flow
       // But check if it's actually a validator approval
-      if (/validator.*approved|approved.*validator/i.test(subjectTrimmed)) {
+      if (/validator.*approved|approved.*validator|validator\s*operator.*approved/i.test(subjectTrimmed)) {
         type = 'validator';
       } else {
         type = 'featured-app';
