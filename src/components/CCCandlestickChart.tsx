@@ -275,11 +275,11 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
             No chart data available
           </div>
         ) : (
-          <div style={{ width: '100%', height: 400 * zoomLevel, minHeight: 400, maxHeight: 800 }}>
+          <div style={{ width: '100%', height: 450 * zoomLevel, minHeight: 450, maxHeight: 900 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart 
                 data={chartData} 
-                margin={{ top: 20, right: 20, left: 0, bottom: 60 }}
+                margin={{ top: 20, right: 30, left: 0, bottom: 80 }}
               >
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis 
