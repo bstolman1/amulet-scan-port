@@ -476,11 +476,10 @@ router.get('/governance-history', async (req, res) => {
           const templateMatch = governanceTemplates.some(t => e.template_id?.includes(t));
           // OR match by governance choice (not Archive - those have empty payloads)
           const choiceMatch = governanceChoices.includes(e.choice);
-          // OR match DsoRules template with governance choices (not Archive)
-          const dsoRulesMatch = e.template_id?.includes('DsoRules') && e.choice !== 'Archive';
+          // Narrow DsoRules matches: ONLY include exercised DsoRules events for governance-related choices
+          // (Avoid flooding results with unrelated DsoRules choices, which pushes VoteRequest out of the scan window)
+          const dsoRulesMatch = e.template_id?.includes('DsoRules') && choiceMatch && e.choice !== 'Archive';
           
-          // For VoteRequest/Confirmation, prefer "created" events (have full payload)
-          // For exercised events, skip "Archive" (empty payload) unless it's DsoRules with other choices
           if (templateMatch) {
             // VoteRequest/Confirmation/ElectionRequest - created events have the data
             if (e.event_type === 'created') return true;
