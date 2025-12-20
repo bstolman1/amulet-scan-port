@@ -276,10 +276,10 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
           </div>
         ) : (
           <div style={{ width: '100%', height: 480 * zoomLevel, minHeight: 480, maxHeight: 980 }}>
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="70%">
               <ComposedChart 
                 data={chartData} 
-                margin={{ top: 20, right: 30, left: 0, bottom: 120 }}
+                margin={{ top: 20, right: 30, left: 0, bottom: 5 }}
               >
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis 
@@ -289,8 +289,8 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                   tickLine={false}
                   axisLine={false}
                   interval="preserveStartEnd"
-                  height={50}
-                  tickMargin={12}
+                  height={30}
+                  tickMargin={8}
                 />
                 <YAxis 
                   domain={[minPrice, maxPrice]}
@@ -325,6 +325,8 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                           <span className="text-foreground">${p.low.toFixed(4)}</span>
                           <span className="text-muted-foreground">Close:</span>
                           <span style={{ color }} className="font-medium">${p.close.toFixed(4)}</span>
+                          <span className="text-muted-foreground">Volume:</span>
+                          <span className="text-foreground">{p.volume.toLocaleString()}</span>
                         </div>
                       </div>
                     );
@@ -348,18 +350,72 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                   stroke="transparent"
                   shape={<CandlestickShape />}
                 />
-                <Brush
-                  dataKey="time"
-                  height={28}
-                  stroke="hsl(var(--primary))"
-                  fill="hsl(var(--muted))"
-                  travellerWidth={10}
-                  startIndex={brushStartIndex}
-                  endIndex={brushEndIndex}
-                  onChange={handleBrushChange}
+              </ComposedChart>
+            </ResponsiveContainer>
+            {/* Volume bars chart */}
+            <ResponsiveContainer width="100%" height="25%">
+              <ComposedChart
+                data={chartData}
+                margin={{ top: 5, right: 30, left: 0, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" opacity={0.3} />
+                <XAxis 
+                  dataKey="time" 
+                  tick={{ fontSize: 9 }}
+                  className="text-muted-foreground"
+                  tickLine={false}
+                  axisLine={false}
+                  interval="preserveStartEnd"
+                  height={25}
+                />
+                <YAxis 
+                  tick={{ fontSize: 9 }}
+                  className="text-muted-foreground"
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(value) => {
+                    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+                    if (value >= 1000) return `${(value / 1000).toFixed(0)}K`;
+                    return value.toFixed(0);
+                  }}
+                  width={65}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.[0]?.payload) return null;
+                    const p = payload[0].payload;
+                    return (
+                      <div className="bg-background border border-border rounded-lg p-2 shadow-lg text-xs">
+                        <div className="text-muted-foreground">{p.date} {p.time}</div>
+                        <div className="text-foreground font-medium">Volume: {p.volume.toLocaleString()}</div>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar
+                  dataKey="volume"
+                  fill="hsl(var(--primary))"
+                  opacity={0.6}
+                  radius={[2, 2, 0, 0]}
                 />
               </ComposedChart>
             </ResponsiveContainer>
+            <div className="h-[60px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+                  <Brush
+                    dataKey="time"
+                    height={28}
+                    stroke="hsl(var(--primary))"
+                    fill="hsl(var(--muted))"
+                    travellerWidth={10}
+                    startIndex={brushStartIndex}
+                    endIndex={brushEndIndex}
+                    onChange={handleBrushChange}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         )}
         <div className="flex items-center justify-center gap-4 mt-4 text-xs text-muted-foreground">
