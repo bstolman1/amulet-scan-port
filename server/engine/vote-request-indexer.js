@@ -167,7 +167,18 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
   try {
     const startTime = Date.now();
     
-    // Ensure tables exist first
+    // If force, drop and recreate tables to apply schema changes
+    if (force) {
+      try {
+        await query('DROP TABLE IF EXISTS vote_requests');
+        await query('DROP TABLE IF EXISTS vote_request_index_state');
+        console.log('   Dropped existing tables for schema update');
+      } catch (err) {
+        // Ignore drop errors
+      }
+    }
+    
+    // Ensure tables exist (will create with new schema if dropped)
     await ensureIndexTables();
     
     // Check if template index is available for faster scanning
