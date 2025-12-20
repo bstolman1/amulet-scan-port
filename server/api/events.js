@@ -692,21 +692,23 @@ router.get('/governance-history', async (req, res) => {
 // GET /api/events/vote-requests - Dedicated endpoint for VoteRequest events with deep scanning
 router.get('/vote-requests', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const status = req.query.status || 'all'; // 'active', 'historical', 'all'
     const verbose = req.query.verbose === 'true';
     const sources = getDataSources();
+    const now = new Date();
     
-    console.log(`\n🗳️ VOTE-REQUESTS: Fetching with limit=${limit}, verbose=${verbose}`);
+    console.log(`\n🗳️ VOTE-REQUESTS: Fetching with limit=${limit}, status=${status}, verbose=${verbose}`);
     console.log(`   Primary source: ${sources.primarySource}`);
     
     if (sources.primarySource === 'binary') {
       // VoteRequest events are VERY sparse (~26 per 275K events)
-      // Scan extensively to find them
+      // Scan ALL files to get complete history
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: limit * 500, // Need to scan many events to find VoteRequests
+        limit: 10000, // Get as many as possible
         offset: 0,
-        maxDays: 365 * 3, // 3 years of history
-        maxFilesToScan: 50000, // Scan as many files as possible
+        maxDays: 365 * 10, // 10 years - get everything
+        maxFilesToScan: 500000, // Scan ALL files
         sortBy: 'effective_at',
         filter: (e) => {
           // Only VoteRequest template
@@ -719,11 +721,12 @@ router.get('/vote-requests', async (req, res) => {
       
       console.log(`   Found ${result.records.length} VoteRequest created events from binary files`);
       
-      // Take only the requested limit
-      const limitedRecords = result.records.slice(0, limit);
-      
-      // Process to extract full VoteRequest details
-      const voteRequests = limitedRecords.map((event, idx) => {
+      // Process to extract full VoteRequest details with active/historical status
+      const allVoteRequests = result.records.map((event, idx) => {
+        const voteBefore = event.payload?.voteBefore;
+        const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
+        const isActive = voteBeforeDate ? voteBeforeDate > now : false;
+        
         if (verbose && idx < 3) {
           console.log(`\n   📝 VoteRequest #${idx + 1}:`);
           console.log(`      effective_at: ${event.effective_at}`);
@@ -732,7 +735,8 @@ router.get('/vote-requests', async (req, res) => {
           const reason = event.payload?.reason;
           console.log(`      reason: ${typeof reason === 'string' ? reason.slice(0, 100) : JSON.stringify(reason)?.slice(0, 100) || 'null'}`);
           console.log(`      votes: ${event.payload?.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
-          console.log(`      voteBefore: ${event.payload?.voteBefore || 'null'}`);
+          console.log(`      voteBefore: ${voteBefore || 'null'}`);
+          console.log(`      status: ${isActive ? 'ACTIVE' : 'HISTORICAL'}`);
         }
         
         return {
@@ -741,26 +745,45 @@ router.get('/vote-requests', async (req, res) => {
           template_id: event.template_id,
           effective_at: event.effective_at,
           timestamp: event.timestamp,
+          // Status
+          status: isActive ? 'active' : 'historical',
           // VoteRequest-specific fields
           action_tag: event.payload?.action?.tag || null,
           action_value: event.payload?.action?.value || null,
           requester: event.payload?.requester || null,
           reason: event.payload?.reason || null,
           votes: event.payload?.votes || [],
-          vote_before: event.payload?.voteBefore || null,
+          vote_count: event.payload?.votes?.length || 0,
+          vote_before: voteBefore || null,
           target_effective_at: event.payload?.targetEffectiveAt || null,
           tracking_cid: event.payload?.trackingCid || null,
           dso: event.payload?.dso || null,
         };
       });
       
+      // Filter by status if requested
+      let filteredVoteRequests = allVoteRequests;
+      if (status === 'active') {
+        filteredVoteRequests = allVoteRequests.filter(v => v.status === 'active');
+      } else if (status === 'historical') {
+        filteredVoteRequests = allVoteRequests.filter(v => v.status === 'historical');
+      }
+      
+      // Apply limit
+      const voteRequests = filteredVoteRequests.slice(0, limit);
+      
       // Summary stats
+      const activeCount = allVoteRequests.filter(v => v.status === 'active').length;
+      const historicalCount = allVoteRequests.filter(v => v.status === 'historical').length;
       const withReason = voteRequests.filter(v => v.reason).length;
       const withVotes = voteRequests.filter(v => v.votes?.length > 0).length;
       const actionTags = [...new Set(voteRequests.map(v => v.action_tag).filter(Boolean))];
       
       console.log(`\n   📊 VoteRequest stats:`);
-      console.log(`      Total found: ${voteRequests.length}`);
+      console.log(`      Total found: ${allVoteRequests.length}`);
+      console.log(`      Active: ${activeCount}`);
+      console.log(`      Historical: ${historicalCount}`);
+      console.log(`      Returned: ${voteRequests.length} (filtered by: ${status})`);
       console.log(`      With reason: ${withReason}`);
       console.log(`      With votes: ${withVotes}`);
       console.log(`      Action types: ${actionTags.join(', ')}`);
@@ -768,12 +791,15 @@ router.get('/vote-requests', async (req, res) => {
       return res.json({
         data: voteRequests,
         count: voteRequests.length,
-        totalScanned: result.records.length,
+        totalFound: allVoteRequests.length,
         source: sources.primarySource,
         _summary: {
+          activeCount,
+          historicalCount,
           withReason,
           withVotes,
           actionTags,
+          statusFilter: status,
         }
       });
     }
