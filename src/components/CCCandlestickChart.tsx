@@ -283,14 +283,17 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
               >
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis 
-                  dataKey="time" 
+                  dataKey="time"
                   tick={{ fontSize: 10 }}
                   className="text-muted-foreground"
                   tickLine={false}
                   axisLine={false}
-                  interval="preserveStartEnd"
-                  height={30}
-                  tickMargin={8}
+                  minTickGap={24}
+                  interval={Math.max(Math.floor(chartData.length / 8), 0)}
+                  angle={-35}
+                  textAnchor="end"
+                  height={42}
+                  tickMargin={10}
                 />
                 <YAxis 
                   domain={[minPrice, maxPrice]}
@@ -359,14 +362,13 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                 margin={{ top: 5, right: 30, left: 0, bottom: 5 }}
               >
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" opacity={0.3} />
-                <XAxis 
-                  dataKey="time" 
-                  tick={{ fontSize: 9 }}
+                <XAxis
+                  dataKey="time"
+                  tick={false}
                   className="text-muted-foreground"
                   tickLine={false}
                   axisLine={false}
-                  interval="preserveStartEnd"
-                  height={25}
+                  height={10}
                 />
                 <YAxis 
                   tick={{ fontSize: 9 }}
