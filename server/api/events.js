@@ -721,14 +721,16 @@ router.get('/vote-requests', async (req, res) => {
       } else {
         console.log(`   Scanning binary files (cache expired or missing)...`);
         
-        // VoteRequest events are VERY sparse - need to scan many files but not absurdly many
-        const MAX_PRACTICAL_FILES = 10000;
+        // VoteRequest events are VERY sparse; for full historical coverage we must scan all partitions/files.
+        // NOTE: this can be slow on cold cache; results are cached for 5 minutes.
+        const FULL_HISTORY_MAX_DAYS = 365 * 50;
+        const FULL_HISTORY_MAX_FILES = Number.MAX_SAFE_INTEGER;
       
         const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
           limit: 10000,
           offset: 0,
-          maxDays: 365 * 10,
-          maxFilesToScan: MAX_PRACTICAL_FILES,
+          maxDays: FULL_HISTORY_MAX_DAYS,
+          maxFilesToScan: FULL_HISTORY_MAX_FILES,
           sortBy: 'effective_at',
           filter: (e) => {
             return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
@@ -738,8 +740,8 @@ router.get('/vote-requests', async (req, res) => {
         const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
           limit: 100000,
           offset: 0,
-          maxDays: 365 * 10,
-          maxFilesToScan: MAX_PRACTICAL_FILES,
+          maxDays: FULL_HISTORY_MAX_DAYS,
+          maxFilesToScan: FULL_HISTORY_MAX_FILES,
           sortBy: 'effective_at',
           filter: (e) => {
             if (!e.template_id?.includes('VoteRequest')) return false;
