@@ -464,11 +464,12 @@ router.get('/governance-history', async (req, res) => {
     
     if (sources.primarySource === 'binary') {
       // Governance events are rare - scan MORE files to find them
+      // VoteRequest events are especially sparse (~26 per 275K events)
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: limit * 100, // Fetch many more to filter down (governance is sparse)
+        limit: limit * 200, // Fetch many more to filter down (governance is sparse)
         offset,
         maxDays: 365 * 3, // 3 years of history
-        maxFilesToScan: 5000, // Scan many more files for rare governance events
+        maxFilesToScan: 20000, // Scan many more files for rare VoteRequest events
         sortBy: 'effective_at',
         filter: (e) => {
           // Match by governance template (VoteRequest, Confirmation, etc.)
