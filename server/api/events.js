@@ -425,6 +425,7 @@ router.get('/governance-history', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
     const offset = parseInt(req.query.offset) || 0;
+    const verbose = req.query.verbose === 'true';
     const sources = getDataSources();
     
     // Templates for governance history
@@ -434,6 +435,9 @@ router.get('/governance-history', async (req, res) => {
       'DsoRules',
       'AmuletRules',
     ];
+    
+    console.log(`\n📊 GOVERNANCE-HISTORY: Fetching with limit=${limit}, offset=${offset}, verbose=${verbose}`);
+    console.log(`   Primary source: ${sources.primarySource}`);
     
     if (sources.primarySource === 'binary') {
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
@@ -445,27 +449,100 @@ router.get('/governance-history', async (req, res) => {
         filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
       });
       
+      console.log(`   Found ${result.records.length} governance events from binary files`);
+      
+      // Group by template and event type for summary
+      const templateCounts = {};
+      const eventTypeCounts = {};
+      const choiceCounts = {};
+      
       // Process to extract governance history details
-      const history = result.records.map(event => ({
-        event_id: event.event_id,
-        event_type: event.event_type,
-        contract_id: event.contract_id,
-        template_id: event.template_id,
-        effective_at: event.effective_at,
-        timestamp: event.timestamp,
-        // Extract action details from payload if available
-        action_tag: event.payload?.action?.tag || null,
-        requester: event.payload?.requester || null,
-        reason: event.payload?.reason || null,
-        votes: event.payload?.votes || [],
-        vote_before: event.payload?.voteBefore || null,
-      }));
+      const history = result.records.map((event, idx) => {
+        // Count templates
+        const template = event.template_id?.split(':').pop() || 'unknown';
+        templateCounts[template] = (templateCounts[template] || 0) + 1;
+        
+        // Count event types
+        const eventType = event.event_type || 'unknown';
+        eventTypeCounts[eventType] = (eventTypeCounts[eventType] || 0) + 1;
+        
+        // Count choices (for exercised events)
+        if (event.choice) {
+          choiceCounts[event.choice] = (choiceCounts[event.choice] || 0) + 1;
+        }
+        
+        // Verbose logging for first few events
+        if (verbose && idx < 5) {
+          console.log(`\n   📝 Event #${idx + 1}:`);
+          console.log(`      template_id: ${event.template_id}`);
+          console.log(`      event_type: ${event.event_type}`);
+          console.log(`      choice: ${event.choice || 'N/A'}`);
+          console.log(`      effective_at: ${event.effective_at}`);
+          console.log(`      payload keys: ${event.payload ? Object.keys(event.payload).join(', ') : 'null'}`);
+          if (event.payload) {
+            console.log(`      payload.action: ${event.payload.action ? JSON.stringify(event.payload.action).slice(0, 200) : 'null'}`);
+            console.log(`      payload.requester: ${event.payload.requester || 'null'}`);
+            console.log(`      payload.reason: ${event.payload.reason?.slice(0, 100) || 'null'}`);
+            console.log(`      payload.votes: ${event.payload.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
+            console.log(`      payload.voteBefore: ${event.payload.voteBefore || 'null'}`);
+          }
+          if (event.exercise_result) {
+            console.log(`      exercise_result keys: ${Object.keys(event.exercise_result).join(', ')}`);
+          }
+        }
+        
+        return {
+          event_id: event.event_id,
+          event_type: event.event_type,
+          choice: event.choice || null,
+          contract_id: event.contract_id,
+          template_id: event.template_id,
+          effective_at: event.effective_at,
+          timestamp: event.timestamp,
+          // Extract action details from payload if available
+          action_tag: event.payload?.action?.tag || null,
+          action_value: event.payload?.action?.value ? Object.keys(event.payload.action.value) : null,
+          requester: event.payload?.requester || null,
+          reason: event.payload?.reason || null,
+          votes: event.payload?.votes || [],
+          vote_before: event.payload?.voteBefore || null,
+          // Include exercise result for completed votes
+          exercise_result: event.exercise_result || null,
+          // Include full payload in verbose mode
+          ...(verbose ? { _payload_keys: event.payload ? Object.keys(event.payload) : null } : {}),
+        };
+      });
+      
+      // Log summary
+      console.log(`\n   📈 Template breakdown:`, templateCounts);
+      console.log(`   📈 Event type breakdown:`, eventTypeCounts);
+      console.log(`   📈 Choice breakdown:`, choiceCounts);
+      
+      // Count events with key governance fields
+      const withAction = history.filter(h => h.action_tag).length;
+      const withRequester = history.filter(h => h.requester).length;
+      const withReason = history.filter(h => h.reason).length;
+      const withVotes = history.filter(h => h.votes?.length > 0).length;
+      const withExerciseResult = history.filter(h => h.exercise_result).length;
+      
+      console.log(`\n   🔍 Field coverage:`);
+      console.log(`      Events with action_tag: ${withAction}/${history.length}`);
+      console.log(`      Events with requester: ${withRequester}/${history.length}`);
+      console.log(`      Events with reason: ${withReason}/${history.length}`);
+      console.log(`      Events with votes: ${withVotes}/${history.length}`);
+      console.log(`      Events with exercise_result: ${withExerciseResult}/${history.length}`);
       
       return res.json({ 
         data: history, 
         count: history.length, 
         hasMore: result.hasMore, 
-        source: 'binary' 
+        source: 'binary',
+        _debug: {
+          templateCounts,
+          eventTypeCounts,
+          choiceCounts,
+          fieldCoverage: { withAction, withRequester, withReason, withVotes, withExerciseResult }
+        }
       });
     }
     
@@ -488,6 +565,7 @@ router.get('/governance-history', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
+    console.log(`   Found ${rows.length} governance events from DuckDB`);
     
     // Process rows to extract governance details
     const history = rows.map(row => ({
