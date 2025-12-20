@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -8,11 +8,58 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, AssetMetricData } from "@/hooks/use-kaiko-ohlcv";
-import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CCPriceChart } from "@/components/CCPriceChart";
 import { CCMarketOverview } from "@/components/CCMarketOverview";
 import { CCExchangeComparison } from "@/components/CCExchangeComparison";
+import { CCCandlestickChart } from "@/components/CCCandlestickChart";
+import { CCPriceTicker } from "@/components/CCPriceTicker";
+import { CCPriceAlerts } from "@/components/CCPriceAlerts";
+
+// Exchange to instrument mapping based on Kaiko reference data
+const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
+  // CC Spot exchanges
+  krkn: ['cc-usd', 'cc-usdt', 'cc-usdc', 'cc-eur', 'btc-usd', 'eth-usd', 'sol-usd'],
+  gate: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
+  kcon: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
+  mexc: ['cc-usdt', 'cc-usdc', 'btc-usdt', 'eth-usdt'],
+  bbsp: ['cc-usdt', 'cc-usdc', 'btc-usdt', 'eth-usdt'],
+  hitb: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
+  cnex: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
+  // CC Derivatives
+  binc: ['cc-usdt', 'btc-usdt', 'eth-usdt', 'sol-usdt'],
+  okex: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
+  gtdm: ['cc-usdt', 'btc-usdt'],
+  bbit: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
+  hbdm: ['cc-usdt', 'btc-usdt'],
+  // Other exchanges (non-CC)
+  cbse: ['btc-usd', 'eth-usd', 'sol-usd', 'btc-usdt', 'eth-usdt'],
+  bfnx: ['btc-usd', 'eth-usd', 'btc-usdt', 'eth-usdt'],
+  stmp: ['btc-usd', 'eth-usd', 'xrp-usd'],
+  gmni: ['btc-usd', 'eth-usd'],
+  huob: ['btc-usdt', 'eth-usdt'],
+  polo: ['btc-usdt', 'eth-usdt'],
+  btrx: ['btc-usdt', 'eth-usdt'],
+  upbt: ['btc-usdt', 'eth-usdt'],
+  bthb: ['btc-usdt', 'eth-usdt'],
+  bybt: ['btc-usdt', 'eth-usdt'],
+  drbt: ['btc-usd', 'eth-usd'],
+  bvav: ['btc-usd', 'eth-usd'],
+  bull: ['btc-usd', 'eth-usd'],
+  whbt: ['btc-usdt', 'eth-usdt'],
+  // DEXs
+  usp3: ['eth-usdt', 'eth-usd'],
+  usp2: ['eth-usdt'],
+  sush: ['eth-usdt'],
+  curv: ['eth-usdt'],
+  blc2: ['eth-usdt'],
+  pksp: ['eth-usdt', 'btc-usdt'],
+  orca: ['sol-usd'],
+  raya: ['sol-usd'],
+  btmx: ['btc-usd', 'eth-usd'],
+  dydx: ['btc-usd', 'eth-usd'],
+};
 
 // All available Kaiko exchanges
 const EXCHANGES = [
@@ -58,23 +105,21 @@ const EXCHANGES = [
   { value: 'dydx', label: 'dYdX' },
 ];
 
-// Instruments including Canton Coin (CC) pairs
-const INSTRUMENTS = [
-  // Canton Coin (CC) pairs - prioritized
-  { value: 'cc-usd', label: 'CC/USD', isCC: true },
-  { value: 'cc-usdt', label: 'CC/USDT', isCC: true },
-  { value: 'cc-usdc', label: 'CC/USDC', isCC: true },
-  { value: 'cc-eur', label: 'CC/EUR', isCC: true },
-  // Major crypto pairs
-  { value: 'btc-usd', label: 'BTC/USD' },
-  { value: 'btc-usdt', label: 'BTC/USDT' },
-  { value: 'eth-usd', label: 'ETH/USD' },
-  { value: 'eth-usdt', label: 'ETH/USDT' },
-  { value: 'sol-usd', label: 'SOL/USD' },
-  { value: 'sol-usdt', label: 'SOL/USDT' },
-  { value: 'xrp-usd', label: 'XRP/USD' },
-  { value: 'ada-usd', label: 'ADA/USD' },
-];
+// All instruments with labels
+const ALL_INSTRUMENTS: Record<string, { label: string; isCC?: boolean }> = {
+  'cc-usd': { label: 'CC/USD', isCC: true },
+  'cc-usdt': { label: 'CC/USDT', isCC: true },
+  'cc-usdc': { label: 'CC/USDC', isCC: true },
+  'cc-eur': { label: 'CC/EUR', isCC: true },
+  'btc-usd': { label: 'BTC/USD' },
+  'btc-usdt': { label: 'BTC/USDT' },
+  'eth-usd': { label: 'ETH/USD' },
+  'eth-usdt': { label: 'ETH/USDT' },
+  'sol-usd': { label: 'SOL/USD' },
+  'sol-usdt': { label: 'SOL/USDT' },
+  'xrp-usd': { label: 'XRP/USD' },
+  'ada-usd': { label: 'ADA/USD' },
+};
 
 const INTERVALS = [
   { value: '1m', label: '1 Minute' },
@@ -161,6 +206,26 @@ export default function KaikoFeed() {
   // Asset Metrics state - default to Canton Coin
   const [asset, setAsset] = useState('cc');
   const [assetInterval, setAssetInterval] = useState('1h');
+
+  // Get available instruments for the selected exchange
+  const availableInstruments = useMemo(() => {
+    const instruments = EXCHANGE_INSTRUMENTS[exchange] || [];
+    return instruments.map(code => ({
+      value: code,
+      label: ALL_INSTRUMENTS[code]?.label || code.toUpperCase(),
+      isCC: ALL_INSTRUMENTS[code]?.isCC || false,
+    }));
+  }, [exchange]);
+
+  // When exchange changes, update instrument if current one isn't available
+  useEffect(() => {
+    const available = EXCHANGE_INSTRUMENTS[exchange] || [];
+    if (!available.includes(instrument)) {
+      // Pick first CC pair if available, otherwise first pair
+      const ccPair = available.find(i => i.startsWith('cc-'));
+      setInstrument(ccPair || available[0] || 'btc-usd');
+    }
+  }, [exchange, instrument]);
 
   const { data: status } = useKaikoStatus();
   const { data, isLoading, error, refetch, isFetching } = useKaikoOHLCV({
@@ -255,14 +320,18 @@ export default function KaikoFeed() {
 
           {/* CC Overview Tab */}
           <TabsContent value="cc-overview" className="space-y-6">
+            <CCPriceTicker enabled={status?.configured && activeTab === 'cc-overview'} />
+            
             <CCMarketOverview enabled={status?.configured && activeTab === 'cc-overview'} />
             
-            <CCPriceChart 
+            <CCCandlestickChart 
               candles={candles} 
               isLoading={isLoading}
               exchange={exchange}
               instrument={instrument}
             />
+            
+            <CCPriceAlerts enabled={status?.configured && activeTab === 'cc-overview'} />
             
             <CCExchangeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
           </TabsContent>
@@ -304,26 +373,39 @@ export default function KaikoFeed() {
                     </Select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-sm text-muted-foreground">Instrument</label>
+                    <label className="text-sm text-muted-foreground">
+                      Instrument 
+                      <span className="text-xs text-muted-foreground/70 ml-1">
+                        ({availableInstruments.length} available)
+                      </span>
+                    </label>
                     <Select value={instrument} onValueChange={setInstrument}>
                       <SelectTrigger className="w-[160px]">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__cc_pairs" disabled className="text-xs text-primary font-semibold">
-                          — Canton Coin —
-                        </SelectItem>
-                        {INSTRUMENTS.filter(inst => inst.isCC).map((inst) => (
-                          <SelectItem key={inst.value} value={inst.value}>
-                            <span className="font-semibold text-primary">{inst.label}</span>
-                          </SelectItem>
-                        ))}
-                        <SelectItem value="__other_pairs" disabled className="text-xs text-muted-foreground font-semibold mt-2">
-                          — Other Pairs —
-                        </SelectItem>
-                        {INSTRUMENTS.filter(inst => !inst.isCC).map((inst) => (
-                          <SelectItem key={inst.value} value={inst.value}>{inst.label}</SelectItem>
-                        ))}
+                      <SelectContent className="bg-background border z-50">
+                        {availableInstruments.filter(inst => inst.isCC).length > 0 && (
+                          <>
+                            <SelectItem value="__cc_pairs" disabled className="text-xs text-primary font-semibold">
+                              — Canton Coin —
+                            </SelectItem>
+                            {availableInstruments.filter(inst => inst.isCC).map((inst) => (
+                              <SelectItem key={inst.value} value={inst.value}>
+                                <span className="font-semibold text-primary">{inst.label}</span>
+                              </SelectItem>
+                            ))}
+                          </>
+                        )}
+                        {availableInstruments.filter(inst => !inst.isCC).length > 0 && (
+                          <>
+                            <SelectItem value="__other_pairs" disabled className="text-xs text-muted-foreground font-semibold mt-2">
+                              — Other Pairs —
+                            </SelectItem>
+                            {availableInstruments.filter(inst => !inst.isCC).map((inst) => (
+                              <SelectItem key={inst.value} value={inst.value}>{inst.label}</SelectItem>
+                            ))}
+                          </>
+                        )}
                       </SelectContent>
                     </Select>
                   </div>
