@@ -503,6 +503,9 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
   const maxFilesToScan = fullScan ? files.length : Math.min(files.length, maxFilesToScanLimit);
   
   let filesProcessed = 0;
+  const scanStartTime = fullScan ? Date.now() : null;
+  let lastLogTime = scanStartTime;
+  
   for (let i = 0; i < maxFilesToScan; i++) {
     const file = files[i];
     try {
@@ -517,9 +520,23 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
       
       allRecords.push(...fileRecords);
       
-      // Log progress every 1000 files for full scan
-      if (fullScan && filesProcessed % 1000 === 0) {
-        console.log(`   📂 Processed ${filesProcessed}/${maxFilesToScan} files, found ${allRecords.length} matching records`);
+      // Log progress every 250 files OR every 10 seconds for full scan
+      if (fullScan) {
+        const now = Date.now();
+        const shouldLog = filesProcessed % 250 === 0 || (now - lastLogTime > 10000);
+        
+        if (shouldLog) {
+          const elapsed = (now - scanStartTime) / 1000;
+          const filesPerSec = filesProcessed / elapsed;
+          const remaining = maxFilesToScan - filesProcessed;
+          const etaSeconds = remaining / filesPerSec;
+          const etaMin = Math.floor(etaSeconds / 60);
+          const etaSec = Math.floor(etaSeconds % 60);
+          const pct = ((filesProcessed / maxFilesToScan) * 100).toFixed(1);
+          
+          console.log(`   📂 [${pct}%] ${filesProcessed}/${maxFilesToScan} files | ${allRecords.length} matches | ${filesPerSec.toFixed(0)} files/s | ETA: ${etaMin}m ${etaSec}s`);
+          lastLogTime = now;
+        }
       }
       
       // For non-full scans, early stop once we have comfortably more than we need.
@@ -532,7 +549,8 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
   }
   
   if (fullScan) {
-    console.log(`   📂 Full scan complete: ${filesProcessed} files, ${allRecords.length} matching records`);
+    const totalElapsed = ((Date.now() - scanStartTime) / 1000).toFixed(1);
+    console.log(`   ✅ Full scan complete: ${filesProcessed} files, ${allRecords.length} matches in ${totalElapsed}s`);
   }
   
   // Sort all collected records by the requested field (default: effective_at descending)
