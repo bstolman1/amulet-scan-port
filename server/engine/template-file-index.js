@@ -463,128 +463,158 @@ async function processFilesParallel(files, startTime) {
 }
 
 /**
- * Process files sequentially (fallback)
+ * Process files concurrently in the main thread.
+ * This avoids worker-thread native addon issues, but still parallelizes IO + decompression.
  */
 async function processFilesSequential(files, startTime) {
+  // Kept function name for compatibility with callers; this is actually concurrent.
+  const concurrency = Math.min(
+    12,
+    Math.max(2, parseInt(process.env.TEMPLATE_INDEX_CONCURRENCY || '6', 10))
+  );
+
   let filesProcessed = 0;
   let templatesFound = 0;
   let lastLogTime = startTime;
-  const BATCH_SIZE = 50;
-  let batch = [];
-  
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    indexingProgress.current = i + 1;
-    
-    try {
-      const result = await readBinaryFile(file);
-      const records = result.records || [];
-      
-      // Extract unique templates from this file
-      const templateStats = new Map();
-      
-      for (const record of records) {
-        const templateName = extractTemplateName(record.template_id);
-        if (!templateName) continue;
-        
-        const effectiveAt = record.effective_at ? new Date(record.effective_at) : null;
-        
-        if (!templateStats.has(templateName)) {
-          templateStats.set(templateName, {
-            count: 0,
-            firstEventAt: effectiveAt,
-            lastEventAt: effectiveAt,
-          });
-        }
-        
-        const stats = templateStats.get(templateName);
-        stats.count++;
-        if (effectiveAt) {
-          if (!stats.firstEventAt || effectiveAt < stats.firstEventAt) {
-            stats.firstEventAt = effectiveAt;
+
+  // Buffer DB writes to reduce per-row overhead
+  const FLUSH_BATCH_SIZE = 1000;
+  let pendingRows = [];
+
+  let nextIndex = 0;
+
+  const processOne = async () => {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= files.length) return;
+
+      const file = files[i];
+      indexingProgress.current = Math.min(filesProcessed + 1, files.length);
+
+      try {
+        const result = await readBinaryFile(file);
+        const records = result.records || [];
+
+        // Extract unique templates from this file
+        const templateStats = new Map();
+        for (const record of records) {
+          const templateName = extractTemplateName(record.template_id);
+          if (!templateName) continue;
+
+          const effectiveAt = record.effective_at ? new Date(record.effective_at) : null;
+          if (!templateStats.has(templateName)) {
+            templateStats.set(templateName, {
+              count: 0,
+              firstEventAt: effectiveAt,
+              lastEventAt: effectiveAt,
+            });
           }
-          if (!stats.lastEventAt || effectiveAt > stats.lastEventAt) {
-            stats.lastEventAt = effectiveAt;
+
+          const stats = templateStats.get(templateName);
+          stats.count++;
+          if (effectiveAt) {
+            if (!stats.firstEventAt || effectiveAt < stats.firstEventAt) stats.firstEventAt = effectiveAt;
+            if (!stats.lastEventAt || effectiveAt > stats.lastEventAt) stats.lastEventAt = effectiveAt;
           }
         }
+
+        for (const [templateName, stats] of templateStats) {
+          pendingRows.push([
+            file,
+            templateName,
+            stats.count,
+            stats.firstEventAt?.toISOString() || null,
+            stats.lastEventAt?.toISOString() || null,
+          ]);
+          templatesFound++;
+        }
+
+        filesProcessed++;
+
+        if (pendingRows.length >= FLUSH_BATCH_SIZE) {
+          const toFlush = pendingRows;
+          pendingRows = [];
+          await flushBatch(toFlush);
+        }
+
+        const now = Date.now();
+        if (filesProcessed % 500 === 0 || now - lastLogTime > 10000) {
+          const elapsed = (now - startTime) / 1000;
+          const filesPerSec = elapsed > 0 ? filesProcessed / elapsed : 0;
+          const remaining = files.length - filesProcessed;
+          const etaSeconds = filesPerSec > 0 ? remaining / filesPerSec : 0;
+          const etaMin = Math.floor(etaSeconds / 60);
+          const etaSec = Math.floor(etaSeconds % 60);
+          const pct = ((filesProcessed / files.length) * 100).toFixed(1);
+
+          console.log(
+            `   📑 [${pct}%] ${filesProcessed}/${files.length} files | ${templatesFound} templates | ${filesPerSec.toFixed(0)} files/s | ETA: ${etaMin}m ${etaSec}s | conc=${concurrency}`
+          );
+          lastLogTime = now;
+        }
+      } catch (err) {
+        console.warn(`   ⚠️ Skipped ${path.basename(file)}: ${err.message}`);
       }
-      
-      // Queue batch inserts
-      for (const [templateName, stats] of templateStats) {
-        batch.push({
-          file_path: file,
-          template_name: templateName,
-          event_count: stats.count,
-          first_event_at: stats.firstEventAt?.toISOString() || null,
-          last_event_at: stats.lastEventAt?.toISOString() || null,
-        });
-        templatesFound++;
-      }
-      
-      // Flush batch when it gets large enough
-      if (batch.length >= BATCH_SIZE) {
-        await flushBatch(batch);
-        batch = [];
-      }
-      
-      filesProcessed++;
-      
-      // Log progress every 500 files or every 10 seconds
-      const now = Date.now();
-      const shouldLog = filesProcessed % 500 === 0 || (now - lastLogTime > 10000);
-      
-      if (shouldLog) {
-        const elapsed = (now - startTime) / 1000;
-        const filesPerSec = filesProcessed / elapsed;
-        const remaining = files.length - i - 1;
-        const etaSeconds = remaining / filesPerSec;
-        const etaMin = Math.floor(etaSeconds / 60);
-        const etaSec = Math.floor(etaSeconds % 60);
-        const pct = ((i / files.length) * 100).toFixed(1);
-        
-        console.log(`   📑 [${pct}%] ${filesProcessed} indexed | ${templatesFound} templates | ${filesPerSec.toFixed(0)} files/s | ETA: ${etaMin}m ${etaSec}s`);
-        lastLogTime = now;
-      }
-      
-    } catch (err) {
-      // Skip files that can't be read
-      console.warn(`   ⚠️ Skipped ${path.basename(file)}: ${err.message}`);
     }
+  };
+
+  console.log(`   ⚡ Concurrent processing enabled: concurrency=${concurrency}`);
+  await Promise.all(Array.from({ length: concurrency }, () => processOne()));
+
+  if (pendingRows.length > 0) {
+    await flushBatch(pendingRows);
   }
-  
-  // Flush remaining batch
-  if (batch.length > 0) {
-    await flushBatch(batch);
-  }
-  
+
   return { filesProcessed, templatesFound };
 }
 
 /**
- * Flush a batch of template mappings to the database
+ * Flush a batch of template mappings to the database (bulk insert)
+ * batch: Array<[file_path, template_name, event_count, first_event_at, last_event_at]>
  */
 async function flushBatch(batch) {
-  if (batch.length === 0) return;
-  
-  // Use INSERT OR REPLACE for upsert behavior
-  for (const item of batch) {
+  if (!batch || batch.length === 0) return;
+
+  // Chunk large batches to keep SQL size reasonable
+  const CHUNK_SIZE = 500;
+
+  for (let i = 0; i < batch.length; i += CHUNK_SIZE) {
+    const chunk = batch.slice(i, i + CHUNK_SIZE);
+
+    const valuesSql = chunk.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    const params = chunk.flat();
+
     try {
-      await query(`
+      await query(
+        `
         INSERT INTO template_file_index (file_path, template_name, event_count, first_event_at, last_event_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES ${valuesSql}
         ON CONFLICT (file_path, template_name) DO UPDATE SET
           event_count = EXCLUDED.event_count,
           first_event_at = EXCLUDED.first_event_at,
           last_event_at = EXCLUDED.last_event_at
-      `, [
-        item.file_path,
-        item.template_name,
-        item.event_count,
-        item.first_event_at,
-        item.last_event_at,
-      ]);
+        `,
+        params
+      );
     } catch (err) {
-      // Ignore individual insert errors
+      // If a bulk insert fails, fall back to row-by-row so we still make progress
+      for (const row of chunk) {
+        try {
+          await query(
+            `
+            INSERT INTO template_file_index (file_path, template_name, event_count, first_event_at, last_event_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (file_path, template_name) DO UPDATE SET
+              event_count = EXCLUDED.event_count,
+              first_event_at = EXCLUDED.first_event_at,
+              last_event_at = EXCLUDED.last_event_at
+            `,
+            row
+          );
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 }
