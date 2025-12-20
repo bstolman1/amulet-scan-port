@@ -5,13 +5,25 @@
  * This dramatically speeds up template-specific queries (like VoteRequest) by scanning only
  * relevant files instead of all 35K+ files.
  * 
+ * Uses parallel worker threads for fast initial indexing (~10-15 min vs ~70 min sequential).
+ * 
  * The index is stored in DuckDB and survives server restarts.
  */
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import { Worker } from 'worker_threads';
+import { fileURLToPath } from 'url';
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
 import { readBinaryFile, findBinaryFiles } from '../duckdb/binary-reader.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WORKER_SCRIPT = path.join(__dirname, 'template-index-worker.js');
+
+// Worker pool size - default to CPU cores - 1, min 2, max 8
+const WORKER_POOL_SIZE = Math.min(8, Math.max(2, parseInt(process.env.TEMPLATE_INDEX_WORKERS) || os.cpus().length - 1));
+const FILES_PER_WORKER_BATCH = 100; // Files to process per worker message
 
 let indexingInProgress = false;
 let indexingProgress = { current: 0, total: 0, startTime: null };
@@ -196,7 +208,7 @@ function extractTemplateName(templateId) {
  * @param {boolean} options.force - Force rebuild from scratch
  * @param {boolean} options.incremental - Only index new files
  */
-export async function buildTemplateFileIndex({ force = false, incremental = true } = {}) {
+export async function buildTemplateFileIndex({ force = false, incremental = true, parallel = true } = {}) {
   if (indexingInProgress) {
     console.log('⏳ Template file indexing already in progress');
     return { status: 'in_progress', progress: getTemplateIndexingProgress() };
@@ -214,11 +226,8 @@ export async function buildTemplateFileIndex({ force = false, incremental = true
     
     // Find all event files
     console.log('   Scanning for event files...');
-    const files = findBinaryFiles(DATA_PATH, 'events');
-    console.log(`   📂 Found ${files.length} total event files`);
-    
-    indexingProgress.total = files.length;
-    indexingProgress.current = 0;
+    const allFiles = findBinaryFiles(DATA_PATH, 'events');
+    console.log(`   📂 Found ${allFiles.length} total event files`);
     
     // Get already-indexed files if incremental
     let indexedFilesSet = new Set();
@@ -243,104 +252,39 @@ export async function buildTemplateFileIndex({ force = false, incremental = true
       }
     }
     
-    let filesProcessed = 0;
-    let templatesFound = 0;
-    let filesSkipped = 0;
-    let lastLogTime = startTime;
+    // Filter to only unindexed files
+    const filesToIndex = allFiles.filter(f => !indexedFilesSet.has(f));
+    const filesSkipped = allFiles.length - filesToIndex.length;
     
-    // Process files in batches for better performance
-    const BATCH_SIZE = 50;
-    let batch = [];
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      indexingProgress.current = i + 1;
-      
-      // Skip already-indexed files in incremental mode
-      if (indexedFilesSet.has(file)) {
-        filesSkipped++;
-        continue;
-      }
-      
-      try {
-        const result = await readBinaryFile(file);
-        const records = result.records || [];
-        
-        // Extract unique templates from this file
-        const templateStats = new Map();
-        
-        for (const record of records) {
-          const templateName = extractTemplateName(record.template_id);
-          if (!templateName) continue;
-          
-          const effectiveAt = record.effective_at ? new Date(record.effective_at) : null;
-          
-          if (!templateStats.has(templateName)) {
-            templateStats.set(templateName, {
-              count: 0,
-              firstEventAt: effectiveAt,
-              lastEventAt: effectiveAt,
-            });
-          }
-          
-          const stats = templateStats.get(templateName);
-          stats.count++;
-          if (effectiveAt) {
-            if (!stats.firstEventAt || effectiveAt < stats.firstEventAt) {
-              stats.firstEventAt = effectiveAt;
-            }
-            if (!stats.lastEventAt || effectiveAt > stats.lastEventAt) {
-              stats.lastEventAt = effectiveAt;
-            }
-          }
-        }
-        
-        // Queue batch inserts
-        for (const [templateName, stats] of templateStats) {
-          batch.push({
-            file_path: file,
-            template_name: templateName,
-            event_count: stats.count,
-            first_event_at: stats.firstEventAt?.toISOString() || null,
-            last_event_at: stats.lastEventAt?.toISOString() || null,
-          });
-          templatesFound++;
-        }
-        
-        // Flush batch when it gets large enough
-        if (batch.length >= BATCH_SIZE) {
-          await flushBatch(batch);
-          batch = [];
-        }
-        
-        filesProcessed++;
-        
-        // Log progress every 500 files or every 10 seconds
-        const now = Date.now();
-        const shouldLog = filesProcessed % 500 === 0 || (now - lastLogTime > 10000);
-        
-        if (shouldLog) {
-          const elapsed = (now - startTime) / 1000;
-          const filesPerSec = filesProcessed / elapsed;
-          const remaining = files.length - i - 1 - filesSkipped;
-          const etaSeconds = remaining / filesPerSec;
-          const etaMin = Math.floor(etaSeconds / 60);
-          const etaSec = Math.floor(etaSeconds % 60);
-          const pct = ((i / files.length) * 100).toFixed(1);
-          
-          console.log(`   📑 [${pct}%] ${filesProcessed} indexed, ${filesSkipped} skipped | ${templatesFound} templates | ${filesPerSec.toFixed(0)} files/s | ETA: ${etaMin}m ${etaSec}s`);
-          lastLogTime = now;
-        }
-        
-      } catch (err) {
-        // Skip files that can't be read
-        console.warn(`   ⚠️ Skipped ${path.basename(file)}: ${err.message}`);
-      }
+    if (filesToIndex.length === 0) {
+      console.log('   ✅ All files already indexed');
+      indexingInProgress = false;
+      return {
+        status: 'complete',
+        filesIndexed: 0,
+        filesSkipped,
+        templatesFound: 0,
+        elapsedSeconds: 0,
+      };
     }
     
-    // Flush remaining batch
-    if (batch.length > 0) {
-      await flushBatch(batch);
+    indexingProgress.total = filesToIndex.length;
+    indexingProgress.current = 0;
+    
+    let filesProcessed = 0;
+    let templatesFound = 0;
+    
+    // Use parallel processing if enabled and we have many files
+    if (parallel && filesToIndex.length > 100) {
+      console.log(`   🚀 Using ${WORKER_POOL_SIZE} parallel workers`);
+      const result = await processFilesParallel(filesToIndex, startTime);
+      filesProcessed = result.filesProcessed;
+      templatesFound = result.templatesFound;
+    } else {
+      console.log('   📝 Using sequential processing');
+      const result = await processFilesSequential(filesToIndex, startTime);
+      filesProcessed = result.filesProcessed;
+      templatesFound = result.templatesFound;
     }
     
     // Update state
@@ -373,6 +317,202 @@ export async function buildTemplateFileIndex({ force = false, incremental = true
     indexingInProgress = false;
     throw err;
   }
+}
+
+/**
+ * Process files using parallel worker threads
+ */
+async function processFilesParallel(files, startTime) {
+  return new Promise((resolve, reject) => {
+    const workers = [];
+    const pendingTasks = new Map(); // taskId -> { resolve, reject }
+    let taskIdCounter = 0;
+    let filesProcessed = 0;
+    let templatesFound = 0;
+    let completedBatches = 0;
+    let lastLogTime = startTime;
+    
+    // Split files into batches
+    const batches = [];
+    for (let i = 0; i < files.length; i += FILES_PER_WORKER_BATCH) {
+      batches.push(files.slice(i, i + FILES_PER_WORKER_BATCH));
+    }
+    
+    const totalBatches = batches.length;
+    let nextBatchIndex = 0;
+    
+    console.log(`   📦 Split ${files.length} files into ${totalBatches} batches of ~${FILES_PER_WORKER_BATCH} files`);
+    
+    // Create workers
+    for (let i = 0; i < WORKER_POOL_SIZE; i++) {
+      try {
+        const worker = new Worker(WORKER_SCRIPT);
+        
+        worker.on('message', async (result) => {
+          const { id, success, results, processed, errors } = result;
+          
+          if (success && results) {
+            // Flush results to database
+            await flushBatch(results);
+            filesProcessed += processed;
+            templatesFound += results.length;
+          }
+          
+          completedBatches++;
+          indexingProgress.current = filesProcessed;
+          
+          // Log progress
+          const now = Date.now();
+          if (now - lastLogTime > 5000 || completedBatches === totalBatches) {
+            const elapsed = (now - startTime) / 1000;
+            const filesPerSec = filesProcessed / elapsed;
+            const pct = ((completedBatches / totalBatches) * 100).toFixed(1);
+            const remaining = files.length - filesProcessed;
+            const etaSeconds = filesPerSec > 0 ? remaining / filesPerSec : 0;
+            const etaMin = Math.floor(etaSeconds / 60);
+            const etaSec = Math.floor(etaSeconds % 60);
+            
+            console.log(`   📑 [${pct}%] ${filesProcessed}/${files.length} files | ${templatesFound} templates | ${filesPerSec.toFixed(0)} files/s | ETA: ${etaMin}m ${etaSec}s`);
+            lastLogTime = now;
+          }
+          
+          // Send next batch to this worker
+          if (nextBatchIndex < batches.length) {
+            const batch = batches[nextBatchIndex++];
+            worker.postMessage({ id: ++taskIdCounter, files: batch });
+          } else if (completedBatches === totalBatches) {
+            // All done - terminate workers and resolve
+            for (const w of workers) {
+              w.terminate();
+            }
+            resolve({ filesProcessed, templatesFound });
+          }
+        });
+        
+        worker.on('error', (err) => {
+          console.error(`   ⚠️ Worker error:`, err.message);
+        });
+        
+        worker.on('exit', (code) => {
+          if (code !== 0 && completedBatches < totalBatches) {
+            console.warn(`   ⚠️ Worker exited with code ${code}`);
+          }
+        });
+        
+        workers.push(worker);
+        
+        // Assign initial batch to this worker
+        if (nextBatchIndex < batches.length) {
+          const batch = batches[nextBatchIndex++];
+          worker.postMessage({ id: ++taskIdCounter, files: batch });
+        }
+      } catch (err) {
+        console.error(`   ⚠️ Failed to create worker:`, err.message);
+      }
+    }
+    
+    if (workers.length === 0) {
+      reject(new Error('Failed to create any workers'));
+    }
+  });
+}
+
+/**
+ * Process files sequentially (fallback)
+ */
+async function processFilesSequential(files, startTime) {
+  let filesProcessed = 0;
+  let templatesFound = 0;
+  let lastLogTime = startTime;
+  const BATCH_SIZE = 50;
+  let batch = [];
+  
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    indexingProgress.current = i + 1;
+    
+    try {
+      const result = await readBinaryFile(file);
+      const records = result.records || [];
+      
+      // Extract unique templates from this file
+      const templateStats = new Map();
+      
+      for (const record of records) {
+        const templateName = extractTemplateName(record.template_id);
+        if (!templateName) continue;
+        
+        const effectiveAt = record.effective_at ? new Date(record.effective_at) : null;
+        
+        if (!templateStats.has(templateName)) {
+          templateStats.set(templateName, {
+            count: 0,
+            firstEventAt: effectiveAt,
+            lastEventAt: effectiveAt,
+          });
+        }
+        
+        const stats = templateStats.get(templateName);
+        stats.count++;
+        if (effectiveAt) {
+          if (!stats.firstEventAt || effectiveAt < stats.firstEventAt) {
+            stats.firstEventAt = effectiveAt;
+          }
+          if (!stats.lastEventAt || effectiveAt > stats.lastEventAt) {
+            stats.lastEventAt = effectiveAt;
+          }
+        }
+      }
+      
+      // Queue batch inserts
+      for (const [templateName, stats] of templateStats) {
+        batch.push({
+          file_path: file,
+          template_name: templateName,
+          event_count: stats.count,
+          first_event_at: stats.firstEventAt?.toISOString() || null,
+          last_event_at: stats.lastEventAt?.toISOString() || null,
+        });
+        templatesFound++;
+      }
+      
+      // Flush batch when it gets large enough
+      if (batch.length >= BATCH_SIZE) {
+        await flushBatch(batch);
+        batch = [];
+      }
+      
+      filesProcessed++;
+      
+      // Log progress every 500 files or every 10 seconds
+      const now = Date.now();
+      const shouldLog = filesProcessed % 500 === 0 || (now - lastLogTime > 10000);
+      
+      if (shouldLog) {
+        const elapsed = (now - startTime) / 1000;
+        const filesPerSec = filesProcessed / elapsed;
+        const remaining = files.length - i - 1;
+        const etaSeconds = remaining / filesPerSec;
+        const etaMin = Math.floor(etaSeconds / 60);
+        const etaSec = Math.floor(etaSeconds % 60);
+        const pct = ((i / files.length) * 100).toFixed(1);
+        
+        console.log(`   📑 [${pct}%] ${filesProcessed} indexed | ${templatesFound} templates | ${filesPerSec.toFixed(0)} files/s | ETA: ${etaMin}m ${etaSec}s`);
+        lastLogTime = now;
+      }
+      
+    } catch (err) {
+      // Skip files that can't be read
+      console.warn(`   ⚠️ Skipped ${path.basename(file)}: ${err.message}`);
+    }
+  }
+  
+  // Flush remaining batch
+  if (batch.length > 0) {
+    await flushBatch(batch);
+  }
+  
+  return { filesProcessed, templatesFound };
 }
 
 /**
