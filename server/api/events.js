@@ -463,39 +463,62 @@ router.get('/governance-history', async (req, res) => {
     console.log(`   OR choices: ${governanceChoices.slice(0, 5).join(', ')}...`);
     
     if (sources.primarySource === 'binary') {
-      // Governance events are rare - scan MORE files to find them
-      // VoteRequest events are especially sparse (~26 per 275K events)
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: limit * 200, // Fetch many more to filter down (governance is sparse)
-        offset,
-        maxDays: 365 * 3, // 3 years of history
-        maxFilesToScan: 20000, // Scan many more files for rare VoteRequest events
+      // VoteRequest events are EXTREMELY sparse (~26 per 275K events)
+      // Strategy: Run TWO parallel scans - one for VoteRequests specifically, one for other governance
+      
+      // Scan 1: Deep scan specifically for VoteRequest created events
+      const voteRequestPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 500, // VoteRequests are rare, 500 should be plenty
+        offset: 0,
+        maxDays: 365 * 3,
+        maxFilesToScan: 100000, // Scan ALL files for VoteRequests
         sortBy: 'effective_at',
         filter: (e) => {
-          // Match by governance template (VoteRequest, Confirmation, etc.)
-          const templateMatch = governanceTemplates.some(t => e.template_id?.includes(t));
-          // OR match by governance choice (not Archive - those have empty payloads)
-          const choiceMatch = governanceChoices.includes(e.choice);
-          // Narrow DsoRules matches: ONLY include exercised DsoRules events for governance-related choices
-          // (Avoid flooding results with unrelated DsoRules choices, which pushes VoteRequest out of the scan window)
-          const dsoRulesMatch = e.template_id?.includes('DsoRules') && choiceMatch && e.choice !== 'Archive';
-          
-          if (templateMatch) {
-            // VoteRequest/Confirmation/ElectionRequest - created events have the data
-            if (e.event_type === 'created') return true;
-            // Exercised events on these templates only if not Archive
-            if (e.choice && e.choice !== 'Archive') return true;
-            return false;
-          }
-          
-          return choiceMatch || dsoRulesMatch;
+          return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
         }
       });
       
-      console.log(`   Found ${result.records.length} potential governance events from binary files`);
+      // Scan 2: Standard governance scan (Confirmation, DsoRules choices)
+      const otherGovernancePromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: limit * 100,
+        offset,
+        maxDays: 365 * 3,
+        maxFilesToScan: 20000,
+        sortBy: 'effective_at',
+        filter: (e) => {
+          // Confirmation created events
+          if (e.template_id?.includes('Confirmation') && e.event_type === 'created') return true;
+          // ElectionRequest created events
+          if (e.template_id?.includes('ElectionRequest') && e.event_type === 'created') return true;
+          // DsoRules governance choices
+          const choiceMatch = governanceChoices.includes(e.choice);
+          if (e.template_id?.includes('DsoRules') && choiceMatch) return true;
+          return false;
+        }
+      });
+      
+      // Run both scans in parallel
+      const [voteRequestResult, otherResult] = await Promise.all([voteRequestPromise, otherGovernancePromise]);
+      
+      console.log(`   Found ${voteRequestResult.records.length} VoteRequest events (deep scan)`);
+      console.log(`   Found ${otherResult.records.length} other governance events`);
+      
+      // Merge and dedupe by event_id, sort by effective_at
+      const allRecords = [...voteRequestResult.records, ...otherResult.records];
+      const seenIds = new Set();
+      const dedupedRecords = allRecords.filter(r => {
+        if (seenIds.has(r.event_id)) return false;
+        seenIds.add(r.event_id);
+        return true;
+      });
+      
+      // Sort by effective_at descending
+      dedupedRecords.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
+      
+      console.log(`   Merged to ${dedupedRecords.length} unique governance events`);
       
       // Take only the requested limit
-      const limitedRecords = result.records.slice(0, limit);
+      const limitedRecords = dedupedRecords.slice(0, limit);
       
       // Group by template and event type for summary
       const templateCounts = {};
