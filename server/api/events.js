@@ -546,16 +546,22 @@ router.get('/governance-history', async (req, res) => {
           template_id: event.template_id,
           effective_at: event.effective_at,
           timestamp: event.timestamp,
-          // Extract action details from payload if available
+          // Template-specific field extraction
+          // VoteRequest: action, requester, reason, votes, voteBefore
+          // Confirmation: action, confirmer, expiresAt
           action_tag: event.payload?.action?.tag || null,
           action_value: event.payload?.action?.value ? Object.keys(event.payload.action.value) : null,
-          requester: event.payload?.requester || null,
+          // VoteRequest has requester, Confirmation has confirmer
+          requester: event.payload?.requester || event.payload?.confirmer || null,
+          confirmer: event.payload?.confirmer || null,
           reason: event.payload?.reason || null,
           votes: event.payload?.votes || [],
           vote_before: event.payload?.voteBefore || null,
-          // Include exercise result for completed votes
+          expires_at: event.payload?.expiresAt || null,
+          dso: event.payload?.dso || null,
+          // Include exercise result for executed actions
           exercise_result: event.exercise_result || null,
-          // Include full payload in verbose mode
+          // Include full payload keys in verbose mode
           ...(verbose ? { _payload_keys: event.payload ? Object.keys(event.payload) : null } : {}),
         };
       });
@@ -568,6 +574,7 @@ router.get('/governance-history', async (req, res) => {
       // Count events with key governance fields
       const withAction = history.filter(h => h.action_tag).length;
       const withRequester = history.filter(h => h.requester).length;
+      const withConfirmer = history.filter(h => h.confirmer).length;
       const withReason = history.filter(h => h.reason).length;
       const withVotes = history.filter(h => h.votes?.length > 0).length;
       const withExerciseResult = history.filter(h => h.exercise_result).length;
@@ -575,6 +582,7 @@ router.get('/governance-history', async (req, res) => {
       console.log(`\n   🔍 Field coverage:`);
       console.log(`      Events with action_tag: ${withAction}/${history.length}`);
       console.log(`      Events with requester: ${withRequester}/${history.length}`);
+      console.log(`      Events with confirmer: ${withConfirmer}/${history.length}`);
       console.log(`      Events with reason: ${withReason}/${history.length}`);
       console.log(`      Events with votes: ${withVotes}/${history.length}`);
       console.log(`      Events with exercise_result: ${withExerciseResult}/${history.length}`);
@@ -588,7 +596,7 @@ router.get('/governance-history', async (req, res) => {
           templateCounts,
           eventTypeCounts,
           choiceCounts,
-          fieldCoverage: { withAction, withRequester, withReason, withVotes, withExerciseResult },
+          fieldCoverage: { withAction, withRequester, withConfirmer, withReason, withVotes, withExerciseResult },
           totalScanned: result.records.length,
         }
       });
