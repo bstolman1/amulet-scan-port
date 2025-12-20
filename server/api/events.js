@@ -800,6 +800,7 @@ router.get('/vote-requests', async (req, res) => {
       // Summary stats
       const activeCount = allVoteRequests.filter(v => v.status === 'active').length;
       const historicalCount = allVoteRequests.filter(v => v.status === 'historical').length;
+      const closedCount = allVoteRequests.filter(v => v.is_closed).length;
       const withReason = voteRequests.filter(v => v.reason).length;
       const withVotes = voteRequests.filter(v => v.votes?.length > 0).length;
       const actionTags = [...new Set(voteRequests.map(v => v.action_tag).filter(Boolean))];
@@ -808,10 +809,15 @@ router.get('/vote-requests', async (req, res) => {
       console.log(`      Total found: ${allVoteRequests.length}`);
       console.log(`      Active: ${activeCount}`);
       console.log(`      Historical: ${historicalCount}`);
+      console.log(`      Closed by exercise: ${closedCount}`);
       console.log(`      Returned: ${voteRequests.length} (filtered by: ${status})`);
       console.log(`      With reason: ${withReason}`);
       console.log(`      With votes: ${withVotes}`);
       console.log(`      Action types: ${actionTags.join(', ')}`);
+      
+      // Debug: sample contract IDs from created vs exercised
+      const sampleCreatedIds = createdResult.records.slice(0, 3).map(r => r.contract_id?.slice(0, 40));
+      const sampleExercisedIds = (exercisedResult.records || []).slice(0, 3).map(r => r.contract_id?.slice(0, 40));
       
       return res.json({
         data: voteRequests,
@@ -821,10 +827,18 @@ router.get('/vote-requests', async (req, res) => {
         _summary: {
           activeCount,
           historicalCount,
+          closedCount,
           withReason,
           withVotes,
           actionTags,
           statusFilter: status,
+        },
+        _debug: {
+          createdEventsFound: createdResult.records.length,
+          exercisedEventsFound: (exercisedResult.records || []).length,
+          closedContractIds: closedContractIds.size,
+          sampleCreatedContractIds: sampleCreatedIds,
+          sampleExercisedContractIds: sampleExercisedIds,
         }
       });
     }
