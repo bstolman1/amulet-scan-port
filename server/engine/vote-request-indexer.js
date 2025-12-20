@@ -1,12 +1,19 @@
 /**
  * VoteRequest Indexer - Builds persistent DuckDB index for VoteRequest events
  * 
- * Scans all binary files for VoteRequest created/exercised events and maintains
+ * Scans binary files for VoteRequest created/exercised events and maintains
  * a persistent table for instant historical queries.
+ * 
+ * Uses template-to-file index when available to dramatically reduce scan time.
  */
 
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
 import * as binaryReader from '../duckdb/binary-reader.js';
+import { 
+  getFilesForTemplate, 
+  isTemplateIndexPopulated,
+  getTemplateIndexStats
+} from './template-file-index.js';
 
 let indexingInProgress = false;
 
@@ -144,6 +151,7 @@ async function ensureIndexTables() {
 
 /**
  * Build or update the VoteRequest index by scanning binary files
+ * Uses template-to-file index when available for much faster scanning
  */
 export async function buildVoteRequestIndex({ force = false } = {}) {
   if (indexingInProgress) {
@@ -160,32 +168,40 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // Ensure tables exist first
     await ensureIndexTables();
     
-    // Scan for all VoteRequest created events using FULL SCAN for historical data
-    console.log('   Scanning for VoteRequest created events (full scan)...');
-    const createdResult = await binaryReader.streamRecords(DATA_PATH, 'events', {
-      limit: Number.MAX_SAFE_INTEGER,
-      offset: 0,
-      fullScan: true, // Critical: scan ALL files, not just recent ones
-      sortBy: 'effective_at',
-      filter: (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
-    });
+    // Check if template index is available for faster scanning
+    const templateIndexPopulated = await isTemplateIndexPopulated();
+    let createdResult, exercisedResult;
+    
+    if (templateIndexPopulated) {
+      // FAST PATH: Use template index to scan only relevant files
+      const templateIndexStats = await getTemplateIndexStats();
+      console.log(`   📋 Using template index (${templateIndexStats.totalFiles} files indexed)`);
+      
+      const voteRequestFiles = await getFilesForTemplate('VoteRequest');
+      console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events`);
+      
+      if (voteRequestFiles.length === 0) {
+        console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
+        createdResult = await scanAllFilesForVoteRequests('created');
+        exercisedResult = await scanAllFilesForVoteRequests('exercised');
+      } else {
+        // Scan only the relevant files
+        console.log('   Scanning VoteRequest files for created events...');
+        createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
+        
+        console.log('   Scanning VoteRequest files for exercised events...');
+        exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
+      }
+    } else {
+      // SLOW PATH: Full scan (template index not built yet)
+      console.log('   ⚠️ Template index not available, using full scan (this will be slow)');
+      console.log('   💡 Run template index build first for faster VoteRequest indexing');
+      
+      createdResult = await scanAllFilesForVoteRequests('created');
+      exercisedResult = await scanAllFilesForVoteRequests('exercised');
+    }
     
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
-    
-    // Scan for exercised events to determine closed status
-    console.log('   Scanning for VoteRequest exercised events (full scan)...');
-    const exercisedResult = await binaryReader.streamRecords(DATA_PATH, 'events', {
-      limit: Number.MAX_SAFE_INTEGER,
-      offset: 0,
-      fullScan: true, // Critical: scan ALL files
-      sortBy: 'effective_at',
-      filter: (e) => {
-        if (!e.template_id?.includes('VoteRequest')) return false;
-        if (e.event_type !== 'exercised') return false;
-        return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
-      }
-    });
-    
     console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events`);
     
     // Build set of closed contract IDs
@@ -311,4 +327,70 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
  */
 export function isIndexingInProgress() {
   return indexingInProgress;
+}
+
+/**
+ * Scan specific files for VoteRequest events (fast path using template index)
+ */
+async function scanFilesForVoteRequests(files, eventType) {
+  const records = [];
+  let filesProcessed = 0;
+  const startTime = Date.now();
+  let lastLogTime = startTime;
+  
+  for (const file of files) {
+    try {
+      const result = await binaryReader.readBinaryFile(file);
+      const fileRecords = result.records || [];
+      
+      for (const record of fileRecords) {
+        if (!record.template_id?.includes('VoteRequest')) continue;
+        
+        if (eventType === 'created' && record.event_type === 'created') {
+          records.push(record);
+        } else if (eventType === 'exercised' && record.event_type === 'exercised') {
+          if (record.choice === 'Archive' || (typeof record.choice === 'string' && record.choice.startsWith('VoteRequest_'))) {
+            records.push(record);
+          }
+        }
+      }
+      
+      filesProcessed++;
+      
+      // Log progress every 50 files or every 5 seconds
+      const now = Date.now();
+      if (filesProcessed % 50 === 0 || (now - lastLogTime > 5000)) {
+        const elapsed = (now - startTime) / 1000;
+        const pct = ((filesProcessed / files.length) * 100).toFixed(0);
+        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} files | ${records.length} ${eventType} events | ${elapsed.toFixed(1)}s`);
+        lastLogTime = now;
+      }
+    } catch (err) {
+      // Skip unreadable files
+    }
+  }
+  
+  return { records, filesScanned: filesProcessed };
+}
+
+/**
+ * Scan all files for VoteRequest events (slow fallback path)
+ */
+async function scanAllFilesForVoteRequests(eventType) {
+  const filter = eventType === 'created'
+    ? (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
+    : (e) => {
+        if (!e.template_id?.includes('VoteRequest')) return false;
+        if (e.event_type !== 'exercised') return false;
+        return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
+      };
+  
+  console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
+  return binaryReader.streamRecords(DATA_PATH, 'events', {
+    limit: Number.MAX_SAFE_INTEGER,
+    offset: 0,
+    fullScan: true,
+    sortBy: 'effective_at',
+    filter
+  });
 }

@@ -10,6 +10,14 @@ import { getIngestionStats, ingestNewFiles } from './ingest.js';
 import { getTotalCounts, getTimeRange, getTemplateEventCounts, streamEvents } from './aggregations.js';
 import { resetEngineSchema } from './schema.js';
 import { query } from '../duckdb/connection.js';
+import {
+  buildTemplateFileIndex,
+  getTemplateIndexStats,
+  getIndexedTemplates,
+  getFilesForTemplateWithMeta,
+  isTemplateIndexingInProgress,
+  getTemplateIndexingProgress,
+} from './template-file-index.js';
 
 const router = Router();
 
@@ -195,6 +203,88 @@ router.post('/reset', async (req, res) => {
   try {
     await resetEngineSchema();
     res.json({ success: true, message: 'Engine schema reset' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Template File Index Endpoints =====
+
+// GET /api/engine/template-index/status - Get template index status
+router.get('/template-index/status', async (req, res) => {
+  try {
+    const stats = await getTemplateIndexStats();
+    const progress = isTemplateIndexingInProgress() 
+      ? getTemplateIndexingProgress() 
+      : null;
+    
+    res.json({
+      ...stats,
+      inProgress: isTemplateIndexingInProgress(),
+      progress,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/engine/template-index/templates - List indexed templates
+router.get('/template-index/templates', async (req, res) => {
+  try {
+    const templates = await getIndexedTemplates();
+    res.json({ templates });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/engine/template-index/files - Get files for a template
+router.get('/template-index/files', async (req, res) => {
+  try {
+    const template = req.query.template;
+    if (!template) {
+      return res.status(400).json({ error: 'template query param required' });
+    }
+    
+    const files = await getFilesForTemplateWithMeta(template);
+    res.json({ 
+      template, 
+      fileCount: files.length,
+      files 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/engine/template-index/build - Build/update template index
+router.post('/template-index/build', async (req, res) => {
+  try {
+    if (isTemplateIndexingInProgress()) {
+      const progress = getTemplateIndexingProgress();
+      return res.json({ 
+        success: false, 
+        message: 'Index build already in progress',
+        progress,
+      });
+    }
+    
+    const force = req.query.force === 'true';
+    
+    // Start build in background and return immediately
+    buildTemplateFileIndex({ force, incremental: !force })
+      .then(result => {
+        console.log(`✅ Template index build complete: ${result.filesIndexed} files, ${result.templatesFound} mappings`);
+      })
+      .catch(err => {
+        console.error('❌ Template index build failed:', err.message);
+      });
+    
+    res.json({ 
+      success: true, 
+      message: 'Template index build started in background',
+      force,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

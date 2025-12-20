@@ -31,3 +31,12 @@ export {
   isIndexPopulated,
   isIndexingInProgress 
 } from './vote-request-indexer.js';
+export {
+  buildTemplateFileIndex,
+  getFilesForTemplate,
+  getTemplateIndexStats,
+  getIndexedTemplates,
+  isTemplateIndexPopulated,
+  isTemplateIndexingInProgress,
+  getTemplateIndexingProgress,
+} from './template-file-index.js';

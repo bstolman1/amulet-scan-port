@@ -13,17 +13,25 @@ import { updateAllAggregations, hasNewData } from './aggregations.js';
 import { initEngineSchema } from './schema.js';
 import { runGapDetection, getLastGapDetection } from './gap-detector.js';
 import { buildVoteRequestIndex, isIndexingInProgress as isVoteIndexing, isIndexPopulated as isVoteIndexPopulated } from './vote-request-indexer.js';
+import { 
+  buildTemplateFileIndex, 
+  isTemplateIndexingInProgress, 
+  isTemplateIndexPopulated,
+  getTemplateIndexStats,
+} from './template-file-index.js';
 
 const WORKER_INTERVAL_MS = parseInt(process.env.ENGINE_INTERVAL_MS || '30000', 10);
 const FILES_PER_CYCLE = parseInt(process.env.ENGINE_FILES_PER_CYCLE || '3', 10);
 const GAP_CHECK_INTERVAL = parseInt(process.env.GAP_CHECK_INTERVAL || '10', 10); // Check gaps every N cycles
 const AUTO_RECOVER_GAPS = process.env.AUTO_RECOVER_GAPS !== 'false'; // Enable by default
 const VOTE_INDEX_BUILD_ON_STARTUP = process.env.VOTE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
+const TEMPLATE_INDEX_BUILD_ON_STARTUP = process.env.TEMPLATE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 
 let running = false;
 let workerInterval = null;
 let lastStats = null;
 let cycleCount = 0;
+let templateIndexBuildPromise = null; // Track background template index build
 let voteIndexBuildPromise = null; // Track background vote index build
 
 const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '300000', 10); // 5 min default
@@ -134,10 +142,51 @@ export async function startEngineWorker() {
   
   console.log('✅ Engine worker started');
   
-  // Start vote request index build in the background (no timeout, runs independently)
-  if (VOTE_INDEX_BUILD_ON_STARTUP) {
-    startVoteIndexBuild();
+  // Start template index build first (vote index depends on it)
+  if (TEMPLATE_INDEX_BUILD_ON_STARTUP) {
+    startTemplateIndexBuild();
   }
+  
+  // Vote request index will be started after template index completes (if needed)
+}
+
+/**
+ * Start template index build as a background task
+ * Once complete, starts vote index build if configured
+ */
+async function startTemplateIndexBuild() {
+  if (templateIndexBuildPromise || isTemplateIndexingInProgress()) {
+    console.log('⏭️ Template index build already in progress');
+    return;
+  }
+  
+  const populated = await isTemplateIndexPopulated();
+  if (populated) {
+    console.log('✅ Template index already populated, skipping build');
+    // Start vote index build if configured
+    if (VOTE_INDEX_BUILD_ON_STARTUP) {
+      startVoteIndexBuild();
+    }
+    return;
+  }
+  
+  console.log('📑 Starting background template index build...');
+  console.log('   This will dramatically speed up VoteRequest index builds');
+  
+  templateIndexBuildPromise = buildTemplateFileIndex({ force: false, incremental: true })
+    .then(result => {
+      console.log(`✅ Template index complete: ${result.filesIndexed} files, ${result.templatesFound} mappings in ${result.elapsedSeconds}s`);
+      templateIndexBuildPromise = null;
+      
+      // Now start vote index build if configured
+      if (VOTE_INDEX_BUILD_ON_STARTUP) {
+        startVoteIndexBuild();
+      }
+    })
+    .catch(err => {
+      console.error('❌ Template index build failed:', err.message);
+      templateIndexBuildPromise = null;
+    });
 }
 
 /**
