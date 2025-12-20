@@ -309,25 +309,25 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                     padding: '12px',
                   }}
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 'bold' }}
-                  formatter={(value: number, name: string) => {
-                    const labels: Record<string, string> = {
-                      open: 'Open',
-                      high: 'High',
-                      low: 'Low',
-                      close: 'Close',
-                      volume: 'Volume',
-                    };
-                    if (name === 'volume') {
-                      return [value.toLocaleString(), labels[name]];
-                    }
-                    return [`$${value?.toFixed(4) || '-'}`, labels[name] || name];
-                  }}
-                  labelFormatter={(_, payload) => {
-                    if (payload?.[0]?.payload) {
-                      const p = payload[0].payload;
-                      return `${p.date} ${p.time}`;
-                    }
-                    return '';
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.[0]?.payload) return null;
+                    const p = payload[0].payload;
+                    const color = p.isUp ? 'hsl(var(--chart-2))' : 'hsl(var(--destructive))';
+                    return (
+                      <div className="bg-background border border-border rounded-lg p-3 shadow-lg">
+                        <div className="font-semibold text-foreground mb-2">{p.date} {p.time}</div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                          <span className="text-muted-foreground">Open:</span>
+                          <span className="text-foreground">${p.open.toFixed(4)}</span>
+                          <span className="text-muted-foreground">High:</span>
+                          <span className="text-foreground">${p.high.toFixed(4)}</span>
+                          <span className="text-muted-foreground">Low:</span>
+                          <span className="text-foreground">${p.low.toFixed(4)}</span>
+                          <span className="text-muted-foreground">Close:</span>
+                          <span style={{ color }} className="font-medium">${p.close.toFixed(4)}</span>
+                        </div>
+                      </div>
+                    );
                   }}
                 />
                 <ReferenceLine 
