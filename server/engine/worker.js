@@ -34,7 +34,7 @@ let cycleCount = 0;
 let templateIndexBuildPromise = null; // Track background template index build
 let voteIndexBuildPromise = null; // Track background vote index build
 
-const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '300000', 10); // 5 min default
+const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '600000', 10); // 10 min default (increased from 5)
 
 /**
  * Promise with timeout wrapper
