@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { KaikoCandle } from "@/hooks/use-kaiko-ohlcv";
 import {
   ComposedChart,
@@ -18,11 +19,28 @@ import {
 } from "recharts";
 import { ZoomIn, ZoomOut, Move, RotateCcw, CandlestickChart } from "lucide-react";
 
+// CC exchanges and their available pairs
+const CC_EXCHANGES = [
+  { value: 'krkn', label: 'Kraken', instruments: ['cc-usd', 'cc-usdt', 'cc-usdc', 'cc-eur'] },
+  { value: 'gate', label: 'Gate.io', instruments: ['cc-usdt'] },
+  { value: 'kcon', label: 'KuCoin', instruments: ['cc-usdt'] },
+  { value: 'mexc', label: 'MEXC', instruments: ['cc-usdt', 'cc-usdc'] },
+  { value: 'bbsp', label: 'Bybit Spot', instruments: ['cc-usdt', 'cc-usdc'] },
+  { value: 'hitb', label: 'HitBTC', instruments: ['cc-usdt'] },
+  { value: 'cnex', label: 'CoinEx', instruments: ['cc-usdt'] },
+  { value: 'binc', label: 'Binance (Perp)', instruments: ['cc-usdt'] },
+  { value: 'okex', label: 'OKX (Perp)', instruments: ['cc-usdt'] },
+  { value: 'gtdm', label: 'Gate.io (Perp)', instruments: ['cc-usdt'] },
+  { value: 'bbit', label: 'Bybit (Perp)', instruments: ['cc-usdt'] },
+  { value: 'hbdm', label: 'Huobi (Perp)', instruments: ['cc-usdt'] },
+];
+
 interface CCCandlestickChartProps {
   candles: KaikoCandle[];
   isLoading: boolean;
   exchange?: string;
   instrument?: string;
+  onExchangeChange?: (exchange: string, instrument: string) => void;
 }
 
 interface CandleData {
@@ -42,10 +60,42 @@ interface CandleData {
   wickHigh: number;
 }
 
-export function CCCandlestickChart({ candles, isLoading, exchange, instrument }: CCCandlestickChartProps) {
+export function CCCandlestickChart({ candles, isLoading, exchange, instrument, onExchangeChange }: CCCandlestickChartProps) {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [brushStartIndex, setBrushStartIndex] = useState<number | undefined>(undefined);
   const [brushEndIndex, setBrushEndIndex] = useState<number | undefined>(undefined);
+  const [selectedExchange, setSelectedExchange] = useState(exchange || 'krkn');
+
+  // Get available instruments for selected exchange
+  const availableInstruments = useMemo(() => {
+    const ex = CC_EXCHANGES.find(e => e.value === selectedExchange);
+    return ex?.instruments || ['cc-usd'];
+  }, [selectedExchange]);
+
+  const [selectedInstrument, setSelectedInstrument] = useState(() => {
+    const ex = CC_EXCHANGES.find(e => e.value === (exchange || 'krkn'));
+    return ex?.instruments.includes(instrument || 'cc-usd') ? (instrument || 'cc-usd') : (ex?.instruments[0] || 'cc-usd');
+  });
+
+  // Update when parent exchange/instrument changes
+  useMemo(() => {
+    if (exchange && exchange !== selectedExchange) {
+      setSelectedExchange(exchange);
+    }
+  }, [exchange]);
+
+  const handleExchangeSelect = useCallback((value: string) => {
+    setSelectedExchange(value);
+    const ex = CC_EXCHANGES.find(e => e.value === value);
+    const defaultInstrument = ex?.instruments[0] || 'cc-usdt';
+    setSelectedInstrument(defaultInstrument);
+    onExchangeChange?.(value, defaultInstrument);
+  }, [onExchangeChange]);
+
+  const handleInstrumentSelect = useCallback((value: string) => {
+    setSelectedInstrument(value);
+    onExchangeChange?.(selectedExchange, value);
+  }, [selectedExchange, onExchangeChange]);
 
   const chartData = useMemo((): CandleData[] => {
     if (!candles.length) return [];
@@ -178,26 +228,47 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument }:
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="flex items-center gap-2">
             <CandlestickChart className="h-5 w-5" />
             Candlestick Chart
-            {exchange && instrument && (
-              <Badge variant="outline" className="ml-2">
-                {exchange.toUpperCase()} / {instrument.toUpperCase()}
-              </Badge>
-            )}
           </CardTitle>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" onClick={handleZoomIn} title="Zoom In">
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button variant="outline" size="icon" onClick={handleZoomOut} title="Zoom Out">
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-            <Button variant="outline" size="icon" onClick={handleReset} title="Reset">
-              <RotateCcw className="h-4 w-4" />
-            </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={selectedExchange} onValueChange={handleExchangeSelect}>
+              <SelectTrigger className="w-[140px] h-8 text-sm">
+                <SelectValue placeholder="Exchange" />
+              </SelectTrigger>
+              <SelectContent className="max-h-[300px]">
+                {CC_EXCHANGES.map((ex) => (
+                  <SelectItem key={ex.value} value={ex.value}>
+                    {ex.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedInstrument} onValueChange={handleInstrumentSelect}>
+              <SelectTrigger className="w-[100px] h-8 text-sm">
+                <SelectValue placeholder="Pair" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableInstruments.map((inst) => (
+                  <SelectItem key={inst} value={inst}>
+                    {inst.toUpperCase()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-1 ml-2">
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomIn} title="Zoom In">
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomOut} title="Zoom Out">
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleReset} title="Reset">
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       </CardHeader>

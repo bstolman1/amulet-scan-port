@@ -329,6 +329,10 @@ export default function KaikoFeed() {
               isLoading={isLoading}
               exchange={exchange}
               instrument={instrument}
+              onExchangeChange={(newExchange, newInstrument) => {
+                setExchange(newExchange);
+                setInstrument(newInstrument);
+              }}
             />
             
             <CCPriceAlerts enabled={status?.configured && activeTab === 'cc-overview'} />
