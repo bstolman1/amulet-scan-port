@@ -11,19 +11,66 @@ import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, Asset
 import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+// All available Kaiko exchanges
 const EXCHANGES = [
+  // Major exchanges with CC trading pairs (prioritized)
+  { value: 'krkn', label: 'Kraken', hasCC: true },
+  { value: 'binc', label: 'Binance', hasCC: true },
+  { value: 'bbsp', label: 'Bybit Spot', hasCC: true },
+  { value: 'gate', label: 'Gate.io', hasCC: true },
+  { value: 'kcon', label: 'KuCoin', hasCC: true },
+  { value: 'mexc', label: 'MEXC', hasCC: true },
+  { value: 'okex', label: 'OKX', hasCC: true },
+  { value: 'hitb', label: 'HitBTC', hasCC: true },
+  { value: 'cnex', label: 'CoinEx', hasCC: true },
+  // Other major exchanges
   { value: 'cbse', label: 'Coinbase' },
   { value: 'bfnx', label: 'Bitfinex' },
-  { value: 'krkn', label: 'Kraken' },
-  { value: 'binc', label: 'Binance' },
+  { value: 'stmp', label: 'Bitstamp' },
+  { value: 'gmni', label: 'Gemini' },
+  { value: 'huob', label: 'Huobi' },
+  { value: 'polo', label: 'Poloniex' },
+  { value: 'btrx', label: 'Bittrex' },
+  { value: 'upbt', label: 'UPbit' },
+  { value: 'bthb', label: 'Bithumb' },
+  { value: 'bybt', label: 'Bybit' },
+  { value: 'drbt', label: 'Deribit' },
+  { value: 'bvav', label: 'Bitvavo' },
+  { value: 'bull', label: 'Bullish' },
+  { value: 'whbt', label: 'WhiteBIT' },
+  // DEXs and DeFi
+  { value: 'usp3', label: 'Uniswap V3' },
+  { value: 'usp2', label: 'Uniswap V2' },
+  { value: 'sush', label: 'Sushiswap' },
+  { value: 'curv', label: 'Curve' },
+  { value: 'blc2', label: 'Balancer V2' },
+  { value: 'pksp', label: 'Pancakeswap' },
+  { value: 'orca', label: 'Orca' },
+  { value: 'raya', label: 'Raydium' },
+  // Derivative markets
+  { value: 'gtdm', label: 'Gate.io Derivatives', hasCC: true },
+  { value: 'hbdm', label: 'Huobi Derivatives', hasCC: true },
+  { value: 'bbit', label: 'Bybit Perps', hasCC: true },
+  { value: 'btmx', label: 'BitMEX' },
+  { value: 'dydx', label: 'dYdX' },
 ];
 
+// Instruments including Canton Coin (CC) pairs
 const INSTRUMENTS = [
+  // Canton Coin (CC) pairs - prioritized
+  { value: 'cc-usd', label: 'CC/USD', isCC: true },
+  { value: 'cc-usdt', label: 'CC/USDT', isCC: true },
+  { value: 'cc-usdc', label: 'CC/USDC', isCC: true },
+  { value: 'cc-eur', label: 'CC/EUR', isCC: true },
+  // Major crypto pairs
   { value: 'btc-usd', label: 'BTC/USD' },
-  { value: 'eth-usd', label: 'ETH/USD' },
-  { value: 'sol-usd', label: 'SOL/USD' },
   { value: 'btc-usdt', label: 'BTC/USDT' },
+  { value: 'eth-usd', label: 'ETH/USD' },
   { value: 'eth-usdt', label: 'ETH/USDT' },
+  { value: 'sol-usd', label: 'SOL/USD' },
+  { value: 'sol-usdt', label: 'SOL/USDT' },
+  { value: 'xrp-usd', label: 'XRP/USD' },
+  { value: 'ada-usd', label: 'ADA/USD' },
 ];
 
 const INTERVALS = [
@@ -35,7 +82,9 @@ const INTERVALS = [
   { value: '1d', label: '1 Day' },
 ];
 
+// Assets including Canton Coin
 const ASSETS = [
+  { value: 'cc', label: 'Canton Coin (CC)', isCC: true },
   { value: 'btc', label: 'Bitcoin (BTC)' },
   { value: 'eth', label: 'Ethereum (ETH)' },
   { value: 'sol', label: 'Solana (SOL)' },
@@ -100,13 +149,14 @@ function StatCard({ title, value, icon: Icon }: { title: string; value: string; 
 }
 
 export default function KaikoFeed() {
-  const [exchange, setExchange] = useState('cbse');
-  const [instrument, setInstrument] = useState('btc-usd');
+  // Default to Kraken + CC/USD for Canton Coin
+  const [exchange, setExchange] = useState('krkn');
+  const [instrument, setInstrument] = useState('cc-usd');
   const [interval, setInterval] = useState('1h');
   const [activeTab, setActiveTab] = useState('ohlcv');
   
-  // Asset Metrics state
-  const [asset, setAsset] = useState('btc');
+  // Asset Metrics state - default to Canton Coin
+  const [asset, setAsset] = useState('cc');
   const [assetInterval, setAssetInterval] = useState('1h');
 
   const { data: status } = useKaikoStatus();
@@ -204,11 +254,25 @@ export default function KaikoFeed() {
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Exchange</label>
                     <Select value={exchange} onValueChange={setExchange}>
-                      <SelectTrigger className="w-[140px]">
+                      <SelectTrigger className="w-[180px]">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
-                        {EXCHANGES.map((ex) => (
+                      <SelectContent className="max-h-[300px]">
+                        <SelectItem value="__cc_header" disabled className="text-xs text-primary font-semibold">
+                          — CC Trading Venues —
+                        </SelectItem>
+                        {EXCHANGES.filter(ex => ex.hasCC).map((ex) => (
+                          <SelectItem key={ex.value} value={ex.value}>
+                            <span className="flex items-center gap-2">
+                              {ex.label}
+                              <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 text-primary border-primary">CC</Badge>
+                            </span>
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="__other_header" disabled className="text-xs text-muted-foreground font-semibold mt-2">
+                          — Other Exchanges —
+                        </SelectItem>
+                        {EXCHANGES.filter(ex => !ex.hasCC).map((ex) => (
                           <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
                         ))}
                       </SelectContent>
@@ -217,11 +281,22 @@ export default function KaikoFeed() {
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Instrument</label>
                     <Select value={instrument} onValueChange={setInstrument}>
-                      <SelectTrigger className="w-[140px]">
+                      <SelectTrigger className="w-[160px]">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {INSTRUMENTS.map((inst) => (
+                        <SelectItem value="__cc_pairs" disabled className="text-xs text-primary font-semibold">
+                          — Canton Coin —
+                        </SelectItem>
+                        {INSTRUMENTS.filter(inst => inst.isCC).map((inst) => (
+                          <SelectItem key={inst.value} value={inst.value}>
+                            <span className="font-semibold text-primary">{inst.label}</span>
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="__other_pairs" disabled className="text-xs text-muted-foreground font-semibold mt-2">
+                          — Other Pairs —
+                        </SelectItem>
+                        {INSTRUMENTS.filter(inst => !inst.isCC).map((inst) => (
                           <SelectItem key={inst.value} value={inst.value}>{inst.label}</SelectItem>
                         ))}
                       </SelectContent>
@@ -377,7 +452,15 @@ export default function KaikoFeed() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {ASSETS.map((a) => (
+                        {ASSETS.filter(a => a.isCC).map((a) => (
+                          <SelectItem key={a.value} value={a.value}>
+                            <span className="font-semibold text-primary">{a.label}</span>
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="__other_assets" disabled className="text-xs text-muted-foreground font-semibold mt-2">
+                          — Other Assets —
+                        </SelectItem>
+                        {ASSETS.filter(a => !a.isCC).map((a) => (
                           <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
                         ))}
                       </SelectContent>
