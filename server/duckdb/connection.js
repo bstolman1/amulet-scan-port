@@ -24,8 +24,10 @@ const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
-// In-memory DuckDB instance
-const db = new duckdb.Database(':memory:');
+// Persistent DuckDB instance (survives restarts, shareable between processes)
+const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
+console.log(`🦆 DuckDB database: ${DB_FILE}`);
+const db = new duckdb.Database(DB_FILE);
 const conn = db.connect();
 
 /**
