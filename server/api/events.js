@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
+import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
 
 const router = Router();
 
-// VoteRequest cache - refreshes every 5 minutes
+// VoteRequest cache - only used when index is not populated
 let voteRequestCache = null;
 let voteRequestCacheTime = 0;
 const VOTE_REQUEST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -700,11 +701,42 @@ router.get('/vote-requests', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const status = req.query.status || 'all'; // 'active', 'historical', 'all'
     const verbose = req.query.verbose === 'true';
+    const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     const now = new Date();
     
     console.log(`\n🗳️ VOTE-REQUESTS: Fetching with limit=${limit}, status=${status}, verbose=${verbose}`);
-    console.log(`   Primary source: ${sources.primarySource}`);
+    
+    // First, try to use the persistent DuckDB index
+    const indexPopulated = await voteRequestIndexer.isIndexPopulated();
+    
+    if (indexPopulated) {
+      console.log(`   Using persistent DuckDB index`);
+      
+      const voteRequests = await voteRequestIndexer.queryVoteRequests({ limit, status, offset });
+      const stats = await voteRequestIndexer.getVoteRequestStats();
+      const indexState = await voteRequestIndexer.getIndexState();
+      
+      return res.json({
+        data: voteRequests,
+        count: voteRequests.length,
+        totalFound: status === 'all' ? stats.total : (status === 'active' ? stats.active : stats.historical),
+        source: 'duckdb-index',
+        _summary: {
+          activeCount: stats.active,
+          historicalCount: stats.historical,
+          closedCount: stats.closed,
+          statusFilter: status,
+        },
+        _debug: verbose ? {
+          indexedAt: indexState.last_indexed_at,
+          totalIndexed: indexState.total_indexed,
+          fromIndex: true,
+        } : undefined,
+      });
+    }
+    
+    console.log(`   Primary source: ${sources.primarySource} (index not populated)`);
     
     if (sources.primarySource === 'binary') {
       // Check cache first
@@ -1005,6 +1037,48 @@ router.get('/template-scan', async (req, res) => {
     });
   } catch (err) {
     console.error('Error in template scan:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/vote-request-index/status - Get index status
+router.get('/vote-request-index/status', async (req, res) => {
+  try {
+    const stats = await voteRequestIndexer.getVoteRequestStats();
+    const state = await voteRequestIndexer.getIndexState();
+    const isIndexing = voteRequestIndexer.isIndexingInProgress();
+    
+    res.json({
+      populated: stats.total > 0,
+      isIndexing,
+      stats,
+      lastIndexedAt: state.last_indexed_at,
+      totalIndexed: state.total_indexed,
+    });
+  } catch (err) {
+    console.error('Error getting vote request index status:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/events/vote-request-index/build - Trigger index build
+router.post('/vote-request-index/build', async (req, res) => {
+  try {
+    const force = req.query.force === 'true';
+    
+    if (voteRequestIndexer.isIndexingInProgress()) {
+      return res.json({ status: 'in_progress', message: 'Indexing already in progress' });
+    }
+    
+    // Start indexing in background
+    res.json({ status: 'started', message: 'VoteRequest index build started' });
+    
+    // Run async
+    voteRequestIndexer.buildVoteRequestIndex({ force }).catch(err => {
+      console.error('Background index build failed:', err);
+    });
+  } catch (err) {
+    console.error('Error starting vote request index build:', err);
     res.status(500).json({ error: err.message });
   }
 });

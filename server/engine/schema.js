@@ -90,6 +90,52 @@ export async function initEngineSchema() {
     CREATE SEQUENCE IF NOT EXISTS raw_files_seq START 1
   `);
 
+  // VoteRequest persistent index table
+  await query(`
+    CREATE TABLE IF NOT EXISTS vote_requests (
+      event_id            VARCHAR PRIMARY KEY,
+      contract_id         VARCHAR NOT NULL,
+      template_id         VARCHAR,
+      effective_at        TIMESTAMP,
+      status              VARCHAR DEFAULT 'active',
+      is_closed           BOOLEAN DEFAULT FALSE,
+      action_tag          VARCHAR,
+      action_value        JSON,
+      requester           VARCHAR,
+      reason              VARCHAR,
+      votes               JSON,
+      vote_count          INTEGER DEFAULT 0,
+      vote_before         TIMESTAMP,
+      target_effective_at TIMESTAMP,
+      tracking_cid        VARCHAR,
+      dso                 VARCHAR,
+      created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Index for efficient queries
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vote_requests_status ON vote_requests(status)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vote_requests_effective_at ON vote_requests(effective_at)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vote_requests_contract_id ON vote_requests(contract_id)
+  `);
+
+  // Track indexing progress for vote_requests
+  await query(`
+    CREATE TABLE IF NOT EXISTS vote_request_index_state (
+      id                  INTEGER PRIMARY KEY DEFAULT 1,
+      last_indexed_file   VARCHAR,
+      last_indexed_at     TIMESTAMP,
+      total_indexed       BIGINT DEFAULT 0,
+      CHECK (id = 1)
+    )
+  `);
+
   schemaInitialized = true;
   console.log('✅ Engine schema initialized');
 }
@@ -101,6 +147,8 @@ export async function resetEngineSchema() {
   await query('DROP TABLE IF EXISTS events_raw');
   await query('DROP TABLE IF EXISTS updates_raw');
   await query('DROP TABLE IF EXISTS aggregation_state');
+  await query('DROP TABLE IF EXISTS vote_requests');
+  await query('DROP TABLE IF EXISTS vote_request_index_state');
   await query('DROP SEQUENCE IF EXISTS raw_files_seq');
   
   schemaInitialized = false;
