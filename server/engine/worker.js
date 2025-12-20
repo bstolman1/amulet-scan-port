@@ -12,16 +12,19 @@ import { ingestNewFiles, getIngestionStats } from './ingest.js';
 import { updateAllAggregations, hasNewData } from './aggregations.js';
 import { initEngineSchema } from './schema.js';
 import { runGapDetection, getLastGapDetection } from './gap-detector.js';
+import { buildVoteRequestIndex, isIndexingInProgress as isVoteIndexing, isIndexPopulated as isVoteIndexPopulated } from './vote-request-indexer.js';
 
 const WORKER_INTERVAL_MS = parseInt(process.env.ENGINE_INTERVAL_MS || '30000', 10);
 const FILES_PER_CYCLE = parseInt(process.env.ENGINE_FILES_PER_CYCLE || '3', 10);
 const GAP_CHECK_INTERVAL = parseInt(process.env.GAP_CHECK_INTERVAL || '10', 10); // Check gaps every N cycles
 const AUTO_RECOVER_GAPS = process.env.AUTO_RECOVER_GAPS !== 'false'; // Enable by default
+const VOTE_INDEX_BUILD_ON_STARTUP = process.env.VOTE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 
 let running = false;
 let workerInterval = null;
 let lastStats = null;
 let cycleCount = 0;
+let voteIndexBuildPromise = null; // Track background vote index build
 
 const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '300000', 10); // 5 min default
 
@@ -130,6 +133,75 @@ export async function startEngineWorker() {
   workerInterval = setInterval(runCycle, WORKER_INTERVAL_MS);
   
   console.log('✅ Engine worker started');
+  
+  // Start vote request index build in the background (no timeout, runs independently)
+  if (VOTE_INDEX_BUILD_ON_STARTUP) {
+    startVoteIndexBuild();
+  }
+}
+
+/**
+ * Start vote request index build as a background task (no timeout)
+ * This runs independently of the main worker cycle
+ */
+async function startVoteIndexBuild() {
+  // Check if already running
+  if (voteIndexBuildPromise || isVoteIndexing()) {
+    console.log('⏭️ Vote request index build already in progress');
+    return;
+  }
+  
+  // Check if index is already populated
+  const populated = await isVoteIndexPopulated();
+  if (populated) {
+    console.log('✅ Vote request index already populated, skipping build');
+    return;
+  }
+  
+  console.log('🗳️ Starting background vote request index build (no timeout)...');
+  console.log('   This may take 15-30 minutes for large datasets');
+  
+  voteIndexBuildPromise = buildVoteRequestIndex({ force: false })
+    .then(result => {
+      console.log(`✅ Vote request index build complete: ${result.totalIndexed} records indexed`);
+      voteIndexBuildPromise = null;
+    })
+    .catch(err => {
+      console.error('❌ Vote request index build failed:', err.message);
+      voteIndexBuildPromise = null;
+    });
+}
+
+/**
+ * Manually trigger vote request index rebuild
+ */
+export async function triggerVoteIndexRebuild() {
+  if (voteIndexBuildPromise || isVoteIndexing()) {
+    return { success: false, message: 'Index build already in progress' };
+  }
+  
+  console.log('🗳️ Manually triggered vote request index rebuild...');
+  
+  voteIndexBuildPromise = buildVoteRequestIndex({ force: true })
+    .then(result => {
+      console.log(`✅ Vote request index rebuild complete: ${result.totalIndexed} records indexed`);
+      voteIndexBuildPromise = null;
+      return result;
+    })
+    .catch(err => {
+      console.error('❌ Vote request index rebuild failed:', err.message);
+      voteIndexBuildPromise = null;
+      throw err;
+    });
+  
+  return { success: true, message: 'Index rebuild started in background' };
+}
+
+/**
+ * Check if vote index is currently building
+ */
+export function isVoteIndexBuilding() {
+  return !!voteIndexBuildPromise || isVoteIndexing();
 }
 
 /**
@@ -165,6 +237,7 @@ export async function getEngineStatus() {
     ...stats,
     lastStats,
     gapDetection: gapInfo,
+    voteIndexBuilding: isVoteIndexBuilding(),
   };
 }
 
