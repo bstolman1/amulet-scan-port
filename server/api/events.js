@@ -733,6 +733,10 @@ router.get('/vote-requests', async (req, res) => {
 
       const [createdResult, exercisedResult] = await Promise.all([createdPromise, exercisedPromise]);
 
+      // Debug: log file scan stats
+      console.log(`   Created scan: ${createdResult.filesScanned || '?'} files scanned, ${createdResult.totalFiles || '?'} total files found`);
+      console.log(`   Exercised scan: ${exercisedResult.filesScanned || '?'} files scanned, ${exercisedResult.totalFiles || '?'} total files found`);
+
       const closedContractIds = new Set(
         (exercisedResult.records || [])
           .map(r => r.contract_id)
@@ -837,6 +841,10 @@ router.get('/vote-requests', async (req, res) => {
           createdEventsFound: createdResult.records.length,
           exercisedEventsFound: (exercisedResult.records || []).length,
           closedContractIds: closedContractIds.size,
+          createdFilesScanned: createdResult.filesScanned || 0,
+          createdTotalFiles: createdResult.totalFiles || 0,
+          exercisedFilesScanned: exercisedResult.filesScanned || 0,
+          exercisedTotalFiles: exercisedResult.totalFiles || 0,
           sampleCreatedContractIds: sampleCreatedIds,
           sampleExercisedContractIds: sampleExercisedIds,
         }
