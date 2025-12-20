@@ -275,13 +275,16 @@ export async function buildTemplateFileIndex({ force = false, incremental = true
     let templatesFound = 0;
     
     // Use parallel processing if enabled and we have many files
-    if (parallel && filesToIndex.length > 100) {
-      console.log(`   🚀 Using ${WORKER_POOL_SIZE} parallel workers`);
+    // NOTE: parallel=false by default because @mongodb-js/zstd (native addon) doesn't work reliably in worker threads
+    const useParallel = parallel && filesToIndex.length > 500 && process.env.TEMPLATE_INDEX_PARALLEL === 'true';
+    
+    if (useParallel) {
+      console.log(`   🚀 Using ${WORKER_POOL_SIZE} parallel workers (experimental)`);
       const result = await processFilesParallel(filesToIndex, startTime);
       filesProcessed = result.filesProcessed;
       templatesFound = result.templatesFound;
     } else {
-      console.log('   📝 Using sequential processing');
+      console.log(`   📝 Using sequential processing (${filesToIndex.length} files)`);
       const result = await processFilesSequential(filesToIndex, startTime);
       filesProcessed = result.filesProcessed;
       templatesFound = result.templatesFound;
@@ -321,16 +324,17 @@ export async function buildTemplateFileIndex({ force = false, incremental = true
 
 /**
  * Process files using parallel worker threads
+ * Falls back to sequential if workers fail to start
  */
 async function processFilesParallel(files, startTime) {
   return new Promise((resolve, reject) => {
     const workers = [];
-    const pendingTasks = new Map(); // taskId -> { resolve, reject }
     let taskIdCounter = 0;
     let filesProcessed = 0;
     let templatesFound = 0;
     let completedBatches = 0;
     let lastLogTime = startTime;
+    let workersFailed = 0;
     
     // Split files into batches
     const batches = [];
@@ -343,19 +347,53 @@ async function processFilesParallel(files, startTime) {
     
     console.log(`   📦 Split ${files.length} files into ${totalBatches} batches of ~${FILES_PER_WORKER_BATCH} files`);
     
+    // Timeout watchdog - if no progress in 2 minutes, fall back to sequential
+    let lastProgress = Date.now();
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastProgress > 120000) {
+        console.warn('   ⚠️ Worker pool stalled for 2 minutes, falling back to sequential processing');
+        clearInterval(watchdog);
+        for (const w of workers) {
+          try { w.terminate(); } catch {}
+        }
+        // Fall back to sequential for remaining files
+        const remainingFiles = files.slice(filesProcessed);
+        processFilesSequential(remainingFiles, startTime)
+          .then(seqResult => {
+            resolve({
+              filesProcessed: filesProcessed + seqResult.filesProcessed,
+              templatesFound: templatesFound + seqResult.templatesFound,
+            });
+          })
+          .catch(reject);
+      }
+    }, 10000);
+    
+    const finishIfDone = () => {
+      if (completedBatches >= totalBatches) {
+        clearInterval(watchdog);
+        for (const w of workers) {
+          try { w.terminate(); } catch {}
+        }
+        resolve({ filesProcessed, templatesFound });
+      }
+    };
+    
     // Create workers
     for (let i = 0; i < WORKER_POOL_SIZE; i++) {
       try {
         const worker = new Worker(WORKER_SCRIPT);
         
         worker.on('message', async (result) => {
+          lastProgress = Date.now();
           const { id, success, results, processed, errors } = result;
           
           if (success && results) {
-            // Flush results to database
             await flushBatch(results);
             filesProcessed += processed;
             templatesFound += results.length;
+          } else if (!success) {
+            console.warn(`   ⚠️ Worker batch failed: ${result.error}`);
           }
           
           completedBatches++;
@@ -365,7 +403,7 @@ async function processFilesParallel(files, startTime) {
           const now = Date.now();
           if (now - lastLogTime > 5000 || completedBatches === totalBatches) {
             const elapsed = (now - startTime) / 1000;
-            const filesPerSec = filesProcessed / elapsed;
+            const filesPerSec = elapsed > 0 ? filesProcessed / elapsed : 0;
             const pct = ((completedBatches / totalBatches) * 100).toFixed(1);
             const remaining = files.length - filesProcessed;
             const etaSeconds = filesPerSec > 0 ? remaining / filesPerSec : 0;
@@ -380,17 +418,20 @@ async function processFilesParallel(files, startTime) {
           if (nextBatchIndex < batches.length) {
             const batch = batches[nextBatchIndex++];
             worker.postMessage({ id: ++taskIdCounter, files: batch });
-          } else if (completedBatches === totalBatches) {
-            // All done - terminate workers and resolve
-            for (const w of workers) {
-              w.terminate();
-            }
-            resolve({ filesProcessed, templatesFound });
+          } else {
+            finishIfDone();
           }
         });
         
         worker.on('error', (err) => {
           console.error(`   ⚠️ Worker error:`, err.message);
+          workersFailed++;
+          // If all workers failed, fall back to sequential
+          if (workersFailed >= WORKER_POOL_SIZE) {
+            console.warn('   ⚠️ All workers failed, falling back to sequential');
+            clearInterval(watchdog);
+            processFilesSequential(files, startTime).then(resolve).catch(reject);
+          }
         });
         
         worker.on('exit', (code) => {
@@ -408,11 +449,15 @@ async function processFilesParallel(files, startTime) {
         }
       } catch (err) {
         console.error(`   ⚠️ Failed to create worker:`, err.message);
+        workersFailed++;
       }
     }
     
+    // If no workers started, fall back immediately
     if (workers.length === 0) {
-      reject(new Error('Failed to create any workers'));
+      console.warn('   ⚠️ No workers started, using sequential processing');
+      clearInterval(watchdog);
+      processFilesSequential(files, startTime).then(resolve).catch(reject);
     }
   });
 }
