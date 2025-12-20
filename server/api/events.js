@@ -503,8 +503,21 @@ router.get('/governance-history', async (req, res) => {
       console.log(`   Found ${voteRequestResult.records.length} VoteRequest events (deep scan)`);
       console.log(`   Found ${otherResult.records.length} other governance events`);
       
-      // Merge and dedupe by event_id, sort by effective_at
-      const allRecords = [...voteRequestResult.records, ...otherResult.records];
+      // Smart merge: Ensure VoteRequests are always represented
+      // Reserve up to 30% of slots for VoteRequests since they have the richest data
+      const voteRequestSlots = Math.min(Math.ceil(limit * 0.3), voteRequestResult.records.length);
+      const otherSlots = limit - voteRequestSlots;
+      
+      // Sort each set by effective_at descending
+      voteRequestResult.records.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
+      otherResult.records.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
+      
+      // Take allocated slots from each
+      const selectedVoteRequests = voteRequestResult.records.slice(0, voteRequestSlots);
+      const selectedOther = otherResult.records.slice(0, otherSlots);
+      
+      // Merge and dedupe
+      const allRecords = [...selectedVoteRequests, ...selectedOther];
       const seenIds = new Set();
       const dedupedRecords = allRecords.filter(r => {
         if (seenIds.has(r.event_id)) return false;
@@ -512,13 +525,15 @@ router.get('/governance-history', async (req, res) => {
         return true;
       });
       
-      // Sort by effective_at descending
+      // Sort merged results by effective_at descending
       dedupedRecords.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
       
+      console.log(`   VoteRequests included: ${selectedVoteRequests.length}/${voteRequestResult.records.length}`);
+      console.log(`   Other governance included: ${selectedOther.length}/${otherResult.records.length}`);
       console.log(`   Merged to ${dedupedRecords.length} unique governance events`);
       
-      // Take only the requested limit
-      const limitedRecords = dedupedRecords.slice(0, limit);
+      // Final records (already limited by slot allocation)
+      const limitedRecords = dedupedRecords;
       
       // Group by template and event type for summary
       const templateCounts = {};
