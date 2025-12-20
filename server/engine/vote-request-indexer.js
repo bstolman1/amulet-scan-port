@@ -72,11 +72,21 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
     LIMIT ${limit} OFFSET ${offset}
   `);
   
-  // Parse JSON fields
+  const safeJsonParse = (val) => {
+    if (val === null || val === undefined) return null;
+    if (typeof val !== 'string') return val;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  };
+
+  // Parse JSON fields (DuckDB may return either JSON objects or strings depending on insertion/casting)
   return results.map(r => ({
     ...r,
-    action_value: r.action_value ? (typeof r.action_value === 'string' ? JSON.parse(r.action_value) : r.action_value) : null,
-    votes: r.votes ? (typeof r.votes === 'string' ? JSON.parse(r.votes) : r.votes) : [],
+    action_value: safeJsonParse(r.action_value),
+    votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
   }));
 }
 
