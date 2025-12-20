@@ -32,8 +32,9 @@ export function useGovernanceEvents() {
   return useQuery({
     queryKey: ["governanceEvents"],
     queryFn: async (): Promise<GovernanceEvent[]> => {
-      // Fetch governance-related events from DuckDB (backfill + updates)
-      const response = await apiFetch<EventsResponse>("/api/events/governance");
+      // Fetch VoteRequest events from DuckDB indexed table (instant queries)
+      // Falls back to file scanning if index is not populated
+      const response = await apiFetch<EventsResponse>("/api/events/vote-requests?status=all&limit=500");
       return response.data || [];
     },
     staleTime: 30_000,
