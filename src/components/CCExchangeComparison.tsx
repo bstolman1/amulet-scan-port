@@ -30,10 +30,18 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
   const [sortKey, setSortKey] = useState<SortKey>('volume');
   const [sortAsc, setSortAsc] = useState(false);
 
-  const sortedExchanges = useMemo(() => {
+  // Filter out exchanges with no actual trading data (volume 0 or no price)
+  const validExchanges = useMemo(() => {
     if (!data?.exchanges) return [];
+    return data.exchanges.filter(e => 
+      e.volume > 0 && e.tradeCount > 0 && e.price !== null
+    );
+  }, [data?.exchanges]);
+
+  const sortedExchanges = useMemo(() => {
+    if (!validExchanges.length) return [];
     
-    return [...data.exchanges].sort((a, b) => {
+    return [...validExchanges].sort((a, b) => {
       let aVal: number, bVal: number;
       
       switch (sortKey) {
@@ -59,12 +67,12 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
       
       return sortAsc ? aVal - bVal : bVal - aVal;
     });
-  }, [data?.exchanges, sortKey, sortAsc]);
+  }, [validExchanges, sortKey, sortAsc]);
 
   const maxVolume = useMemo(() => {
-    if (!data?.exchanges) return 0;
-    return Math.max(...data.exchanges.map(e => e.volume || 0));
-  }, [data?.exchanges]);
+    if (!validExchanges.length) return 0;
+    return Math.max(...validExchanges.map(e => e.volume || 0));
+  }, [validExchanges]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
