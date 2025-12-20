@@ -114,9 +114,21 @@ function extractPrimaryEntityName(text) {
     }
   }
   
-  // Pattern 0: "to implement/apply Featured Application status for AppName"
+  // Pattern 0: "to Feature AppName" or "to implement/apply Featured Application status for AppName"
   // "for Featured Application status for AppName"
   // "for featured app rights for AppName"
+  // Also handles "to Feature the Console Wallet" -> extracts "Console Wallet"
+  const toFeatureMatch = cleanText.match(/to\s+feature\s+(?:the\s+)?([A-Za-z0-9][\w\s-]*?)$/i);
+  if (toFeatureMatch) {
+    let name = toFeatureMatch[1].trim();
+    // Remove trailing "by Company" if present
+    name = name.replace(/\s+by\s+.*$/i, '').trim();
+    if (name.length > 1) {
+      console.log(`EXTRACT: "to Feature" pattern matched, extracted: "${name}" from "${cleanText.slice(0, 60)}"`);
+      return { name, isMultiEntity: false };
+    }
+  }
+  
   const forAppMatch = cleanText.match(/(?:to\s+)?(?:implement|apply|for)\s+featured\s*(?:app(?:lication)?|application)\s+(?:status|rights)\s+for\s+([A-Za-z0-9][\w\s-]*?)$/i);
   if (forAppMatch) {
     let name = forAppMatch[1].trim();
@@ -272,9 +284,10 @@ function extractIdentifiers(text) {
     /featured\s+app\s+rights/i.test(text)
   );
   
-  // Check if text contains validator indicators - including "validator approved" and "validator operator approved"
+  // Check if text contains validator indicators - including "validator approved", "validator operator approved", 
+  // "node as a service", "validator operators approved", etc.
   const isValidator = (
-    /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator/i.test(text) ||
+    /super\s*validator|validator\s+(?:approved|application|onboarding|license|candidate|operator\s+approved)|sv\s+(?:application|onboarding)|validator\s+operator|node\s+as\s+a\s+service|validator\s+operators\s+approved/i.test(text) ||
     isValidatorVoteProposal
   );
   
