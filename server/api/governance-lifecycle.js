@@ -680,7 +680,12 @@ function correlateTopics(allTopics) {
       }
     } else if (topic.flow === 'featured-app') {
       // tokenomics-announce is specifically for featured-app flow
-      type = 'featured-app';
+      // But check if it's actually a validator approval
+      if (/validator.*approved|approved.*validator/i.test(subjectTrimmed)) {
+        type = 'validator';
+      } else {
+        type = 'featured-app';
+      }
     } else if (topic.flow === 'shared') {
       // Shared groups (tokenomics, sv-announce) need subject-line disambiguation
       // Use specific vote proposal type flags for better accuracy
