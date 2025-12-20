@@ -701,16 +701,26 @@ router.get('/vote-requests', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const status = req.query.status || 'all'; // 'active', 'historical', 'all'
     const verbose = req.query.verbose === 'true';
+    const ensureFresh = req.query.ensureFresh === 'true';
     const offset = parseInt(req.query.offset) || 0;
     const sources = getDataSources();
     const now = new Date();
     
-    console.log(`\n🗳️ VOTE-REQUESTS: Fetching with limit=${limit}, status=${status}, verbose=${verbose}`);
+    console.log(`\n🗳️ VOTE-REQUESTS: Fetching with limit=${limit}, status=${status}, verbose=${verbose}, ensureFresh=${ensureFresh}`);
     
     // First, try to use the persistent DuckDB index
     const indexPopulated = await voteRequestIndexer.isIndexPopulated();
     
-    if (indexPopulated) {
+    // If caller requests fresh/complete data, trigger a background rebuild and fall back to a deep scan
+    // for this response (so the UI isn't stuck with a stale/partial index).
+    if (indexPopulated && ensureFresh) {
+      if (!voteRequestIndexer.isIndexingInProgress()) {
+        console.log('   ensureFresh=true → triggering background VoteRequest index rebuild');
+        voteRequestIndexer.buildVoteRequestIndex({ force: true }).catch(err => {
+          console.error('Background index rebuild failed:', err);
+        });
+      }
+    } else if (indexPopulated) {
       console.log(`   Using persistent DuckDB index`);
       
       const voteRequests = await voteRequestIndexer.queryVoteRequests({ limit, status, offset });
