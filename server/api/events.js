@@ -463,18 +463,19 @@ router.get('/governance-history', async (req, res) => {
     console.log(`   OR choices: ${governanceChoices.slice(0, 5).join(', ')}...`);
     
     if (sources.primarySource === 'binary') {
+      // Governance events are rare - scan MORE files to find them
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: limit * 10, // Fetch more to filter down
+        limit: limit * 50, // Fetch many more to filter down (governance is sparse)
         offset,
-        maxDays: 365 * 2, // 2 years of history
-        maxFilesToScan: 1000,
+        maxDays: 365 * 3, // 3 years of history
+        maxFilesToScan: 5000, // Scan many more files for rare governance events
         sortBy: 'effective_at',
         filter: (e) => {
-          // Match by template (VoteRequest, Confirmation, etc.)
+          // Match by governance template (VoteRequest, Confirmation, etc.)
           const templateMatch = governanceTemplates.some(t => e.template_id?.includes(t));
           // OR match by governance choice
           const choiceMatch = governanceChoices.includes(e.choice);
-          // OR match DsoRules template with any choice (DsoRules is governance-specific)
+          // OR match DsoRules template (governance-specific)
           const dsoRulesMatch = e.template_id?.includes('DsoRules');
           return templateMatch || choiceMatch || dsoRulesMatch;
         }
