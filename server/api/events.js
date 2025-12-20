@@ -706,11 +706,15 @@ router.get('/vote-requests', async (req, res) => {
       // Also: many VoteRequests quickly become historical via an exercised (Archive/Accept/Reject/Expire) event.
       // Strategy: scan for BOTH created VoteRequests (payload-rich) and exercised VoteRequest events (closure signal).
 
+      // VoteRequest events are VERY sparse - need to scan many files but not absurdly many
+      // Practical limit: 10K files covers ~30-60 days depending on activity
+      const MAX_PRACTICAL_FILES = 10000;
+      
       const createdPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit: 10000, // Get as many as possible
         offset: 0,
         maxDays: 365 * 10, // 10 years - get everything we have
-        maxFilesToScan: 500000, // Scan as many files as exist
+        maxFilesToScan: MAX_PRACTICAL_FILES,
         sortBy: 'effective_at',
         filter: (e) => {
           return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
@@ -718,15 +722,14 @@ router.get('/vote-requests', async (req, res) => {
       });
 
       const exercisedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 100000, // exercised events can be more common; we only need contract_id + choice
+        limit: 100000,
         offset: 0,
         maxDays: 365 * 10,
-        maxFilesToScan: 500000,
+        maxFilesToScan: MAX_PRACTICAL_FILES,
         sortBy: 'effective_at',
         filter: (e) => {
           if (!e.template_id?.includes('VoteRequest')) return false;
           if (e.event_type !== 'exercised') return false;
-          // Archive is empty payload but is the main closure signal; keep other terminal choices too
           return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
         }
       });
@@ -823,6 +826,14 @@ router.get('/vote-requests', async (req, res) => {
       const sampleCreatedIds = createdResult.records.slice(0, 3).map(r => r.contract_id?.slice(0, 40));
       const sampleExercisedIds = (exercisedResult.records || []).slice(0, 3).map(r => r.contract_id?.slice(0, 40));
       
+      // Get date range of scanned data
+      const allDates = [...createdResult.records, ...(exercisedResult.records || [])]
+        .map(r => r.effective_at)
+        .filter(Boolean)
+        .sort();
+      const oldestDate = allDates[0] || null;
+      const newestDate = allDates[allDates.length - 1] || null;
+      
       return res.json({
         data: voteRequests,
         count: voteRequests.length,
@@ -845,6 +856,7 @@ router.get('/vote-requests', async (req, res) => {
           createdTotalFiles: createdResult.totalFiles || 0,
           exercisedFilesScanned: exercisedResult.filesScanned || 0,
           exercisedTotalFiles: exercisedResult.totalFiles || 0,
+          dateRangeCovered: { oldest: oldestDate, newest: newestDate },
           sampleCreatedContractIds: sampleCreatedIds,
           sampleExercisedContractIds: sampleExercisedIds,
         }
