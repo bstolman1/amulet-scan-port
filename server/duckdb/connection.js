@@ -107,6 +107,12 @@ export function query(sql, params = []) {
   });
 }
 
+// Helper to get a single row
+export async function queryOne(sql, params = []) {
+  const rows = await query(sql, params);
+  return rows[0] || null;
+}
+
 // Helper to get file glob pattern (supports both jsonl and parquet)
 export function getFileGlob(type = 'events', dateFilter = null, format = 'jsonl') {
   const ext = format === 'parquet' ? 'parquet' : 'jsonl';
