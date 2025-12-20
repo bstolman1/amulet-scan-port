@@ -649,6 +649,137 @@ router.get('/governance-history', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-requests - Dedicated endpoint for VoteRequest events with deep scanning
+router.get('/vote-requests', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const verbose = req.query.verbose === 'true';
+    const sources = getDataSources();
+    
+    console.log(`\n🗳️ VOTE-REQUESTS: Fetching with limit=${limit}, verbose=${verbose}`);
+    console.log(`   Primary source: ${sources.primarySource}`);
+    
+    if (sources.primarySource === 'binary') {
+      // VoteRequest events are VERY sparse (~26 per 275K events)
+      // Scan extensively to find them
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: limit * 500, // Need to scan many events to find VoteRequests
+        offset: 0,
+        maxDays: 365 * 3, // 3 years of history
+        maxFilesToScan: 50000, // Scan as many files as possible
+        sortBy: 'effective_at',
+        filter: (e) => {
+          // Only VoteRequest template
+          if (!e.template_id?.includes('VoteRequest')) return false;
+          // Only created events (have full payload with votes, requester, reason)
+          if (e.event_type !== 'created') return false;
+          return true;
+        }
+      });
+      
+      console.log(`   Found ${result.records.length} VoteRequest created events from binary files`);
+      
+      // Take only the requested limit
+      const limitedRecords = result.records.slice(0, limit);
+      
+      // Process to extract full VoteRequest details
+      const voteRequests = limitedRecords.map((event, idx) => {
+        if (verbose && idx < 3) {
+          console.log(`\n   📝 VoteRequest #${idx + 1}:`);
+          console.log(`      effective_at: ${event.effective_at}`);
+          console.log(`      action.tag: ${event.payload?.action?.tag || 'null'}`);
+          console.log(`      requester: ${event.payload?.requester || 'null'}`);
+          console.log(`      reason: ${event.payload?.reason?.slice(0, 100) || 'null'}`);
+          console.log(`      votes: ${event.payload?.votes ? `[${event.payload.votes.length} votes]` : 'null'}`);
+          console.log(`      voteBefore: ${event.payload?.voteBefore || 'null'}`);
+        }
+        
+        return {
+          event_id: event.event_id,
+          contract_id: event.contract_id,
+          template_id: event.template_id,
+          effective_at: event.effective_at,
+          timestamp: event.timestamp,
+          // VoteRequest-specific fields
+          action_tag: event.payload?.action?.tag || null,
+          action_value: event.payload?.action?.value || null,
+          requester: event.payload?.requester || null,
+          reason: event.payload?.reason || null,
+          votes: event.payload?.votes || [],
+          vote_before: event.payload?.voteBefore || null,
+          target_effective_at: event.payload?.targetEffectiveAt || null,
+          tracking_cid: event.payload?.trackingCid || null,
+          dso: event.payload?.dso || null,
+        };
+      });
+      
+      // Summary stats
+      const withReason = voteRequests.filter(v => v.reason).length;
+      const withVotes = voteRequests.filter(v => v.votes?.length > 0).length;
+      const actionTags = [...new Set(voteRequests.map(v => v.action_tag).filter(Boolean))];
+      
+      console.log(`\n   📊 VoteRequest stats:`);
+      console.log(`      Total found: ${voteRequests.length}`);
+      console.log(`      With reason: ${withReason}`);
+      console.log(`      With votes: ${withVotes}`);
+      console.log(`      Action types: ${actionTags.join(', ')}`);
+      
+      return res.json({
+        data: voteRequests,
+        count: voteRequests.length,
+        totalScanned: result.records.length,
+        source: sources.primarySource,
+        _summary: {
+          withReason,
+          withVotes,
+          actionTags,
+        }
+      });
+    }
+    
+    // Fallback to DuckDB/Parquet
+    const sql = `
+      SELECT 
+        event_id,
+        contract_id,
+        template_id,
+        effective_at,
+        timestamp,
+        payload
+      FROM ${getEventsSource()}
+      WHERE template_id LIKE '%VoteRequest%'
+        AND event_type = 'created'
+      ORDER BY effective_at DESC
+      LIMIT ${limit}
+    `;
+    
+    const rows = await db.safeQuery(sql);
+    console.log(`   Found ${rows.length} VoteRequest events from DuckDB`);
+    
+    const voteRequests = rows.map(row => ({
+      event_id: row.event_id,
+      contract_id: row.contract_id,
+      template_id: row.template_id,
+      effective_at: row.effective_at,
+      timestamp: row.timestamp,
+      action_tag: row.payload?.action?.tag || null,
+      action_value: row.payload?.action?.value || null,
+      requester: row.payload?.requester || null,
+      reason: row.payload?.reason || null,
+      votes: row.payload?.votes || [],
+      vote_before: row.payload?.voteBefore || null,
+      target_effective_at: row.payload?.targetEffectiveAt || null,
+      tracking_cid: row.payload?.trackingCid || null,
+      dso: row.payload?.dso || null,
+    }));
+    
+    res.json({ data: voteRequests, count: voteRequests.length, source: sources.primarySource });
+  } catch (err) {
+    console.error('Error fetching vote requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/template-scan - Scan all binary files to find unique templates (for debugging)
 router.get('/template-scan', async (req, res) => {
   try {
