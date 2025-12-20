@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +13,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell,
   ReferenceLine,
   Brush,
 } from "recharts";
@@ -53,7 +52,6 @@ interface CandleData {
   close: number;
   volume: number;
   isUp: boolean;
-  // For candlestick rendering
   bodyBottom: number;
   bodyHeight: number;
   wickLow: number;
@@ -65,6 +63,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
   const [brushStartIndex, setBrushStartIndex] = useState<number | undefined>(undefined);
   const [brushEndIndex, setBrushEndIndex] = useState<number | undefined>(undefined);
   const [selectedExchange, setSelectedExchange] = useState(exchange || 'krkn');
+  const [selectedInstrument, setSelectedInstrument] = useState(instrument || 'cc-usd');
 
   // Get available instruments for selected exchange
   const availableInstruments = useMemo(() => {
@@ -72,17 +71,15 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
     return ex?.instruments || ['cc-usd'];
   }, [selectedExchange]);
 
-  const [selectedInstrument, setSelectedInstrument] = useState(() => {
-    const ex = CC_EXCHANGES.find(e => e.value === (exchange || 'krkn'));
-    return ex?.instruments.includes(instrument || 'cc-usd') ? (instrument || 'cc-usd') : (ex?.instruments[0] || 'cc-usd');
-  });
-
-  // Update when parent exchange/instrument changes
-  useMemo(() => {
+  // Sync with parent props when they change
+  useEffect(() => {
     if (exchange && exchange !== selectedExchange) {
       setSelectedExchange(exchange);
+      const ex = CC_EXCHANGES.find(e => e.value === exchange);
+      const validInstrument = ex?.instruments.includes(instrument || '') ? instrument : ex?.instruments[0];
+      setSelectedInstrument(validInstrument || 'cc-usd');
     }
-  }, [exchange]);
+  }, [exchange, instrument]);
 
   const handleExchangeSelect = useCallback((value: string) => {
     setSelectedExchange(value);
