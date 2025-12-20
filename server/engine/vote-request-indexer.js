@@ -99,6 +99,51 @@ export async function isIndexPopulated() {
 }
 
 /**
+ * Ensure index tables exist
+ */
+async function ensureIndexTables() {
+  try {
+    // Create vote_requests table if it doesn't exist
+    await query(`
+      CREATE TABLE IF NOT EXISTS vote_requests (
+        event_id VARCHAR PRIMARY KEY,
+        contract_id VARCHAR,
+        template_id VARCHAR,
+        effective_at TIMESTAMP,
+        status VARCHAR,
+        is_closed BOOLEAN,
+        action_tag VARCHAR,
+        action_value VARCHAR,
+        requester VARCHAR,
+        reason VARCHAR,
+        votes VARCHAR,
+        vote_count INTEGER,
+        vote_before VARCHAR,
+        target_effective_at VARCHAR,
+        tracking_cid VARCHAR,
+        dso VARCHAR,
+        updated_at TIMESTAMP
+      )
+    `);
+    
+    // Create state table if it doesn't exist
+    await query(`
+      CREATE TABLE IF NOT EXISTS vote_request_index_state (
+        id INTEGER PRIMARY KEY,
+        last_indexed_file VARCHAR,
+        last_indexed_at TIMESTAMP,
+        total_indexed INTEGER
+      )
+    `);
+    
+    console.log('   ✓ Index tables ensured');
+  } catch (err) {
+    console.error('Error creating index tables:', err);
+    throw err;
+  }
+}
+
+/**
  * Build or update the VoteRequest index by scanning binary files
  */
 export async function buildVoteRequestIndex({ force = false } = {}) {
@@ -112,6 +157,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
   
   try {
     const startTime = Date.now();
+    
+    // Ensure tables exist first
+    await ensureIndexTables();
     
     // Scan for all VoteRequest created events
     console.log('   Scanning for VoteRequest created events...');
@@ -152,8 +200,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     
     // Clear existing data if force rebuild
     if (force) {
-      await query('DELETE FROM vote_requests');
-      console.log('   Cleared existing index');
+      try {
+        await query('DELETE FROM vote_requests');
+        console.log('   Cleared existing index');
+      } catch (err) {
+        // Table might not exist yet, ignore
+      }
     }
     
     // Insert vote requests
