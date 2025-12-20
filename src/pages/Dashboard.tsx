@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { fetchConfigData } from "@/lib/config-sync";
 import { useLocalOverviewStats, useLocalApiAvailable, useLocalDailyStats } from "@/hooks/use-local-stats";
 import { Badge } from "@/components/ui/badge";
-import { useLocalACSAvailable, useLocalACSStats, useLocalLatestACSSnapshot, useLocalACSTemplates } from "@/hooks/use-local-acs";
+import { useACSStatus, useLocalACSStats, useLocalLatestACSSnapshot, useLocalACSTemplates } from "@/hooks/use-local-acs";
 
 const Dashboard = () => {
   // Check if local API is available
@@ -21,7 +21,7 @@ const Dashboard = () => {
   const { data: dailyStats } = useLocalDailyStats(7);
   
   // Local ACS snapshot data
-  const { data: acsAvailable } = useLocalACSAvailable();
+  const { data: acsStatus } = useACSStatus();
   const { data: acsStats, isLoading: acsStatsLoading } = useLocalACSStats();
   const { data: latestAcsSnapshot, isLoading: acsSnapshotLoading } = useLocalLatestACSSnapshot();
   const { data: acsTemplates, isLoading: acsTemplatesLoading } = useLocalACSTemplates(10);
@@ -284,7 +284,7 @@ const Dashboard = () => {
         )}
 
         {/* Local ACS Snapshot Data - Only shown if ACS data is available */}
-        {acsAvailable && (
+        {acsStatus?.available && (
           <div>
             <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <FileText className="h-5 w-5 text-primary" />

@@ -23,8 +23,10 @@ const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
-// Keep only this many snapshots per migration (set to 1 to only keep latest)
-const MAX_SNAPSHOTS_PER_MIGRATION = parseInt(process.env.MAX_SNAPSHOTS_PER_MIGRATION) || 1;
+// Keep at least 2 snapshots per migration so that during a new snapshot fetch,
+// the previous complete snapshot is still available for queries.
+// Set to 1 only if you don't care about availability during snapshot updates.
+const MAX_SNAPSHOTS_PER_MIGRATION = parseInt(process.env.MAX_SNAPSHOTS_PER_MIGRATION) || 2;
 
 // In-memory buffer for batching
 let contractsBuffer = [];
