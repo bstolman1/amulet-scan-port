@@ -1365,15 +1365,16 @@ const GovernanceFlow = () => {
                             {/* Checkbox for bulk selection */}
                             {bulkSelectMode && (
                               <div 
-                                className="shrink-0 mr-3"
+                                className="shrink-0 mr-3 cursor-pointer"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  e.preventDefault();
                                   toggleItemSelection(group.primaryId);
                                 }}
                               >
                                 <Checkbox 
                                   checked={isSelected}
-                                  onCheckedChange={() => toggleItemSelection(group.primaryId)}
+                                  className="pointer-events-none"
                                 />
                               </div>
                             )}
