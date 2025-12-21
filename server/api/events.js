@@ -1000,6 +1000,72 @@ router.get('/vote-requests', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-requests/export - Export ALL raw VoteRequest events (for debugging)
+router.get('/vote-requests/export', async (req, res) => {
+  try {
+    const sources = getDataSources();
+
+    // Always export raw records so we can inspect payload fields used for deduplication.
+    // This endpoint is meant for debugging and may be large.
+    console.log(`\n📦 VOTE-REQUESTS EXPORT: source=${sources.primarySource}`);
+
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({
+        error: 'vote-requests/export currently only supports binary source',
+        source: sources.primarySource,
+      });
+    }
+
+    const templateIndexReady = await isTemplateIndexPopulated();
+    if (!templateIndexReady) {
+      return res.status(400).json({
+        error: 'Template index not populated yet (needed for efficient export).',
+      });
+    }
+
+    const voteRequestFiles = await getFilesForTemplate('VoteRequest');
+    console.log(`   📂 Export scanning ${voteRequestFiles.length} VoteRequest files...`);
+
+    const created = [];
+    const exercised = [];
+
+    for (const file of voteRequestFiles) {
+      try {
+        const result = await binaryReader.readBinaryFile(file);
+        for (const e of result.records || []) {
+          if (!e.template_id?.includes('VoteRequest')) continue;
+          if (e.event_type === 'created') {
+            created.push(e);
+          } else if (e.event_type === 'exercised') {
+            if (e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'))) {
+              exercised.push(e);
+            }
+          }
+        }
+      } catch {
+        // ignore unreadable files
+      }
+    }
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+
+    return res.json({
+      meta: {
+        createdCount: created.length,
+        exercisedCount: exercised.length,
+        filesScanned: voteRequestFiles.length,
+        exportedAt: new Date().toISOString(),
+      },
+      created,
+      exercised,
+    });
+  } catch (err) {
+    console.error('Error exporting vote requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/template-scan - Scan all binary files to find unique templates (for debugging)
 router.get('/template-scan', async (req, res) => {
   try {
