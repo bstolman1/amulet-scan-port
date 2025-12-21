@@ -41,9 +41,10 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const REPO_DATA_DIR = path.join(path.resolve(__dirname, '..', '..'), 'data');
 // Default WSL path: /mnt/c/ledger_raw
 const WSL_DEFAULT = '/mnt/c/ledger_raw';
-const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+const DATA_DIR = process.env.DATA_DIR || (fs.existsSync(REPO_DATA_DIR) ? REPO_DATA_DIR : WSL_DEFAULT);
 
 // Track state
 let lastTimestamp = null;
