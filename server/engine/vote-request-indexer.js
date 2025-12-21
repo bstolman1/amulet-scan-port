@@ -108,49 +108,53 @@ export async function isIndexPopulated() {
  * Ensure index tables exist
  */
 /**
- * Generate a stable identifier for a VoteRequest that persists across migrations.
- * Prefer truly stable fields if present:
- *  - payload.trackingCid
- *  - any other payload field ending in *Cid / *cid (recursively)
- *  - contract_key (if present)
- * Fallback: hash of action/value/requester/reason.
+ * Extract candidate stable identifiers from a payload.
+ * We look for any leaf string field whose key ends with "Cid" (case-insensitive).
  */
-function generateStableVoteRequestId(event) {
+function extractCidCandidates(payload) {
+  const out = [];
+  const walk = (obj, prefix = '') => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      if (typeof v === 'string' && /cid$/i.test(k) && v.length > 0) {
+        out.push({ path, value: v });
+      } else if (v && typeof v === 'object') {
+        walk(v, path);
+      }
+    }
+  };
+  walk(payload);
+  return out;
+}
+
+function getValueAtPath(obj, path) {
+  try {
+    return path.split('.').reduce((acc, k) => (acc && typeof acc === 'object' ? acc[k] : undefined), obj);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Generate a stable identifier for a VoteRequest that persists across migrations.
+ * Strategy:
+ *  1) Use payload.trackingCid when present.
+ *  2) Otherwise, use the "best" *Cid field across the dataset (chosen in buildVoteRequestIndex).
+ *  3) Fallback: hash of action/value/requester/reason.
+ */
+function generateStableVoteRequestId(event, bestCidPath) {
   const payload = event?.payload;
 
   const trackingCid = payload?.trackingCid;
   if (typeof trackingCid === 'string' && trackingCid.length > 0) {
-    return `trackingCid:${trackingCid}`;
+    return { stableId: `trackingCid:${trackingCid}`, kind: 'trackingCid' };
   }
 
-  // Heuristic: scan payload recursively for other stable *Cid identifiers
-  const findCidCandidates = (obj, prefix = '', out = []) => {
-    if (!obj || typeof obj !== 'object') return out;
-    for (const [k, v] of Object.entries(obj)) {
-      const path = prefix ? `${prefix}.${k}` : k;
-      if (typeof v === 'string' && /cid$/i.test(k) && v.length > 0) {
-        out.push([path, v]);
-      } else if (v && typeof v === 'object') {
-        findCidCandidates(v, path, out);
-      }
-    }
-    return out;
-  };
-
-  const candidates = findCidCandidates(payload);
-  if (candidates.length > 0) {
-    // Deterministic pick: sort by path name, then value
-    candidates.sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1]));
-    const [path, value] = candidates[0];
-    return `payloadCid:${path}:${value}`;
-  }
-
-  // contract_key can be stable even when contract_id changes across migrations
-  if (event?.contract_key) {
-    try {
-      return `contractKey:${JSON.stringify(event.contract_key)}`;
-    } catch {
-      // ignore
+  if (bestCidPath) {
+    const v = getValueAtPath(payload, bestCidPath);
+    if (typeof v === 'string' && v.length > 0) {
+      return { stableId: `payloadCid:${bestCidPath}:${v}`, kind: 'payloadCid' };
     }
   }
 
@@ -179,7 +183,7 @@ function generateStableVoteRequestId(event) {
   };
 
   const hash = cyrb53(composite);
-  return `${actionTag}-${hash.toString(36)}`;
+  return { stableId: `${actionTag}-${hash.toString(36)}`, kind: 'hash' };
 }
 
 async function ensureIndexTables() {
@@ -292,21 +296,42 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       exercisedRecords = result.exercised;
     }
     
-    // Dedupe created records by STABLE ID, keeping newest by effective_at
-    // Stable ID prefers trackingCid/contract_key to survive contract_id changes across migrations.
+    // Dedupe created records by STABLE ID, keeping newest by effective_at.
+    // We first discover which *Cid field (other than trackingCid) is the best candidate
+    // by looking for the path with the highest number of unique values.
     const stableIdMap = new Map();
     const contractIdToStableId = new Map();
 
-    // Simple counters to verify the chosen stable key is behaving as expected
-    let withTrackingCid = 0;
-    let withContractKey = 0;
+    // Pass 1: find the best payload *Cid path
+    const cidPathToValues = new Map();
+    for (const e of createdRecords) {
+      if (typeof e?.payload?.trackingCid === 'string' && e.payload.trackingCid.length > 0) continue;
+      for (const c of extractCidCandidates(e.payload)) {
+        if (c.path === 'trackingCid') continue;
+        if (!cidPathToValues.has(c.path)) cidPathToValues.set(c.path, new Set());
+        cidPathToValues.get(c.path).add(c.value);
+      }
+    }
+
+    let bestCidPath = null;
+    let bestCidUniques = 0;
+    for (const [path, set] of cidPathToValues.entries()) {
+      const uniques = set.size;
+      if (uniques > bestCidUniques) {
+        bestCidUniques = uniques;
+        bestCidPath = path;
+      }
+    }
+
+    console.log(`   🔍 Stable-id candidate: bestCidPath=${bestCidPath || 'none'} (unique=${bestCidUniques})`);
+
+    // Pass 2: generate stable IDs and dedupe
+    const kindCounts = { trackingCid: 0, payloadCid: 0, hash: 0 };
 
     for (const event of createdRecords) {
-      const stableId = generateStableVoteRequestId(event);
+      const { stableId, kind } = generateStableVoteRequestId(event, bestCidPath);
       if (!stableId) continue;
-
-      if (stableId.startsWith('trackingCid:')) withTrackingCid++;
-      if (stableId.startsWith('contractKey:')) withContractKey++;
+      kindCounts[kind] = (kindCounts[kind] || 0) + 1;
 
       event._stableId = stableId;
       if (event.contract_id) contractIdToStableId.set(event.contract_id, stableId);
@@ -320,7 +345,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const dedupedRecords = Array.from(stableIdMap.values());
 
     console.log(`   📊 Deduplication: ${createdRecords.length} total → ${dedupedRecords.length} unique (stable_id)`);
-    console.log(`      Stable key coverage: trackingCid=${withTrackingCid}, contractKey=${withContractKey}`);
+    console.log(`      Stable-id kind usage: trackingCid=${kindCounts.trackingCid}, payloadCid=${kindCounts.payloadCid}, hash=${kindCounts.hash}`);
     
     console.log(`   ✓ Found ${createdRecords.length} created (${dedupedRecords.length} unique), ${exercisedRecords.length} exercised`);
     
