@@ -492,8 +492,17 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     console.log(`   📂 Found ${files.length} total ${type} files`);
   } else {
     files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });
+
+    // Fallback: if date-based scan finds nothing (timezone/partition mismatch), do a capped full scan
+    if (files.length === 0) {
+      console.log(`   ⚠️ Fast scan found 0 ${type} files. Falling back to capped full scan...`);
+      const all = findBinaryFiles(dirPath, type);
+      all.sort((a, b) => extractWriteTimestampFromPath(b) - extractWriteTimestampFromPath(a));
+      files = all.slice(0, maxFilesToScanLimit);
+      console.log(`   📂 Fallback scan selected ${files.length}/${all.length} ${type} files`);
+    }
   }
-  
+
   if (files.length === 0) {
     return { records: [], total: 0, hasMore: false };
   }
