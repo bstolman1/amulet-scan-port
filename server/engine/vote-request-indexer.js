@@ -109,20 +109,38 @@ export async function isIndexPopulated() {
  */
 /**
  * Generate a stable identifier for a VoteRequest that persists across migrations.
- * Uses action_tag + action_value + requester + reason since these define what the vote is about.
- * Uses a proper 53-bit hash to avoid collisions.
+ * Prefer truly stable fields if present:
+ *  - payload.trackingCid (best)
+ *  - contract_key (often stable across migrations)
+ * Fallback: hash of action/value/requester/reason.
  */
-function generateStableVoteRequestId(payload) {
+function generateStableVoteRequestId(event) {
+  const payload = event?.payload;
+
+  const trackingCid = payload?.trackingCid;
+  if (typeof trackingCid === 'string' && trackingCid.length > 0) {
+    return `trackingCid:${trackingCid}`;
+  }
+
+  // contract_key can be stable even when contract_id changes across migrations
+  if (event?.contract_key) {
+    try {
+      return `contractKey:${JSON.stringify(event.contract_key)}`;
+    } catch {
+      // ignore
+    }
+  }
+
   const actionTag = payload?.action?.tag || '';
   const actionValue = payload?.action?.value ? JSON.stringify(payload.action.value) : '';
   const requester = payload?.requester || '';
-  const reason = payload?.reason ? (typeof payload.reason === 'string' ? payload.reason : JSON.stringify(payload.reason)) : '';
-  
-  // Create a stable composite key with all unique fields
+  const reason = payload?.reason
+    ? (typeof payload.reason === 'string' ? payload.reason : JSON.stringify(payload.reason))
+    : '';
+
   const composite = `${actionTag}::${actionValue}::${requester}::${reason}`;
-  
-  // Use cyrb53 hash - a proper 53-bit hash with good distribution
-  // Source: https://github.com/bryc/code/blob/master/jshash/experimental/cyrb53.js
+
+  // cyrb53 hash - 53-bit hash with good distribution
   const cyrb53 = (str, seed = 0) => {
     let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
     for (let i = 0, ch; i < str.length; i++) {
@@ -136,10 +154,8 @@ function generateStableVoteRequestId(payload) {
     h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
     return 4294967296 * (2097151 & h2) + (h1 >>> 0);
   };
-  
+
   const hash = cyrb53(composite);
-  
-  // Use the hash combined with action_tag for readability
   return `${actionTag}-${hash.toString(36)}`;
 }
 
@@ -253,44 +269,46 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       exercisedRecords = result.exercised;
     }
     
-    // Dedupe created records by STABLE ID (action + requester), keeping newest by effective_at
-    // This correctly handles the same VoteRequest getting new contract_ids during ledger migrations
+    // Dedupe created records by STABLE ID, keeping newest by effective_at
+    // Stable ID prefers trackingCid/contract_key to survive contract_id changes across migrations.
     const stableIdMap = new Map();
+    const contractIdToStableId = new Map();
+
+    // Simple counters to verify the chosen stable key is behaving as expected
+    let withTrackingCid = 0;
+    let withContractKey = 0;
+
     for (const event of createdRecords) {
-      const stableId = generateStableVoteRequestId(event.payload);
-      if (!stableId || stableId === '-0') continue; // Skip if no meaningful payload
-      
-      // Attach stableId to event for later use
+      const stableId = generateStableVoteRequestId(event);
+      if (!stableId) continue;
+
+      if (stableId.startsWith('trackingCid:')) withTrackingCid++;
+      if (stableId.startsWith('contractKey:')) withContractKey++;
+
       event._stableId = stableId;
-      
+      if (event.contract_id) contractIdToStableId.set(event.contract_id, stableId);
+
       const existing = stableIdMap.get(stableId);
       if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
         stableIdMap.set(stableId, event);
       }
     }
+
     const dedupedRecords = Array.from(stableIdMap.values());
-    
-    console.log(`   📊 Deduplication: ${createdRecords.length} total → ${dedupedRecords.length} unique (by action+requester)`);
+
+    console.log(`   📊 Deduplication: ${createdRecords.length} total → ${dedupedRecords.length} unique (stable_id)`);
+    console.log(`      Stable key coverage: trackingCid=${withTrackingCid}, contractKey=${withContractKey}`);
     
     console.log(`   ✓ Found ${createdRecords.length} created (${dedupedRecords.length} unique), ${exercisedRecords.length} exercised`);
     
-    // Build set of closed stable IDs (not contract IDs, since those change across migrations)
-    // We need to look at the exercised events and match them to their original VoteRequest
+    // Build set of closed stable IDs (not contract IDs, since those can change across migrations)
     const closedStableIds = new Set();
     for (const exercised of exercisedRecords) {
-      // For exercised events, we need to find the original VoteRequest by contract_id
-      // and then use its stable_id
       const cid = exercised.contract_id;
       if (!cid) continue;
-      
-      // Find the created event with this contract_id to get its stable_id
-      const matchingCreated = createdRecords.find(c => c.contract_id === cid);
-      if (matchingCreated) {
-        const stableId = generateStableVoteRequestId(matchingCreated.payload);
-        if (stableId && stableId !== '-0') {
-          closedStableIds.add(stableId);
-        }
-      }
+
+      const stableId = contractIdToStableId.get(cid);
+      if (stableId) closedStableIds.add(stableId);
     }
     
     const now = new Date();
