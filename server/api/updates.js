@@ -37,6 +37,30 @@ function getDataSources() {
   };
 }
 
+// GET /api/updates/debug
+router.get('/debug', async (req, res) => {
+  try {
+    const dirPath = db.DATA_PATH;
+    const type = 'updates';
+
+    const hasBinary = binaryReader.hasBinaryFiles(dirPath, type);
+    const fastFiles = binaryReader.findBinaryFilesFast(dirPath, type, { maxDays: 30, maxFiles: 20 });
+    const fullFiles = binaryReader.findBinaryFiles(dirPath, type);
+
+    res.json({
+      dataPath: dirPath,
+      hasBinary,
+      fastScanSampleCount: fastFiles.length,
+      fastScanSample: fastFiles.slice(0, 5),
+      fullScanCount: fullFiles.length,
+      fullScanSample: fullFiles.slice(0, 5),
+    });
+  } catch (err) {
+    console.error('Error debugging updates source:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/updates/latest
 router.get('/latest', async (req, res) => {
   try {
@@ -52,7 +76,14 @@ router.get('/latest', async (req, res) => {
         maxFilesToScan: 200,
         sortBy: 'record_time',
       });
-      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
+      return res.json({
+        data: result.records,
+        count: result.records.length,
+        hasMore: result.hasMore,
+        source: 'binary',
+        filesScanned: result.filesScanned,
+        totalFiles: result.totalFiles,
+      });
     }
 
     const sql = `
