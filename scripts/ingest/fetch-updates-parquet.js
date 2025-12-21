@@ -17,7 +17,7 @@ import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './parquet-schema.js';
 // Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId, shutdown as shutdownWriter } from './write-binary.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -521,11 +521,17 @@ async function shutdown() {
   console.log('\n🛑 Shutting down...');
   isRunning = false;
   
-  // Flush remaining data
+  // Flush remaining data AND wait for all writes to complete
+  console.log('💾 Flushing buffers and waiting for writes to complete...');
   const flushed = await flushAll();
   if (flushed.length > 0) {
-    console.log(`💾 Flushed ${flushed.length} files on shutdown`);
+    console.log(`💾 Flushed ${flushed.length} files`);
   }
+  
+  // Properly shut down the writer pool (waits for workers to finish)
+  console.log('⏳ Shutting down writer pool...');
+  await shutdownWriter();
+  console.log('✅ Writer pool shutdown complete');
   
   // Save final live cursor state
   if (LIVE_MODE && lastTimestamp) {
