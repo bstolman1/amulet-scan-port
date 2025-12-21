@@ -20,15 +20,25 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_DATA_DIR = join(resolve(__dirname, '..', '..'), 'data');
 
-// Configuration - Default WSL path: /mnt/c/ledger_raw
+// Configuration - Default paths checked in order
 const WSL_DEFAULT = '/mnt/c/ledger_raw';
-const BASE_DATA_DIR_RAW = process.env.DATA_DIR || (existsSync(REPO_DATA_DIR) ? REPO_DATA_DIR : WSL_DEFAULT);
+const WINDOWS_DEFAULT = 'C:\\\\ledger_raw';
 
-// Safety: require an absolute path to avoid accidentally writing outside the intended directory.
-// (resolve() will make it absolute, but we still fail fast if a relative path was provided.)
-if (process.env.DATA_DIR && !isAbsolute(process.env.DATA_DIR)) {
-  throw new Error(`[write-binary] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
+function selectBaseDataDir() {
+  if (process.env.DATA_DIR) {
+    if (!isAbsolute(process.env.DATA_DIR)) {
+      throw new Error(`[write-binary] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
+    }
+    return process.env.DATA_DIR;
+  }
+
+  if (existsSync(REPO_DATA_DIR)) return REPO_DATA_DIR;
+  if (existsSync(WSL_DEFAULT)) return WSL_DEFAULT;
+  if (existsSync(WINDOWS_DEFAULT)) return WINDOWS_DEFAULT;
+  return WSL_DEFAULT; // Fallback for consistency
 }
+
+const BASE_DATA_DIR_RAW = selectBaseDataDir();
 
 const BASE_DATA_DIR = resolve(BASE_DATA_DIR_RAW);
 const DATA_DIR = join(BASE_DATA_DIR, 'raw'); // Binary files go in raw/ subdirectory
