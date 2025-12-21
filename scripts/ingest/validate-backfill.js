@@ -27,7 +27,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration - defaults to WSL paths, can override with env vars
-const BASE_DATA_DIR = process.env.DATA_DIR || '/home/bstolz/canton-explorer/data';
+const BASE_DATA_DIR = process.env.DATA_DIR || '/mnt/c/ledger_raw';
 const CURSOR_DIR = process.env.CURSOR_DIR || path.join(BASE_DATA_DIR, 'cursors');
 const RAW_DIR = process.env.RAW_DIR || path.join(BASE_DATA_DIR, 'raw');
 

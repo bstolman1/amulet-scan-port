@@ -41,8 +41,8 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Default WSL path: /home/bstolz/canton-explorer/data
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+// Default WSL path: /mnt/c/ledger_raw
+const WSL_DEFAULT = '/mnt/c/ledger_raw';
 const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 
 // Track state

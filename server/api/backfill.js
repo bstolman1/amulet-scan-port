@@ -14,7 +14,7 @@ const router = Router();
 
 // Path to data directory - configurable via env var for WSL/cross-platform support
 // Prefer repo-local ./data if present (matches server/duckdb/connection.js)
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+const WSL_DEFAULT = '/mnt/c/ledger_raw';
 const REPO_DATA_DIR = join(__dirname, '../../data');
 const repoCursorDir = join(REPO_DATA_DIR, 'cursors');
 
