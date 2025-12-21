@@ -109,26 +109,38 @@ export async function isIndexPopulated() {
  */
 /**
  * Generate a stable identifier for a VoteRequest that persists across migrations.
- * Uses action_tag + action_value + requester since these define what the vote is about.
+ * Uses action_tag + action_value + requester + reason since these define what the vote is about.
+ * Uses a proper 53-bit hash to avoid collisions.
  */
 function generateStableVoteRequestId(payload) {
   const actionTag = payload?.action?.tag || '';
   const actionValue = payload?.action?.value ? JSON.stringify(payload.action.value) : '';
   const requester = payload?.requester || '';
+  const reason = payload?.reason ? (typeof payload.reason === 'string' ? payload.reason : JSON.stringify(payload.reason)) : '';
   
-  // Create a stable composite key
-  const composite = `${actionTag}::${actionValue}::${requester}`;
+  // Create a stable composite key with all unique fields
+  const composite = `${actionTag}::${actionValue}::${requester}::${reason}`;
   
-  // Simple hash to create a shorter identifier
-  let hash = 0;
-  for (let i = 0; i < composite.length; i++) {
-    const char = composite.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
+  // Use cyrb53 hash - a proper 53-bit hash with good distribution
+  // Source: https://github.com/bryc/code/blob/master/jshash/experimental/cyrb53.js
+  const cyrb53 = (str, seed = 0) => {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0, ch; i < str.length; i++) {
+      ch = str.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  };
+  
+  const hash = cyrb53(composite);
   
   // Use the hash combined with action_tag for readability
-  return `${actionTag}-${Math.abs(hash).toString(36)}`;
+  return `${actionTag}-${hash.toString(36)}`;
 }
 
 async function ensureIndexTables() {
@@ -396,7 +408,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       uniqueVoteRequests: inserted,
       inserted,
       updated,
-      closedCount: closedContractIds.size,
+      closedCount: closedStableIds.size,
       elapsedSeconds: parseFloat(elapsed),
     };
     
