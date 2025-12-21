@@ -22,7 +22,7 @@ const REPO_DATA_DIR = join(resolve(__dirname, '..', '..'), 'data');
 
 // Configuration - Default paths checked in order
 const WSL_DEFAULT = '/mnt/c/ledger_raw';
-const WINDOWS_DEFAULT = 'C:\\\\ledger_raw';
+const WINDOWS_DEFAULT = 'C:\\ledger_raw';
 
 function selectBaseDataDir() {
   if (process.env.DATA_DIR) {
