@@ -283,32 +283,73 @@ export async function readBinaryFile(filePath) {
   const recordKey = isEvents ? 'events' : 'updates';
   
   const fileBuffer = fs.readFileSync(filePath);
+  
+  // Debug: log file size
+  console.log(`[binary-reader] Reading ${basename}: ${fileBuffer.length} bytes`);
+  
+  if (fileBuffer.length === 0) {
+    console.warn(`[binary-reader] File is empty: ${filePath}`);
+    return { type: recordKey, count: 0, records: [] };
+  }
+  
   const allRecords = [];
   let offset = 0;
+  let chunkIndex = 0;
   
   // Read chunks: [4-byte length][compressed data]...
   while (offset < fileBuffer.length) {
-    if (offset + 4 > fileBuffer.length) break;
+    if (offset + 4 > fileBuffer.length) {
+      console.warn(`[binary-reader] Incomplete length header at offset ${offset}`);
+      break;
+    }
     
     const chunkLength = fileBuffer.readUInt32BE(offset);
     offset += 4;
     
-    if (offset + chunkLength > fileBuffer.length) break;
+    if (chunkLength === 0) {
+      console.warn(`[binary-reader] Zero-length chunk at index ${chunkIndex}`);
+      continue;
+    }
+    
+    if (offset + chunkLength > fileBuffer.length) {
+      console.warn(`[binary-reader] Chunk ${chunkIndex} would exceed file bounds: needs ${chunkLength} bytes at offset ${offset}, file size ${fileBuffer.length}`);
+      break;
+    }
     
     const compressedChunk = fileBuffer.subarray(offset, offset + chunkLength);
     offset += chunkLength;
     
     // Decompress chunk
-    const decompressed = await decompress(compressedChunk);
+    let decompressed;
+    try {
+      decompressed = await decompress(compressedChunk);
+    } catch (err) {
+      console.error(`[binary-reader] Failed to decompress chunk ${chunkIndex}: ${err.message}`);
+      chunkIndex++;
+      continue;
+    }
     
     // Decode protobuf
-    const message = BatchType.decode(decompressed);
+    let message;
+    try {
+      message = BatchType.decode(decompressed);
+    } catch (err) {
+      console.error(`[binary-reader] Failed to decode protobuf chunk ${chunkIndex}: ${err.message}`);
+      chunkIndex++;
+      continue;
+    }
+    
     const records = message[recordKey] || [];
+    console.log(`[binary-reader] Chunk ${chunkIndex}: decompressed ${decompressed.length} bytes, decoded ${records.length} ${recordKey}`);
 
     for (const r of records) {
       allRecords.push(toPlainObject(r, isEvents, filePath));
     }
+    
+    chunkIndex++;
   }
+  
+  console.log(`[binary-reader] Total: ${chunkIndex} chunks, ${allRecords.length} records from ${basename}`);
   
   return {
     type: recordKey,
