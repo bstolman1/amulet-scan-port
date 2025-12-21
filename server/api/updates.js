@@ -47,6 +47,17 @@ router.get('/debug', async (req, res) => {
     const fastFiles = binaryReader.findBinaryFilesFast(dirPath, type, { maxDays: 30, maxFiles: 20 });
     const fullFiles = binaryReader.findBinaryFiles(dirPath, type);
 
+    // Try to read the first file to diagnose decode issues
+    let singleFileResult = null;
+    let singleFileError = null;
+    if (fastFiles.length > 0) {
+      try {
+        singleFileResult = await binaryReader.readBinaryFile(fastFiles[0]);
+      } catch (err) {
+        singleFileError = err.message;
+      }
+    }
+
     res.json({
       dataPath: dirPath,
       hasBinary,
@@ -54,6 +65,11 @@ router.get('/debug', async (req, res) => {
       fastScanSample: fastFiles.slice(0, 5),
       fullScanCount: fullFiles.length,
       fullScanSample: fullFiles.slice(0, 5),
+      singleFileTest: {
+        file: fastFiles[0] || null,
+        result: singleFileResult ? { type: singleFileResult.type, count: singleFileResult.count, sampleRecord: singleFileResult.records?.[0] } : null,
+        error: singleFileError,
+      },
     });
   } catch (err) {
     console.error('Error debugging updates source:', err);
