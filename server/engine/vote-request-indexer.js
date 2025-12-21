@@ -110,8 +110,9 @@ export async function isIndexPopulated() {
 /**
  * Generate a stable identifier for a VoteRequest that persists across migrations.
  * Prefer truly stable fields if present:
- *  - payload.trackingCid (best)
- *  - contract_key (often stable across migrations)
+ *  - payload.trackingCid
+ *  - any other payload field ending in *Cid / *cid (recursively)
+ *  - contract_key (if present)
  * Fallback: hash of action/value/requester/reason.
  */
 function generateStableVoteRequestId(event) {
@@ -120,6 +121,28 @@ function generateStableVoteRequestId(event) {
   const trackingCid = payload?.trackingCid;
   if (typeof trackingCid === 'string' && trackingCid.length > 0) {
     return `trackingCid:${trackingCid}`;
+  }
+
+  // Heuristic: scan payload recursively for other stable *Cid identifiers
+  const findCidCandidates = (obj, prefix = '', out = []) => {
+    if (!obj || typeof obj !== 'object') return out;
+    for (const [k, v] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      if (typeof v === 'string' && /cid$/i.test(k) && v.length > 0) {
+        out.push([path, v]);
+      } else if (v && typeof v === 'object') {
+        findCidCandidates(v, path, out);
+      }
+    }
+    return out;
+  };
+
+  const candidates = findCidCandidates(payload);
+  if (candidates.length > 0) {
+    // Deterministic pick: sort by path name, then value
+    candidates.sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1]));
+    const [path, value] = candidates[0];
+    return `payloadCid:${path}:${value}`;
   }
 
   // contract_key can be stable even when contract_id changes across migrations
@@ -424,6 +447,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     return {
       status: 'complete',
       uniqueVoteRequests: inserted,
+      totalIndexed: inserted,
       inserted,
       updated,
       closedCount: closedStableIds.size,
