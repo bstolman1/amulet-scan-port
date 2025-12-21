@@ -41,9 +41,26 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Default WSL path: /mnt/c/ledger_raw
+const REPO_DATA_DIR = path.join(path.resolve(__dirname, '..', '..'), 'data');
+// Default paths (checked in order)
 const WSL_DEFAULT = '/mnt/c/ledger_raw';
-const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+const WINDOWS_DEFAULT = 'C:\\\\ledger_raw';
+
+function selectBaseDataDir() {
+  if (process.env.DATA_DIR) {
+    if (!path.isAbsolute(process.env.DATA_DIR)) {
+      throw new Error(`[fetch-updates] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
+    }
+    return process.env.DATA_DIR;
+  }
+
+  if (fs.existsSync(REPO_DATA_DIR)) return REPO_DATA_DIR;
+  if (fs.existsSync(WSL_DEFAULT)) return WSL_DEFAULT;
+  if (fs.existsSync(WINDOWS_DEFAULT)) return WINDOWS_DEFAULT;
+  return WSL_DEFAULT; // Fallback for consistent behavior
+}
+
+const DATA_DIR = selectBaseDataDir();
 
 // Track state
 let lastTimestamp = null;
