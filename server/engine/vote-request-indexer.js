@@ -68,7 +68,7 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
   
   const results = await query(`
     SELECT 
-      event_id, contract_id, template_id, effective_at,
+      stable_id, event_id, contract_id, template_id, effective_at,
       status, is_closed, action_tag, action_value,
       requester, reason, votes, vote_count,
       vote_before, target_effective_at, tracking_cid, dso
@@ -107,14 +107,39 @@ export async function isIndexPopulated() {
 /**
  * Ensure index tables exist
  */
+/**
+ * Generate a stable identifier for a VoteRequest that persists across migrations.
+ * Uses action_tag + action_value + requester since these define what the vote is about.
+ */
+function generateStableVoteRequestId(payload) {
+  const actionTag = payload?.action?.tag || '';
+  const actionValue = payload?.action?.value ? JSON.stringify(payload.action.value) : '';
+  const requester = payload?.requester || '';
+  
+  // Create a stable composite key
+  const composite = `${actionTag}::${actionValue}::${requester}`;
+  
+  // Simple hash to create a shorter identifier
+  let hash = 0;
+  for (let i = 0; i < composite.length; i++) {
+    const char = composite.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  
+  // Use the hash combined with action_tag for readability
+  return `${actionTag}-${Math.abs(hash).toString(36)}`;
+}
+
 async function ensureIndexTables() {
   try {
     // Create vote_requests table if it doesn't exist
-    // Use contract_id as primary key since each VoteRequest contract is unique
-    // (event_id can have duplicates across migration_ids)
+    // Use stable_id as primary key - a composite of action+requester that persists across migrations
+    // This correctly deduplicates VoteRequests that get new contract_ids during ledger upgrades
     await query(`
       CREATE TABLE IF NOT EXISTS vote_requests (
-        contract_id VARCHAR PRIMARY KEY,
+        stable_id VARCHAR PRIMARY KEY,
+        contract_id VARCHAR,
         event_id VARCHAR,
         template_id VARCHAR,
         effective_at TIMESTAMP,
@@ -216,25 +241,45 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       exercisedRecords = result.exercised;
     }
     
-    // Dedupe created records by contract_id (keep newest by effective_at)
-    // This handles duplicates from multiple migration_ids or ingestion passes
-    const contractMap = new Map();
+    // Dedupe created records by STABLE ID (action + requester), keeping newest by effective_at
+    // This correctly handles the same VoteRequest getting new contract_ids during ledger migrations
+    const stableIdMap = new Map();
     for (const event of createdRecords) {
-      const cid = event.contract_id;
-      if (!cid) continue;
-      const existing = contractMap.get(cid);
+      const stableId = generateStableVoteRequestId(event.payload);
+      if (!stableId || stableId === '-0') continue; // Skip if no meaningful payload
+      
+      // Attach stableId to event for later use
+      event._stableId = stableId;
+      
+      const existing = stableIdMap.get(stableId);
       if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
-        contractMap.set(cid, event);
+        stableIdMap.set(stableId, event);
       }
     }
-    const dedupedRecords = Array.from(contractMap.values());
+    const dedupedRecords = Array.from(stableIdMap.values());
+    
+    console.log(`   📊 Deduplication: ${createdRecords.length} total → ${dedupedRecords.length} unique (by action+requester)`);
     
     console.log(`   ✓ Found ${createdRecords.length} created (${dedupedRecords.length} unique), ${exercisedRecords.length} exercised`);
     
-    // Build set of closed contract IDs
-    const closedContractIds = new Set(
-      exercisedRecords.map(r => r.contract_id).filter(Boolean)
-    );
+    // Build set of closed stable IDs (not contract IDs, since those change across migrations)
+    // We need to look at the exercised events and match them to their original VoteRequest
+    const closedStableIds = new Set();
+    for (const exercised of exercisedRecords) {
+      // For exercised events, we need to find the original VoteRequest by contract_id
+      // and then use its stable_id
+      const cid = exercised.contract_id;
+      if (!cid) continue;
+      
+      // Find the created event with this contract_id to get its stable_id
+      const matchingCreated = createdRecords.find(c => c.contract_id === cid);
+      if (matchingCreated) {
+        const stableId = generateStableVoteRequestId(matchingCreated.payload);
+        if (stableId && stableId !== '-0') {
+          closedStableIds.add(stableId);
+        }
+      }
+    }
     
     const now = new Date();
     
@@ -253,9 +298,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let updated = 0;
     
     for (const event of dedupedRecords) {
+      const stableId = event._stableId;
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-      const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
+      const isClosed = closedStableIds.has(stableId);
       const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
       
       // Normalize reason - can be string or object
@@ -265,6 +311,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         : null;
       
       const voteRequest = {
+        stable_id: stableId,
         event_id: event.event_id,
         contract_id: event.contract_id,
         template_id: event.template_id,
@@ -284,15 +331,16 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       };
       
       try {
-        // Upsert - insert or update on conflict by contract_id (unique per VoteRequest)
+        // Upsert - insert or update on conflict by stable_id (unique per logical VoteRequest)
         await query(`
           INSERT INTO vote_requests (
-            contract_id, event_id, template_id, effective_at,
+            stable_id, contract_id, event_id, template_id, effective_at,
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
             updated_at
           ) VALUES (
+            '${voteRequest.stable_id}',
             '${voteRequest.contract_id}',
             '${voteRequest.event_id}',
             ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
@@ -311,7 +359,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
             now()
           )
-          ON CONFLICT (contract_id) DO UPDATE SET
+          ON CONFLICT (stable_id) DO UPDATE SET
+            contract_id = EXCLUDED.contract_id,
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
             votes = EXCLUDED.votes,
@@ -338,12 +387,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     `);
     
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
+    console.log(`✅ VoteRequest index built: ${inserted} unique VoteRequests indexed in ${elapsed}s`);
     
     indexingInProgress = false;
     
     return {
       status: 'complete',
+      uniqueVoteRequests: inserted,
       inserted,
       updated,
       closedCount: closedContractIds.size,
