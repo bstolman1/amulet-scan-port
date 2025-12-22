@@ -43,7 +43,13 @@ async function ensureIndexTables() {
       PRIMARY KEY (file_path, template_name)
     )
   `);
-  
+
+  // DuckDB requires a UNIQUE index for ON CONFLICT composite targets
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_template_file_index_pk
+    ON template_file_index(file_path, template_name)
+  `);
+
   // Index state tracking table
   await query(`
     CREATE TABLE IF NOT EXISTS template_file_index_state (
@@ -55,7 +61,13 @@ async function ensureIndexTables() {
       build_duration_seconds REAL
     )
   `);
-  
+
+  // DuckDB requires a UNIQUE index for ON CONFLICT (id)
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_template_file_index_state_id
+    ON template_file_index_state(id)
+  `);
+
   // Create index for fast template lookups
   await query(`
     CREATE INDEX IF NOT EXISTS idx_template_file_template 
