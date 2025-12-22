@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
 import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
@@ -1239,9 +1241,9 @@ router.get('/vote-request-index/status', async (req, res) => {
     // Check if a stale lock exists (lock file present but we're not indexing)
     let lockExists = false;
     if (!isIndexing) {
-      const lockPath = require('path').join(db.DATA_PATH, '.locks', 'vote_request_index.lock');
+      const lockPath = path.join(db.DATA_PATH, '.locks', 'vote_request_index.lock');
       try {
-        await require('fs').promises.access(lockPath);
+        await fs.promises.access(lockPath);
         lockExists = true;
       } catch {
         // No lock file
