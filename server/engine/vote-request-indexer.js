@@ -232,8 +232,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       try {
         // Escape helper for safe SQL string values
-        const escapeStr = (val) => val ? val.replace(/'/g, "''") : null;
+        const escapeStr = (val) => (val === null || val === undefined) ? null : String(val).replace(/'/g, "''");
         const payloadStr = voteRequest.payload ? escapeStr(voteRequest.payload) : null;
+        const stableIdSql = voteRequest.stable_id ? `'${escapeStr(voteRequest.stable_id)}'` : 'NULL';
         
         // Upsert - insert or update on conflict
         await query(`
@@ -244,23 +245,23 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             vote_before, target_effective_at, tracking_cid, dso,
             payload, updated_at
           ) VALUES (
-            '${voteRequest.event_id}',
-            '${escapeStr(voteRequest.stable_id)}',
-            ${voteRequest.contract_id ? `'${voteRequest.contract_id}'` : 'NULL'},
-            ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
-            ${voteRequest.effective_at ? `'${voteRequest.effective_at}'` : 'NULL'},
-            '${voteRequest.status}',
+            '${escapeStr(voteRequest.event_id)}',
+            ${stableIdSql},
+            ${voteRequest.contract_id ? `'${escapeStr(voteRequest.contract_id)}'` : 'NULL'},
+            ${voteRequest.template_id ? `'${escapeStr(voteRequest.template_id)}'` : 'NULL'},
+            ${voteRequest.effective_at ? `'${escapeStr(voteRequest.effective_at)}'` : 'NULL'},
+            '${escapeStr(voteRequest.status)}',
             ${voteRequest.is_closed},
             ${voteRequest.action_tag ? `'${escapeStr(voteRequest.action_tag)}'` : 'NULL'},
             ${voteRequest.action_value ? `'${escapeStr(voteRequest.action_value)}'` : 'NULL'},
-            ${voteRequest.requester ? `'${voteRequest.requester}'` : 'NULL'},
+            ${voteRequest.requester ? `'${escapeStr(voteRequest.requester)}'` : 'NULL'},
             ${voteRequest.reason ? `'${escapeStr(voteRequest.reason)}'` : 'NULL'},
             '${escapeStr(voteRequest.votes)}',
             ${voteRequest.vote_count},
-            ${voteRequest.vote_before ? `'${voteRequest.vote_before}'` : 'NULL'},
-            ${voteRequest.target_effective_at ? `'${voteRequest.target_effective_at}'` : 'NULL'},
-            ${voteRequest.tracking_cid ? `'${voteRequest.tracking_cid}'` : 'NULL'},
-            ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
+            ${voteRequest.vote_before ? `'${escapeStr(voteRequest.vote_before)}'` : 'NULL'},
+            ${voteRequest.target_effective_at ? `'${escapeStr(voteRequest.target_effective_at)}'` : 'NULL'},
+            ${voteRequest.tracking_cid ? `'${escapeStr(voteRequest.tracking_cid)}'` : 'NULL'},
+            ${voteRequest.dso ? `'${escapeStr(voteRequest.dso)}'` : 'NULL'},
             ${payloadStr ? `'${payloadStr}'` : 'NULL'},
             now()
           )

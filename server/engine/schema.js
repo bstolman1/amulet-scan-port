@@ -124,15 +124,61 @@ export async function initEngineSchema() {
 
   // Backward-compatible schema fixes for existing DuckDB files
   // (DuckDB CREATE TABLE IF NOT EXISTS does not modify existing tables)
+  // Some older DuckDB files may have stable_id defined as NOT NULL; DuckDB
+  // doesn't reliably support DROP NOT NULL across versions, so we do a safe
+  // table rebuild when needed.
   try {
     await query(`ALTER TABLE vote_requests ADD COLUMN stable_id VARCHAR`);
   } catch {
     // Column may already exist
   }
+
   try {
-    await query(`ALTER TABLE vote_requests ALTER COLUMN stable_id DROP NOT NULL`);
-  } catch {
-    // Column may not exist or already nullable
+    const cols = await query(`PRAGMA table_info('vote_requests')`);
+    const stable = cols.find(c => c.name === 'stable_id');
+    if (stable && Number(stable.notnull) === 1) {
+      console.log('🔧 Migrating vote_requests.stable_id to nullable (table rebuild)...');
+      await query(`
+        CREATE TABLE vote_requests__tmp AS
+        SELECT * FROM vote_requests
+      `);
+
+      await query(`DROP TABLE vote_requests`);
+
+      await query(`
+        CREATE TABLE vote_requests (
+          event_id            VARCHAR PRIMARY KEY,
+          stable_id           VARCHAR,
+          contract_id         VARCHAR,
+          template_id         VARCHAR,
+          effective_at        TIMESTAMP,
+          status              VARCHAR DEFAULT 'active',
+          is_closed           BOOLEAN DEFAULT FALSE,
+          action_tag          VARCHAR,
+          action_value        VARCHAR,
+          requester           VARCHAR,
+          reason              VARCHAR,
+          votes               VARCHAR,
+          vote_count          INTEGER DEFAULT 0,
+          vote_before         VARCHAR,
+          target_effective_at VARCHAR,
+          tracking_cid        VARCHAR,
+          dso                 VARCHAR,
+          payload             VARCHAR,
+          created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      await query(`
+        INSERT INTO vote_requests
+        SELECT * FROM vote_requests__tmp
+      `);
+      await query(`DROP TABLE vote_requests__tmp`);
+      console.log('   ✓ vote_requests migrated');
+    }
+  } catch (err) {
+    console.warn('⚠️ vote_requests schema migration skipped:', err?.message || err);
   }
 
   // DuckDB requires UNIQUE indexes for ON CONFLICT targets
