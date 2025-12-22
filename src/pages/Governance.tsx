@@ -53,57 +53,24 @@ const Governance = () => {
     staleTime: 60 * 1000,
   });
 
-  // Fetch vote requests from LOCAL ACS first
+  // Fetch vote requests from LOCAL ACS only
   const {
-    data: localVoteRequestsData,
-    isLoading: localLoading,
-    isError: localError,
+    data: voteRequestsData,
+    isLoading,
+    isError,
   } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
   // Fetch DsoRules from LOCAL ACS
-  const { data: localDsoRulesData } = useAggregatedTemplateData(
+  const { data: dsoRulesData } = useAggregatedTemplateData(
     undefined,
     "Splice:DsoRules:DsoRules",
   );
 
   // Fetch Confirmations from LOCAL ACS
-  const { data: localConfirmationsData } = useAggregatedTemplateData(
+  const { data: confirmationsData } = useAggregatedTemplateData(
     undefined,
     "Splice:DsoRules:Confirmation",
   );
-
-  // Check if local ACS has governance data
-  const localHasGovernanceData = (localVoteRequestsData?.data?.length || 0) > 0;
-
-  // FALLBACK: Fetch from live Canton Scan API if local ACS has no governance data
-  const { data: liveVoteRequestsData, isLoading: liveLoading } = useQuery({
-    queryKey: ["live-vote-requests"],
-    queryFn: async () => {
-      const proposals = await scanApi.fetchGovernanceProposals();
-      return { data: proposals, source: "live" };
-    },
-    enabled: !localLoading && !localHasGovernanceData,
-    staleTime: 60 * 1000,
-    retry: 1,
-  });
-
-  // Use local data if available, otherwise use live fallback
-  const voteRequestsData = localHasGovernanceData ? localVoteRequestsData : liveVoteRequestsData;
-  const dsoRulesData = localDsoRulesData;
-  const confirmationsData = localConfirmationsData;
-  const isLoading = localLoading || (liveLoading && !localHasGovernanceData);
-  const isError = localError && !liveVoteRequestsData;
-  const isUsingLiveFallback = !localHasGovernanceData && !!liveVoteRequestsData;
-
-  // Debug: Log data loading status
-  console.log("🔍 Governance Data Status:", {
-    localVoteRequests: localVoteRequestsData?.data?.length ?? "loading",
-    liveVoteRequests: liveVoteRequestsData?.data?.length ?? "not loaded",
-    usingLiveFallback: isUsingLiveFallback,
-    dsoRules: dsoRulesData?.data?.length ?? "loading",
-    confirmations: confirmationsData?.data?.length ?? "loading",
-    events: governanceEvents?.length ?? "loading",
-  });
 
   // Scroll to highlighted proposal when data loads
   useEffect(() => {
@@ -329,16 +296,6 @@ const Governance = () => {
           </Alert>
         )}
 
-        {/* Live Fallback Warning */}
-        {isUsingLiveFallback && (
-          <Alert className="bg-yellow-500/10 border-yellow-500/30">
-            <AlertTriangle className="h-4 w-4 text-yellow-500" />
-            <AlertDescription className="text-sm">
-              <strong>Using live Canton Scan API</strong> — Local ACS snapshot doesn't contain VoteRequest contracts. 
-              Governance data is being fetched from the live network.
-            </AlertDescription>
-          </Alert>
-        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
