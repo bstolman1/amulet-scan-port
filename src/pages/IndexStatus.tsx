@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -24,13 +23,13 @@ import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 // API functions
 const fetchTemplateIndexStatus = async () => {
-  const res = await fetch(`${getDuckDBApiUrl()}/api/events/template-index/status`);
+  const res = await fetch(`${getDuckDBApiUrl()}/api/engine/template-index/status`);
   if (!res.ok) throw new Error("Failed to fetch template index status");
   return res.json();
 };
 
 const fetchVoteRequestIndexStatus = async () => {
-  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-requests/index-status`);
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-request-index/status`);
   if (!res.ok) throw new Error("Failed to fetch vote request index status");
   return res.json();
 };
@@ -42,13 +41,13 @@ const fetchAggregationState = async () => {
 };
 
 const rebuildTemplateIndex = async () => {
-  const res = await fetch(`${getDuckDBApiUrl()}/api/events/template-index/build`, { method: "POST" });
+  const res = await fetch(`${getDuckDBApiUrl()}/api/engine/template-index/build`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to rebuild template index");
   return res.json();
 };
 
 const rebuildVoteRequestIndex = async () => {
-  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-requests/build-index`, { method: "POST" });
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-request-index/build`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to rebuild vote request index");
   return res.json();
 };
@@ -238,8 +237,8 @@ const IndexStatus = () => {
   const getTemplateStatus = (): IndexCardProps["status"] => {
     if (templateLoading) return "loading";
     if (templateError) return "error";
-    if (templateIndex?.indexing) return "building";
-    if (templateIndex?.populated) return "ready";
+    if (templateIndex?.inProgress) return "building";
+    if (templateIndex?.isPopulated) return "ready";
     return "empty";
   };
 
@@ -247,7 +246,7 @@ const IndexStatus = () => {
   const getVoteStatus = (): IndexCardProps["status"] => {
     if (voteLoading) return "loading";
     if (voteError) return "error";
-    if (voteRequestIndex?.indexing) return "building";
+    if (voteRequestIndex?.isIndexing) return "building";
     if (voteRequestIndex?.stats?.total > 0) return "ready";
     return "empty";
   };
@@ -335,21 +334,21 @@ const IndexStatus = () => {
             icon={<FileText className="w-5 h-5" />}
             status={getTemplateStatus()}
             stats={
-              templateIndex?.populated
+              templateIndex?.isPopulated
                 ? [
-                    { label: "Files Indexed", value: templateIndex.stats?.totalFilesIndexed?.toLocaleString() || 0 },
-                    { label: "Templates Found", value: templateIndex.stats?.totalTemplatesFound?.toLocaleString() || 0 },
-                    { label: "Build Duration", value: templateIndex.stats?.buildDurationSeconds ? `${templateIndex.stats.buildDurationSeconds.toFixed(1)}s` : "—" },
-                    { label: "Unique Templates", value: templateIndex.stats?.uniqueTemplates?.toLocaleString() || 0 },
+                    { label: "Files Indexed", value: templateIndex.totalFiles?.toLocaleString?.() || 0 },
+                    { label: "Templates Found", value: templateIndex.uniqueTemplates?.toLocaleString?.() || 0 },
+                    { label: "Build Duration", value: templateIndex.buildDurationSeconds ? `${Number(templateIndex.buildDurationSeconds).toFixed(1)}s` : "—" },
+                    { label: "Event Mappings", value: templateIndex.totalEventMappings?.toLocaleString?.() || 0 },
                   ]
                 : []
             }
-            lastUpdated={templateIndex?.stats?.lastIndexedAt}
+            lastUpdated={templateIndex?.lastIndexedAt}
             onRebuild={() => templateRebuildMutation.mutate()}
             isRebuilding={templateRebuildMutation.isPending}
             buildProgress={
-              templateIndex?.indexing
-                ? { current: templateIndex.progress?.current || 0, total: templateIndex.progress?.total || 1 }
+              templateIndex?.inProgress && templateIndex?.progress
+                ? { current: templateIndex.progress.current || 0, total: templateIndex.progress.total || 1 }
                 : null
             }
           />
@@ -370,7 +369,7 @@ const IndexStatus = () => {
                   ]
                 : []
             }
-            lastUpdated={voteRequestIndex?.state?.lastIndexedAt}
+            lastUpdated={voteRequestIndex?.lastIndexedAt}
             onRebuild={() => voteRebuildMutation.mutate()}
             isRebuilding={voteRebuildMutation.isPending}
           />

@@ -3,6 +3,7 @@ import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import { getTotalCounts, getTimeRange, getTemplateEventCounts } from '../engine/aggregations.js';
 import { getIngestionStats } from '../engine/ingest.js';
+import { query } from '../duckdb/connection.js';
 
 const router = Router();
 
@@ -849,29 +850,56 @@ router.get('/live-status', async (req, res) => {
   }
 });
 
+// GET /api/stats/aggregation-state - Aggregation progress table (DuckDB)
+router.get('/aggregation-state', async (req, res) => {
+  try {
+    // aggregation_state is used by engine/aggregations for incremental progress.
+    const rows = await query(`
+      SELECT agg_name, last_file_id, last_updated
+      FROM aggregation_state
+      ORDER BY last_updated DESC
+    `);
+
+    res.json({
+      states: rows.map(r => ({
+        agg_name: r.agg_name,
+        last_file_id: Number(r.last_file_id || 0),
+        last_updated: r.last_updated,
+      }))
+    });
+  } catch (err) {
+    // If engine schema isn't initialized yet, the table may not exist.
+    if (String(err?.message || '').toLowerCase().includes('does not exist')) {
+      return res.json({ states: [] });
+    }
+    console.error('Error fetching aggregation state:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/stats/live-cursor - Purge live cursor to stop live ingestion tracking
 router.delete('/live-cursor', async (req, res) => {
   try {
     const path = await import('path');
     const fs = await import('fs');
-    
+
     const DATA_DIR = process.env.DATA_DIR || db.DATA_PATH;
     const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
     const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
-    
+
     if (fs.existsSync(LIVE_CURSOR_FILE)) {
       fs.unlinkSync(LIVE_CURSOR_FILE);
       console.log('🗑️ Deleted live cursor file:', LIVE_CURSOR_FILE);
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         message: 'Live cursor deleted. The live ingestion script will need to be restarted.',
-        deleted_file: LIVE_CURSOR_FILE 
+        deleted_file: LIVE_CURSOR_FILE
       });
     } else {
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         message: 'No live cursor file found.',
-        deleted_file: null 
+        deleted_file: null
       });
     }
   } catch (err) {
