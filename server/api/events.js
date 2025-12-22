@@ -1498,4 +1498,137 @@ router.get('/debug-vote-requests', async (req, res) => {
   }
 });
 
+// GET /api/events/debug-vote-request/:contractId - Get detailed debug info for a single VoteRequest
+router.get('/debug-vote-request/:contractId', async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    if (!contractId) {
+      return res.status(400).json({ error: 'Contract ID required' });
+    }
+
+    console.log(`\n🔍 Debug VoteRequest: ${contractId.slice(0, 30)}...`);
+    const sources = getDataSources();
+
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary source required for debug' });
+    }
+
+    // Find all events for this contract_id
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: 100,
+      maxDays: 3650,
+      maxFilesToScan: 100000,
+      fullScan: true,
+      filter: (e) => e.contract_id === contractId
+    });
+
+    // Dedupe by event_id (id field in the JSON)
+    const seen = new Set();
+    const deduped = [];
+    for (const r of result.records) {
+      const eventId = r.event_id || r.id;
+      if (eventId && seen.has(eventId)) continue;
+      if (eventId) seen.add(eventId);
+      deduped.push(r);
+    }
+
+    // Identify created event and closing event(s)
+    let createdEvent = null;
+    const exercisedEvents = [];
+    const closingEvents = [];
+
+    for (const r of deduped) {
+      if (r.event_type === 'created' && r.template_id?.endsWith(':VoteRequest')) {
+        createdEvent = r;
+      } else if (r.event_type === 'exercised' || r.event_type === 'archived') {
+        exercisedEvents.push(r);
+        
+        // Check if this is a "closing" choice
+        const choice = String(r.choice || '');
+        const isClosingChoice =
+          choice === 'Archive' ||
+          /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
+          choice === 'VoteRequest_ExpireVoteRequest';
+
+        if (isClosingChoice) {
+          closingEvents.push(r);
+        }
+      }
+    }
+
+    // Get indexed record from DuckDB if available
+    let indexedRecord = null;
+    try {
+      const indexed = await voteRequestIndexer.queryVoteRequests({ limit: 1, status: 'all', offset: 0 });
+      // Query specifically by contract_id
+      const rows = await db.safeQuery(`
+        SELECT * FROM vote_requests WHERE contract_id = '${contractId.replace(/'/g, "''")}'
+      `);
+      if (rows.length > 0) {
+        indexedRecord = rows[0];
+      }
+    } catch {
+      // Index may not exist
+    }
+
+    // Parse payload fields from created event
+    const payload = createdEvent?.payload || {};
+    const parsedFields = {
+      action: payload.action || null,
+      requester: payload.requester || null,
+      reason: payload.reason || null,
+      votes: payload.votes || null,
+      voteBefore: payload.voteBefore || null,
+      targetEffectiveAt: payload.targetEffectiveAt || null,
+      trackingCid: payload.trackingCid || null,
+      dso: payload.dso || null,
+    };
+
+    res.json({
+      contractId,
+      totalEventsFound: result.records.length,
+      dedupedCount: deduped.length,
+      createdEvent: createdEvent ? {
+        event_id: createdEvent.event_id,
+        event_type: createdEvent.event_type,
+        template_id: createdEvent.template_id,
+        effective_at: createdEvent.effective_at,
+        timestamp: createdEvent.timestamp,
+        file: createdEvent._source_file || null,
+      } : null,
+      exercisedEvents: exercisedEvents.map(e => ({
+        event_id: e.event_id,
+        event_type: e.event_type,
+        choice: e.choice,
+        template_id: e.template_id,
+        effective_at: e.effective_at,
+        file: e._source_file || null,
+        isClosingChoice: closingEvents.includes(e),
+      })),
+      closingEventUsed: closingEvents.length > 0 ? {
+        event_id: closingEvents[0].event_id,
+        choice: closingEvents[0].choice,
+        template_id: closingEvents[0].template_id,
+        effective_at: closingEvents[0].effective_at,
+        file: closingEvents[0]._source_file || null,
+        exerciseResult: closingEvents[0].exercise_result || null,
+      } : null,
+      parsedPayloadFields: parsedFields,
+      indexedRecord: indexedRecord ? {
+        event_id: indexedRecord.event_id,
+        status: indexedRecord.status,
+        is_closed: indexedRecord.is_closed,
+        action_tag: indexedRecord.action_tag,
+        vote_count: indexedRecord.vote_count,
+        vote_before: indexedRecord.vote_before,
+        requester: indexedRecord.requester,
+        reason: indexedRecord.reason,
+      } : null,
+    });
+  } catch (err) {
+    console.error('Error debugging vote request:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
