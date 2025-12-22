@@ -57,13 +57,21 @@ const fetchIndexedTemplates = async (): Promise<{ templates: TemplateInfo[] }> =
 };
 
 const rebuildTemplateIndex = async () => {
-  const res = await fetch(`${getDuckDBApiUrl()}/api/engine/template-index/build`, { method: "POST" });
+  const res = await fetch(`${getDuckDBApiUrl()}/api/engine/template-index/build`, { 
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force: true })
+  });
   if (!res.ok) throw new Error("Failed to rebuild template index");
   return res.json();
 };
 
 const rebuildVoteRequestIndex = async () => {
-  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-request-index/build`, { method: "POST" });
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-request-index/build`, { 
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force: true })
+  });
   if (!res.ok) throw new Error("Failed to rebuild vote request index");
   return res.json();
 };
