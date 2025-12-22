@@ -5,6 +5,35 @@ import { getFilesForTemplate, isTemplateIndexPopulated } from '../engine/templat
 
 const router = Router();
 
+// Reward coupon template names
+const REWARD_TEMPLATES = ['AppRewardCoupon', 'ValidatorRewardCoupon', 'SvRewardCoupon'];
+const ROUND_TEMPLATES = ['IssuingMiningRound', 'ClosedMiningRound', 'OpenMiningRound'];
+
+/**
+ * Extract CC reward amount from a reward coupon payload
+ * For reward coupons, the amount is: weight * issuancePerReward
+ * If we don't have issuance data, we return the weight as a fallback
+ */
+function extractRewardAmount(payload, roundIssuance = null) {
+  // Direct amount field (some coupons have this)
+  if (payload?.amount) {
+    return parseFloat(payload.amount);
+  }
+  if (payload?.initialAmount) {
+    return parseFloat(payload.initialAmount);
+  }
+  
+  // For coupons with weight, calculate using issuance rate
+  const weight = parseFloat(payload?.weight || 0);
+  if (weight > 0 && roundIssuance) {
+    // issuance is typically in CC per weight unit
+    return weight * roundIssuance;
+  }
+  
+  // Return weight as fallback (will be multiplied by issuance later if available)
+  return weight;
+}
+
 /**
  * GET /api/rewards/calculate
  * Calculate app rewards for a specific party ID within a date or round range
@@ -30,73 +59,71 @@ router.get('/calculate', async (req, res) => {
     
     const startTime = Date.now();
     
-    // Build filters
-    const filters = [];
+    // Parse round range if provided
+    const startR = startRound ? parseInt(startRound, 10) : null;
+    const endR = endRound ? parseInt(endRound, 10) : null;
     
-    // Party filter - check in payload for provider/beneficiary
-    // Look for AppRewardCoupon, ValidatorRewardCoupon, SvRewardCoupon templates
-    filters.push((e) => {
+    // Parse date range if provided
+    const startMs = startDate ? new Date(startDate).getTime() : null;
+    const endMs = endDate ? new Date(endDate).getTime() : null;
+    
+    // Check if we're using date filter or round filter (not both typically needed)
+    const useDateFilter = startMs !== null || endMs !== null;
+    const useRoundFilter = startR !== null || endR !== null;
+    
+    // Build filter for reward coupons
+    const isRewardForParty = (e) => {
       const templateName = e.template_id || '';
-      const isRewardTemplate = templateName.includes('AppRewardCoupon') || 
-                               templateName.includes('ValidatorRewardCoupon') ||
-                               templateName.includes('SvRewardCoupon') ||
-                               templateName.includes('RewardCoupon');
+      const isRewardTemplate = REWARD_TEMPLATES.some(t => templateName.includes(t));
       if (!isRewardTemplate) return false;
       if (!e.payload) return false;
       
-      // Check various fields where party might appear
       const payload = e.payload;
+      // Check various fields where party might appear as beneficiary
       if (payload.provider === partyId) return true;
       if (payload.beneficiary === partyId) return true;
       if (payload.owner === partyId) return true;
       if (payload.round?.provider === partyId) return true;
-      
-      // Check in dso field
       if (payload.dso === partyId) return true;
       
       return false;
-    });
+    };
     
     // Date filter
-    if (startDate || endDate) {
-      const startMs = startDate ? new Date(startDate).getTime() : 0;
-      const endMs = endDate ? new Date(endDate).getTime() : Date.now();
-      
-      filters.push((e) => {
-        if (!e.effective_at) return true; // Include if no date
-        const eventMs = new Date(e.effective_at).getTime();
-        return eventMs >= startMs && eventMs <= endMs;
-      });
-    }
+    const passesDateFilter = (e) => {
+      if (!useDateFilter) return true;
+      if (!e.effective_at) return true;
+      const eventMs = new Date(e.effective_at).getTime();
+      if (startMs !== null && eventMs < startMs) return false;
+      if (endMs !== null && eventMs > endMs) return false;
+      return true;
+    };
     
     // Round filter
-    if (startRound || endRound) {
-      const startR = startRound ? parseInt(startRound, 10) : 0;
-      const endR = endRound ? parseInt(endRound, 10) : Number.MAX_SAFE_INTEGER;
-      
-      filters.push((e) => {
-        // Round is typically in payload.round.number
-        const roundNum = e.payload?.round?.number ?? e.payload?.round;
-        if (roundNum === undefined || roundNum === null) return true;
-        const r = typeof roundNum === 'number' ? roundNum : parseInt(roundNum, 10);
-        return r >= startR && r <= endR;
-      });
-    }
+    const passesRoundFilter = (e) => {
+      if (!useRoundFilter) return true;
+      const roundNum = e.payload?.round?.number ?? e.payload?.round;
+      if (roundNum === undefined || roundNum === null) return true;
+      const r = typeof roundNum === 'number' ? roundNum : parseInt(roundNum, 10);
+      if (startR !== null && r < startR) return false;
+      if (endR !== null && r > endR) return false;
+      return true;
+    };
     
-    // Combined filter function
-    const combinedFilter = (e) => filters.every(f => f(e));
+    // Combined filter
+    const combinedFilter = (e) => isRewardForParty(e) && passesDateFilter(e) && passesRoundFilter(e);
     
     // Check if template index is available for faster scanning
     const templateIndexPopulated = await isTemplateIndexPopulated();
     let records = [];
+    let roundIssuanceMap = new Map(); // round -> issuance rate
     
     if (templateIndexPopulated) {
       // Fast path: use template index - search for all reward coupon types
       console.log('   ⚡ Using template index for fast scanning');
-      const rewardTemplates = ['AppRewardCoupon', 'ValidatorRewardCoupon', 'SvRewardCoupon', 'RewardCoupon'];
       const allRewardFiles = new Set();
       
-      for (const template of rewardTemplates) {
+      for (const template of REWARD_TEMPLATES) {
         const files = await getFilesForTemplate(template);
         files.forEach(f => allRewardFiles.add(f));
       }
@@ -104,7 +131,36 @@ router.get('/calculate', async (req, res) => {
       const rewardFiles = Array.from(allRewardFiles);
       console.log(`   📂 Found ${rewardFiles.length} files with reward events`);
       
-      // Scan files with filter
+      // Also get round data for issuance rates
+      const roundFiles = new Set();
+      for (const template of ROUND_TEMPLATES) {
+        const files = await getFilesForTemplate(template);
+        files.forEach(f => roundFiles.add(f));
+      }
+      
+      // Build issuance map from round data (sample first few files)
+      const roundFileList = Array.from(roundFiles).slice(0, 100);
+      for (const file of roundFileList) {
+        try {
+          const result = await binaryReader.readBinaryFile(file);
+          for (const record of (result.records || [])) {
+            if (record.event_type === 'created' && record.template_id?.includes('MiningRound')) {
+              const roundNum = record.payload?.round?.number ?? record.payload?.round;
+              const issuance = parseFloat(record.payload?.issuancePerSvRewardCoupon || 
+                                          record.payload?.issuancePerValidatorRewardCoupon ||
+                                          record.payload?.issuancePerAppRewardCoupon || 0);
+              if (roundNum && issuance) {
+                roundIssuanceMap.set(roundNum, issuance);
+              }
+            }
+          }
+        } catch (err) {
+          // Skip files that can't be read
+        }
+      }
+      console.log(`   📊 Built issuance map for ${roundIssuanceMap.size} rounds`);
+      
+      // Scan reward files with filter
       for (const file of rewardFiles) {
         try {
           const result = await binaryReader.readBinaryFile(file);
@@ -144,23 +200,32 @@ router.get('/calculate', async (req, res) => {
     
     // Calculate totals
     let totalRewards = 0;
+    let totalWeight = 0;
     const byRound = {};
     const events = [];
     
     for (const record of records) {
-      // Extract amount from payload
-      const amount = parseFloat(record.payload?.amount || record.payload?.initialAmount || 0);
-      const roundNum = record.payload?.round?.number ?? record.payload?.round ?? 0;
+      const payload = record.payload || {};
+      const roundNum = payload.round?.number ?? payload.round ?? 0;
+      const roundKey = String(roundNum);
+      
+      // Get issuance for this round if available
+      const issuance = roundIssuanceMap.get(roundNum) || null;
+      
+      // Extract amount (uses weight * issuance if available)
+      const amount = extractRewardAmount(payload, issuance);
+      const weight = parseFloat(payload.weight || 0);
       
       totalRewards += amount;
+      totalWeight += weight;
       
       // Group by round
-      const roundKey = String(roundNum);
       if (!byRound[roundKey]) {
-        byRound[roundKey] = { count: 0, amount: 0 };
+        byRound[roundKey] = { count: 0, amount: 0, weight: 0 };
       }
       byRound[roundKey].count++;
       byRound[roundKey].amount += amount;
+      byRound[roundKey].weight += weight;
       
       // Add to events list (limit to 500 for response size)
       if (events.length < 500) {
@@ -168,22 +233,27 @@ router.get('/calculate', async (req, res) => {
           event_id: record.event_id,
           round: roundNum,
           amount,
+          weight,
           effective_at: record.effective_at,
           template_id: record.template_id,
+          templateType: record.template_id?.split(':').pop() || 'Unknown',
         });
       }
     }
     
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`   ✅ Calculation complete in ${elapsed}s: ${records.length} events, ${totalRewards.toFixed(6)} total`);
+    console.log(`   ✅ Calculation complete in ${elapsed}s: ${records.length} events, ${totalRewards.toFixed(6)} CC total`);
     
     res.json({
       partyId,
       totalRewards,
+      totalWeight,
       rewardCount: records.length,
       byRound,
       events,
       queryTime: parseFloat(elapsed),
+      hasIssuanceData: roundIssuanceMap.size > 0,
+      note: roundIssuanceMap.size === 0 ? 'Amounts shown as weights (issuance data not available)' : null,
     });
     
   } catch (err) {
@@ -202,7 +272,6 @@ router.get('/templates', async (req, res) => {
       { name: 'AppRewardCoupon', description: 'App provider rewards' },
       { name: 'ValidatorRewardCoupon', description: 'Validator rewards' },
       { name: 'SvRewardCoupon', description: 'Super Validator rewards' },
-      { name: 'RewardCoupon', description: 'General reward coupons' },
     ],
   });
 });
