@@ -969,41 +969,6 @@ const GovernanceFlow = () => {
           </div>
         </div>
 
-        {/* Stats Overview */}
-        {data && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            <Card className="bg-blue-500/10 border-blue-500/20">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold text-blue-400">{data.stats.byType.cip || 0}</div>
-                <div className="text-xs text-muted-foreground">CIPs</div>
-              </CardContent>
-            </Card>
-            <Card className="bg-emerald-500/10 border-emerald-500/20">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold text-emerald-400">{data.stats.byType['featured-app'] || 0}</div>
-                <div className="text-xs text-muted-foreground">Featured Apps</div>
-              </CardContent>
-            </Card>
-            <Card className="bg-orange-500/10 border-orange-500/20">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold text-orange-400">{data.stats.byType.validator || 0}</div>
-                <div className="text-xs text-muted-foreground">Validators</div>
-              </CardContent>
-            </Card>
-            <Card className="bg-cyan-500/10 border-cyan-500/20">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold text-cyan-400">{data.stats.byType['protocol-upgrade'] || 0}</div>
-                <div className="text-xs text-muted-foreground">Protocol Upgrades</div>
-              </CardContent>
-            </Card>
-            <Card className="bg-muted/30">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold">{Object.keys(data.groups).length}</div>
-                <div className="text-xs text-muted-foreground">Groups</div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
 
         {/* Group Stats */}
         {data && Object.keys(data.stats.groupCounts).length > 0 && (
