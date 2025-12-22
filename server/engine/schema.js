@@ -21,6 +21,22 @@ export async function initEngineSchema() {
 
   console.log('🔧 Initializing engine schema...');
 
+  // Raw files metadata table
+  await query(`
+    CREATE TABLE IF NOT EXISTS raw_files (
+      file_id       INTEGER PRIMARY KEY,
+      file_path     VARCHAR NOT NULL,
+      file_type     VARCHAR NOT NULL,
+      migration_id  INTEGER,
+      record_date   DATE,
+      record_count  BIGINT DEFAULT 0,
+      min_ts        TIMESTAMP,
+      max_ts        TIMESTAMP,
+      ingested      BOOLEAN DEFAULT FALSE,
+      ingested_at   TIMESTAMP,
+      created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
   // Events table - matches existing event schema
   await query(`
@@ -121,7 +137,9 @@ export async function initEngineSchema() {
   try {
     const cols = await query(`PRAGMA table_info('vote_requests')`);
     const stable = cols.find(c => c.name === 'stable_id');
-    if (stable && Number(stable.notnull) === 1) {
+    const isNotNull = stable && (stable.notnull === 1 || stable.notnull === true || stable.notnull === '1');
+
+    if (isNotNull) {
       console.log('🔧 Migrating vote_requests.stable_id to nullable (table rebuild)...');
       await query(`
         CREATE TABLE vote_requests__tmp AS
