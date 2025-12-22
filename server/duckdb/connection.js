@@ -31,9 +31,35 @@ console.log(`📦 DuckDB base data dir: ${BASE_DATA_DIR}`);
 
 let db = null;
 let conn = null;
+let recoveryAttempted = false;
+
+function logDuckDBDiagnostics(prefix = 'ℹ️') {
+  try {
+    const exists = fs.existsSync(DB_FILE);
+    const walExists = fs.existsSync(`${DB_FILE}.wal`);
+    let size = null;
+    try {
+      size = exists ? fs.statSync(DB_FILE).size : null;
+    } catch {}
+
+    console.log(`${prefix} DuckDB diagnostics:`);
+    console.log(`   platform=${process.platform}`);
+    console.log(`   db_file_exists=${exists}${size != null ? ` size_bytes=${size}` : ''}`);
+    console.log(`   wal_exists=${walExists}`);
+  } catch (e) {
+    console.warn(`⚠️ Failed to log DuckDB diagnostics: ${e?.message || e}`);
+  }
+}
 
 function openDuckDBConnection() {
   if (conn) return;
+
+  // If the DB file doesn't exist, DuckDB will create a new empty DB.
+  // That's almost never what we want for this app, so fail loudly.
+  if (!fs.existsSync(DB_FILE)) {
+    throw new Error(`DuckDB file not found at ${DB_FILE} (check DATA_DIR/DUCKDB_FILE)`);
+  }
+
   db = new duckdb.Database(DB_FILE);
   conn = db.connect();
 }
@@ -91,8 +117,11 @@ export async function ensureDuckDBReady({ allowRecovery = true } = {}) {
     await pingDuckDB();
   } catch (err) {
     const msg = err?.message || String(err);
+    logDuckDBDiagnostics('❗');
 
-    if (allowRecovery && process.platform === 'win32') {
+    // Only try recovery once per process to avoid loops.
+    if (allowRecovery && process.platform === 'win32' && !recoveryAttempted) {
+      recoveryAttempted = true;
       console.warn(`⚠️ DuckDB connection ping failed: ${msg}`);
       console.warn('🧹 Attempting Windows DuckDB recovery (remove WAL/lock, reconnect once)...');
 
