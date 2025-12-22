@@ -107,65 +107,16 @@ export async function isIndexPopulated() {
 }
 
 /**
- * Ensure index tables exist
+ * Ensure index tables exist - delegates to engine schema
  */
 async function ensureIndexTables() {
   try {
-    // Create vote_requests table if it doesn't exist (with payload column for full JSON)
-    await query(`
-      CREATE TABLE IF NOT EXISTS vote_requests (
-        event_id VARCHAR PRIMARY KEY,
-        contract_id VARCHAR,
-        template_id VARCHAR,
-        effective_at TIMESTAMP,
-        status VARCHAR,
-        is_closed BOOLEAN,
-        action_tag VARCHAR,
-        action_value VARCHAR,
-        requester VARCHAR,
-        reason VARCHAR,
-        votes VARCHAR,
-        vote_count INTEGER,
-        vote_before VARCHAR,
-        target_effective_at VARCHAR,
-        tracking_cid VARCHAR,
-        dso VARCHAR,
-        payload VARCHAR,
-        updated_at TIMESTAMP
-      )
-    `);
-
-    // DuckDB requires a UNIQUE index for ON CONFLICT targets.
-    await query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_vote_requests_event_id
-      ON vote_requests(event_id)
-    `);
-
-    // Try to add payload column if table exists but column doesn't
-    try {
-      await query(`ALTER TABLE vote_requests ADD COLUMN IF NOT EXISTS payload VARCHAR`);
-    } catch (alterErr) {
-      // Column might already exist or syntax not supported, ignore
-    }
-
-    // Create state table if it doesn't exist
-    await query(`
-      CREATE TABLE IF NOT EXISTS vote_request_index_state (
-        id INTEGER PRIMARY KEY,
-        last_indexed_file VARCHAR,
-        last_indexed_at TIMESTAMP,
-        total_indexed INTEGER
-      )
-    `);
-
-    await query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_vote_request_index_state_id
-      ON vote_request_index_state(id)
-    `);
-
-    console.log('   ✓ Index tables ensured');
+    // Use the centralized engine schema which creates vote_requests and vote_request_index_state
+    const { initEngineSchema } = await import('./schema.js');
+    await initEngineSchema();
+    console.log('   ✓ Index tables ensured via engine schema');
   } catch (err) {
-    console.error('Error creating index tables:', err);
+    console.error('Error ensuring index tables:', err);
     throw err;
   }
 }
@@ -293,7 +244,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             payload, updated_at
           ) VALUES (
             '${voteRequest.event_id}',
-            '${voteRequest.contract_id}',
+            ${voteRequest.contract_id ? `'${voteRequest.contract_id}'` : 'NULL'},
             ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
             ${voteRequest.effective_at ? `'${voteRequest.effective_at}'` : 'NULL'},
             '${voteRequest.status}',

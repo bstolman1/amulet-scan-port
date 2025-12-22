@@ -100,7 +100,7 @@ export async function initEngineSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS vote_requests (
       event_id            VARCHAR PRIMARY KEY,
-      contract_id         VARCHAR NOT NULL,
+      contract_id         VARCHAR,
       template_id         VARCHAR,
       effective_at        TIMESTAMP,
       status              VARCHAR DEFAULT 'active',
@@ -111,8 +111,8 @@ export async function initEngineSchema() {
       reason              VARCHAR,
       votes               VARCHAR,
       vote_count          INTEGER DEFAULT 0,
-      vote_before         TIMESTAMP,
-      target_effective_at TIMESTAMP,
+      vote_before         VARCHAR,
+      target_effective_at VARCHAR,
       tracking_cid        VARCHAR,
       dso                 VARCHAR,
       payload             VARCHAR,
