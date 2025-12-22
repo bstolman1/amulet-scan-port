@@ -16,6 +16,7 @@ import {
 } from './template-file-index.js';
 
 let indexingInProgress = false;
+let indexingProgress = null;
 
 /**
  * Get current indexing state
@@ -130,7 +131,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.log('⏳ VoteRequest indexing already in progress');
     return { status: 'in_progress' };
   }
-  
+
   // Check if index is already populated (skip unless force=true)
   if (!force) {
     const stats = await getVoteRequestStats();
@@ -140,52 +141,71 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       return { status: 'already_populated', totalIndexed: stats.total };
     }
   }
-  
+
   indexingInProgress = true;
+  indexingProgress = { phase: 'starting', current: 0, total: 0, records: 0, startedAt: new Date().toISOString() };
   console.log('\n🗳️ Starting VoteRequest index build...');
-  
+
   try {
     const startTime = Date.now();
-    
+
     // Ensure tables exist first
     await ensureIndexTables();
-    
+
+    // Heartbeat: mark "last indexed" as now() so the UI doesn't look stale while building.
+    try {
+      await query(`
+        INSERT INTO vote_request_index_state (id, last_indexed_at, total_indexed)
+        VALUES (1, now(), 0)
+        ON CONFLICT (id) DO UPDATE SET
+          last_indexed_at = now()
+      `);
+    } catch {
+      // ignore
+    }
+
     // Check if template index is available for faster scanning
     const templateIndexPopulated = await isTemplateIndexPopulated();
     let createdResult, exercisedResult;
-    
+
     if (templateIndexPopulated) {
       // FAST PATH: Use template index to scan only relevant files
       const templateIndexStats = await getTemplateIndexStats();
       console.log(`   📋 Using template index (${templateIndexStats.totalFiles} files indexed)`);
-      
+
       const voteRequestFiles = await getFilesForTemplate('VoteRequest');
       console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events`);
-      
+
       if (voteRequestFiles.length === 0) {
         console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
+        indexingProgress = { ...indexingProgress, phase: 'scan:created (full)', current: 0, total: 0, records: 0 };
         createdResult = await scanAllFilesForVoteRequests('created');
+        indexingProgress = { ...indexingProgress, phase: 'scan:exercised (full)', current: 0, total: 0, records: 0 };
         exercisedResult = await scanAllFilesForVoteRequests('exercised');
       } else {
         // Scan only the relevant files
         console.log('   Scanning VoteRequest files for created events...');
+        indexingProgress = { ...indexingProgress, phase: 'scan:created', current: 0, total: voteRequestFiles.length, records: 0 };
         createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
-        
+
         console.log('   Scanning VoteRequest files for exercised events...');
+        indexingProgress = { ...indexingProgress, phase: 'scan:exercised', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
       console.log('   ⚠️ Template index not available, using full scan (this will be slow)');
       console.log('   💡 Run template index build first for faster VoteRequest indexing');
-      
+
+      indexingProgress = { ...indexingProgress, phase: 'scan:created (full)', current: 0, total: 0, records: 0 };
       createdResult = await scanAllFilesForVoteRequests('created');
+      indexingProgress = { ...indexingProgress, phase: 'scan:exercised (full)', current: 0, total: 0, records: 0 };
       exercisedResult = await scanAllFilesForVoteRequests('exercised');
     }
-    
+
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
     console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events`);
-    
+
     // Build map of closed contract IDs -> archived event data (with final vote counts)
     const archivedEventsMap = new Map();
     for (const record of exercisedResult.records) {
@@ -194,9 +214,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
     }
     const closedContractIds = new Set(archivedEventsMap.keys());
-    
+
     const now = new Date();
-    
+
     // Clear existing data if force rebuild
     if (force) {
       try {
@@ -206,29 +226,30 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         // Table might not exist yet, ignore
       }
     }
-    
+
     // Insert vote requests
+    indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: createdResult.records.length, records: 0 };
     let inserted = 0;
     let updated = 0;
-    
+
     for (const event of createdResult.records) {
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
-      
+
       // Use archived event data for final vote counts if available
       const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
       const finalVotes = archivedEvent?.payload?.votes || event.payload?.votes;
       const finalVoteCount = finalVotes?.length || 0;
-      
+
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
       const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
-      
+
       // Normalize reason - can be string or object
       const rawReason = event.payload?.reason;
-      const reasonStr = rawReason 
+      const reasonStr = rawReason
         ? (typeof rawReason === 'string' ? rawReason : JSON.stringify(rawReason))
         : null;
-      
+
       const voteRequest = {
         event_id: event.event_id,
         // Always set stable_id to a non-null identifier (some older records may lack contract_id)
@@ -251,14 +272,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         dso: event.payload?.dso || null,
         payload: event.payload ? JSON.stringify(event.payload) : null,
       };
-      
+
       try {
         // Escape helper for safe SQL string values
         const escapeStr = (val) => (val === null || val === undefined) ? null : String(val).replace(/'/g, "''");
         const payloadStr = voteRequest.payload ? escapeStr(voteRequest.payload) : null;
         // stable_id should never be NULL; fall back to event_id if needed
         const stableIdSql = `'${escapeStr(voteRequest.stable_id ?? voteRequest.event_id)}'`;
-        
+
         // Upsert - insert or update on conflict
         await query(`
           INSERT INTO vote_requests (
@@ -302,9 +323,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         } else {
           updated++;
         }
+      } finally {
+        const current = inserted + updated;
+        indexingProgress = { ...indexingProgress, current, records: current };
       }
     }
-    
+
     // Update index state
     await query(`
       INSERT INTO vote_request_index_state (id, last_indexed_at, total_indexed)
@@ -313,23 +337,26 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         last_indexed_at = now(),
         total_indexed = ${inserted}
     `);
-    
+
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
-    
+
     indexingInProgress = false;
-    
+    indexingProgress = null;
+
     return {
       status: 'complete',
       inserted,
       updated,
       closedCount: closedContractIds.size,
       elapsedSeconds: parseFloat(elapsed),
+      totalIndexed: inserted,
     };
-    
+
   } catch (err) {
     console.error('❌ VoteRequest index build failed:', err);
     indexingInProgress = false;
+    indexingProgress = null;
     throw err;
   }
 }
@@ -339,6 +366,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
  */
 export function isIndexingInProgress() {
   return indexingInProgress;
+}
+
+/**
+ * Get current indexing progress (null when not indexing)
+ */
+export function getIndexingProgress() {
+  return indexingProgress;
 }
 
 /**
@@ -379,6 +413,16 @@ async function scanFilesForVoteRequests(files, eventType) {
       console.warn(`   ⚠️ Skipping VoteRequest file due to read error: ${file} (${err?.message || err})`);
     } finally {
       filesProcessed++;
+
+      // update shared progress state for status endpoint/UI
+      if (indexingProgress) {
+        indexingProgress = {
+          ...indexingProgress,
+          current: filesProcessed,
+          total: files.length,
+          records: records.length,
+        };
+      }
 
       // Log progress every 50 files or every 5 seconds
       const now = Date.now();

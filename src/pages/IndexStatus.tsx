@@ -511,6 +511,11 @@ const IndexStatus = () => {
             lastUpdated={voteRequestIndex?.lastIndexedAt}
             onRebuild={() => voteRebuildMutation.mutate()}
             isRebuilding={voteRebuildMutation.isPending}
+            buildProgress={
+              voteRequestIndex?.isIndexing && voteRequestIndex?.progress
+                ? { current: voteRequestIndex.progress.current || 0, total: voteRequestIndex.progress.total || 1 }
+                : null
+            }
           />
 
           {/* Reward Coupon Index */}
