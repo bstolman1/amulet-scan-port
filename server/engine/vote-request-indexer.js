@@ -131,6 +131,16 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     return { status: 'in_progress' };
   }
   
+  // Check if index is already populated (skip unless force=true)
+  if (!force) {
+    const stats = await getVoteRequestStats();
+    if (stats.total > 0) {
+      console.log(`✅ VoteRequest index already populated (${stats.total} records), skipping rebuild`);
+      console.log('   Use force=true to rebuild from scratch');
+      return { status: 'already_populated', totalIndexed: stats.total };
+    }
+  }
+  
   indexingInProgress = true;
   console.log('\n🗳️ Starting VoteRequest index build...');
   
