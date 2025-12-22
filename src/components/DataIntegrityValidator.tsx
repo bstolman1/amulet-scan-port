@@ -81,7 +81,7 @@ export function DataIntegrityValidator() {
       if (!contentType?.includes('application/json')) {
         toast({
           title: "Backend unavailable",
-          description: "Make sure the DuckDB API server is running on localhost:3001",
+          description: "Make sure the DuckDB API server is running and accessible",
           variant: "destructive",
         });
         return;
