@@ -189,44 +189,36 @@ export function useUniqueProposals(votingThreshold = 10) {
   const uniqueProposals = useMemo(() => {
     if (!governanceActions?.length) return [];
 
-    // Group events by proposal hash + action type
-    const proposalMap = new Map<string, {
-      events: typeof governanceActions;
-      latestEvent: typeof governanceActions[0];
-    }>();
+    // Deduplicate by contract_id only (one row per unique contract)
+    const contractMap = new Map<string, typeof governanceActions[0]>();
 
     for (const event of governanceActions) {
-      const proposalHash = extractProposalHash(event.contractId);
-      const actionType = event.actionTag || 'Unknown';
-      const proposalId = `${proposalHash}•${actionType}`;
+      const cid = event.contractId;
+      if (!cid) continue;
 
-      const existing = proposalMap.get(proposalId);
+      const existing = contractMap.get(cid);
       if (!existing) {
-        proposalMap.set(proposalId, {
-          events: [event],
-          latestEvent: event,
-        });
+        contractMap.set(cid, event);
       } else {
-        existing.events.push(event);
-        // Keep the latest event by effectiveAt
+        // Keep the latest event by effectiveAt for the same contract
         const currentTime = new Date(event.effectiveAt).getTime();
-        const latestTime = new Date(existing.latestEvent.effectiveAt).getTime();
-        if (currentTime > latestTime) {
-          existing.latestEvent = event;
+        const existingTime = new Date(existing.effectiveAt).getTime();
+        if (currentTime > existingTime) {
+          contractMap.set(cid, event);
         }
       }
     }
 
     // Convert to unique proposals array
     const proposals: UniqueProposal[] = [];
-    
-    for (const [proposalId, { events, latestEvent }] of proposalMap) {
-      const proposalHash = extractProposalHash(latestEvent.contractId);
-      const actionType = latestEvent.actionTag || 'Unknown';
-      
+
+    for (const [contractId, event] of contractMap) {
+      const proposalHash = extractProposalHash(contractId);
+      const actionType = event.actionTag || 'Unknown';
+
       // Map the status from GovernanceAction to UniqueProposal status
       let status: UniqueProposal['status'];
-      switch (latestEvent.status) {
+      switch (event.status) {
         case 'passed':
           status = 'approved';
           break;
@@ -240,42 +232,36 @@ export function useUniqueProposals(votingThreshold = 10) {
           status = 'approved';
           break;
         default:
-          if (latestEvent.votesFor >= votingThreshold) {
+          if (event.votesFor >= votingThreshold) {
             status = 'approved';
-          } else if (latestEvent.type === 'vote_completed') {
+          } else if (event.type === 'vote_completed') {
             status = 'rejected';
           } else {
             status = 'expired';
           }
       }
 
-      // Find earliest created event
-      const sortedEvents = [...events].sort(
-        (a, b) => new Date(a.effectiveAt).getTime() - new Date(b.effectiveAt).getTime()
-      );
-      const createdAt = sortedEvents[0]?.effectiveAt || null;
-
       proposals.push({
-        proposalId,
+        proposalId: contractId,
         proposalHash,
         actionType,
-        title: latestEvent.actionTitle || 'Unknown',
+        title: event.actionTitle || 'Unknown',
         status,
-        latestEventTime: latestEvent.effectiveAt,
-        createdAt,
-        voteBefore: latestEvent.voteBefore,
-        requester: latestEvent.requester,
-        reason: latestEvent.reason,
-        reasonUrl: latestEvent.reasonUrl,
-        votesFor: latestEvent.votesFor,
-        votesAgainst: latestEvent.votesAgainst,
-        totalVotes: latestEvent.totalVotes,
-        contractId: latestEvent.contractId,
-        cipReference: latestEvent.cipReference,
-        eventCount: events.length,
-        lastEventType: latestEvent.type === 'vote_completed' ? 'archived' : 'created',
-        actionDetails: latestEvent.actionDetails,
-        rawData: latestEvent,
+        latestEventTime: event.effectiveAt,
+        createdAt: event.effectiveAt,
+        voteBefore: event.voteBefore,
+        requester: event.requester,
+        reason: event.reason,
+        reasonUrl: event.reasonUrl,
+        votesFor: event.votesFor,
+        votesAgainst: event.votesAgainst,
+        totalVotes: event.totalVotes,
+        contractId,
+        cipReference: event.cipReference,
+        eventCount: 1,
+        lastEventType: event.type === 'vote_completed' ? 'archived' : 'created',
+        actionDetails: event.actionDetails,
+        rawData: event,
       });
     }
 
