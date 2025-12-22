@@ -70,10 +70,11 @@ export function useGovernanceEvents() {
     queryKey: ["governanceEvents"],
     queryFn: async (): Promise<GovernanceEventsResult> => {
       // Governance History needs VoteRequest data shaped like the rest of the UI expects (payload.action, payload.votes, etc.).
-      // ensureFresh=true triggers a background index rebuild if the persistent index is stale/partial.
       // verbose=true to get debug info about data source
+      // If index is populated, use it. Otherwise, fall back to binary scan (slower).
+      // We do NOT set ensureFresh=true to avoid triggering repeated index rebuilds.
       const response = await apiFetch<EventsResponse<VoteRequestRow>>(
-        "/api/events/vote-requests?status=historical&limit=1000&ensureFresh=true&verbose=true",
+        "/api/events/vote-requests?status=historical&limit=5000&verbose=true",
       );
 
       const seen = new Set<string>();
