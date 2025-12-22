@@ -1,5 +1,22 @@
 import { useMemo } from "react";
-import { GovernanceAction, useGovernanceHistory } from "./use-governance-history";
+import { useGovernanceEvents } from "./use-governance-events";
+
+export interface GovernanceAction {
+  id: string;
+  type: 'vote_completed' | 'rule_change' | 'confirmation';
+  actionTag: string;
+  templateType: 'VoteRequest' | 'DsoRules' | 'AmuletRules' | 'Confirmation';
+  status: 'passed' | 'failed' | 'expired' | 'executed';
+  effectiveAt: string;
+  requester: string | null;
+  reason: string | null;
+  reasonUrl: string | null;
+  votesFor: number;
+  votesAgainst: number;
+  totalVotes: number;
+  contractId: string;
+  cipReference: string | null;
+}
 
 export interface UniqueProposal {
   proposalId: string; // hash + actionType
@@ -20,7 +37,7 @@ export interface UniqueProposal {
   cipReference: string | null;
   eventCount: number;
   lastEventType: 'created' | 'archived';
-  rawData: GovernanceAction; // Include raw data for display
+  rawData: GovernanceAction;
 }
 
 // Format action tag to human-readable title
@@ -37,8 +54,82 @@ const extractProposalHash = (contractId: string): string => {
   return contractId?.slice(0, 12) || 'unknown';
 };
 
+// Extract CIP reference from reason text
+const extractCipReference = (reason: string | null, reasonUrl: string | null): string | null => {
+  if (!reason && !reasonUrl) return null;
+  const text = `${reason || ''} ${reasonUrl || ''}`;
+  const match = text.match(/CIP[#\-\s]?0*(\d+)/i);
+  return match ? match[1].padStart(4, '0') : null;
+};
+
+// Parse votes array to count for/against
+const parseVotes = (votes: unknown): { votesFor: number; votesAgainst: number } => {
+  let votesFor = 0;
+  let votesAgainst = 0;
+  
+  if (!Array.isArray(votes)) return { votesFor, votesAgainst };
+  
+  for (const vote of votes) {
+    const [, voteData] = Array.isArray(vote) ? vote : ['', vote];
+    const isAccept = voteData?.accept === true || (voteData as any)?.Accept === true;
+    if (isAccept) votesFor++;
+    else votesAgainst++;
+  }
+  
+  return { votesFor, votesAgainst };
+};
+
 export function useUniqueProposals(votingThreshold = 10) {
-  const { data: governanceActions, isLoading, error } = useGovernanceHistory(2000);
+  const { data: rawEvents, isLoading, error } = useGovernanceEvents();
+
+  // Transform raw events from indexed data into GovernanceAction format
+  const governanceActions = useMemo(() => {
+    if (!rawEvents?.length) return [];
+    
+    const actions: GovernanceAction[] = [];
+    
+    for (const event of rawEvents) {
+      const templateId = event.template_id || '';
+      if (!templateId.includes('VoteRequest')) continue;
+      
+      // Only process archived events (completed votes) for historical data
+      if (event.event_type !== 'archived') continue;
+      
+      const payload = event.payload as Record<string, unknown> | undefined;
+      const actionTag = (payload?.action as any)?.tag || 'Unknown';
+      const reason = payload?.reason as { url?: string; body?: string } | string | null;
+      const reasonBody = typeof reason === 'string' ? reason : (reason?.body || null);
+      const reasonUrl = typeof reason === 'object' ? (reason?.url || null) : null;
+      const votes = payload?.votes;
+      const { votesFor, votesAgainst } = parseVotes(votes);
+      const totalVotes = votesFor + votesAgainst;
+      
+      let status: GovernanceAction['status'] = 'failed';
+      if (votesFor >= votingThreshold) status = 'passed';
+      else if (totalVotes === 0) status = 'expired';
+      
+      actions.push({
+        id: event.event_id || event.contract_id || '',
+        type: 'vote_completed',
+        actionTag,
+        templateType: 'VoteRequest',
+        status,
+        effectiveAt: event.effective_at || event.timestamp || '',
+        requester: (payload?.requester as string) || null,
+        reason: reasonBody,
+        reasonUrl,
+        votesFor,
+        votesAgainst,
+        totalVotes,
+        contractId: event.contract_id || '',
+        cipReference: extractCipReference(reasonBody, reasonUrl),
+      });
+    }
+    
+    return actions.sort((a, b) => 
+      new Date(b.effectiveAt).getTime() - new Date(a.effectiveAt).getTime()
+    );
+  }, [rawEvents, votingThreshold]);
 
   const uniqueProposals = useMemo(() => {
     if (!governanceActions?.length) return [];
