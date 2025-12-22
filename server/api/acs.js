@@ -1907,22 +1907,6 @@ router.get('/realtime-rich-list', async (req, res) => {
     `;
 
     const snapshotBalances = await db.safeQuery(snapshotSql);
-    console.log(`[ACS RichList] Found ${snapshotBalances.length} unique owners in snapshot`);
-    
-    // Debug: if no balances found, check what entity_names exist
-    if (snapshotBalances.length === 0) {
-      try {
-        const debugSql = `SELECT DISTINCT entity_name, COUNT(*) as cnt FROM ${acsSource} GROUP BY entity_name ORDER BY cnt DESC LIMIT 20`;
-        const debugRows = await db.safeQuery(debugSql);
-        console.log(`[ACS RichList DEBUG] entity_names in snapshot:`, debugRows.map(r => `${r.entity_name}(${r.cnt})`).join(', '));
-        
-        // Also check if Amulet exists with different matching
-        const amuletCheck = await db.safeQuery(`SELECT COUNT(*) as cnt FROM ${acsSource} WHERE template_id ILIKE '%Amulet%'`);
-        console.log(`[ACS RichList DEBUG] Contracts matching '%Amulet%':`, amuletCheck[0]?.cnt);
-      } catch (debugErr) {
-        console.warn('[ACS RichList DEBUG] Failed:', debugErr.message);
-      }
-    }
     
     // Build a map of owner -> balances
     const balanceMap = new Map();
