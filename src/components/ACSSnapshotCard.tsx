@@ -6,7 +6,6 @@ import { Coins, Lock, TrendingUp, RefreshCw, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/hooks/use-toast";
-import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 const AUTO_REFRESH_INTERVAL = 30000; // 30 seconds
 
@@ -20,7 +19,7 @@ export const ACSSnapshotCard = () => {
     setIsRefreshing(true);
     try {
       // Invalidate server-side cache first
-      const apiBase = getDuckDBApiUrl();
+      const apiBase = import.meta.env.VITE_DUCKDB_API_URL || 'http://localhost:3001';
       await fetch(`${apiBase}/api/acs/cache/invalidate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

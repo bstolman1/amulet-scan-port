@@ -58,18 +58,18 @@ const Governance = () => {
     data: localVoteRequestsData,
     isLoading: localLoading,
     isError: localError,
-  } = useAggregatedTemplateData(undefined, "Splice.DsoRules:VoteRequest");
+  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
   // Fetch DsoRules from LOCAL ACS
   const { data: localDsoRulesData } = useAggregatedTemplateData(
     undefined,
-    "Splice.DsoRules:DsoRules",
+    "Splice:DsoRules:DsoRules",
   );
 
   // Fetch Confirmations from LOCAL ACS
   const { data: localConfirmationsData } = useAggregatedTemplateData(
     undefined,
-    "Splice.DsoRules:Confirmation",
+    "Splice:DsoRules:Confirmation",
   );
 
   // Check if local ACS has governance data
@@ -438,17 +438,7 @@ const Governance = () => {
           <TabsContent value="active">
             <Card className="glass-card">
               <div className="p-6">
-                <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                  Active Proposals
-                  <Badge variant="secondary" className="ml-2 text-xs">
-                    ACS Snapshot
-                  </Badge>
-                  {proposals?.length > 0 && (
-                    <Badge variant="outline" className="ml-1">
-                      {proposals.length} active
-                    </Badge>
-                  )}
-                </h3>
+                <h3 className="text-xl font-bold mb-6">Recent Proposals</h3>
 
             {isError ? (
               <div className="text-center py-12">
@@ -647,24 +637,13 @@ const Governance = () => {
           <div className="p-6">
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
               <History className="h-5 w-5" />
-              Governance History
-              <Badge variant="secondary" className="ml-2 text-xs">
-                Ledger Events
-              </Badge>
+              Historical Governance Events (DuckDB)
               {governanceEvents?.length ? (
-                <Badge variant="outline" className="ml-1">
-                  {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} archived
+                <Badge variant="outline" className="ml-2">
+                  {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} VoteRequests
                 </Badge>
               ) : null}
             </h3>
-            
-            <Alert className="mb-4 bg-muted/30 border-border/50">
-              <Database className="h-4 w-4" />
-              <AlertDescription className="text-sm">
-                History shows <strong>archived</strong> VoteRequest contracts from ledger backfill/updates. 
-                These are proposals that have been completed (approved/rejected/expired).
-              </AlertDescription>
-            </Alert>
             
             {eventsLoading ? (
               <div className="space-y-3">
@@ -676,11 +655,8 @@ const Governance = () => {
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">No historical governance events found</p>
-                <p className="text-xs text-muted-foreground mb-4">
-                  Governance history requires ledger backfill data with archived VoteRequest events.
-                </p>
                 <p className="text-xs text-muted-foreground">
-                  Run backfill ingestion to populate historical governance data.
+                  Governance history is extracted from local DuckDB backfill data
                 </p>
               </div>
             ) : (
@@ -914,9 +890,9 @@ const Governance = () => {
         <DataSourcesFooter
           snapshotId={latestSnapshot?.id}
           templateSuffixes={[
-            "Splice.DsoRules:VoteRequest",
-            "Splice.DsoRules:DsoRules",
-            "Splice.DsoRules:Confirmation",
+            "Splice:DsoRules:VoteRequest",
+            "Splice:DsoRules:DsoRules",
+            "Splice:DsoRules:Confirmation",
           ]}
           isProcessing={false}
         />

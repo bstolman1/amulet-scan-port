@@ -68,7 +68,7 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
   
   const results = await query(`
     SELECT 
-      stable_id, event_id, contract_id, template_id, effective_at,
+      event_id, contract_id, template_id, effective_at,
       status, is_closed, action_tag, action_value,
       requester, reason, votes, vote_count,
       vote_before, target_effective_at, tracking_cid, dso
@@ -107,94 +107,14 @@ export async function isIndexPopulated() {
 /**
  * Ensure index tables exist
  */
-/**
- * Extract candidate stable identifiers from a payload.
- * We look for any leaf string field whose key ends with "Cid" (case-insensitive).
- */
-function extractCidCandidates(payload) {
-  const out = [];
-  const walk = (obj, prefix = '') => {
-    if (!obj || typeof obj !== 'object') return;
-    for (const [k, v] of Object.entries(obj)) {
-      const path = prefix ? `${prefix}.${k}` : k;
-      if (typeof v === 'string' && /cid$/i.test(k) && v.length > 0) {
-        out.push({ path, value: v });
-      } else if (v && typeof v === 'object') {
-        walk(v, path);
-      }
-    }
-  };
-  walk(payload);
-  return out;
-}
-
-function getValueAtPath(obj, path) {
-  try {
-    return path.split('.').reduce((acc, k) => (acc && typeof acc === 'object' ? acc[k] : undefined), obj);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Generate a stable identifier for a VoteRequest that persists across migrations.
- * Strategy:
- *  1) Use payload.trackingCid when present.
- *  2) Otherwise, use the "best" *Cid field across the dataset (chosen in buildVoteRequestIndex).
- *  3) Fallback: hash of action/value/requester/reason.
- */
-function generateStableVoteRequestId(event, bestCidPath) {
-  const payload = event?.payload;
-
-  const trackingCid = payload?.trackingCid;
-  if (typeof trackingCid === 'string' && trackingCid.length > 0) {
-    return { stableId: `trackingCid:${trackingCid}`, kind: 'trackingCid' };
-  }
-
-  if (bestCidPath) {
-    const v = getValueAtPath(payload, bestCidPath);
-    if (typeof v === 'string' && v.length > 0) {
-      return { stableId: `payloadCid:${bestCidPath}:${v}`, kind: 'payloadCid' };
-    }
-  }
-
-  const actionTag = payload?.action?.tag || '';
-  const actionValue = payload?.action?.value ? JSON.stringify(payload.action.value) : '';
-  const requester = payload?.requester || '';
-  const reason = payload?.reason
-    ? (typeof payload.reason === 'string' ? payload.reason : JSON.stringify(payload.reason))
-    : '';
-
-  const composite = `${actionTag}::${actionValue}::${requester}::${reason}`;
-
-  // cyrb53 hash - 53-bit hash with good distribution
-  const cyrb53 = (str, seed = 0) => {
-    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
-    for (let i = 0, ch; i < str.length; i++) {
-      ch = str.charCodeAt(i);
-      h1 = Math.imul(h1 ^ ch, 2654435761);
-      h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
-    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
-    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-  };
-
-  const hash = cyrb53(composite);
-  return { stableId: `${actionTag}-${hash.toString(36)}`, kind: 'hash' };
-}
-
 async function ensureIndexTables() {
   try {
     // Create vote_requests table if it doesn't exist
-    // Use stable_id as primary key - a composite of action+requester that persists across migrations
-    // This correctly deduplicates VoteRequests that get new contract_ids during ledger upgrades
+    // Use contract_id as primary key since each VoteRequest contract is unique
+    // (event_id can have duplicates across migration_ids)
     await query(`
       CREATE TABLE IF NOT EXISTS vote_requests (
-        stable_id VARCHAR PRIMARY KEY,
-        contract_id VARCHAR,
+        contract_id VARCHAR PRIMARY KEY,
         event_id VARCHAR,
         template_id VARCHAR,
         effective_at TIMESTAMP,
@@ -296,68 +216,25 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       exercisedRecords = result.exercised;
     }
     
-    // Dedupe created records by STABLE ID, keeping newest by effective_at.
-    // We first discover which *Cid field (other than trackingCid) is the best candidate
-    // by looking for the path with the highest number of unique values.
-    const stableIdMap = new Map();
-    const contractIdToStableId = new Map();
-
-    // Pass 1: find the best payload *Cid path
-    const cidPathToValues = new Map();
-    for (const e of createdRecords) {
-      if (typeof e?.payload?.trackingCid === 'string' && e.payload.trackingCid.length > 0) continue;
-      for (const c of extractCidCandidates(e.payload)) {
-        if (c.path === 'trackingCid') continue;
-        if (!cidPathToValues.has(c.path)) cidPathToValues.set(c.path, new Set());
-        cidPathToValues.get(c.path).add(c.value);
-      }
-    }
-
-    let bestCidPath = null;
-    let bestCidUniques = 0;
-    for (const [path, set] of cidPathToValues.entries()) {
-      const uniques = set.size;
-      if (uniques > bestCidUniques) {
-        bestCidUniques = uniques;
-        bestCidPath = path;
-      }
-    }
-
-    console.log(`   🔍 Stable-id candidate: bestCidPath=${bestCidPath || 'none'} (unique=${bestCidUniques})`);
-
-    // Pass 2: generate stable IDs and dedupe
-    const kindCounts = { trackingCid: 0, payloadCid: 0, hash: 0 };
-
+    // Dedupe created records by contract_id (keep newest by effective_at)
+    // This handles duplicates from multiple migration_ids or ingestion passes
+    const contractMap = new Map();
     for (const event of createdRecords) {
-      const { stableId, kind } = generateStableVoteRequestId(event, bestCidPath);
-      if (!stableId) continue;
-      kindCounts[kind] = (kindCounts[kind] || 0) + 1;
-
-      event._stableId = stableId;
-      if (event.contract_id) contractIdToStableId.set(event.contract_id, stableId);
-
-      const existing = stableIdMap.get(stableId);
+      const cid = event.contract_id;
+      if (!cid) continue;
+      const existing = contractMap.get(cid);
       if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
-        stableIdMap.set(stableId, event);
+        contractMap.set(cid, event);
       }
     }
-
-    const dedupedRecords = Array.from(stableIdMap.values());
-
-    console.log(`   📊 Deduplication: ${createdRecords.length} total → ${dedupedRecords.length} unique (stable_id)`);
-    console.log(`      Stable-id kind usage: trackingCid=${kindCounts.trackingCid}, payloadCid=${kindCounts.payloadCid}, hash=${kindCounts.hash}`);
+    const dedupedRecords = Array.from(contractMap.values());
     
     console.log(`   ✓ Found ${createdRecords.length} created (${dedupedRecords.length} unique), ${exercisedRecords.length} exercised`);
     
-    // Build set of closed stable IDs (not contract IDs, since those can change across migrations)
-    const closedStableIds = new Set();
-    for (const exercised of exercisedRecords) {
-      const cid = exercised.contract_id;
-      if (!cid) continue;
-
-      const stableId = contractIdToStableId.get(cid);
-      if (stableId) closedStableIds.add(stableId);
-    }
+    // Build set of closed contract IDs
+    const closedContractIds = new Set(
+      exercisedRecords.map(r => r.contract_id).filter(Boolean)
+    );
     
     const now = new Date();
     
@@ -376,10 +253,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let updated = 0;
     
     for (const event of dedupedRecords) {
-      const stableId = event._stableId;
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-      const isClosed = closedStableIds.has(stableId);
+      const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
       const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
       
       // Normalize reason - can be string or object
@@ -389,7 +265,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         : null;
       
       const voteRequest = {
-        stable_id: stableId,
         event_id: event.event_id,
         contract_id: event.contract_id,
         template_id: event.template_id,
@@ -409,16 +284,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       };
       
       try {
-        // Upsert - insert or update on conflict by stable_id (unique per logical VoteRequest)
+        // Upsert - insert or update on conflict by contract_id (unique per VoteRequest)
         await query(`
           INSERT INTO vote_requests (
-            stable_id, contract_id, event_id, template_id, effective_at,
+            contract_id, event_id, template_id, effective_at,
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
             updated_at
           ) VALUES (
-            '${voteRequest.stable_id}',
             '${voteRequest.contract_id}',
             '${voteRequest.event_id}',
             ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
@@ -437,8 +311,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
             now()
           )
-          ON CONFLICT (stable_id) DO UPDATE SET
-            contract_id = EXCLUDED.contract_id,
+          ON CONFLICT (contract_id) DO UPDATE SET
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
             votes = EXCLUDED.votes,
@@ -465,17 +338,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     `);
     
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`✅ VoteRequest index built: ${inserted} unique VoteRequests indexed in ${elapsed}s`);
+    console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
     
     indexingInProgress = false;
     
     return {
       status: 'complete',
-      uniqueVoteRequests: inserted,
-      totalIndexed: inserted,
       inserted,
       updated,
-      closedCount: closedStableIds.size,
+      closedCount: closedContractIds.size,
       elapsedSeconds: parseFloat(elapsed),
     };
     

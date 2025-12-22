@@ -11,132 +11,24 @@ const REPO_DATA_DIR = path.join(__dirname, '../../data');
 const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
 // DATA_DIR should point to the base directory
-// Default Windows path: C:/ledger_raw
-const WIN_DEFAULT_DATA_DIR = 'C:/ledger_raw';
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT_DATA_DIR = '/home/bstolz/canton-explorer/data';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
 // 2) repo-local data/ (if present)
-// 3) Windows default path
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+// 3) WSL default path
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WSL_DEFAULT_DATA_DIR);
 // Ledger events/updates live under: <BASE_DATA_DIR>/raw
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
-// Persistent DuckDB instance
+// Persistent DuckDB instance (survives restarts, shareable between processes)
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
-console.log(`📦 DuckDB base data dir: ${BASE_DATA_DIR}`);
-
-let db = null;
-let conn = null;
-let recoveryAttempted = false;
-
-function logDuckDBDiagnostics(prefix = 'ℹ️') {
-  try {
-    const exists = fs.existsSync(DB_FILE);
-    const walExists = fs.existsSync(`${DB_FILE}.wal`);
-    let size = null;
-    try {
-      size = exists ? fs.statSync(DB_FILE).size : null;
-    } catch {}
-
-    console.log(`${prefix} DuckDB diagnostics:`);
-    console.log(`   platform=${process.platform}`);
-    console.log(`   db_file_exists=${exists}${size != null ? ` size_bytes=${size}` : ''}`);
-    console.log(`   wal_exists=${walExists}`);
-  } catch (e) {
-    console.warn(`⚠️ Failed to log DuckDB diagnostics: ${e?.message || e}`);
-  }
-}
-
-function openDuckDBConnection() {
-  if (conn) return;
-
-  // If the DB file doesn't exist, DuckDB will create a new empty DB.
-  // That's almost never what we want for this app, so fail loudly.
-  if (!fs.existsSync(DB_FILE)) {
-    throw new Error(`DuckDB file not found at ${DB_FILE} (check DATA_DIR/DUCKDB_FILE)`);
-  }
-
-  db = new duckdb.Database(DB_FILE);
-  conn = db.connect();
-}
-
-function closeDuckDBConnection() {
-  try { conn?.close?.(); } catch {}
-  try { db?.close?.(); } catch {}
-  conn = null;
-  db = null;
-}
-
-function pingDuckDB() {
-  return new Promise((resolve, reject) => {
-    if (!conn) return reject(new Error('DuckDB connection not initialized'));
-    conn.all('SELECT 1 AS ok', (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-}
-
-function cleanupDuckDBArtifacts() {
-  // On Windows, stale .wal/.lock files are a common cause of "connection closed" issues.
-  try {
-    const walPath = `${DB_FILE}.wal`;
-    if (fs.existsSync(walPath)) {
-      fs.unlinkSync(walPath);
-      console.log(`🧹 Deleted WAL: ${walPath}`);
-    }
-  } catch (e) {
-    console.warn(`⚠️ Failed deleting WAL: ${e?.message || e}`);
-  }
-
-  try {
-    if (!fs.existsSync(BASE_DATA_DIR)) return;
-    const entries = fs.readdirSync(BASE_DATA_DIR);
-    const lockFiles = entries.filter((f) => f.endsWith('.lock'));
-    for (const f of lockFiles) {
-      const lockPath = path.join(BASE_DATA_DIR, f);
-      try {
-        fs.unlinkSync(lockPath);
-        console.log(`🧹 Deleted lock: ${lockPath}`);
-      } catch (e) {
-        console.warn(`⚠️ Failed deleting lock ${lockPath}: ${e?.message || e}`);
-      }
-    }
-  } catch (e) {
-    console.warn(`⚠️ Failed scanning lock files: ${e?.message || e}`);
-  }
-}
-
-export async function ensureDuckDBReady({ allowRecovery = true } = {}) {
-  try {
-    openDuckDBConnection();
-    await pingDuckDB();
-  } catch (err) {
-    const msg = err?.message || String(err);
-    logDuckDBDiagnostics('❗');
-
-    // Only try recovery once per process to avoid loops.
-    if (allowRecovery && process.platform === 'win32' && !recoveryAttempted) {
-      recoveryAttempted = true;
-      console.warn(`⚠️ DuckDB connection ping failed: ${msg}`);
-      console.warn('🧹 Attempting Windows DuckDB recovery (remove WAL/lock, reconnect once)...');
-
-      cleanupDuckDBArtifacts();
-      closeDuckDBConnection();
-
-      openDuckDBConnection();
-      await pingDuckDB();
-      return;
-    }
-
-    throw err;
-  }
-}
-
+const db = new duckdb.Database(DB_FILE);
+const conn = db.connect();
 
 /**
  * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
@@ -208,8 +100,7 @@ function hasDataFiles(type = 'events') {
 }
 
 // Helper to run queries
-export async function query(sql, params = []) {
-  await ensureDuckDBReady();
+export function query(sql, params = []) {
   return new Promise((resolve, reject) => {
     conn.all(sql, ...params, (err, rows) => {
       if (err) reject(err);
@@ -387,10 +278,8 @@ export async function initializeViews() {
   }
 }
 
-// Initialize on import (best-effort only). Never crash the server on init failures.
-initializeViews().catch((err) => {
-  console.error('❌ DuckDB view initialization failed during startup:', err?.message || err);
-});
+// Initialize on import
+initializeViews();
 
 export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
 

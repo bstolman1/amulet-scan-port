@@ -12,7 +12,6 @@ import { ingestNewFiles, getIngestionStats } from './ingest.js';
 import { updateAllAggregations, hasNewData } from './aggregations.js';
 import { initEngineSchema } from './schema.js';
 import { runGapDetection, getLastGapDetection } from './gap-detector.js';
-import { ensureDuckDBReady } from '../duckdb/connection.js';
 import { buildVoteRequestIndex, isIndexingInProgress as isVoteIndexing, isIndexPopulated as isVoteIndexPopulated } from './vote-request-indexer.js';
 import { 
   buildTemplateFileIndex, 
@@ -132,9 +131,6 @@ export async function startEngineWorker() {
   console.log(`   Interval: ${WORKER_INTERVAL_MS}ms, Files/cycle: ${FILES_PER_CYCLE}`);
   console.log(`   Gap check: every ${GAP_CHECK_INTERVAL} cycles, Auto-recover: ${AUTO_RECOVER_GAPS}`);
   
-  // Ensure DuckDB is actually usable before starting (best-effort recovery on Windows)
-  await ensureDuckDBReady({ allowRecovery: true });
-
   // Initialize schema
   await initEngineSchema();
   
