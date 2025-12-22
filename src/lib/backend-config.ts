@@ -16,11 +16,11 @@ interface BackendConfig {
   duckdbApiUrl: string;
 }
 
-// Configuration - use Cloudflare tunnel for DuckDB backend
+// Configuration - use env variable or fallback to localhost
 const config: BackendConfig = {
   ledgerBackend: 'duckdb',
   metadataBackend: 'supabase', // Keep Supabase for small metadata tables  
-  duckdbApiUrl: 'https://operating-daughter-ipod-allowed.trycloudflare.com',
+  duckdbApiUrl: import.meta.env.VITE_DUCKDB_API_URL || 'http://localhost:3001',
 };
 
 export function getBackendConfig(): BackendConfig {
