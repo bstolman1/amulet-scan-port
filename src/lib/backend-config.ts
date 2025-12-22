@@ -25,15 +25,18 @@ function computeDuckDbApiUrl(): string {
   if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
 
   const host = window.location.hostname;
+  const protocol = window.location.protocol; // "http:" | "https:"
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
 
   if (isLocalHost) {
     return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
   }
 
-  // If you run the UI from another host on your LAN (e.g. http://192.168.x.x:5173)
-  // this will automatically target that same host on :3001.
-  return `http://${host}:${DEFAULT_DUCKDB_PORT}`;
+  // In Lovable preview / deployed environments the UI is typically served over HTTPS.
+  // Using the same protocol avoids mixed-content blocks (HTTPS page calling HTTP API).
+  // Note: This assumes the DuckDB API is reachable on the same host + port.
+  const baseProtocol = protocol === 'https:' ? 'https' : 'http';
+  return `${baseProtocol}://${host}:${DEFAULT_DUCKDB_PORT}`;
 }
 
 const config: BackendConfig = {
