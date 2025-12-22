@@ -100,21 +100,28 @@ export async function initEngineSchema() {
       status              VARCHAR DEFAULT 'active',
       is_closed           BOOLEAN DEFAULT FALSE,
       action_tag          VARCHAR,
-      action_value        JSON,
+      action_value        VARCHAR,
       requester           VARCHAR,
       reason              VARCHAR,
-      votes               JSON,
+      votes               VARCHAR,
       vote_count          INTEGER DEFAULT 0,
       vote_before         TIMESTAMP,
       target_effective_at TIMESTAMP,
       tracking_cid        VARCHAR,
       dso                 VARCHAR,
+      payload             VARCHAR,
       created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  // Index for efficient queries
+  // DuckDB requires UNIQUE indexes for ON CONFLICT targets
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_vote_requests_event_id
+    ON vote_requests(event_id)
+  `);
+
+  // Indexes for efficient queries
   await query(`
     CREATE INDEX IF NOT EXISTS idx_vote_requests_status ON vote_requests(status)
   `);
@@ -134,6 +141,11 @@ export async function initEngineSchema() {
       total_indexed       BIGINT DEFAULT 0,
       CHECK (id = 1)
     )
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_vote_request_index_state_id
+    ON vote_request_index_state(id)
   `);
 
   schemaInitialized = true;

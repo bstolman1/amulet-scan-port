@@ -134,14 +134,20 @@ async function ensureIndexTables() {
         updated_at TIMESTAMP
       )
     `);
-    
+
+    // DuckDB requires a UNIQUE index for ON CONFLICT targets.
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_vote_requests_event_id
+      ON vote_requests(event_id)
+    `);
+
     // Try to add payload column if table exists but column doesn't
     try {
       await query(`ALTER TABLE vote_requests ADD COLUMN IF NOT EXISTS payload VARCHAR`);
     } catch (alterErr) {
       // Column might already exist or syntax not supported, ignore
     }
-    
+
     // Create state table if it doesn't exist
     await query(`
       CREATE TABLE IF NOT EXISTS vote_request_index_state (
@@ -151,7 +157,12 @@ async function ensureIndexTables() {
         total_indexed INTEGER
       )
     `);
-    
+
+    await query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_vote_request_index_state_id
+      ON vote_request_index_state(id)
+    `);
+
     console.log('   ✓ Index tables ensured');
   } catch (err) {
     console.error('Error creating index tables:', err);
