@@ -497,13 +497,28 @@ export function isIndexingInProgress() {
  * Scan specific files for VoteRequest events - SINGLE PASS collecting both created and exercised
  */
 async function scanFilesForVoteRequestsSinglePass(files) {
+  const fs = await import('fs');
   const created = [];
   const exercised = [];
   let filesProcessed = 0;
+  let filesMissing = 0;
+  let filesErrored = 0;
   const startTime = Date.now();
   let lastLogTime = startTime;
   
-  for (const file of files) {
+  // Validate files exist before scanning
+  const existingFiles = files.filter(file => {
+    if (fs.existsSync(file)) return true;
+    filesMissing++;
+    return false;
+  });
+  
+  if (filesMissing > 0) {
+    console.log(`   ⚠️ ${filesMissing}/${files.length} files in template index no longer exist`);
+    console.log(`   💡 Template index may be stale - consider rebuilding with force: true`);
+  }
+  
+  for (const file of existingFiles) {
     try {
       const result = await binaryReader.readBinaryFile(file);
       const fileRecords = result.records || [];
@@ -526,16 +541,23 @@ async function scanFilesForVoteRequestsSinglePass(files) {
       const now = Date.now();
       if (filesProcessed % 50 === 0 || (now - lastLogTime > 5000)) {
         const elapsed = (now - startTime) / 1000;
-        const pct = ((filesProcessed / files.length) * 100).toFixed(0);
-        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} files | ${created.length} created, ${exercised.length} exercised | ${elapsed.toFixed(1)}s`);
+        const pct = ((filesProcessed / existingFiles.length) * 100).toFixed(0);
+        console.log(`   📂 [${pct}%] ${filesProcessed}/${existingFiles.length} files | ${created.length} created, ${exercised.length} exercised | ${elapsed.toFixed(1)}s`);
         lastLogTime = now;
       }
     } catch (err) {
-      // Skip unreadable files
+      filesErrored++;
+      if (filesErrored <= 3) {
+        console.warn(`   ⚠️ Error reading ${file}: ${err.message}`);
+      }
     }
   }
   
-  return { created, exercised, filesScanned: filesProcessed };
+  if (filesErrored > 3) {
+    console.warn(`   ⚠️ ${filesErrored} total files had read errors`);
+  }
+  
+  return { created, exercised, filesScanned: filesProcessed, filesMissing, filesErrored };
 }
 
 /**
