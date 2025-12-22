@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useGovernanceEvents } from "./use-governance-events";
 
+// Uses fast indexed VoteRequest data from DuckDB
 export interface GovernanceAction {
   id: string;
   type: 'vote_completed' | 'rule_change' | 'confirmation';
