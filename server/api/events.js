@@ -1247,15 +1247,15 @@ router.get('/vote-request-index/status', async (req, res) => {
 // POST /api/events/vote-request-index/build - Trigger index build
 router.post('/vote-request-index/build', async (req, res) => {
   try {
-    const force = req.query.force === 'true';
-    
+    const force = req.query.force === 'true' || req.body?.force === true;
+
     if (voteRequestIndexer.isIndexingInProgress()) {
       return res.json({ status: 'in_progress', message: 'Indexing already in progress' });
     }
-    
+
     // Start indexing in background
-    res.json({ status: 'started', message: 'VoteRequest index build started' });
-    
+    res.json({ status: 'started', message: 'VoteRequest index build started', force });
+
     // Run async
     voteRequestIndexer.buildVoteRequestIndex({ force }).catch(err => {
       console.error('Background index build failed:', err);
