@@ -781,10 +781,24 @@ router.get('/vote-requests', async (req, res) => {
           const created = [];
           const exercised = [];
           let filesScanned = 0;
+          let filesMissing = 0;
+          let filesErrored = 0;
           const start = Date.now();
           let lastLog = start;
           
-          for (const file of files) {
+          // Validate files exist before scanning
+          const fs = await import('fs');
+          const existingFiles = files.filter(file => {
+            if (fs.existsSync(file)) return true;
+            filesMissing++;
+            return false;
+          });
+          
+          if (filesMissing > 0) {
+            console.log(`   ⚠️ ${filesMissing}/${files.length} files in template index no longer exist`);
+          }
+          
+          for (const file of existingFiles) {
             try {
               const result = await binaryReader.readBinaryFile(file);
               const fileRecords = result.records || [];
@@ -804,18 +818,25 @@ router.get('/vote-requests', async (req, res) => {
               filesScanned++;
               const now = Date.now();
               if (now - lastLog > 5000) {
-                const pct = files.length ? ((filesScanned / files.length) * 100).toFixed(0) : '0';
-                console.log(`   📂 [${pct}%] ${filesScanned}/${files.length} files | ${created.length} created, ${exercised.length} exercised`);
+                const pct = existingFiles.length ? ((filesScanned / existingFiles.length) * 100).toFixed(0) : '0';
+                console.log(`   📂 [${pct}%] ${filesScanned}/${existingFiles.length} files | ${created.length} created, ${exercised.length} exercised`);
                 lastLog = now;
               }
-            } catch {
-              // ignore unreadable files
+            } catch (err) {
+              filesErrored++;
+              if (filesErrored <= 3) {
+                console.warn(`   ⚠️ Error reading ${file}: ${err.message}`);
+              }
             }
           }
           
+          if (filesErrored > 3) {
+            console.warn(`   ⚠️ ${filesErrored} total files had read errors`);
+          }
+          
           return { 
-            created: { records: created, filesScanned, elapsedMs: Date.now() - start },
-            exercised: { records: exercised, filesScanned, elapsedMs: Date.now() - start }
+            created: { records: created, filesScanned, filesMissing, filesErrored, elapsedMs: Date.now() - start },
+            exercised: { records: exercised, filesScanned, filesMissing, filesErrored, elapsedMs: Date.now() - start }
           };
         };
 
@@ -855,8 +876,8 @@ router.get('/vote-requests', async (req, res) => {
           exercisedResult = { records: exercised, filesScanned: allVoteRecords.filesScanned || 0 };
         }
 
-        console.log(`   Created scan: ${createdResult.filesScanned || '?'} files scanned`);
-        console.log(`   Exercised scan: ${exercisedResult.filesScanned || '?'} files scanned`);
+        console.log(`   Created scan: ${createdResult.filesScanned || 0} files scanned${createdResult.filesMissing ? `, ${createdResult.filesMissing} missing` : ''}${createdResult.filesErrored ? `, ${createdResult.filesErrored} errors` : ''}`);
+        console.log(`   Exercised scan: ${exercisedResult.filesScanned || 0} files scanned`);
 
         const closedContractIds = new Set(
           (exercisedResult.records || [])
@@ -906,12 +927,16 @@ router.get('/vote-requests', async (req, res) => {
           exercisedEventsFound: (exercisedResult.records || []).length,
           closedContractIds: closedContractIds.size,
           createdFilesScanned: createdResult.filesScanned || 0,
+          createdFilesMissing: createdResult.filesMissing || 0,
+          createdFilesErrored: createdResult.filesErrored || 0,
           createdTotalFiles: createdResult.totalFiles || 0,
           dateRangeCovered: { 
             oldest: allDates[0] || null, 
             newest: allDates[allDates.length - 1] || null 
           },
           fromCache: false,
+          templateIndexStale: (createdResult.filesMissing || 0) > 0,
+          rebuildHint: (createdResult.filesMissing || 0) > 0 ? 'Template index has stale file paths. Rebuild with: POST /api/engine/template-index/build?force=true' : null,
         };
         
         // Cache the results
