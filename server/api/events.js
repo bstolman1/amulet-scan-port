@@ -476,19 +476,32 @@ router.get('/governance-history', async (req, res) => {
       // VoteRequest events are EXTREMELY sparse (~26 per 275K events)
       // Strategy: Run TWO parallel scans - one for VoteRequests specifically, one for other governance
       
-      // Scan 1: Deep scan specifically for VoteRequest created events
-      const voteRequestPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 500, // VoteRequests are rare, 500 should be plenty
+      // Scan 1: Deep scan specifically for VoteRequest archived events (completed votes)
+      // These are the vote results - when voteBefore expires and the vote concludes
+      const voteRequestArchivedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 1000, // Completed votes are what we want for history
         offset: 0,
         maxDays: 365 * 3,
         maxFilesToScan: 100000, // Scan ALL files for VoteRequests
+        sortBy: 'effective_at',
+        filter: (e) => {
+          return e.template_id?.includes('VoteRequest') && e.event_type === 'archived';
+        }
+      });
+      
+      // Scan 2: VoteRequest created events (for active proposals context)
+      const voteRequestCreatedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 100, // Just a few for context
+        offset: 0,
+        maxDays: 365,
+        maxFilesToScan: 50000,
         sortBy: 'effective_at',
         filter: (e) => {
           return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
         }
       });
       
-      // Scan 2: Standard governance scan (Confirmation, DsoRules choices)
+      // Scan 3: Standard governance scan (Confirmation, DsoRules choices)
       const otherGovernancePromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit: limit * 100,
         offset,
@@ -507,27 +520,35 @@ router.get('/governance-history', async (req, res) => {
         }
       });
       
-      // Run both scans in parallel
-      const [voteRequestResult, otherResult] = await Promise.all([voteRequestPromise, otherGovernancePromise]);
+      // Run all scans in parallel
+      const [voteRequestArchivedResult, voteRequestCreatedResult, otherResult] = await Promise.all([
+        voteRequestArchivedPromise, 
+        voteRequestCreatedPromise,
+        otherGovernancePromise
+      ]);
       
-      console.log(`   Found ${voteRequestResult.records.length} VoteRequest events (deep scan)`);
+      console.log(`   Found ${voteRequestArchivedResult.records.length} ARCHIVED VoteRequest events (completed votes)`);
+      console.log(`   Found ${voteRequestCreatedResult.records.length} CREATED VoteRequest events`);
       console.log(`   Found ${otherResult.records.length} other governance events`);
       
-      // Smart merge: Ensure VoteRequests are always represented
-      // Reserve up to 30% of slots for VoteRequests since they have the richest data
-      const voteRequestSlots = Math.min(Math.ceil(limit * 0.3), voteRequestResult.records.length);
-      const otherSlots = limit - voteRequestSlots;
+      // Priority: Archived VoteRequests first (completed votes), then Created, then other
+      // Reserve up to 60% of slots for archived VoteRequests (the main history)
+      const archivedSlots = Math.min(Math.ceil(limit * 0.6), voteRequestArchivedResult.records.length);
+      const createdSlots = Math.min(Math.ceil(limit * 0.2), voteRequestCreatedResult.records.length);
+      const otherSlots = limit - archivedSlots - createdSlots;
       
       // Sort each set by effective_at descending
-      voteRequestResult.records.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
+      voteRequestArchivedResult.records.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
+      voteRequestCreatedResult.records.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
       otherResult.records.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
       
       // Take allocated slots from each
-      const selectedVoteRequests = voteRequestResult.records.slice(0, voteRequestSlots);
+      const selectedArchived = voteRequestArchivedResult.records.slice(0, archivedSlots);
+      const selectedCreated = voteRequestCreatedResult.records.slice(0, createdSlots);
       const selectedOther = otherResult.records.slice(0, otherSlots);
       
       // Merge and dedupe
-      const allRecords = [...selectedVoteRequests, ...selectedOther];
+      const allRecords = [...selectedArchived, ...selectedCreated, ...selectedOther];
       const seenIds = new Set();
       const dedupedRecords = allRecords.filter(r => {
         if (seenIds.has(r.event_id)) return false;
@@ -538,7 +559,8 @@ router.get('/governance-history', async (req, res) => {
       // Sort merged results by effective_at descending
       dedupedRecords.sort((a, b) => new Date(b.effective_at) - new Date(a.effective_at));
       
-      console.log(`   VoteRequests included: ${selectedVoteRequests.length}/${voteRequestResult.records.length}`);
+      console.log(`   Archived VoteRequests included: ${selectedArchived.length}/${voteRequestArchivedResult.records.length}`);
+      console.log(`   Created VoteRequests included: ${selectedCreated.length}/${voteRequestCreatedResult.records.length}`);
       console.log(`   Other governance included: ${selectedOther.length}/${otherResult.records.length}`);
       console.log(`   Merged to ${dedupedRecords.length} unique governance events`);
       
@@ -647,7 +669,8 @@ router.get('/governance-history', async (req, res) => {
           choiceCounts,
           fieldCoverage: { withAction, withRequester, withConfirmer, withReason, withVotes, withExerciseResult },
           totalScanned: dedupedRecords.length,
-          voteRequestsFound: voteRequestResult.records.length,
+          archivedVoteRequestsFound: voteRequestArchivedResult.records.length,
+          createdVoteRequestsFound: voteRequestCreatedResult.records.length,
           otherGovernanceFound: otherResult.records.length,
         }
       });
