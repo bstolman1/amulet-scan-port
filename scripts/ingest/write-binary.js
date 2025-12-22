@@ -19,9 +19,9 @@ import { getBinaryWriterPool, shutdownBinaryPool } from './binary-writer-pool.js
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default WSL path: /home/bstolz/canton-explorer/data
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
-const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WSL_DEFAULT;
+// Configuration - Default Windows path: C:\ledger_raw
+const WIN_DEFAULT = 'C:\\ledger_raw';
+const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WIN_DEFAULT;
 
 // Safety: require an absolute path to avoid accidentally writing outside the intended directory.
 // (resolve() will make it absolute, but we still fail fast if a relative path was provided.)

@@ -14,8 +14,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Match the same path resolution logic as connection.js
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
 const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
-const WSL_DEFAULT_DATA_DIR = '/home/bstolz/canton-explorer/data';
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WSL_DEFAULT_DATA_DIR);
+const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
 const RAW_DIR = path.join(BASE_DATA_DIR, 'raw');
 
 /**

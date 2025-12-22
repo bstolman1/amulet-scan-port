@@ -22,9 +22,9 @@ import { getWorkerPool, shutdownPool } from './worker-pool.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default WSL path: /home/bstolz/canton-explorer/data/raw
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data/raw';
-const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WSL_DEFAULT;
+// Configuration - Default Windows path: C:\ledger_raw\raw
+const WIN_DEFAULT = 'C:\\ledger_raw\\raw';
+const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WIN_DEFAULT;
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 10000;
 const MAX_CONCURRENT_WRITES = parseInt(process.env.MAX_CONCURRENT_WRITES) || 4;
 const GZIP_LEVEL = parseInt(process.env.GZIP_LEVEL) || 1;
