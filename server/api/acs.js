@@ -1075,54 +1075,58 @@ router.get('/rich-list', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const search = req.query.search || '';
 
-     // Check cache - use search-specific key
-     const cacheKey = `acs:v2:rich-list:${limit}:${search}`;
-     const cached = getCached(cacheKey);
-     if (cached) {
-       console.log(`[ACS] Rich list cache HIT: ${cacheKey}`);
-       return res.json(cached);
-     }
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: [], totalSupply: 0, holderCount: 0, message: 'No snapshot found' });
+    }
 
-     console.log(`[ACS] Rich list cache MISS: ${cacheKey}`);
+    // Check cache - use search-specific key
+    const cacheKey = `acs:v3:rich-list:m${snapshot.migrationId}:t${snapshot.snapshotTime}:${limit}:${search}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      console.log(`[ACS] Rich list cache HIT: ${cacheKey}`);
+      return res.json(cached);
+    }
 
-     // Try to use pre-computed aggregation first
-     const aggregation = getCached('aggregation:v2:holder-balances');
-     if (aggregation && !search) {
-       // Use pre-computed data
-       const holders = aggregation.holders.slice(0, limit).map(row => ({
-         owner: row.owner,
-         amount: row.unlocked_balance,
-         locked: row.locked_balance,
-         total: row.total_balance,
-       }));
+    console.log(`[ACS] Rich list cache MISS: ${cacheKey}`);
 
-       const result = serializeBigInt({
-         data: holders,
-         totalSupply: aggregation.totalSupply,
-         unlockedSupply: aggregation.unlockedSupply,
-         lockedSupply: aggregation.lockedSupply,
-         holderCount: aggregation.holderCount,
-         cached: true,
-         refreshedAt: aggregation.refreshedAt,
-       });
+    // Try to use pre-computed aggregation first
+    const aggregation = getCached('aggregation:v2:holder-balances');
+    if (aggregation && !search) {
+      // Use pre-computed data
+      const holders = aggregation.holders.slice(0, limit).map(row => ({
+        owner: row.owner,
+        amount: row.unlocked_balance,
+        locked: row.locked_balance,
+        total: row.total_balance,
+      }));
 
-       setCache(cacheKey, result, CACHE_TTL.RICH_LIST);
-       return res.json(result);
-     }
+      const result = serializeBigInt({
+        data: holders,
+        totalSupply: aggregation.totalSupply,
+        unlockedSupply: aggregation.unlockedSupply,
+        lockedSupply: aggregation.lockedSupply,
+        holderCount: aggregation.holderCount,
+        cached: true,
+        refreshedAt: aggregation.refreshedAt,
+      });
+
+      setCache(cacheKey, result, CACHE_TTL.RICH_LIST);
+      return res.json(result);
+    }
 
     // Fall back to query (for search or if no pre-computed data)
-    const acsSource = getACSSource();
+    // NOTE: acsSource already reads only the best snapshot's files, no need to filter by migration_id/snapshot_time
     const sql = `
-      WITH ${getLatestSnapshotCTE(acsSource)},
-      latest_contracts AS (
+      WITH latest_contracts AS (
         SELECT
           contract_id,
           any_value(template_id) as template_id,
           any_value(entity_name) as entity_name,
           any_value(payload) as payload
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource}
         GROUP BY contract_id
       ),
       amulet_balances AS (
@@ -1183,18 +1187,15 @@ router.get('/rich-list', async (req, res) => {
     const rows = await db.safeQuery(sql);
     console.log(`[ACS] Rich list returned ${rows.length} holders`);
 
-    // Get total supply and holder count (using same acsSource)
+    // Get total supply and holder count
     const statsSql = `
-      WITH ${getLatestSnapshotCTE(acsSource)},
-      latest_contracts AS (
+      WITH latest_contracts AS (
         SELECT
           contract_id,
           any_value(template_id) as template_id,
           any_value(entity_name) as entity_name,
           any_value(payload) as payload
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource}
         GROUP BY contract_id
       ),
       amulet_total AS (
@@ -1276,29 +1277,35 @@ router.get('/supply', async (req, res) => {
       return res.json({ data: null });
     }
 
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: null, message: 'No snapshot found' });
+    }
+
     // Check cache
-    const cacheKey = 'acs:v2:supply';
+    const cacheKey = `acs:v3:supply:m${snapshot.migrationId}:t${snapshot.snapshotTime}`;
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
     }
 
-    const acsSource = getACSSource();
     const sql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
-        COUNT(*) as amulet_count,
-        snapshot_time,
-        (SELECT migration_id FROM latest_migration) as migration_id
-      FROM ${acsSource} acs
-      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'Amulet' OR template_id LIKE '%Amulet%')
-      GROUP BY snapshot_time
+        COUNT(*) as amulet_count
+      FROM ${acsSource}
+      WHERE (entity_name = 'Amulet' OR template_id LIKE '%Amulet%')
     `;
 
     const rows = await db.safeQuery(sql);
-    const result = serializeBigInt({ data: rows[0] || null });
+    const result = serializeBigInt({ 
+      data: {
+        ...rows[0],
+        snapshot_time: snapshot.snapshotTime,
+        migration_id: snapshot.migrationId,
+      }
+    });
     setCache(cacheKey, result, CACHE_TTL.SUPPLY);
     res.json(result);
   } catch (err) {
@@ -1318,8 +1325,15 @@ router.get('/allocations', async (req, res) => {
     const offset = parseInt(req.query.offset) || 0;
     const search = (req.query.search || '').trim();
 
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: [], totalCount: 0, totalAmount: 0, message: 'No snapshot found' });
+    }
+
     // Check cache for paginated data
-    const cacheKey = `acs:allocations:${limit}:${offset}:${search}`;
+    const cacheKey = `acs:v3:allocations:m${snapshot.migrationId}:t${snapshot.snapshotTime}:${limit}:${offset}:${search}`;
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
@@ -1327,9 +1341,7 @@ router.get('/allocations', async (req, res) => {
 
     console.log(`[ACS] Allocations request: limit=${limit}, offset=${offset}, search=${search}`);
 
-    const acsSource = getACSSource();
     const sql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
       SELECT 
         contract_id,
         json_extract_string(payload, '$.allocation.settlement.executor') as executor,
@@ -1339,10 +1351,8 @@ router.get('/allocations', async (req, res) => {
         json_extract_string(payload, '$.allocation.settlement.requestedAt') as requested_at,
         json_extract_string(payload, '$.allocation.transferLegId') as transfer_leg_id,
         payload
-      FROM ${acsSource} acs
-      WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-        AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        AND (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
+      FROM ${acsSource}
+      WHERE (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
         ${search ? `AND (
           json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
           OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${search.replace(/'/g, "''")}%'
@@ -1355,20 +1365,17 @@ router.get('/allocations', async (req, res) => {
     const rows = await db.safeQuery(sql);
 
     // Get totals (cached separately from paginated data to avoid refetching on page change)
-    const statsCacheKey = `acs:allocations-stats:${search}`;
+    const statsCacheKey = `acs:v3:allocations-stats:m${snapshot.migrationId}:t${snapshot.snapshotTime}:${search}`;
     let stats = getCached(statsCacheKey);
     
     if (!stats) {
       const statsSql = `
-        WITH ${getLatestSnapshotCTE(acsSource)}
         SELECT 
           COUNT(*) as total_count,
           COALESCE(SUM(CAST(COALESCE(json_extract_string(payload, '$.allocation.transferLeg.amount'), '0') AS DOUBLE)), 0) as total_amount,
           COUNT(DISTINCT json_extract_string(payload, '$.allocation.settlement.executor')) as unique_executors
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
+        FROM ${acsSource}
+        WHERE (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
           ${search ? `AND (
             json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
             OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${search.replace(/'/g, "''")}%'
@@ -1405,12 +1412,16 @@ router.get('/mining-rounds', async (req, res) => {
     }
 
     const closedLimit = Math.min(parseInt(req.query.closedLimit) || 20, 100);
-    const snapshotTime = req.query.snapshot || null; // Optional: specific snapshot timestamp
 
-    // Check cache (include snapshot in key if specified)
-    const cacheKey = snapshotTime 
-      ? `acs:mining-rounds:${closedLimit}:${snapshotTime}`
-      : `acs:mining-rounds:${closedLimit}`;
+    // Use optimized snapshot source
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ openRounds: [], issuingRounds: [], closedRounds: [], counts: {}, message: 'No snapshot found' });
+    }
+
+    // Check cache
+    const cacheKey = `acs:v3:mining-rounds:m${snapshot.migrationId}:t${snapshot.snapshotTime}:${closedLimit}`;
     const cached = getCached(cacheKey);
     if (cached) {
       console.log(`[ACS] Mining rounds cache HIT: ${cacheKey}`);
@@ -1419,8 +1430,8 @@ router.get('/mining-rounds', async (req, res) => {
 
     console.log(`[ACS] Mining rounds cache MISS: ${cacheKey}`);
 
-    // Skip pre-computed aggregation if specific snapshot requested
-    const aggregation = !snapshotTime && getCached('aggregation:mining-rounds');
+    // Skip pre-computed aggregation for now (use direct query)
+    const aggregation = getCached('aggregation:mining-rounds');
     if (aggregation) {
       const result = serializeBigInt({
         openRounds: aggregation.openRounds,
@@ -1435,54 +1446,31 @@ router.get('/mining-rounds', async (req, res) => {
       return res.json(result);
     }
 
-    // Fall back to query - use specified snapshot or latest
-    const acsSource = getACSSource();
-    
-    // First, debug what's actually in the payload for mining rounds
-    const debugSql = `
+    const sql = `
       SELECT 
+        contract_id,
         entity_name,
         template_id,
-        payload,
-        json_extract_string(payload, '$.round.number') as round_dot_number,
-        json_extract_string(payload, '$.round') as round_direct,
-        json_type(payload, '$.round') as round_type
+        -- Try multiple extraction paths for round number
+        COALESCE(
+          NULLIF(json_extract_string(payload, '$.round.number'), ''),
+          NULLIF(CAST(json_extract(payload, '$.round.number') AS VARCHAR), ''),
+          NULLIF(json_extract_string(payload, '$.round'), ''),
+          NULLIF(CAST(json_extract(payload, '$.round') AS VARCHAR), '')
+        ) as round_number,
+        json_extract_string(payload, '$.opensAt') as opens_at,
+        json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
+        json_extract_string(payload, '$.amuletPrice') as amulet_price,
+        payload
       FROM ${acsSource}
-      WHERE entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
-         OR template_id LIKE '%MiningRound%'
-      LIMIT 5
-    `;
-    
-    const debugRows = await db.safeQuery(debugSql);
-    console.log('[ACS] Mining rounds payload debug:', JSON.stringify(debugRows, null, 2));
-    
-    const sql = `
-      WITH ${getSnapshotCTE(acsSource, snapshotTime)},
-      all_rounds AS (
-        SELECT 
-          contract_id,
-          entity_name,
-          template_id,
-          -- Try multiple extraction paths for round number
-          COALESCE(
-            NULLIF(json_extract_string(payload, '$.round.number'), ''),
-            NULLIF(CAST(json_extract(payload, '$.round.number') AS VARCHAR), ''),
-            NULLIF(json_extract_string(payload, '$.round'), ''),
-            NULLIF(CAST(json_extract(payload, '$.round') AS VARCHAR), '')
-          ) as round_number,
-          json_extract_string(payload, '$.opensAt') as opens_at,
-          json_extract_string(payload, '$.targetClosesAt') as target_closes_at,
-          json_extract_string(payload, '$.amuletPrice') as amulet_price,
-          payload,
-          (SELECT snapshot_time FROM latest_snapshot) as snapshot_time
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-          AND (entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
-               OR template_id LIKE '%MiningRound%')
-      )
-      SELECT * FROM all_rounds
-      ORDER BY entity_name, CAST(COALESCE(NULLIF(round_number, ''), '0') AS BIGINT) DESC
+      WHERE (entity_name IN ('OpenMiningRound', 'IssuingMiningRound', 'ClosedMiningRound')
+             OR template_id LIKE '%MiningRound%')
+      ORDER BY entity_name, CAST(COALESCE(NULLIF(
+        COALESCE(
+          NULLIF(json_extract_string(payload, '$.round.number'), ''),
+          NULLIF(json_extract_string(payload, '$.round'), ''),
+          '0'
+        ), ''), '0') AS BIGINT) DESC
     `;
 
     const rows = await db.safeQuery(sql);
@@ -1493,9 +1481,6 @@ router.get('/mining-rounds', async (req, res) => {
     const allClosedRounds = rows.filter(r => r.entity_name === 'ClosedMiningRound' || r.template_id?.includes('ClosedMiningRound'));
     const closedRounds = allClosedRounds.slice(0, closedLimit);
 
-    // Get snapshot_time from first row or null
-    const actualSnapshotTime = rows[0]?.snapshot_time || null;
-
     const result = serializeBigInt({
       openRounds,
       issuingRounds,
@@ -1505,7 +1490,7 @@ router.get('/mining-rounds', async (req, res) => {
         issuing: issuingRounds.length,
         closed: allClosedRounds.length,
       },
-      snapshotTime: actualSnapshotTime, // Include actual snapshot time used
+      snapshotTime: snapshot.snapshotTime,
     });
     
     setCache(cacheKey, result, CACHE_TTL.MINING_ROUNDS);
