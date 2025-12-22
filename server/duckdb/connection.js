@@ -278,8 +278,10 @@ export async function initializeViews() {
   }
 }
 
-// Initialize on import
-initializeViews();
+// Initialize on import (best-effort only). Never crash the server on init failures.
+initializeViews().catch((err) => {
+  console.error('❌ DuckDB view initialization failed during startup:', err?.message || err);
+});
 
 export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
 
