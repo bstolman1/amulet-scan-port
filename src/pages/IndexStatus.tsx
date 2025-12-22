@@ -502,9 +502,10 @@ const IndexStatus = () => {
               voteRequestIndex?.stats?.total > 0
                 ? [
                     { label: "Total Requests", value: voteRequestIndex.stats.total?.toLocaleString() || 0 },
-                    { label: "Active", value: voteRequestIndex.stats.active?.toLocaleString() || 0 },
-                    { label: "Historical", value: voteRequestIndex.stats.historical?.toLocaleString() || 0 },
-                    { label: "Closed", value: voteRequestIndex.stats.closed?.toLocaleString() || 0 },
+                    { label: "In Progress", value: voteRequestIndex.stats.inProgress?.toLocaleString() || voteRequestIndex.stats.active?.toLocaleString() || 0 },
+                    { label: "Executed", value: voteRequestIndex.stats.executed?.toLocaleString() || 0 },
+                    { label: "Rejected", value: voteRequestIndex.stats.rejected?.toLocaleString() || 0 },
+                    { label: "Expired", value: voteRequestIndex.stats.expired?.toLocaleString() || 0 },
                   ]
                 : []
             }
