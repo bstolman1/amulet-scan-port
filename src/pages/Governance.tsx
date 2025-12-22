@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -666,52 +666,33 @@ const Governance = () => {
                 <p className="text-muted-foreground">No unique proposals found</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-[120px]">Proposal ID</TableHead>
-                      <TableHead>Action</TableHead>
-                      <TableHead>Requester</TableHead>
-                      <TableHead className="text-center">Votes</TableHead>
-                      <TableHead className="text-center">Events</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Latest Update</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {uniqueProposals.map((proposal) => (
-                      <TableRow key={proposal.proposalId} className="hover:bg-muted/30">
-                        <TableCell className="font-mono text-xs">
-                          <div className="flex flex-col">
+              <div className="space-y-2">
+                {uniqueProposals.map((proposal) => (
+                  <Collapsible key={proposal.proposalId}>
+                    <div className="p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className="font-mono text-xs">
                             <span className="text-primary">{proposal.proposalHash}</span>
                             {proposal.cipReference && (
-                              <span className="text-muted-foreground">{proposal.cipReference}</span>
+                              <span className="block text-muted-foreground">{proposal.cipReference}</span>
                             )}
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{proposal.title}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium block truncate">{proposal.title}</span>
                             <span className="text-xs text-muted-foreground font-mono">{proposal.actionType}</span>
                           </div>
-                        </TableCell>
-                        <TableCell className="max-w-[150px] truncate text-xs">
-                          {proposal.requester || 'Unknown'}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <div className="flex items-center justify-center gap-2">
+                          <div className="text-xs truncate max-w-[120px]">
+                            {proposal.requester || 'Unknown'}
+                          </div>
+                          <div className="flex items-center gap-2">
                             <span className="text-success font-medium">{proposal.votesFor}</span>
                             <span className="text-muted-foreground">/</span>
                             <span className="text-destructive font-medium">{proposal.votesAgainst}</span>
                           </div>
-                        </TableCell>
-                        <TableCell className="text-center">
                           <Badge variant="outline" className="text-xs">
                             {proposal.eventCount}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
                           <Badge className={cn(
                             "text-xs",
                             proposal.status === 'approved' && "bg-success/10 text-success border-success/20",
@@ -724,14 +705,75 @@ const Governance = () => {
                             {proposal.status === 'pending' && <Clock className="h-3 w-3 mr-1" />}
                             {proposal.status}
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {safeFormatDate(proposal.latestEventTime, "MMM d, yyyy")}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                            {safeFormatDate(proposal.latestEventTime, "MMM d, yyyy")}
+                          </span>
+                        </div>
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="ml-2">
+                            <ChevronDown className="h-4 w-4" />
+                          </Button>
+                        </CollapsibleTrigger>
+                      </div>
+
+                      <CollapsibleContent className="mt-4">
+                        <div className="space-y-3">
+                          {/* Details */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div className="p-2 rounded bg-background/50">
+                              <p className="text-xs text-muted-foreground">Requester</p>
+                              <p className="text-xs font-mono truncate">{proposal.requester || 'Unknown'}</p>
+                            </div>
+                            <div className="p-2 rounded bg-background/50">
+                              <p className="text-xs text-muted-foreground">Created</p>
+                              <p className="text-xs">{safeFormatDate(proposal.createdAt, "MMM d, yyyy HH:mm")}</p>
+                            </div>
+                            <div className="p-2 rounded bg-background/50">
+                              <p className="text-xs text-muted-foreground">Votes</p>
+                              <p className="text-xs">
+                                <span className="text-success">{proposal.votesFor} for</span>
+                                {" / "}
+                                <span className="text-destructive">{proposal.votesAgainst} against</span>
+                              </p>
+                            </div>
+                            <div className="p-2 rounded bg-background/50">
+                              <p className="text-xs text-muted-foreground">Total Events</p>
+                              <p className="text-xs">{proposal.eventCount}</p>
+                            </div>
+                          </div>
+
+                          {/* Reason */}
+                          {(proposal.reason || proposal.reasonUrl) && (
+                            <div className="p-3 rounded bg-background/30 border border-border/30">
+                              <p className="text-xs text-muted-foreground mb-1 font-semibold">Reason:</p>
+                              {proposal.reason && <p className="text-sm mb-1">{proposal.reason}</p>}
+                              {proposal.reasonUrl && (
+                                <a 
+                                  href={proposal.reasonUrl} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-primary hover:underline break-all"
+                                >
+                                  {proposal.reasonUrl}
+                                </a>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Raw JSON */}
+                          <div className="p-3 rounded bg-background/70 border border-border/50">
+                            <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                              Contract ID: <span className="font-mono">{proposal.contractId}</span>
+                            </p>
+                            <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-64">
+                              {JSON.stringify(proposal.rawData, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                ))}
               </div>
             )}
 
