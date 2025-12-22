@@ -85,6 +85,12 @@ export async function initEngineSchema() {
     )
   `);
 
+  // DuckDB requires a UNIQUE index for ON CONFLICT (agg_name)
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_aggregation_state_agg_name
+    ON aggregation_state(agg_name)
+  `);
+
   // Sequence for file IDs
   await query(`
     CREATE SEQUENCE IF NOT EXISTS raw_files_seq START 1
