@@ -254,6 +254,59 @@ export async function initEngineSchema() {
     ON vote_request_index_state(id)
   `);
 
+  // RewardCoupon persistent index table
+  await query(`
+    CREATE TABLE IF NOT EXISTS reward_coupons (
+      event_id            VARCHAR PRIMARY KEY,
+      contract_id         VARCHAR,
+      template_id         VARCHAR,
+      effective_at        TIMESTAMP,
+      round               BIGINT,
+      coupon_type         VARCHAR,
+      beneficiary         VARCHAR,
+      weight              DOUBLE DEFAULT 0,
+      cc_amount           DOUBLE DEFAULT 0,
+      has_issuance_data   BOOLEAN DEFAULT FALSE,
+      payload             VARCHAR,
+      created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_reward_coupons_event_id
+    ON reward_coupons(event_id)
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_reward_coupons_beneficiary ON reward_coupons(beneficiary)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_reward_coupons_round ON reward_coupons(round)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_reward_coupons_coupon_type ON reward_coupons(coupon_type)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_reward_coupons_effective_at ON reward_coupons(effective_at)
+  `);
+
+  // Track indexing progress for reward_coupons
+  await query(`
+    CREATE TABLE IF NOT EXISTS reward_coupon_index_state (
+      id                  INTEGER PRIMARY KEY DEFAULT 1,
+      last_indexed_file   VARCHAR,
+      last_indexed_at     TIMESTAMP,
+      total_indexed       BIGINT DEFAULT 0,
+      CHECK (id = 1)
+    )
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_reward_coupon_index_state_id
+    ON reward_coupon_index_state(id)
+  `);
+
   schemaInitialized = true;
   console.log('✅ Engine schema initialized');
 }
@@ -268,6 +321,8 @@ export async function resetEngineSchema() {
   await query('DROP TABLE IF EXISTS aggregation_state');
   await query('DROP TABLE IF EXISTS vote_requests');
   await query('DROP TABLE IF EXISTS vote_request_index_state');
+  await query('DROP TABLE IF EXISTS reward_coupons');
+  await query('DROP TABLE IF EXISTS reward_coupon_index_state');
   await query('DROP SEQUENCE IF EXISTS raw_files_seq');
   
   schemaInitialized = false;

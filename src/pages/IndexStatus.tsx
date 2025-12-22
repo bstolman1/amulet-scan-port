@@ -19,6 +19,7 @@ import {
   Play,
   ChevronDown,
   ChevronUp,
+  Coins,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -73,6 +74,22 @@ const rebuildVoteRequestIndex = async () => {
     body: JSON.stringify({ force: true })
   });
   if (!res.ok) throw new Error("Failed to rebuild vote request index");
+  return res.json();
+};
+
+const fetchRewardCouponIndexStatus = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/reward-coupon-index/status`);
+  if (!res.ok) throw new Error("Failed to fetch reward coupon index status");
+  return res.json();
+};
+
+const rebuildRewardCouponIndex = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/reward-coupon-index/build`, { 
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force: true })
+  });
+  if (!res.ok) throw new Error("Failed to rebuild reward coupon index");
   return res.json();
 };
 
@@ -241,6 +258,13 @@ const IndexStatus = () => {
     retry: false,
   });
 
+  const { data: rewardCouponIndex, isLoading: rewardLoading, error: rewardError } = useQuery({
+    queryKey: ["rewardCouponIndexStatus"],
+    queryFn: fetchRewardCouponIndexStatus,
+    refetchInterval: 5000,
+    retry: false,
+  });
+
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
     queryKey: ["indexedTemplates"],
     queryFn: fetchIndexedTemplates,
@@ -311,10 +335,29 @@ const IndexStatus = () => {
     },
   });
 
+  const rewardRebuildMutation = useMutation({
+    mutationFn: rebuildRewardCouponIndex,
+    onSuccess: (data) => {
+      toast({
+        title: "Reward coupon index build started",
+        description: data.message || "Building in background...",
+      });
+      queryClient.invalidateQueries({ queryKey: ["rewardCouponIndexStatus"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to build reward coupon index",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRefreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ["templateIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["voteRequestIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["aggregationState"] });
+    queryClient.invalidateQueries({ queryKey: ["rewardCouponIndexStatus"] });
     toast({ title: "Refreshing status..." });
   };
 
@@ -346,6 +389,17 @@ const IndexStatus = () => {
     return "empty";
   };
 
+  // Derive reward coupon index status
+  const getRewardStatus = (): IndexCardProps["status"] => {
+    if (rewardLoading) return "loading";
+    if (rewardError) return "error";
+    if (rewardCouponIndex?.isIndexing) return "building";
+    if (rewardCouponIndex?.stats?.total > 0) return "ready";
+    return "empty";
+  };
+
+  const allStatuses = [getTemplateStatus(), getVoteStatus(), getAggStatus(), getRewardStatus()];
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -373,7 +427,7 @@ const IndexStatus = () => {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Total Indexes</p>
-                  <p className="text-2xl font-bold">3</p>
+                  <p className="text-2xl font-bold">4</p>
                 </div>
               </div>
             </CardContent>
@@ -388,7 +442,7 @@ const IndexStatus = () => {
                 <div>
                   <p className="text-sm text-muted-foreground">Ready</p>
                   <p className="text-2xl font-bold">
-                    {[getTemplateStatus(), getVoteStatus(), getAggStatus()].filter(s => s === "ready").length}
+                    {allStatuses.filter(s => s === "ready").length}
                   </p>
                 </div>
               </div>
@@ -404,7 +458,7 @@ const IndexStatus = () => {
                 <div>
                   <p className="text-sm text-muted-foreground">Need Attention</p>
                   <p className="text-2xl font-bold">
-                    {[getTemplateStatus(), getVoteStatus(), getAggStatus()].filter(s => s === "empty" || s === "error").length}
+                    {allStatuses.filter(s => s === "empty" || s === "error").length}
                   </p>
                 </div>
               </div>
@@ -459,6 +513,32 @@ const IndexStatus = () => {
             lastUpdated={voteRequestIndex?.lastIndexedAt}
             onRebuild={() => voteRebuildMutation.mutate()}
             isRebuilding={voteRebuildMutation.isPending}
+          />
+
+          {/* Reward Coupon Index */}
+          <IndexCard
+            title="Reward Coupon Index"
+            description="Pre-calculated CC rewards from App/Validator/SV coupons"
+            icon={<Coins className="w-5 h-5" />}
+            status={getRewardStatus()}
+            stats={
+              rewardCouponIndex?.stats?.total > 0
+                ? [
+                    { label: "Total Coupons", value: rewardCouponIndex.stats.total?.toLocaleString() || 0 },
+                    { label: "App", value: rewardCouponIndex.stats.app?.toLocaleString() || 0 },
+                    { label: "Validator", value: rewardCouponIndex.stats.validator?.toLocaleString() || 0 },
+                    { label: "SV", value: rewardCouponIndex.stats.sv?.toLocaleString() || 0 },
+                  ]
+                : []
+            }
+            lastUpdated={rewardCouponIndex?.lastIndexedAt}
+            onRebuild={() => rewardRebuildMutation.mutate()}
+            isRebuilding={rewardRebuildMutation.isPending}
+            buildProgress={
+              rewardCouponIndex?.isIndexing && rewardCouponIndex?.progress
+                ? { current: rewardCouponIndex.progress.current || 0, total: rewardCouponIndex.progress.total || 1 }
+                : null
+            }
           />
 
           {/* Aggregation State */}
