@@ -9,14 +9,42 @@
 
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
 import * as binaryReader from '../duckdb/binary-reader.js';
-import { 
-  getFilesForTemplate, 
+import fs from 'fs';
+import path from 'path';
+import {
+  getFilesForTemplate,
   isTemplateIndexPopulated,
   getTemplateIndexStats
 } from './template-file-index.js';
 
 let indexingInProgress = false;
 let indexingProgress = null;
+let lockRelease = null;
+
+async function acquireIndexLock() {
+  // Prevent multi-process index builds (e.g., two servers running, or the process restarting mid-build)
+  const lockDir = path.join(DATA_PATH, '.locks');
+  const lockPath = path.join(lockDir, 'vote_request_index.lock');
+
+  await fs.promises.mkdir(lockDir, { recursive: true });
+
+  try {
+    // 'wx' = create file exclusively; fail if exists
+    const handle = await fs.promises.open(lockPath, 'wx');
+    await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    await handle.close();
+
+    return async () => {
+      try {
+        await fs.promises.unlink(lockPath);
+      } catch {
+        // ignore
+      }
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Get current indexing state
@@ -132,12 +160,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     return { status: 'in_progress' };
   }
 
+  // Cross-process lock: if another server instance is building, don't start a second build.
+  lockRelease = await acquireIndexLock();
+  if (!lockRelease) {
+    console.log('⏳ VoteRequest index lock present — another process is indexing');
+    return { status: 'in_progress' };
+  }
+
   // Check if index is already populated (skip unless force=true)
   if (!force) {
     const stats = await getVoteRequestStats();
     if (stats.total > 0) {
       console.log(`✅ VoteRequest index already populated (${stats.total} records), skipping rebuild`);
       console.log('   Use force=true to rebuild from scratch');
+      await lockRelease();
+      lockRelease = null;
       return { status: 'already_populated', totalIndexed: stats.total };
     }
   }
@@ -344,6 +381,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     indexingInProgress = false;
     indexingProgress = null;
 
+    if (lockRelease) {
+      await lockRelease();
+      lockRelease = null;
+    }
+
     return {
       status: 'complete',
       inserted,
@@ -357,6 +399,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.error('❌ VoteRequest index build failed:', err);
     indexingInProgress = false;
     indexingProgress = null;
+
+    if (lockRelease) {
+      await lockRelease();
+      lockRelease = null;
+    }
+
     throw err;
   }
 }
