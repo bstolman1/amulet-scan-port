@@ -970,41 +970,37 @@ router.get('/contracts', async (req, res) => {
       // - "<pkg-hash>:Splice.DsoRules:VoteRequest" (dots for module)
       // - "<pkg-hash>_Splice_DsoRules_VoteRequest" (underscores)
       const t = String(template);
-      const entityName = t.split(/[:._]/).pop() || t;
-      
-      // Extract module name (e.g., "AmuletRules" from "Splice:AmuletRules:AmuletRules")
       const parts = t.split(/[:._]/);
-      const moduleName = parts.length >= 2 ? parts[parts.length - 2] : null;
+      const entityName = parts.pop() || t;
+      const moduleName = parts.length >= 1 ? parts[parts.length - 1] : null;
       
-      const variants = new Set([
-        t,
-        t.replaceAll(':', '.'),
-        t.replaceAll('.', ':'),
-        t.replaceAll(':', '_'),
-        t.replaceAll('.', '_'),
-        t.replaceAll('_', ':'),
-        t.replaceAll('_', '.'),
-        entityName, // Also try just the entity name
-      ]);
-
-      // Use ILIKE for case-insensitive matching (DuckDB's LIKE is case-sensitive)
-      const likeClauses = [...variants]
-        .filter(Boolean)
-        .map((v) => `template_id ILIKE '%${v.replace(/'/g, "''")}%'`);
+      // Build more precise matching patterns
+      // Format: <hash>:Module.Name:EntityName or Module.Name:EntityName
+      const likeClauses = [];
       
-      // Also match by entity_name directly (case-insensitive)
+      // Match full qualified names (ending with :EntityName or .EntityName or _EntityName)
+      if (moduleName && entityName) {
+        // Match patterns like ":ModuleName:EntityName" or ".ModuleName:EntityName"
+        likeClauses.push(`template_id ILIKE '%${moduleName}.${entityName}'`);     // hash:Module.Entity
+        likeClauses.push(`template_id ILIKE '%${moduleName}:${entityName}'`);     // hash:Module:Entity  
+        likeClauses.push(`template_id ILIKE '%.${moduleName}:${entityName}'`);    // hash:Splice.Module:Entity
+        likeClauses.push(`template_id ILIKE '%:${moduleName}:${entityName}'`);    // hash:Splice:Module:Entity
+      }
+      
+      // Match by entity_name column exactly (case-insensitive)
       likeClauses.push(`LOWER(entity_name) = LOWER('${entityName.replace(/'/g, "''")}')`);
       
-      // Also match by module_name if available
+      // Match by module_name + entity_name if both available
       if (moduleName) {
-        likeClauses.push(`LOWER(module_name) ILIKE '%${moduleName.replace(/'/g, "''")}%'`);
+        likeClauses.push(`(LOWER(module_name) ILIKE '%${moduleName.replace(/'/g, "''")}' AND LOWER(entity_name) = LOWER('${entityName.replace(/'/g, "''")}'))`);
       }
 
       whereClause = `(${likeClauses.join(' OR ')})`;
+      console.log(`[ACS] Template parts: module=${moduleName}, entity=${entityName}`);
     } else if (entity) {
-      // Match by entity_name OR template_id containing the entity name (case-insensitive)
+      // Match by entity_name exactly (case-insensitive)
       const e = String(entity).replace(/'/g, "''");
-      whereClause = `(LOWER(entity_name) = LOWER('${e}') OR template_id ILIKE '%:${e}:%' OR template_id ILIKE '%:${e}' OR template_id ILIKE '%_${e}_%' OR template_id ILIKE '%_${e}')`;
+      whereClause = `LOWER(entity_name) = LOWER('${e}')`;
     }
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
