@@ -226,16 +226,28 @@ const truncateIdentifier = (value?: string) =>
 
 const AmuletRules = () => {
   const { data: latestSnapshot, isLoading: snapshotLoading } = useLatestACSSnapshot();
+
+  // The on-disk ACS uses module/entity format like "Splice.AmuletRules:AmuletRules".
   const amuletRulesQuery = useAggregatedTemplateData(
     latestSnapshot?.id,
-    "Splice:AmuletRules:AmuletRules",
+    "Splice.AmuletRules:AmuletRules",
   );
 
-  const normalizedRule = useMemo(() => normalizeAmuletRule(amuletRulesQuery.data?.data?.[0]), [amuletRulesQuery.data]);
+  const rawRule = useMemo(() => {
+    const rows = amuletRulesQuery.data?.data ?? [];
+    // Prefer the exact module/entity match if the backend returns more than one row.
+    return (
+      rows.find((r: any) => r?.entity_name === "AmuletRules" && r?.module_name === "Splice.AmuletRules") ??
+      rows[0]
+    );
+  }, [amuletRulesQuery.data]);
+
+  const normalizedRule = useMemo(() => normalizeAmuletRule(rawRule), [rawRule]);
 
   const transferConfig = normalizedRule?.transferConfig;
   const issuanceCurve = normalizedRule?.issuanceCurve;
   const synchronizer = normalizedRule?.decentralizedSynchronizer;
+
 
   const isLoading = snapshotLoading || amuletRulesQuery.isLoading;
   const hasData = !!normalizedRule;
