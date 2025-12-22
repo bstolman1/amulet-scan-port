@@ -473,34 +473,130 @@ router.get('/governance-history', async (req, res) => {
     console.log(`   OR choices: ${governanceChoices.slice(0, 5).join(', ')}...`);
     
     if (sources.primarySource === 'binary') {
-      // VoteRequest events are EXTREMELY sparse (~26 per 275K events)
-      // Strategy: Run TWO parallel scans - one for VoteRequests specifically, one for other governance
-      
+      // Fast path: if the persistent VoteRequest index exists, use it for completed votes.
+      // This avoids scanning tens of thousands of binary files (which can take many minutes).
+      const voteIndexPopulated = await voteRequestIndexer.isIndexPopulated();
+      if (voteIndexPopulated) {
+        console.log('   ⚡ VoteRequest index is populated → using indexed historical votes');
+
+        const indexedHistorical = await voteRequestIndexer.queryVoteRequests({
+          limit,
+          offset,
+          status: 'historical',
+        });
+
+        // Still include a small set of other governance events (confirmations/elections/dso rules)
+        // so the endpoint stays compatible with the UI.
+        const otherResult = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+          limit: Math.min(limit * 5, 5000),
+          offset: 0,
+          maxDays: 365 * 3,
+          maxFilesToScan: 5000,
+          sortBy: 'effective_at',
+          filter: (e) => {
+            if (e.template_id?.includes('Confirmation') && e.event_type === 'created') return true;
+            if (e.template_id?.includes('ElectionRequest') && e.event_type === 'created') return true;
+            const choiceMatch = governanceChoices.includes(e.choice);
+            if (e.template_id?.includes('DsoRules') && choiceMatch) return true;
+            return false;
+          }
+        });
+
+        const indexedHistory = indexedHistorical.map((vr) => ({
+          event_id: vr.event_id,
+          event_type: 'archived',
+          choice: null,
+          contract_id: vr.contract_id,
+          template_id: vr.template_id,
+          effective_at: vr.effective_at,
+          // We don't have a separate timestamp in the index; use effective_at for sorting/display.
+          timestamp: vr.effective_at,
+          action_tag: vr.action_tag || null,
+          action_value: vr.action_value || null,
+          requester: vr.requester || null,
+          confirmer: null,
+          reason: (() => {
+            // Keep existing shape: prefer JSON object if available
+            const r = vr.reason;
+            if (!r) return null;
+            if (typeof r !== 'string') return r;
+            try {
+              return JSON.parse(r);
+            } catch {
+              return { body: r };
+            }
+          })(),
+          votes: Array.isArray(vr.votes) ? vr.votes : [],
+          vote_before: vr.vote_before || null,
+          expires_at: null,
+          dso: vr.dso || null,
+          exercise_result: null,
+        }));
+
+        // Convert "other" events into the same response shape used below.
+        const otherHistory = (otherResult.records || []).map((event) => ({
+          event_id: event.event_id,
+          event_type: event.event_type,
+          choice: event.choice || null,
+          contract_id: event.contract_id,
+          template_id: event.template_id,
+          effective_at: event.effective_at,
+          timestamp: event.timestamp,
+          action_tag: event.payload?.action?.tag || null,
+          action_value: event.payload?.action?.value ? Object.keys(event.payload.action.value) : null,
+          requester: event.payload?.requester || event.payload?.confirmer || null,
+          confirmer: event.payload?.confirmer || null,
+          reason: event.payload?.reason || null,
+          votes: event.payload?.votes || [],
+          vote_before: event.payload?.voteBefore || null,
+          expires_at: event.payload?.expiresAt || null,
+          dso: event.payload?.dso || null,
+          exercise_result: event.exercise_result || null,
+        }));
+
+        const merged = [...indexedHistory, ...otherHistory]
+          .filter(Boolean)
+          .sort((a, b) => new Date(b.effective_at).getTime() - new Date(a.effective_at).getTime())
+          .slice(0, limit);
+
+        return res.json({
+          data: merged,
+          count: merged.length,
+          hasMore: indexedHistorical.length === limit,
+          source: 'binary',
+          _debug: {
+            usedVoteRequestIndex: true,
+            indexedHistoricalVotes: indexedHistorical.length,
+            otherGovernanceIncluded: otherHistory.length,
+          }
+        });
+      }
+
+      console.log('   ⚠️ VoteRequest index is empty → falling back to binary scans (slow)');
+
+      // VoteRequest events are EXTREMELY sparse, and scanning everything can take a long time.
+      // Strategy: Run scans in parallel.
+
       // Scan 1: Deep scan specifically for VoteRequest archived events (completed votes)
-      // These are the vote results - when voteBefore expires and the vote concludes
       const voteRequestArchivedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 1000, // Completed votes are what we want for history
+        limit: 1000,
         offset: 0,
         maxDays: 365 * 3,
-        maxFilesToScan: 100000, // Scan ALL files for VoteRequests
+        maxFilesToScan: 100000,
         sortBy: 'effective_at',
-        filter: (e) => {
-          return e.template_id?.includes('VoteRequest') && e.event_type === 'archived';
-        }
+        filter: (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'archived',
       });
-      
+
       // Scan 2: VoteRequest created events (for active proposals context)
       const voteRequestCreatedPromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 100, // Just a few for context
+        limit: 100,
         offset: 0,
         maxDays: 365,
         maxFilesToScan: 50000,
         sortBy: 'effective_at',
-        filter: (e) => {
-          return e.template_id?.includes('VoteRequest') && e.event_type === 'created';
-        }
+        filter: (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created',
       });
-      
+
       // Scan 3: Standard governance scan (Confirmation, DsoRules choices)
       const otherGovernancePromise = binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit: limit * 100,
@@ -509,15 +605,13 @@ router.get('/governance-history', async (req, res) => {
         maxFilesToScan: 20000,
         sortBy: 'effective_at',
         filter: (e) => {
-          // Confirmation created events
           if (e.template_id?.includes('Confirmation') && e.event_type === 'created') return true;
-          // ElectionRequest created events
           if (e.template_id?.includes('ElectionRequest') && e.event_type === 'created') return true;
-          // DsoRules governance choices
           const choiceMatch = governanceChoices.includes(e.choice);
           if (e.template_id?.includes('DsoRules') && choiceMatch) return true;
           return false;
         }
+      });
       });
       
       // Run all scans in parallel
