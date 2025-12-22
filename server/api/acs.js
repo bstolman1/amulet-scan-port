@@ -1003,18 +1003,40 @@ router.get('/contracts', async (req, res) => {
     const { snapshot, source: acsSource, type } = getBestSnapshotAndSource();
     
     if (!snapshot) {
-      console.log('[ACS] No snapshot found, falling back to full scan');
+      console.log('[ACS] No snapshot found, returning empty result');
+      return res.json({ data: [], count: 0, message: 'No snapshot found' });
     }
+    
+    console.log(`[ACS] Using snapshot: migration=${snapshot.migrationId}, time=${snapshot.snapshotTime}, type=${type}`);
     
     // First get total count (deduplicated by contract_id)
     const countSql = `
       SELECT COUNT(DISTINCT contract_id) as total_count
-      FROM ${acsSource} acs
+      FROM ${acsSource}
       WHERE ${whereClause}
     `;
     
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
+    
+    console.log(`[ACS] Count query returned: ${totalCount} for template=${template}`);
+    
+    // If no results, try to debug by checking what templates exist
+    if (totalCount === 0 && template) {
+      try {
+        const debugSql = `
+          SELECT DISTINCT entity_name, COUNT(*) as cnt
+          FROM ${acsSource}
+          GROUP BY entity_name
+          ORDER BY cnt DESC
+          LIMIT 20
+        `;
+        const debugRows = await db.safeQuery(debugSql);
+        console.log(`[ACS] Available entity_names in snapshot:`, debugRows.map(r => `${r.entity_name}(${r.cnt})`).join(', '));
+      } catch (debugErr) {
+        console.warn('[ACS] Debug query failed:', debugErr.message);
+      }
+    }
     
     // Use GROUP BY contract_id to deduplicate (handles any duplicate records)
     const sql = `
@@ -1026,9 +1048,8 @@ router.get('/contracts', async (req, res) => {
         any_value(signatories) as signatories,
         any_value(observers) as observers,
         any_value(payload) as payload,
-        any_value(record_time) as record_time,
-        any_value(snapshot_time) as snapshot_time
-      FROM ${acsSource} acs
+        any_value(record_time) as record_time
+      FROM ${acsSource}
       WHERE ${whereClause}
       GROUP BY contract_id
       ORDER BY contract_id
