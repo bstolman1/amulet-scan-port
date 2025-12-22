@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -182,6 +183,9 @@ const extractCipReference = (voteRequest: VoteRequest): string | null => {
 };
 
 const GovernanceFlow = () => {
+  const [searchParams] = useSearchParams();
+  const initialQuery = searchParams.get("q") || "";
+
   const [data, setData] = useState<GovernanceData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -190,14 +194,14 @@ const GovernanceFlow = () => {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [stageFilter, setStageFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline'>('lifecycle');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>(initialQuery);
   
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [datePreset, setDatePreset] = useState<string>('all');
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [voteRequests, setVoteRequests] = useState<VoteRequest[]>([]);
-  
+
   // Bulk selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
