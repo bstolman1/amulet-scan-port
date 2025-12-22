@@ -28,6 +28,10 @@ const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.netwo
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 100;
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 5000;
 
+// Auto-rebuild VoteRequest index every N updates (0 = disabled)
+const INDEX_REBUILD_INTERVAL = parseInt(process.env.INDEX_REBUILD_INTERVAL) || 10000;
+const LOCAL_SERVER_URL = process.env.LOCAL_SERVER_URL || 'http://localhost:3001';
+
 // Axios client with retry logic
 const client = axios.create({
   baseURL: SCAN_URL,
@@ -50,6 +54,7 @@ let lastTimestamp = null;
 let lastMigrationId = null;
 let migrationId = null;
 let isRunning = true;
+let lastIndexRebuildAt = 0; // Track updates count at last index rebuild
 
 // Cursor directory (same as backfill script)
 const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
@@ -572,6 +577,12 @@ async function runIngestion() {
         saveLiveCursor(afterMigrationId, afterRecordTime);
       }
       
+      // Auto-rebuild VoteRequest index every N updates
+      if (INDEX_REBUILD_INTERVAL > 0 && (totalUpdates - lastIndexRebuildAt) >= INDEX_REBUILD_INTERVAL) {
+        lastIndexRebuildAt = totalUpdates;
+        triggerIndexRebuild();
+      }
+      
       const stats = getBufferStats();
       const modePrefix = LIVE_MODE ? '🔴' : '📦';
       console.log(`${modePrefix} Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Cursor: m${afterMigrationId}@${afterRecordTime?.substring(0, 19) || 'start'}`);
@@ -588,6 +599,26 @@ async function runIngestion() {
  */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Trigger VoteRequest index rebuild (non-blocking)
+ */
+function triggerIndexRebuild() {
+  console.log('🔄 Triggering VoteRequest index rebuild...');
+  fetch(`${LOCAL_SERVER_URL}/api/events/vote-request-index/build?force=true`, {
+    method: 'POST',
+  })
+    .then(res => {
+      if (res.ok) {
+        console.log('✅ VoteRequest index rebuild triggered successfully');
+      } else {
+        console.warn(`⚠️ VoteRequest index rebuild failed: ${res.status}`);
+      }
+    })
+    .catch(err => {
+      console.warn(`⚠️ Could not trigger index rebuild: ${err.message}`);
+    });
 }
 
 /**
