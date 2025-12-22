@@ -704,10 +704,10 @@ async function scanFilesForDsoCloseVoteRequests(files) {
         if (record.event_type !== 'exercised') continue;
         
         const choice = record.choice || '';
-        // Look for DsoRules_CloseVoteRequest and related choices
-        if (choice === 'DsoRules_CloseVoteRequest' || 
-            choice === 'DsoRules_CloseVoteRequestResult' ||
-            choice === 'DsoRules_ExecuteConfirmedAction') {
+        // Only collect DsoRules_CloseVoteRequest - this specifically closes VoteRequests
+        // Do NOT include DsoRules_ExecuteConfirmedAction as that's used for many other 
+        // governance actions (amulet price updates, validator confirmations, etc.)
+        if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
           records.push(record);
         }
       }
