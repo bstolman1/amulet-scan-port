@@ -666,26 +666,33 @@ const Governance = () => {
                 <p className="text-muted-foreground">No unique proposals found</p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-4">
                 {uniqueProposals.map((proposal) => (
                   <Collapsible key={proposal.proposalId}>
-                    <div className="p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4 flex-1">
-                          <div className="font-mono text-xs">
-                            <span className="text-primary">{proposal.proposalHash}</span>
-                            {proposal.cipReference && (
-                              <span className="block text-muted-foreground">{proposal.cipReference}</span>
-                            )}
+                    <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                            <p className="text-sm text-muted-foreground">
+                              {proposal.proposalHash}
+                              <span className="mx-2">•</span>
+                              <span className="font-mono text-xs">{proposal.actionType}</span>
+                              {proposal.cipReference && (
+                                <>
+                                  <span className="mx-2">•</span>
+                                  <span className="text-xs">CIP-{proposal.cipReference}</span>
+                                </>
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Requested by: <span className="font-medium text-foreground">{proposal.requester || 'Unknown'}</span>
+                            </p>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <span className="font-medium block truncate">{proposal.title}</span>
-                            <span className="text-xs text-muted-foreground font-mono">{proposal.actionType}</span>
-                          </div>
-                          <div className="text-xs truncate max-w-[120px]">
-                            {proposal.requester || 'Unknown'}
-                          </div>
-                          <div className="flex items-center gap-2">
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1 text-sm">
                             <span className="text-success font-medium">{proposal.votesFor}</span>
                             <span className="text-muted-foreground">/</span>
                             <span className="text-destructive font-medium">{proposal.votesAgainst}</span>
@@ -708,60 +715,90 @@ const Governance = () => {
                           <span className="text-xs text-muted-foreground whitespace-nowrap">
                             {safeFormatDate(proposal.latestEventTime, "MMM d, yyyy")}
                           </span>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <ChevronDown className="h-4 w-4" />
+                            </Button>
+                          </CollapsibleTrigger>
                         </div>
-                        <CollapsibleTrigger asChild>
-                          <Button variant="ghost" size="sm" className="ml-2">
-                            <ChevronDown className="h-4 w-4" />
-                          </Button>
-                        </CollapsibleTrigger>
+                      </div>
+
+                      {/* Action Details */}
+                      {proposal.actionDetails && typeof proposal.actionDetails === "object" && Object.keys(proposal.actionDetails).length > 0 && (
+                        <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                          <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                            {Object.entries(proposal.actionDetails)
+                              .filter(([_, value]) => value !== null && value !== undefined)
+                              .slice(0, 8)
+                              .map(([key, value]: [string, any]) => (
+                              <div key={key} className="flex flex-col">
+                                <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                                <span className="font-mono text-xs break-all">
+                                  {typeof value === "string" || typeof value === "number" 
+                                    ? String(value).slice(0, 100) 
+                                    : JSON.stringify(value).slice(0, 100)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reason Section */}
+                      <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                        <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                        {proposal.reason && typeof proposal.reason === "string" && (
+                          <p className="text-sm mb-2">{proposal.reason}</p>
+                        )}
+                        {proposal.reasonUrl && typeof proposal.reasonUrl === "string" && (
+                          <a 
+                            href={proposal.reasonUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-sm text-primary hover:underline break-all"
+                          >
+                            {proposal.reasonUrl}
+                          </a>
+                        )}
+                        {(!proposal.reason || typeof proposal.reason !== "string") && 
+                         (!proposal.reasonUrl || typeof proposal.reasonUrl !== "string") && (
+                          <p className="text-sm text-muted-foreground italic">No reason provided</p>
+                        )}
+                      </div>
+
+                      {/* Stats Grid */}
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                          <p className="text-lg font-bold text-success">{proposal.votesFor}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                          <p className="text-lg font-bold text-destructive">{proposal.votesAgainst}</p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Created</p>
+                          <p className="text-xs font-mono">
+                            {safeFormatDate(proposal.createdAt, "MMM d, yyyy HH:mm")}
+                          </p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
+                          <p className="text-xs font-mono">
+                            {safeFormatDate(proposal.voteBefore)}
+                          </p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-background/50">
+                          <p className="text-xs text-muted-foreground mb-1">Events</p>
+                          <p className="text-lg font-bold">{proposal.eventCount}</p>
+                        </div>
                       </div>
 
                       <CollapsibleContent className="mt-4">
                         <div className="space-y-3">
-                          {/* Details */}
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                            <div className="p-2 rounded bg-background/50">
-                              <p className="text-xs text-muted-foreground">Requester</p>
-                              <p className="text-xs font-mono truncate">{proposal.requester || 'Unknown'}</p>
-                            </div>
-                            <div className="p-2 rounded bg-background/50">
-                              <p className="text-xs text-muted-foreground">Created</p>
-                              <p className="text-xs">{safeFormatDate(proposal.createdAt, "MMM d, yyyy HH:mm")}</p>
-                            </div>
-                            <div className="p-2 rounded bg-background/50">
-                              <p className="text-xs text-muted-foreground">Votes</p>
-                              <p className="text-xs">
-                                <span className="text-success">{proposal.votesFor} for</span>
-                                {" / "}
-                                <span className="text-destructive">{proposal.votesAgainst} against</span>
-                              </p>
-                            </div>
-                            <div className="p-2 rounded bg-background/50">
-                              <p className="text-xs text-muted-foreground">Total Events</p>
-                              <p className="text-xs">{proposal.eventCount}</p>
-                            </div>
-                          </div>
-
-                          {/* Reason */}
-                          {(proposal.reason || proposal.reasonUrl) && (
-                            <div className="p-3 rounded bg-background/30 border border-border/30">
-                              <p className="text-xs text-muted-foreground mb-1 font-semibold">Reason:</p>
-                              {proposal.reason && <p className="text-sm mb-1">{proposal.reason}</p>}
-                              {proposal.reasonUrl && (
-                                <a 
-                                  href={proposal.reasonUrl} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="text-sm text-primary hover:underline break-all"
-                                >
-                                  {proposal.reasonUrl}
-                                </a>
-                              )}
-                            </div>
-                          )}
-
                           {/* Raw JSON */}
-                          <div className="p-3 rounded bg-background/70 border border-border/50">
+                          <div className="p-3 rounded-lg bg-background/70 border border-border/50">
                             <p className="text-xs text-muted-foreground mb-2 font-semibold">
                               Contract ID: <span className="font-mono">{proposal.contractId}</span>
                             </p>
