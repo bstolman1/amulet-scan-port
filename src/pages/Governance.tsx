@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
+import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -101,6 +102,9 @@ const Governance = () => {
   const svs = dsoRulesPayload.svs || {};
   const svCount = Object.keys(svs).length || 0;
   const votingThreshold = dsoInfo?.voting_threshold || Math.ceil(svCount * 0.67) || 1; // 2/3 majority
+
+  // Unique proposals (deduplicated by proposal hash + action type)
+  const { proposals: uniqueProposals, stats: uniqueStats, isLoading: uniqueLoading, rawEventCount } = useUniqueProposals(votingThreshold);
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -392,6 +396,14 @@ const Governance = () => {
         <Tabs defaultValue="active" className="space-y-6">
           <TabsList>
             <TabsTrigger value="active">Active Proposals</TabsTrigger>
+            <TabsTrigger value="unique">
+              Unique Proposals
+              {uniqueStats.total > 0 && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  {uniqueStats.total}
+                </Badge>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="history">Governance History</TabsTrigger>
           </TabsList>
 
@@ -588,6 +600,149 @@ const Governance = () => {
                 })}
               </div>
             )}
+          </div>
+        </Card>
+      </TabsContent>
+
+      {/* Unique Proposals Tab - Deduplicated View */}
+      <TabsContent value="unique">
+        <Card className="glass-card">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <Database className="h-5 w-5" />
+                  Unique Proposals (Deduplicated)
+                </h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Grouped by proposal hash + action type, showing latest state only
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Badge variant="outline">
+                  {rawEventCount} events → {uniqueStats.total} unique
+                </Badge>
+                {uniqueStats.duplicatesRemoved > 0 && (
+                  <Badge variant="secondary" className="text-xs">
+                    {uniqueStats.duplicatesRemoved} duplicates removed
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {/* Stats Row */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+              <div className="p-3 rounded-lg bg-muted/30 text-center">
+                <div className="text-2xl font-bold">{uniqueStats.total}</div>
+                <div className="text-xs text-muted-foreground">Total</div>
+              </div>
+              <div className="p-3 rounded-lg bg-success/10 text-center">
+                <div className="text-2xl font-bold text-success">{uniqueStats.approved}</div>
+                <div className="text-xs text-muted-foreground">Approved</div>
+              </div>
+              <div className="p-3 rounded-lg bg-destructive/10 text-center">
+                <div className="text-2xl font-bold text-destructive">{uniqueStats.rejected}</div>
+                <div className="text-xs text-muted-foreground">Rejected</div>
+              </div>
+              <div className="p-3 rounded-lg bg-warning/10 text-center">
+                <div className="text-2xl font-bold text-warning">{uniqueStats.pending}</div>
+                <div className="text-xs text-muted-foreground">Pending</div>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/50 text-center">
+                <div className="text-2xl font-bold text-muted-foreground">{uniqueStats.expired}</div>
+                <div className="text-xs text-muted-foreground">Expired</div>
+              </div>
+            </div>
+
+            {uniqueLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-24 w-full" />
+                ))}
+              </div>
+            ) : !uniqueProposals?.length ? (
+              <div className="text-center py-12">
+                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">No unique proposals found</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[120px]">Proposal ID</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Requester</TableHead>
+                      <TableHead className="text-center">Votes</TableHead>
+                      <TableHead className="text-center">Events</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Latest Update</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {uniqueProposals.map((proposal) => (
+                      <TableRow key={proposal.proposalId} className="hover:bg-muted/30">
+                        <TableCell className="font-mono text-xs">
+                          <div className="flex flex-col">
+                            <span className="text-primary">{proposal.proposalHash}</span>
+                            {proposal.cipReference && (
+                              <span className="text-muted-foreground">{proposal.cipReference}</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{proposal.title}</span>
+                            <span className="text-xs text-muted-foreground font-mono">{proposal.actionType}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="max-w-[150px] truncate text-xs">
+                          {proposal.requester || 'Unknown'}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <span className="text-success font-medium">{proposal.votesFor}</span>
+                            <span className="text-muted-foreground">/</span>
+                            <span className="text-destructive font-medium">{proposal.votesAgainst}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge variant="outline" className="text-xs">
+                            {proposal.eventCount}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={cn(
+                            "text-xs",
+                            proposal.status === 'approved' && "bg-success/10 text-success border-success/20",
+                            proposal.status === 'rejected' && "bg-destructive/10 text-destructive border-destructive/20",
+                            proposal.status === 'pending' && "bg-warning/10 text-warning border-warning/20",
+                            proposal.status === 'expired' && "bg-muted text-muted-foreground",
+                          )}>
+                            {proposal.status === 'approved' && <CheckCircle className="h-3 w-3 mr-1" />}
+                            {proposal.status === 'rejected' && <XCircle className="h-3 w-3 mr-1" />}
+                            {proposal.status === 'pending' && <Clock className="h-3 w-3 mr-1" />}
+                            {proposal.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {safeFormatDate(proposal.latestEventTime, "MMM d, yyyy")}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Info about deduplication */}
+            <Alert className="mt-6">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                This view deduplicates proposals by combining <code className="bg-muted px-1 rounded">proposal_hash + action_type</code>. 
+                Each row shows the <strong>latest state</strong> of a unique proposal. The "Events" column shows how many state updates exist for that proposal.
+              </AlertDescription>
+            </Alert>
           </div>
         </Card>
       </TabsContent>
