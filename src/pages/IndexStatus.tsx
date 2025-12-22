@@ -26,6 +26,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { useState } from "react";
+import { VoteRequestDebugPanel } from "@/components/VoteRequestDebugPanel";
 
 interface TemplateInfo {
   template_name: string;
@@ -847,6 +848,9 @@ const IndexStatus = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* VoteRequest Debug Panel */}
+        <VoteRequestDebugPanel />
       </div>
     </DashboardLayout>
   );
