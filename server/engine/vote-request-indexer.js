@@ -355,55 +355,73 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       // - expired: vote deadline passed AND not closed (or closed with 0 votes)
       let status = 'in_progress';
       
-      // Count accept vs reject votes
+      // Count accept vs reject votes (support multiple JSON encodings)
       const votesArray = Array.isArray(finalVotes) ? finalVotes : [];
       let acceptCount = 0;
       let rejectCount = 0;
+
+      const normalizeVote = (voteData) => {
+        if (!voteData || typeof voteData !== 'object') return null;
+
+        // Common shapes observed in DAML/ledger JSON:
+        // - { accept: true } / { Accept: true }
+        // - { reject: true } / { Reject: true }
+        // - { tag: 'Accept' } / { tag: 'Reject' }
+        // - { vote: { tag: 'Accept' } }
+        if (voteData.accept === true || voteData.Accept === true) return 'accept';
+        if (voteData.reject === true || voteData.Reject === true) return 'reject';
+        if (voteData.accept === false) return 'reject';
+
+        const tag = voteData.tag || voteData.Tag || voteData.vote?.tag || voteData.vote?.Tag;
+        if (typeof tag === 'string') {
+          const t = tag.toLowerCase();
+          if (t === 'accept') return 'accept';
+          if (t === 'reject') return 'reject';
+        }
+
+        // Variant-as-key style: { Accept: {...} } or { Reject: {...} }
+        if (Object.prototype.hasOwnProperty.call(voteData, 'Accept')) return 'accept';
+        if (Object.prototype.hasOwnProperty.call(voteData, 'Reject')) return 'reject';
+
+        return null;
+      };
+
       for (const vote of votesArray) {
         const [, voteData] = Array.isArray(vote) ? vote : ['', vote];
-        if (voteData?.accept === true || voteData?.Accept === true) acceptCount++;
-        else if (voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true) rejectCount++;
+        const normalized = normalizeVote(voteData);
+        if (normalized === 'accept') acceptCount++;
+        else if (normalized === 'reject') rejectCount++;
       }
-      
-      // Check if this was an accepted/executed proposal by looking at the archived event choice
-      // Choices can be: VoteRequest_Accept, DsoRules_CloseVoteRequest, Archive, etc.
+
+      // Closing choice can often be just "Archive" on VoteRequest; don't treat that as "rejected".
+      // Prefer explicit choice labels when present; otherwise infer from votes.
       const archivedChoice = archivedEvent?.choice || '';
-      const choiceLower = archivedChoice.toLowerCase();
-      
-      // DsoRules_CloseVoteRequest means the vote completed - determine outcome from vote counts
-      const isCloseVoteRequest = archivedChoice === 'DsoRules_CloseVoteRequest' || 
-                                  archivedChoice === 'DsoRules_CloseVoteRequestResult' ||
-                                  archivedChoice === 'DsoRules_ExecuteConfirmedAction';
-      
-      // Traditional choice-based detection
+      const choiceLower = String(archivedChoice).toLowerCase();
+
       const wasExecutedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
       const wasRejectedByChoice = choiceLower.includes('reject');
       const wasExpiredByChoice = choiceLower.includes('expire');
-      
-      // Vote-based detection for CloseVoteRequest (all accepts = executed, any rejects or expired = rejected/expired)
-      const wasExecutedByVotes = isCloseVoteRequest && acceptCount > 0 && rejectCount === 0;
-      const wasRejectedByVotes = isCloseVoteRequest && rejectCount > 0;
-      
+
+      // Vote-based inference:
+      // - Any explicit reject votes => rejected
+      // - If there are votes and no rejects => executed (most governance votes are accept-only)
+      const wasRejectedByVotes = rejectCount > 0;
+      const wasExecutedByVotes = finalVoteCount > 0 && rejectCount === 0;
+
       const wasExecuted = wasExecutedByChoice || wasExecutedByVotes;
       const wasRejected = wasRejectedByChoice || wasRejectedByVotes;
       const wasExpired = wasExpiredByChoice;
-      
+
       if (isClosed) {
-        if (wasExecuted) {
-          status = 'executed';
+        if (wasExpired || (finalVoteCount === 0 && isExpired)) {
+          status = 'expired';
         } else if (wasRejected) {
           status = 'rejected';
-        } else if (wasExpired || (finalVoteCount === 0 && isExpired)) {
-          status = 'expired';
-        } else if (isExpired) {
-          // Closed after expiry without explicit action
-          status = 'expired';
-        } else if (isCloseVoteRequest) {
-          // CloseVoteRequest with no clear outcome - check if expired
-          status = isExpired ? 'expired' : 'executed'; // Default to executed if closed via CloseVoteRequest
+        } else if (wasExecuted) {
+          status = 'executed';
         } else {
-          // Closed but no clear accept/reject - likely expired or archived
-          status = 'rejected';
+          // Closed but we couldn't classify; default to executed (safer than marking everything rejected)
+          status = 'executed';
         }
       } else if (isExpired) {
         status = 'expired';
