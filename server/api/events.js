@@ -1422,6 +1422,56 @@ router.get('/vote-request-index/validate', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-request-index/debug-event - Show raw event structure for a contract_id
+router.get('/vote-request-index/debug-event', async (req, res) => {
+  try {
+    const { contract_id } = req.query;
+    if (!contract_id) {
+      return res.status(400).json({ error: 'contract_id query param required' });
+    }
+
+    // Scan for events with this contract_id
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Debug only works with binary source' });
+    }
+
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: 100,
+      offset: 0,
+      maxDays: 365 * 3,
+      maxFilesToScan: 10000,
+      sortBy: 'effective_at',
+      filter: (e) => e.contract_id === contract_id,
+    });
+
+    const events = result.records.map(e => ({
+      event_id: e.event_id,
+      event_type: e.event_type,
+      choice: e.choice || null,
+      template_id: e.template_id,
+      effective_at: e.effective_at,
+      // Show ALL fields to debug vote location
+      payload_keys: e.payload ? Object.keys(e.payload) : [],
+      payload_votes: e.payload?.votes,
+      payload_votes_length: e.payload?.votes?.length,
+      payload_vote_sample: e.payload?.votes?.[0],
+      // For exercised events, check argument
+      exercise_result: e.exercise_result,
+      exercise_result_keys: e.exercise_result ? Object.keys(e.exercise_result) : [],
+      // Raw payload structure
+      full_payload: e.payload,
+    }));
+
+    const json = JSON.stringify({ contract_id, events }, (_key, value) => 
+      (typeof value === 'bigint' ? value.toString() : value), 2);
+    res.type('application/json').send(json);
+  } catch (err) {
+    console.error('Error debugging event:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============ REWARD COUPON INDEX ROUTES ============
 
 // GET /api/events/reward-coupon-index/status - Get index status
