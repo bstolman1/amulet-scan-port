@@ -311,19 +311,26 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
       
       // Check if this was an accepted/executed proposal by looking at the archived event choice
+      // Choices can be: VoteRequest_Accept, ARC_DsoRules_VoteRequest_Accept, Archive, etc.
       const archivedChoice = archivedEvent?.choice || '';
-      const wasExecuted = archivedChoice.includes('Accept') || archivedChoice === 'VoteRequest_Accept';
-      const wasRejected = archivedChoice.includes('Reject') || archivedChoice === 'VoteRequest_Reject';
+      const choiceLower = archivedChoice.toLowerCase();
+      const wasExecuted = choiceLower.includes('accept') && !choiceLower.includes('reject');
+      const wasRejected = choiceLower.includes('reject');
+      const wasExpired = choiceLower.includes('expire');
       
       if (isClosed) {
-        if (wasExecuted || acceptCount >= 10) {
+        if (wasExecuted) {
           status = 'executed';
         } else if (wasRejected) {
           status = 'rejected';
-        } else if (finalVoteCount === 0 || isExpired) {
+        } else if (wasExpired || (finalVoteCount === 0 && isExpired)) {
+          status = 'expired';
+        } else if (isExpired) {
+          // Closed after expiry without explicit action
           status = 'expired';
         } else {
-          status = 'rejected'; // closed but didn't pass
+          // Closed but no clear accept/reject - likely expired or archived
+          status = 'rejected';
         }
       } else if (isExpired) {
         status = 'expired';
