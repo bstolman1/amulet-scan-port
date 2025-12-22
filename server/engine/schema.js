@@ -254,6 +254,30 @@ export async function initEngineSchema() {
     ON vote_request_index_state(id)
   `);
 
+  // Persist last successful build summary so restarts are obvious and auditable
+  await query(`
+    CREATE TABLE IF NOT EXISTS vote_request_build_history (
+      build_id            VARCHAR PRIMARY KEY,
+      started_at          TIMESTAMP NOT NULL,
+      completed_at        TIMESTAMP NOT NULL,
+      duration_seconds    DOUBLE,
+      total_indexed       BIGINT DEFAULT 0,
+      inserted            BIGINT DEFAULT 0,
+      updated             BIGINT DEFAULT 0,
+      closed_count        BIGINT DEFAULT 0,
+      in_progress_count   BIGINT DEFAULT 0,
+      executed_count      BIGINT DEFAULT 0,
+      rejected_count      BIGINT DEFAULT 0,
+      expired_count       BIGINT DEFAULT 0,
+      success             BOOLEAN DEFAULT TRUE
+    )
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vote_request_build_history_completed
+    ON vote_request_build_history(completed_at)
+  `);
+
   // RewardCoupon persistent index table
   await query(`
     CREATE TABLE IF NOT EXISTS reward_coupons (

@@ -1234,6 +1234,7 @@ router.get('/vote-request-index/status', async (req, res) => {
     const state = await voteRequestIndexer.getIndexState();
     const isIndexing = voteRequestIndexer.isIndexingInProgress();
     const progress = voteRequestIndexer.getIndexingProgress?.();
+    const lastSuccessfulBuild = await voteRequestIndexer.getLastSuccessfulBuild();
 
     res.json({
       populated: stats.total > 0,
@@ -1242,6 +1243,7 @@ router.get('/vote-request-index/status', async (req, res) => {
       lastIndexedAt: state.last_indexed_at,
       totalIndexed: state.total_indexed,
       progress: isIndexing ? progress : null,
+      lastSuccessfulBuild,
     });
   } catch (err) {
     console.error('Error getting vote request index status:', err);

@@ -97,6 +97,27 @@ export async function getVoteRequestStats() {
 }
 
 /**
+ * Get the last successful build summary
+ */
+export async function getLastSuccessfulBuild() {
+  try {
+    const build = await queryOne(`
+      SELECT 
+        build_id, started_at, completed_at, duration_seconds,
+        total_indexed, inserted, updated, closed_count,
+        in_progress_count, executed_count, rejected_count, expired_count
+      FROM vote_request_build_history
+      WHERE success = true
+      ORDER BY completed_at DESC
+      LIMIT 1
+    `);
+    return build || null;
+  } catch (err) {
+    // Table might not exist yet
+    return null;
+  }
+
+/**
  * Query vote requests from the persistent index
  */
 export async function queryVoteRequests({ limit = 100, status = 'all', offset = 0 } = {}) {
@@ -435,6 +456,36 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
 
+    // Persist successful build summary for audit trail
+    const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const finalStats = await getVoteRequestStats();
+    try {
+      await query(`
+        INSERT INTO vote_request_build_history (
+          build_id, started_at, completed_at, duration_seconds,
+          total_indexed, inserted, updated, closed_count,
+          in_progress_count, executed_count, rejected_count, expired_count, success
+        ) VALUES (
+          '${buildId}',
+          '${indexingProgress?.startedAt || new Date().toISOString()}',
+          now(),
+          ${parseFloat(elapsed)},
+          ${inserted},
+          ${inserted},
+          ${updated},
+          ${closedContractIds.size},
+          ${finalStats.inProgress},
+          ${finalStats.executed},
+          ${finalStats.rejected},
+          ${finalStats.expired},
+          true
+        )
+      `);
+      console.log(`   📋 Build summary saved: ${buildId}`);
+    } catch (histErr) {
+      console.warn('   ⚠️ Failed to save build history:', histErr.message);
+    }
+
     indexingInProgress = false;
     indexingProgress = null;
 
@@ -445,11 +496,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
     return {
       status: 'complete',
+      buildId,
       inserted,
       updated,
       closedCount: closedContractIds.size,
       elapsedSeconds: parseFloat(elapsed),
       totalIndexed: inserted,
+      stats: finalStats,
     };
 
   } catch (err) {

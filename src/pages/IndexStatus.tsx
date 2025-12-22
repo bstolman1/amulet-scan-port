@@ -91,6 +91,21 @@ const rebuildRewardCouponIndex = async () => {
   return res.json();
 };
 
+interface LastSuccessfulBuild {
+  build_id: string;
+  started_at: string;
+  completed_at: string;
+  duration_seconds: number;
+  total_indexed: number;
+  inserted: number;
+  updated: number;
+  closed_count: number;
+  in_progress_count: number;
+  executed_count: number;
+  rejected_count: number;
+  expired_count: number;
+}
+
 interface IndexCardProps {
   title: string;
   description: string;
@@ -103,6 +118,7 @@ interface IndexCardProps {
   buildProgress?: { current: number; total: number } | null;
   onCreateTable?: () => void;
   isCreatingTable?: boolean;
+  lastSuccessfulBuild?: LastSuccessfulBuild | null;
 }
 
 const IndexCard = ({
@@ -117,6 +133,7 @@ const IndexCard = ({
   buildProgress,
   onCreateTable,
   isCreatingTable,
+  lastSuccessfulBuild,
 }: IndexCardProps) => {
   const statusConfig = {
     ready: { label: "Ready", variant: "default" as const, color: "text-green-500", bg: "bg-green-500/10" },
@@ -176,6 +193,42 @@ const IndexCard = ({
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Clock className="w-4 h-4" />
             <span>Updated {formatDistanceToNow(new Date(lastUpdated), { addSuffix: true })}</span>
+          </div>
+        )}
+
+        {/* Last Successful Build Summary */}
+        {lastSuccessfulBuild && (
+          <div className="bg-muted/30 rounded-lg p-3 space-y-2 border border-border/50">
+            <div className="flex items-center gap-2 text-sm font-medium text-green-600 dark:text-green-400">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Last Successful Build</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>Build ID:</span>
+              <span className="font-mono truncate" title={lastSuccessfulBuild.build_id}>
+                {lastSuccessfulBuild.build_id.slice(0, 20)}...
+              </span>
+              <span>Completed:</span>
+              <span>{formatDistanceToNow(new Date(lastSuccessfulBuild.completed_at), { addSuffix: true })}</span>
+              <span>Duration:</span>
+              <span>{lastSuccessfulBuild.duration_seconds?.toFixed(1)}s</span>
+              <span>Total Indexed:</span>
+              <span>{lastSuccessfulBuild.total_indexed?.toLocaleString()}</span>
+            </div>
+            <div className="flex flex-wrap gap-1 pt-1">
+              <Badge variant="secondary" className="text-xs">
+                In Progress: {lastSuccessfulBuild.in_progress_count}
+              </Badge>
+              <Badge variant="secondary" className="text-xs bg-green-500/20 text-green-700 dark:text-green-300">
+                Executed: {lastSuccessfulBuild.executed_count}
+              </Badge>
+              <Badge variant="secondary" className="text-xs bg-red-500/20 text-red-700 dark:text-red-300">
+                Rejected: {lastSuccessfulBuild.rejected_count}
+              </Badge>
+              <Badge variant="secondary" className="text-xs bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                Expired: {lastSuccessfulBuild.expired_count}
+              </Badge>
+            </div>
           </div>
         )}
 
@@ -517,6 +570,7 @@ const IndexStatus = () => {
                 ? { current: voteRequestIndex.progress.current || 0, total: voteRequestIndex.progress.total || 1 }
                 : null
             }
+            lastSuccessfulBuild={voteRequestIndex?.lastSuccessfulBuild}
           />
 
           {/* Reward Coupon Index */}
