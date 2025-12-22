@@ -5,12 +5,9 @@
  * Replace Supabase calls with this when using the Parquet/DuckDB backend.
  */
 
-// Configure your API URL
-// Local development: http://localhost:3001
-// NOTE: Lovable preview can't access localhost; this will only work when running locally.
+// NOTE: In Lovable preview, localhost is not reachable. When running locally, this resolves
+// to http://localhost:3001 (or http://<your-host>:3001 if hosting the UI on your LAN).
 import { getDuckDBApiUrl } from "@/lib/backend-config";
-
-const API_BASE_URL = getDuckDBApiUrl();
 
 interface ApiResponse<T> {
   data: T;
@@ -18,10 +15,15 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+function getApiBaseUrl() {
+  return getDuckDBApiUrl();
+}
+
 /**
  * Generic fetch wrapper with error handling
  */
 export async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const API_BASE_URL = getApiBaseUrl();
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers: {
