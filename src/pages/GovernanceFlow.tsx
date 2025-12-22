@@ -971,19 +971,7 @@ const GovernanceFlow = () => {
 
         {/* Stats Overview */}
         {data && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-            <Card className="bg-muted/30">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold">{data.stats.totalTopics}</div>
-                <div className="text-xs text-muted-foreground">Total Topics</div>
-              </CardContent>
-            </Card>
-            <Card className="bg-muted/30">
-              <CardContent className="p-4">
-                <div className="text-2xl font-bold">{data.stats.lifecycleItems}</div>
-                <div className="text-xs text-muted-foreground">Lifecycle Items</div>
-              </CardContent>
-            </Card>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <Card className="bg-blue-500/10 border-blue-500/20">
               <CardContent className="p-4">
                 <div className="text-2xl font-bold text-blue-400">{data.stats.byType.cip || 0}</div>
