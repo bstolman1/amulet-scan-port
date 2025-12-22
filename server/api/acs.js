@@ -1616,55 +1616,38 @@ router.get('/realtime-supply', async (req, res) => {
       });
     }
 
+    // Use optimized snapshot source (reads only the best snapshot, not all files)
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: null, message: 'No snapshot found' });
+    }
+
     // Check cache (shorter TTL for real-time)
-    // IMPORTANT: Cache key must include the latest COMPLETE snapshot identity,
-    // otherwise we can serve stale totals right after a new snapshot is written.
-    const latestComplete = (() => {
-      const snaps = findCompleteSnapshots();
-      if (!snaps.length) return null;
-      snaps.sort((a, b) => {
-        if (b.migrationId !== a.migrationId) return b.migrationId - a.migrationId;
-        return new Date(b.snapshotTime) - new Date(a.snapshotTime);
-      });
-      return snaps[0];
-    })();
-
-    const cacheKey = latestComplete
-      ? `acs:v3:realtime-supply:m${latestComplete.migrationId}:t${latestComplete.snapshotTime}`
-      : 'acs:v3:realtime-supply:incomplete';
-
+    const cacheKey = `acs:v3:realtime-supply:m${snapshot.migrationId}:t${snapshot.snapshotTime}`;
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
     }
 
-
-    const acsSource = getACSSource();
     const eventsSource = getEventsSource();
 
     // Step 1: Get snapshot totals and record_time
+    // NOTE: Since we use getBestSnapshotAndSource(), the acsSource already reads only the
+    // best snapshot's files. No need to filter by migration_id/snapshot_time columns.
     const snapshotSql = `
-      WITH ${getLatestSnapshotCTE(acsSource)},
-      latest_contracts AS (
+      WITH latest_contracts AS (
         SELECT
           contract_id,
           any_value(template_id) as template_id,
           any_value(entity_name) as entity_name,
           any_value(payload) as payload
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource}
         GROUP BY contract_id
       ),
       snapshot_info AS (
-        SELECT 
-          snapshot_time,
-          migration_id,
-          MIN(record_time) as record_time
+        SELECT MIN(record_time) as record_time
         FROM ${acsSource}
-        WHERE migration_id = (SELECT migration_id FROM latest_migration)
-          AND snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-        GROUP BY snapshot_time, migration_id
       ),
       amulet_total AS (
         SELECT COALESCE(SUM(
@@ -1688,8 +1671,8 @@ router.get('/realtime-supply', async (req, res) => {
         WHERE (entity_name = 'LockedAmulet' OR template_id LIKE '%:LockedAmulet:%')
       )
       SELECT 
-        snapshot_info.snapshot_time,
-        snapshot_info.migration_id,
+        '${snapshot.snapshotTime}'::TIMESTAMP as snapshot_time,
+        ${snapshot.migrationId} as migration_id,
         snapshot_info.record_time,
         amulet_total.total as snapshot_unlocked,
         locked_total.total as snapshot_locked,
@@ -1703,8 +1686,8 @@ router.get('/realtime-supply', async (req, res) => {
       return res.json({ data: null, message: 'No snapshot data found' });
     }
 
-    const snapshot = snapshotResult[0];
-    const recordTime = snapshot.record_time;
+    const snapshotRow = snapshotResult[0];
+    const recordTime = snapshotRow.record_time;
 
     // Step 2: Calculate delta from events since record_time
     // Created events ADD to supply, Archived events SUBTRACT
@@ -1784,20 +1767,20 @@ router.get('/realtime-supply', async (req, res) => {
     }
 
     // Step 3: Combine snapshot + delta for real-time values
-    const realtimeUnlocked = snapshot.snapshot_unlocked + deltaUnlocked;
-    const realtimeLocked = snapshot.snapshot_locked + deltaLocked;
+    const realtimeUnlocked = snapshotRow.snapshot_unlocked + deltaUnlocked;
+    const realtimeLocked = snapshotRow.snapshot_locked + deltaLocked;
     const realtimeTotal = realtimeUnlocked + realtimeLocked;
 
     const result = serializeBigInt({
       data: {
         // Snapshot values (point-in-time)
         snapshot: {
-          timestamp: snapshot.snapshot_time,
-          migration_id: snapshot.migration_id,
+          timestamp: snapshot.snapshotTime,
+          migration_id: snapshot.migrationId,
           record_time: recordTime,
-          unlocked: snapshot.snapshot_unlocked,
-          locked: snapshot.snapshot_locked,
-          total: snapshot.snapshot_total,
+          unlocked: snapshotRow.snapshot_unlocked,
+          locked: snapshotRow.snapshot_locked,
+          total: snapshotRow.snapshot_total,
         },
         // Delta from v2/updates since snapshot
         delta: {
@@ -1841,39 +1824,37 @@ router.get('/realtime-rich-list', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const search = req.query.search || '';
 
+    // Use optimized snapshot source (reads only the best snapshot, not all files)
+    const { snapshot, source: acsSource } = getBestSnapshotAndSource();
+    
+    if (!snapshot) {
+      return res.json({ data: [], message: 'No snapshot found' });
+    }
+
     // Check cache
-    const cacheKey = `acs:v3:realtime-rich-list:${limit}:${search}`;
+    const cacheKey = `acs:v3:realtime-rich-list:m${snapshot.migrationId}:t${snapshot.snapshotTime}:${limit}:${search}`;
     const cached = getCached(cacheKey);
     if (cached) {
       return res.json(cached);
     }
 
-    const acsSource = getACSSource();
     const eventsSource = getEventsSource();
 
     // Step 1: Get snapshot record_time
-    const recordTimeSql = `
-      WITH ${getLatestSnapshotCTE(acsSource)}
-      SELECT MIN(record_time) as record_time
-      FROM ${acsSource}
-      WHERE migration_id = (SELECT migration_id FROM latest_migration)
-        AND snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
-    `;
+    const recordTimeSql = `SELECT MIN(record_time) as record_time FROM ${acsSource}`;
     const recordTimeResult = await db.safeQuery(recordTimeSql);
     const recordTime = recordTimeResult[0]?.record_time;
 
     // Step 2: Get snapshot balances per owner
+    // NOTE: Since acsSource already reads only the best snapshot's files, no need to filter by migration_id/snapshot_time
     const snapshotSql = `
-      WITH ${getLatestSnapshotCTE(acsSource)},
-      latest_contracts AS (
+      WITH latest_contracts AS (
         SELECT
           contract_id,
           any_value(template_id) as template_id,
           any_value(entity_name) as entity_name,
           any_value(payload) as payload
-        FROM ${acsSource} acs
-        WHERE acs.migration_id = (SELECT migration_id FROM latest_migration)
-          AND acs.snapshot_time = (SELECT snapshot_time FROM latest_snapshot)
+        FROM ${acsSource}
         GROUP BY contract_id
       ),
       amulet_balances AS (
