@@ -1,19 +1,9 @@
 import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import * as partyIndexer from '../engine/party-indexer.js';
+import * as binaryReader from '../duckdb/binary-reader.js';
 
 const router = Router();
-
-// Helper to get the correct read function for JSONL files (supports .jsonl, .jsonl.gz, .jsonl.zst)
-// Uses UNION for cross-platform compatibility (Windows doesn't support brace expansion)
-// Use UNION (not UNION ALL) to prevent duplicate records
-const getUpdatesSource = () => `(
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)
-  UNION
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  UNION
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)
-)`;
 
 // GET /api/party/index/status - Get party index status
 router.get('/index/status', async (req, res) => {
@@ -72,22 +62,12 @@ router.get('/list/all', async (req, res) => {
       return res.json({ data: parties, count: parties.length, indexed: true });
     }
     
-    // Fallback to slow JSONL scan
-    const sql = `
-      WITH all_parties AS (
-        SELECT DISTINCT unnest(signatories) as party_id
-        FROM ${getUpdatesSource()}
-        UNION
-        SELECT DISTINCT unnest(observers) as party_id
-        FROM ${getUpdatesSource()}
-      )
-      SELECT party_id FROM all_parties
-      WHERE party_id IS NOT NULL
-      LIMIT ${limit}
-    `;
-    
-    const rows = await db.safeQuery(sql);
-    res.json({ data: rows.map(r => r.party_id), count: rows.length, indexed: false });
+    // No index - return error suggesting to build the index
+    res.status(503).json({ 
+      error: 'Party index not built. Build the party index first for this query.',
+      indexed: false,
+      suggestion: 'POST /api/party/index/build to start building the index'
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -113,19 +93,30 @@ router.get('/:partyId', async (req, res) => {
       });
     }
     
-    // Fallback to slow JSONL scan
-    const sql = `
-      SELECT *
-      FROM ${getUpdatesSource()}
-      WHERE 
-        list_contains(signatories, '${partyId}')
-        OR list_contains(observers, '${partyId}')
-      ORDER BY timestamp DESC
-      LIMIT ${limit}
-    `;
+    // Fallback: scan recent binary files (slow but works without index)
+    console.log(`Party ${partyId}: No index, falling back to binary scan...`);
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: limit * 10, // Get more to filter
+      maxDays: 30,
+      filter: (event) => {
+        return (event.signatories && event.signatories.includes(partyId)) ||
+               (event.observers && event.observers.includes(partyId));
+      }
+    });
     
-    const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, party_id: partyId, indexed: false });
+    // Filter and limit
+    const filtered = result.records.filter(event => 
+      (event.signatories && event.signatories.includes(partyId)) ||
+      (event.observers && event.observers.includes(partyId))
+    ).slice(0, limit);
+    
+    res.json({ 
+      data: filtered, 
+      count: filtered.length, 
+      party_id: partyId, 
+      indexed: false,
+      warning: 'Scanning recent files only (last 30 days). Build the party index for complete history.'
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -145,23 +136,13 @@ router.get('/:partyId/summary', async (req, res) => {
       }
     }
     
-    // Fallback to slow JSONL scan
-    const sql = `
-      SELECT 
-        event_type,
-        COUNT(*) as count,
-        MIN(timestamp) as first_seen,
-        MAX(timestamp) as last_seen
-      FROM ${getUpdatesSource()}
-      WHERE 
-        list_contains(signatories, '${partyId}')
-        OR list_contains(observers, '${partyId}')
-      GROUP BY event_type
-      ORDER BY count DESC
-    `;
-    
-    const rows = await db.safeQuery(sql);
-    res.json({ data: rows, party_id: partyId, indexed: false });
+    // No index - return minimal info
+    res.json({ 
+      data: null, 
+      party_id: partyId, 
+      indexed: false,
+      warning: 'Party index not built. Build the index for summary data.'
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
