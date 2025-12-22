@@ -105,6 +105,30 @@ export async function getTemplateIndexState() {
 }
 
 /**
+ * Normalize stored path to current OS format.
+ * The template_file_index may store Unix-style paths (/home/...) even when running on Windows.
+ * This function converts them relative to DATA_PATH so fs.readFile works correctly.
+ */
+function normalizePath(storedPath) {
+  // If running on Windows and storedPath is Unix-style, convert it relative to DATA_PATH
+  if (process.platform === 'win32' && storedPath.startsWith('/')) {
+    // Extract the relative portion after "data/raw/" (or equivalent subdirectory)
+    const rawIdx = storedPath.indexOf('/data/raw/');
+    if (rawIdx !== -1) {
+      const relative = storedPath.slice(rawIdx + '/data/raw/'.length);
+      return path.join(DATA_PATH, relative);
+    }
+    // Fallback: try extracting after "migration="
+    const migrationIdx = storedPath.indexOf('migration=');
+    if (migrationIdx !== -1) {
+      const relative = storedPath.slice(migrationIdx);
+      return path.join(DATA_PATH, relative);
+    }
+  }
+  return storedPath;
+}
+
+/**
  * Get files containing a specific template (or template pattern)
  */
 export async function getFilesForTemplate(templatePattern) {
@@ -115,7 +139,7 @@ export async function getFilesForTemplate(templatePattern) {
       WHERE template_name LIKE '%' || ? || '%'
       ORDER BY last_event_at DESC
     `, [templatePattern]);
-    return rows.map(r => r.file_path);
+    return rows.map(r => normalizePath(r.file_path));
   } catch (err) {
     console.error('Error querying template index:', err);
     return [];
@@ -133,7 +157,7 @@ export async function getFilesForTemplateWithMeta(templatePattern) {
       WHERE template_name LIKE '%' || ? || '%'
       ORDER BY last_event_at DESC
     `, [templatePattern]);
-    return rows;
+    return rows.map(r => ({ ...r, file_path: normalizePath(r.file_path) }));
   } catch (err) {
     console.error('Error querying template index:', err);
     return [];
