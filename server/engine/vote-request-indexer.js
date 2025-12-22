@@ -116,6 +116,7 @@ export async function getLastSuccessfulBuild() {
     // Table might not exist yet
     return null;
   }
+}
 
 /**
  * Query vote requests from the persistent index
