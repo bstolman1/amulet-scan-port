@@ -275,69 +275,100 @@ function findLatestFromCursors() {
 /**
  * Find latest timestamp from raw binary data files
  * Scans directories to find the most recent data
+ * Supports both structures:
+ *   - raw/migration=X/year=YYYY/month=MM/day=DD/ (new partitioned format)
+ *   - raw/events/migration-X/YYYY-MM-DD/ (legacy format)
  */
 async function findLatestFromRawData(rawDir) {
-  // Check both events and updates subdirectories
-  const dirsToCheck = ['events', 'updates'];
   let latestResult = null;
   
-  for (const subDir of dirsToCheck) {
-    const targetDir = path.join(rawDir, subDir);
-    if (!fs.existsSync(targetDir)) continue;
+  // Check for new partitioned format: raw/migration=X/year=YYYY/month=MM/day=DD/
+  const migrationDirs = fs.readdirSync(rawDir)
+    .filter(d => d.startsWith('migration='))
+    .map(d => ({
+      name: d,
+      id: parseInt(d.replace('migration=', '')) || 0
+    }))
+    .sort((a, b) => b.id - a.id); // Sort by migration ID descending
+  
+  for (const migDir of migrationDirs) {
+    const migPath = path.join(rawDir, migDir.name);
     
-    // Get migration directories
-    const migrationDirs = fs.readdirSync(targetDir)
-      .filter(d => d.startsWith('migration-'))
-      .map(d => ({
-        name: d,
-        id: parseInt(d.replace('migration-', '')) || 0
-      }))
-      .sort((a, b) => b.id - a.id); // Sort by migration ID descending
+    // Find year directories
+    const yearDirs = fs.readdirSync(migPath)
+      .filter(d => d.startsWith('year='))
+      .map(d => parseInt(d.replace('year=', '')) || 0)
+      .sort((a, b) => b - a); // Descending
     
-    if (migrationDirs.length === 0) continue;
-    
-    // Check the highest migration for the latest date
-    for (const migDir of migrationDirs) {
-      const migPath = path.join(targetDir, migDir.name);
-      const dateDirs = fs.readdirSync(migPath)
-        .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-        .sort()
-        .reverse(); // Sort descending to get latest first
+    for (const year of yearDirs) {
+      const yearPath = path.join(migPath, `year=${year}`);
       
-      if (dateDirs.length > 0) {
-        // Use the LATEST date directory (first after reverse sort)
-        const latestDate = dateDirs[0];
+      // Find month directories
+      const monthDirs = fs.readdirSync(yearPath)
+        .filter(d => d.startsWith('month='))
+        .map(d => parseInt(d.replace('month=', '')) || 0)
+        .sort((a, b) => b - a); // Descending
+      
+      for (const month of monthDirs) {
+        const monthPath = path.join(yearPath, `month=${month}`);
         
-        // Try to find the latest hour directory for more precision
-        const datePath = path.join(migPath, latestDate);
-        let latestHour = '23'; // Default to end of day
+        // Find day directories
+        const dayDirs = fs.readdirSync(monthPath)
+          .filter(d => d.startsWith('day='))
+          .map(d => parseInt(d.replace('day=', '')) || 0)
+          .sort((a, b) => b - a); // Descending
         
-        try {
-          const hourDirs = fs.readdirSync(datePath)
-            .filter(d => /^\d{2}$/.test(d))
-            .sort()
-            .reverse();
-          if (hourDirs.length > 0) {
-            latestHour = hourDirs[0];
-          }
-        } catch (e) {
-          // No hour directories, use end of day
-        }
-        
-        const timestamp = `${latestDate}T${latestHour}:59:59.999999Z`;
-        
-        // Check if this is newer than what we found so far
-        if (!latestResult || 
-            migDir.id > latestResult.migrationId ||
-            (migDir.id === latestResult.migrationId && new Date(timestamp) > new Date(latestResult.timestamp))) {
+        if (dayDirs.length > 0) {
+          const latestDay = dayDirs[0];
+          const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(latestDay).padStart(2, '0')}`;
+          const timestamp = `${dateStr}T23:59:59.999999Z`;
+          
           latestResult = {
             migrationId: migDir.id,
             timestamp: timestamp,
-            source: `${subDir}/${migDir.name}/${latestDate}`
+            source: `migration=${migDir.id}/year=${year}/month=${month}/day=${latestDay}`
           };
+          break; // Found latest day for this month
         }
+      }
+      if (latestResult) break; // Found latest for this year
+    }
+    if (latestResult) break; // Found latest for this migration
+  }
+  
+  // Also check legacy format: raw/events/migration-X/YYYY-MM-DD/
+  if (!latestResult) {
+    for (const subDir of ['events', 'updates']) {
+      const targetDir = path.join(rawDir, subDir);
+      if (!fs.existsSync(targetDir)) continue;
+      
+      const legacyMigDirs = fs.readdirSync(targetDir)
+        .filter(d => d.startsWith('migration-'))
+        .map(d => ({ name: d, id: parseInt(d.replace('migration-', '')) || 0 }))
+        .sort((a, b) => b.id - a.id);
+      
+      for (const migDir of legacyMigDirs) {
+        const migPath = path.join(targetDir, migDir.name);
+        const dateDirs = fs.readdirSync(migPath)
+          .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+          .sort()
+          .reverse();
         
-        break; // Found latest for this migration, move to next
+        if (dateDirs.length > 0) {
+          const latestDate = dateDirs[0];
+          const timestamp = `${latestDate}T23:59:59.999999Z`;
+          
+          if (!latestResult || 
+              migDir.id > latestResult.migrationId ||
+              (migDir.id === latestResult.migrationId && new Date(timestamp) > new Date(latestResult.timestamp))) {
+            latestResult = {
+              migrationId: migDir.id,
+              timestamp: timestamp,
+              source: `${subDir}/${migDir.name}/${latestDate}`
+            };
+          }
+          break;
+        }
       }
     }
   }
