@@ -133,30 +133,26 @@ const normalizeFutureValues = (futureValues: any): NormalizedIssuanceFutureValue
 
 const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
   if (!raw) return null;
-  const payload = raw.payload ?? raw;
-  
-  // Data may be nested under configSchedule.initialValue (ACS format) or directly on payload
-  const configSource = payload.configSchedule?.initialValue ?? payload;
-  
+  const source = raw.payload ?? raw;
   const transferConfig = pickFirstDefined(
-    configSource.transferConfig,
-    configSource.transfer_config,
-    configSource.TransferConfig,
+    source.transferConfig,
+    source.transfer_config,
+    source.TransferConfig,
+    source.transfer_configSchedule,
   );
-  const issuanceCurve = pickFirstDefined(configSource.issuanceCurve, configSource.issuance_curve);
+  const issuanceCurve = pickFirstDefined(source.issuanceCurve, source.issuance_curve);
   const decentralizedSynchronizer = pickFirstDefined(
-    configSource.decentralizedSynchronizer,
-    configSource.decentralized_synchronizer,
+    source.decentralizedSynchronizer,
+    source.decentralized_synchronizer,
   );
-
 
   return {
-    dso: pickFirstDefined(payload.dso, payload.DSO, payload.owner),
-    templateIdSuffix: pickFirstDefined(payload.templateIdSuffix, payload.template_id_suffix, "AmuletRules"),
-    isDevNet: pickFirstDefined(payload.isDevNet, payload.is_devnet, payload.is_dev_net, false),
+    dso: pickFirstDefined(source.dso, source.DSO, source.owner),
+    templateIdSuffix: pickFirstDefined(source.templateIdSuffix, source.template_id_suffix, "AmuletRules"),
+    isDevNet: pickFirstDefined(source.isDevNet, source.is_devnet, source.is_dev_net, false),
     featuredAppActivityMarkerAmount: pickFirstDefined(
-      configSource.featuredAppActivityMarkerAmount,
-      configSource.featured_app_activity_marker_amount,
+      source.featuredAppActivityMarkerAmount,
+      source.featured_app_activity_marker_amount,
     ),
     transferConfig: transferConfig
       ? {
@@ -212,7 +208,7 @@ const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
           fees: decentralizedSynchronizer.fees,
         }
       : undefined,
-    packageConfig: pickFirstDefined(configSource.packageConfig, configSource.package_config),
+    packageConfig: pickFirstDefined(source.packageConfig, source.package_config),
     raw,
   };
 };
