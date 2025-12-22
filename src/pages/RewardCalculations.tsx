@@ -98,7 +98,7 @@ const RewardCalculations = () => {
             Reward Calculations
           </h1>
           <p className="text-muted-foreground">
-            Calculate app rewards for a specific party ID within a date or round range
+            Calculate app rewards for a specific party ID. Filter by date range <strong>or</strong> round numbers (not both required).
           </p>
         </div>
 
@@ -110,7 +110,7 @@ const RewardCalculations = () => {
               Query Parameters
             </CardTitle>
             <CardDescription>
-              Enter a party ID and optionally filter by date range or round numbers
+              Enter a party ID and optionally filter by date range <strong>or</strong> round numbers
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
