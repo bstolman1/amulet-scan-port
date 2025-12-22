@@ -118,6 +118,13 @@ function saveLiveCursor(migrationId, recordTime) {
  * This is the authoritative source for where backfill stopped
  */
 async function findLatestTimestamp() {
+  // Always check raw data first to find the actual latest timestamp
+  const rawDir = path.join(DATA_DIR, 'raw');
+  let rawDataResult = null;
+  if (fs.existsSync(rawDir)) {
+    rawDataResult = await findLatestFromRawData(rawDir);
+  }
+
   // In live mode, try to resume from live cursor, but never go backwards behind backfill.
   if (LIVE_MODE) {
     const liveCursor = loadLiveCursor();
@@ -128,49 +135,66 @@ async function findLatestTimestamp() {
     const backfillTime = findLatestFromCursors();
     const backfillMigration = lastMigrationId;
 
-    // If we have both, prefer whichever is newer.
-    if (liveCursor && backfillTime) {
-      const liveTs = new Date(liveTime).getTime();
-      const backfillTs = new Date(backfillTime).getTime();
-
-      const useBackfill =
-        backfillMigration > liveMigration ||
-        (backfillMigration === liveMigration && backfillTs > liveTs);
-
-      if (useBackfill) {
-        console.log(
-          `⚠️ Live cursor is behind backfill (live m${liveMigration}@${liveTime}); continuing from backfill (m${backfillMigration}@${backfillTime})`
-        );
-        return backfillTime;
-      }
-
-      lastMigrationId = liveMigration;
-      return liveTime;
-    }
-
-    // Only live cursor exists
+    // Collect all candidates: live cursor, backfill cursor, raw data
+    const candidates = [];
+    
     if (liveCursor) {
-      lastMigrationId = liveMigration;
-      return liveTime;
+      candidates.push({ source: 'live-cursor', migration: liveMigration, time: liveTime });
     }
-
-    // Only backfill cursor exists
     if (backfillTime) {
-      return backfillTime;
+      candidates.push({ source: 'backfill-cursor', migration: backfillMigration, time: backfillTime });
+    }
+    if (rawDataResult) {
+      candidates.push({ source: 'raw-data', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
     }
 
-    console.log('🔴 LIVE MODE: No live/backfill cursor found, falling back to raw files...');
-  } else {
-    // Non-live mode: cursor files from backfill are authoritative
-    const backfillTime = findLatestFromCursors();
-    if (backfillTime) return backfillTime;
-  }
+    if (candidates.length === 0) {
+      console.log('🔴 LIVE MODE: No cursors or raw data found, starting fresh');
+      return null;
+    }
 
-  // Fallback: check raw data directory for binary files
-  const rawDir = path.join(DATA_DIR, 'raw');
-  if (fs.existsSync(rawDir)) {
-    const result = await findLatestFromRawData(rawDir);
-    if (result) return result;
+    // Find the newest candidate (highest migration, then latest timestamp)
+    candidates.sort((a, b) => {
+      if (a.migration !== b.migration) return b.migration - a.migration;
+      return new Date(b.time).getTime() - new Date(a.time).getTime();
+    });
+
+    const best = candidates[0];
+    console.log(`📍 Best resume point: ${best.source} -> migration=${best.migration}, time=${best.time}`);
+    
+    // Log all candidates for debugging
+    for (const c of candidates) {
+      const marker = c === best ? '✓' : ' ';
+      console.log(`   ${marker} ${c.source}: m${c.migration} @ ${c.time}`);
+    }
+
+    lastMigrationId = best.migration;
+    return best.time;
+  } else {
+    // Non-live mode: prefer raw data if it's newer than cursors
+    const backfillTime = findLatestFromCursors();
+    const backfillMigration = lastMigrationId;
+
+    if (rawDataResult && backfillTime) {
+      const rawTs = new Date(rawDataResult.timestamp).getTime();
+      const backfillTs = new Date(backfillTime).getTime();
+      
+      const useRaw = rawDataResult.migrationId > backfillMigration ||
+        (rawDataResult.migrationId === backfillMigration && rawTs > backfillTs);
+      
+      if (useRaw) {
+        console.log(`📍 Raw data is ahead of cursor (raw: ${rawDataResult.timestamp} vs cursor: ${backfillTime})`);
+        lastMigrationId = rawDataResult.migrationId;
+        return rawDataResult.timestamp;
+      }
+    }
+
+    if (backfillTime) return backfillTime;
+    
+    if (rawDataResult) {
+      lastMigrationId = rawDataResult.migrationId;
+      return rawDataResult.timestamp;
+    }
   }
 
   console.log('📁 No existing backfill data found, starting fresh');
@@ -249,40 +273,78 @@ function findLatestFromCursors() {
 }
 
 /**
- * Fallback: Find latest timestamp from raw binary data files
+ * Find latest timestamp from raw binary data files
+ * Scans directories to find the most recent data
  */
 async function findLatestFromRawData(rawDir) {
-  // Check events subdirectory
-  const eventsDir = path.join(rawDir, 'events');
-  if (!fs.existsSync(eventsDir)) {
-    return null;
-  }
+  // Check both events and updates subdirectories
+  const dirsToCheck = ['events', 'updates'];
+  let latestResult = null;
   
-  // Get migration directories
-  const migrationDirs = fs.readdirSync(eventsDir)
-    .filter(d => d.startsWith('migration-'))
-    .sort()
-    .reverse();
-  
-  if (migrationDirs.length === 0) {
-    return null;
-  }
-  
-  // Check most recent migration for date directories
-  for (const migDir of migrationDirs.slice(0, 2)) {
-    const migPath = path.join(eventsDir, migDir);
-    const dateDirs = fs.readdirSync(migPath)
-      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-      .sort()
-      .reverse();
+  for (const subDir of dirsToCheck) {
+    const targetDir = path.join(rawDir, subDir);
+    if (!fs.existsSync(targetDir)) continue;
     
-    if (dateDirs.length > 0) {
-      // Use the earliest date directory as the resume point
-      const earliestDate = dateDirs[dateDirs.length - 1];
-      const timestamp = `${earliestDate}T00:00:00Z`;
-      console.log(`📍 Found data in ${migDir}/${earliestDate}, resuming from ${timestamp}`);
-      return timestamp;
+    // Get migration directories
+    const migrationDirs = fs.readdirSync(targetDir)
+      .filter(d => d.startsWith('migration-'))
+      .map(d => ({
+        name: d,
+        id: parseInt(d.replace('migration-', '')) || 0
+      }))
+      .sort((a, b) => b.id - a.id); // Sort by migration ID descending
+    
+    if (migrationDirs.length === 0) continue;
+    
+    // Check the highest migration for the latest date
+    for (const migDir of migrationDirs) {
+      const migPath = path.join(targetDir, migDir.name);
+      const dateDirs = fs.readdirSync(migPath)
+        .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+        .sort()
+        .reverse(); // Sort descending to get latest first
+      
+      if (dateDirs.length > 0) {
+        // Use the LATEST date directory (first after reverse sort)
+        const latestDate = dateDirs[0];
+        
+        // Try to find the latest hour directory for more precision
+        const datePath = path.join(migPath, latestDate);
+        let latestHour = '23'; // Default to end of day
+        
+        try {
+          const hourDirs = fs.readdirSync(datePath)
+            .filter(d => /^\d{2}$/.test(d))
+            .sort()
+            .reverse();
+          if (hourDirs.length > 0) {
+            latestHour = hourDirs[0];
+          }
+        } catch (e) {
+          // No hour directories, use end of day
+        }
+        
+        const timestamp = `${latestDate}T${latestHour}:59:59.999999Z`;
+        
+        // Check if this is newer than what we found so far
+        if (!latestResult || 
+            migDir.id > latestResult.migrationId ||
+            (migDir.id === latestResult.migrationId && new Date(timestamp) > new Date(latestResult.timestamp))) {
+          latestResult = {
+            migrationId: migDir.id,
+            timestamp: timestamp,
+            source: `${subDir}/${migDir.name}/${latestDate}`
+          };
+        }
+        
+        break; // Found latest for this migration, move to next
+      }
     }
+  }
+  
+  if (latestResult) {
+    console.log(`📁 Found raw data: ${latestResult.source} -> migration=${latestResult.migrationId}, time=${latestResult.timestamp}`);
+    return latestResult;
   }
   
   return null;
