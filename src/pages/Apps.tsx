@@ -32,11 +32,22 @@ const Apps = () => {
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
     for (const field of fieldNames) {
+      // Check top level
       if (record[field] !== undefined && record[field] !== null) return record[field];
+      // Check payload
       if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
+      // Check payload.payload (sometimes double-nested)
+      if (record.payload?.payload?.[field] !== undefined && record.payload?.payload?.[field] !== null) return record.payload.payload[field];
+      // Check contract_data
+      if (record.contract_data?.[field] !== undefined && record.contract_data?.[field] !== null) return record.contract_data[field];
     }
     return undefined;
   };
+
+  // Debug: log first app structure
+  if (apps.length > 0 && !isLoading) {
+    console.log("🔍 Apps page - First app structure:", JSON.stringify(apps[0], null, 2));
+  }
 
   // Normalize app name for comparison
   const normalizeAppName = (name: string) => {
@@ -141,10 +152,16 @@ const Apps = () => {
                 <Badge variant="secondary">{apps.length} On-Chain</Badge>
               </div>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {apps.map((app: any, i: number) => {
-                  const appName = getField(app, "appName", "name", "applicationName");
-                  const provider = getField(app, "provider", "providerId", "providerParty");
-                  const dso = getField(app, "dso");
+              {apps.map((app: any, i: number) => {
+                  // Extract app name from various possible locations
+                  const appName = getField(app, "appName", "name", "applicationName", "app_name") 
+                    || app.payload?.appName 
+                    || app.payload?.app_name
+                    || Object.keys(app.payload || {}).find(k => k.toLowerCase().includes('appname') && app.payload[k]);
+                  const provider = getField(app, "provider", "providerId", "providerParty", "provider_id")
+                    || app.payload?.provider;
+                  const dso = getField(app, "dso")
+                    || app.payload?.dso;
                   const governanceMatch = appName ? findGovernanceMatch(appName) : null;
                   const currentStage = governanceMatch ? getCurrentStage(governanceMatch) : null;
                   const latestTopic = governanceMatch ? getLatestTopic(governanceMatch) : null;
