@@ -24,11 +24,90 @@ const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
-// Persistent DuckDB instance (survives restarts, shareable between processes)
+// Persistent DuckDB instance
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
-const db = new duckdb.Database(DB_FILE);
-const conn = db.connect();
+console.log(`📦 DuckDB base data dir: ${BASE_DATA_DIR}`);
+
+let db = null;
+let conn = null;
+
+function openDuckDBConnection() {
+  if (conn) return;
+  db = new duckdb.Database(DB_FILE);
+  conn = db.connect();
+}
+
+function closeDuckDBConnection() {
+  try { conn?.close?.(); } catch {}
+  try { db?.close?.(); } catch {}
+  conn = null;
+  db = null;
+}
+
+function pingDuckDB() {
+  return new Promise((resolve, reject) => {
+    if (!conn) return reject(new Error('DuckDB connection not initialized'));
+    conn.all('SELECT 1 AS ok', (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+
+function cleanupDuckDBArtifacts() {
+  // On Windows, stale .wal/.lock files are a common cause of "connection closed" issues.
+  try {
+    const walPath = `${DB_FILE}.wal`;
+    if (fs.existsSync(walPath)) {
+      fs.unlinkSync(walPath);
+      console.log(`🧹 Deleted WAL: ${walPath}`);
+    }
+  } catch (e) {
+    console.warn(`⚠️ Failed deleting WAL: ${e?.message || e}`);
+  }
+
+  try {
+    if (!fs.existsSync(BASE_DATA_DIR)) return;
+    const entries = fs.readdirSync(BASE_DATA_DIR);
+    const lockFiles = entries.filter((f) => f.endsWith('.lock'));
+    for (const f of lockFiles) {
+      const lockPath = path.join(BASE_DATA_DIR, f);
+      try {
+        fs.unlinkSync(lockPath);
+        console.log(`🧹 Deleted lock: ${lockPath}`);
+      } catch (e) {
+        console.warn(`⚠️ Failed deleting lock ${lockPath}: ${e?.message || e}`);
+      }
+    }
+  } catch (e) {
+    console.warn(`⚠️ Failed scanning lock files: ${e?.message || e}`);
+  }
+}
+
+export async function ensureDuckDBReady({ allowRecovery = true } = {}) {
+  try {
+    openDuckDBConnection();
+    await pingDuckDB();
+  } catch (err) {
+    const msg = err?.message || String(err);
+
+    if (allowRecovery && process.platform === 'win32') {
+      console.warn(`⚠️ DuckDB connection ping failed: ${msg}`);
+      console.warn('🧹 Attempting Windows DuckDB recovery (remove WAL/lock, reconnect once)...');
+
+      cleanupDuckDBArtifacts();
+      closeDuckDBConnection();
+
+      openDuckDBConnection();
+      await pingDuckDB();
+      return;
+    }
+
+    throw err;
+  }
+}
+
 
 /**
  * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
@@ -100,7 +179,8 @@ function hasDataFiles(type = 'events') {
 }
 
 // Helper to run queries
-export function query(sql, params = []) {
+export async function query(sql, params = []) {
+  await ensureDuckDBReady();
   return new Promise((resolve, reject) => {
     conn.all(sql, ...params, (err, rows) => {
       if (err) reject(err);
