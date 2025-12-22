@@ -1250,7 +1250,7 @@ router.get('/vote-request-index/status', async (req, res) => {
       }
     }
 
-    res.json({
+    const payload = {
       populated: stats.total > 0,
       isIndexing,
       lockExists,
@@ -1259,7 +1259,14 @@ router.get('/vote-request-index/status', async (req, res) => {
       totalIndexed: state.total_indexed,
       progress: isIndexing ? progress : null,
       lastSuccessfulBuild,
-    });
+    };
+
+    // DuckDB can return BIGINT values as JS BigInt, which Express can't JSON.stringify.
+    const safePayload = JSON.parse(
+      JSON.stringify(payload, (_key, value) => (typeof value === 'bigint' ? value.toString() : value))
+    );
+
+    res.json(safePayload);
   } catch (err) {
     console.error('Error getting vote request index status:', err);
     res.status(500).json({ error: err.message });
