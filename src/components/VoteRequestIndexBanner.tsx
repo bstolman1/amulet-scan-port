@@ -8,15 +8,16 @@ import { apiFetch } from "@/lib/duckdb-api-client";
 import { toast } from "@/hooks/use-toast";
 
 interface IndexStatus {
-  total: number;
-  active: number;
-  historical: number;
-  closed: number;
-  indexState?: {
-    last_indexed_at: string | null;
-    total_indexed: number;
+  populated: boolean;
+  isIndexing: boolean;
+  stats: {
+    total: number;
+    active: number;
+    historical: number;
+    closed: number;
   };
-  indexingInProgress?: boolean;
+  lastIndexedAt: string | null;
+  totalIndexed: number;
 }
 
 export function VoteRequestIndexBanner() {
@@ -48,12 +49,12 @@ export function VoteRequestIndexBanner() {
       const pollInterval = setInterval(async () => {
         const fresh = await apiFetch<IndexStatus>("/api/events/vote-request-index/status");
         queryClient.setQueryData(["vote-request-index-status"], fresh);
-        if (!fresh.indexingInProgress) {
+        if (!fresh.isIndexing) {
           clearInterval(pollInterval);
           setIsBuilding(false);
           toast({
             title: "Index Build Complete",
-            description: `Indexed ${fresh.total} VoteRequest events (${fresh.historical} historical).`,
+            description: `Indexed ${fresh.stats?.total ?? 0} VoteRequest events (${fresh.stats?.historical ?? 0} historical).`,
           });
         }
       }, 3000);
@@ -71,9 +72,9 @@ export function VoteRequestIndexBanner() {
   if (isLoading) return null;
   if (error) return null;
 
-  const isPopulated = (status?.total ?? 0) > 0;
-  const historicalCount = status?.historical ?? 0;
-  const inProgress = isBuilding || status?.indexingInProgress;
+  const isPopulated = status?.populated || (status?.stats?.total ?? 0) > 0;
+  const historicalCount = status?.stats?.historical ?? 0;
+  const inProgress = isBuilding || status?.isIndexing;
 
   return (
     <Alert className={isPopulated ? "bg-success/10 border-success/30" : "bg-warning/10 border-warning/30"}>
