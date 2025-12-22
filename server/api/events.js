@@ -1235,10 +1235,23 @@ router.get('/vote-request-index/status', async (req, res) => {
     const isIndexing = voteRequestIndexer.isIndexingInProgress();
     const progress = voteRequestIndexer.getIndexingProgress?.();
     const lastSuccessfulBuild = await voteRequestIndexer.getLastSuccessfulBuild();
+    
+    // Check if a stale lock exists (lock file present but we're not indexing)
+    let lockExists = false;
+    if (!isIndexing) {
+      const lockPath = require('path').join(db.DATA_PATH, '.locks', 'vote_request_index.lock');
+      try {
+        await require('fs').promises.access(lockPath);
+        lockExists = true;
+      } catch {
+        // No lock file
+      }
+    }
 
     res.json({
       populated: stats.total > 0,
       isIndexing,
+      lockExists,
       stats,
       lastIndexedAt: state.last_indexed_at,
       totalIndexed: state.total_indexed,
@@ -1269,6 +1282,17 @@ router.post('/vote-request-index/build', async (req, res) => {
     });
   } catch (err) {
     console.error('Error starting vote request index build:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/events/vote-request-index/lock - Clear stale lock
+router.delete('/vote-request-index/lock', async (req, res) => {
+  try {
+    const result = await voteRequestIndexer.clearStaleLock();
+    res.json(result);
+  } catch (err) {
+    console.error('Error clearing vote request index lock:', err);
     res.status(500).json({ error: err.message });
   }
 });

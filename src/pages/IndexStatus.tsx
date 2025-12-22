@@ -46,6 +46,14 @@ const fetchVoteRequestIndexStatus = async () => {
   return res.json();
 };
 
+const clearVoteRequestIndexLock = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/vote-request-index/lock`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to clear lock");
+  return res.json();
+};
+
 const fetchAggregationState = async () => {
   const res = await fetch(`${getDuckDBApiUrl()}/api/stats/aggregation-state`);
   if (!res.ok) throw new Error("Failed to fetch aggregation state");
@@ -127,7 +135,7 @@ interface IndexCardProps {
   title: string;
   description: string;
   icon: React.ReactNode;
-  status: "ready" | "building" | "empty" | "error" | "loading";
+  status: "ready" | "building" | "empty" | "error" | "loading" | "locked";
   stats?: { label: string; value: string | number }[];
   lastUpdated?: string | null;
   onRebuild?: () => void;
@@ -136,6 +144,8 @@ interface IndexCardProps {
   onCreateTable?: () => void;
   isCreatingTable?: boolean;
   lastSuccessfulBuild?: LastSuccessfulBuild | null;
+  onClearLock?: () => void;
+  isClearingLock?: boolean;
 }
 
 const IndexCard = ({
@@ -151,6 +161,8 @@ const IndexCard = ({
   onCreateTable,
   isCreatingTable,
   lastSuccessfulBuild,
+  onClearLock,
+  isClearingLock,
 }: IndexCardProps) => {
   const statusConfig = {
     ready: { label: "Ready", variant: "default" as const, color: "text-green-500", bg: "bg-green-500/10" },
@@ -158,6 +170,7 @@ const IndexCard = ({
     empty: { label: "Not Built", variant: "outline" as const, color: "text-amber-500", bg: "bg-amber-500/10" },
     error: { label: "Error", variant: "destructive" as const, color: "text-destructive", bg: "bg-destructive/10" },
     loading: { label: "Loading...", variant: "secondary" as const, color: "text-muted-foreground", bg: "bg-muted" },
+    locked: { label: "Locked", variant: "outline" as const, color: "text-orange-500", bg: "bg-orange-500/10" },
   };
 
   const config = statusConfig[status];
@@ -294,6 +307,29 @@ const IndexCard = ({
             )}
           </Button>
         )}
+
+        {/* Clear Lock Button */}
+        {onClearLock && status === "locked" && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onClearLock}
+            disabled={isClearingLock}
+            className="w-full"
+          >
+            {isClearingLock ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Clearing...
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-4 h-4 mr-2" />
+                Clear Stale Lock
+              </>
+            )}
+          </Button>
+        )}
       </CardContent>
     </Card>
   );
@@ -387,6 +423,26 @@ const IndexStatus = () => {
     },
   });
 
+  const clearLockMutation = useMutation({
+    mutationFn: clearVoteRequestIndexLock,
+    onSuccess: (data) => {
+      toast({
+        title: data.cleared ? "Lock cleared" : "No lock to clear",
+        description: data.cleared 
+          ? `Cleared stale lock from PID ${data.previousPid}` 
+          : data.reason,
+      });
+      queryClient.invalidateQueries({ queryKey: ["voteRequestIndexStatus"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to clear lock",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   // Mutation to initialize engine schema (create aggregation_state table)
   const initSchemaMutation = useMutation({
     mutationFn: async () => {
@@ -469,6 +525,7 @@ const IndexStatus = () => {
     if (voteLoading) return "loading";
     if (voteError) return "error";
     if (voteRequestIndex?.isIndexing) return "building";
+    if (voteRequestIndex?.lockExists) return "locked";
     if (voteRequestIndex?.stats?.total > 0) return "ready";
     return "empty";
   };
@@ -623,6 +680,8 @@ const IndexStatus = () => {
                 : null
             }
             lastSuccessfulBuild={voteRequestIndex?.lastSuccessfulBuild}
+            onClearLock={() => clearLockMutation.mutate()}
+            isClearingLock={clearLockMutation.isPending}
           />
 
           {/* Reward Coupon Index */}
