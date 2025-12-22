@@ -926,6 +926,25 @@ function correlateTopics(allTopics) {
     if (unaccounted.length > 10) {
       console.log(`   ... and ${unaccounted.length - 10} more`);
     }
+    
+    // Create standalone items for unaccounted topics so they're not lost
+    for (const topic of unaccounted) {
+      const item = {
+        id: `lifecycle-${topic.id}`,
+        primaryId: topic.identifiers.entityName || topic.subject,
+        type: 'other',
+        network: topic.identifiers.network,
+        stages: { [topic.stage]: [topic] },
+        topics: [topic],
+        firstDate: topic.date,
+        lastDate: topic.date,
+        currentStage: topic.stage,
+        wasUnaccounted: true, // Flag for debugging
+      };
+      lifecycleItems.push(item);
+      used.add(topic.id);
+    }
+    console.log(`   → Created ${unaccounted.length} standalone items for unaccounted topics`);
   }
   
   // Sort lifecycle items by CIP number descending (highest first)
