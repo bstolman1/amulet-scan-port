@@ -972,6 +972,10 @@ router.get('/contracts', async (req, res) => {
       const t = String(template);
       const entityName = t.split(/[:._]/).pop() || t;
       
+      // Extract module name (e.g., "AmuletRules" from "Splice:AmuletRules:AmuletRules")
+      const parts = t.split(/[:._]/);
+      const moduleName = parts.length >= 2 ? parts[parts.length - 2] : null;
+      
       const variants = new Set([
         t,
         t.replaceAll(':', '.'),
@@ -983,18 +987,24 @@ router.get('/contracts', async (req, res) => {
         entityName, // Also try just the entity name
       ]);
 
+      // Use ILIKE for case-insensitive matching (DuckDB's LIKE is case-sensitive)
       const likeClauses = [...variants]
         .filter(Boolean)
-        .map((v) => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
+        .map((v) => `template_id ILIKE '%${v.replace(/'/g, "''")}%'`);
       
-      // Also match by entity_name directly
-      likeClauses.push(`entity_name = '${entityName.replace(/'/g, "''")}'`);
+      // Also match by entity_name directly (case-insensitive)
+      likeClauses.push(`LOWER(entity_name) = LOWER('${entityName.replace(/'/g, "''")}')`);
+      
+      // Also match by module_name if available
+      if (moduleName) {
+        likeClauses.push(`LOWER(module_name) ILIKE '%${moduleName.replace(/'/g, "''")}%'`);
+      }
 
       whereClause = `(${likeClauses.join(' OR ')})`;
     } else if (entity) {
-      // Match by entity_name OR template_id containing the entity name
+      // Match by entity_name OR template_id containing the entity name (case-insensitive)
       const e = String(entity).replace(/'/g, "''");
-      whereClause = `(entity_name = '${e}' OR template_id LIKE '%:${e}:%' OR template_id LIKE '%:${e}' OR template_id LIKE '%_${e}_%' OR template_id LIKE '%_${e}')`;
+      whereClause = `(LOWER(entity_name) = LOWER('${e}') OR template_id ILIKE '%:${e}:%' OR template_id ILIKE '%:${e}' OR template_id ILIKE '%_${e}_%' OR template_id ILIKE '%_${e}')`;
     }
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
