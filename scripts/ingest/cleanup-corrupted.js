@@ -11,9 +11,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// Default Windows path: C:/ledger_raw/raw
-const WIN_DEFAULT = 'C:/ledger_raw/raw';
-const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WIN_DEFAULT;
+// Default WSL path: /home/bstolz/canton-explorer/data/raw
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data/raw';
+const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WSL_DEFAULT;
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const VERBOSE = process.argv.includes('--verbose');

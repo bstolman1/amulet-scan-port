@@ -16,10 +16,10 @@ import { getACSPartitionPath, ACS_COLUMNS } from './acs-schema.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default Windows path: C:/ledger_raw
+// Configuration - Default WSL path: /home/bstolz/canton-explorer/data
 // ACS data goes in DATA_DIR/raw subdirectory (alongside ledger data)
-const WIN_DEFAULT = 'C:/ledger_raw';
-const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
