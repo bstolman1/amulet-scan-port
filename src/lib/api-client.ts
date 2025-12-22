@@ -640,8 +640,8 @@ export const scanApi = {
           record_time: snap.record_time,
           page_size: 2000,
           templates: [
-            'Splice.Round:OpenMiningRound',
-            'Splice.Round:IssuingMiningRound',
+            'Splice:Round:OpenMiningRound',
+            'Splice:Round:IssuingMiningRound',
           ],
         });
 
@@ -1150,7 +1150,10 @@ export const scanApi = {
         migration_id: 0,
         record_time: snap.record_time,
         page_size: 1000,
-        templates: ["Splice.DsoRules:VoteRequest", "Splice.DsoRules:DsoRules_CloseVoteRequestResult"],
+        templates: [
+          "Splice:DsoRules:VoteRequest",
+          "Splice:DsoRules:DsoRules_CloseVoteRequestResult",
+        ],
       });
 
       const proposals: any[] = [];

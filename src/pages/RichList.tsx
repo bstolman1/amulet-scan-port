@@ -120,7 +120,7 @@ const RichList = () => {
               {error instanceof Error ? error.message : "Failed to load rich list data"}
             </p>
             <p className="text-xs text-muted-foreground mt-2">
-              Make sure the local DuckDB server is running at localhost:3001
+              Make sure the DuckDB API server is running and accessible
             </p>
           </Card>
         )}

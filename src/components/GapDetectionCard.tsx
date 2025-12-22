@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle, RefreshCw, Clock } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 interface Gap {
   synchronizer: string;
@@ -33,7 +34,7 @@ export function GapDetectionCard({ refreshInterval = 30000 }: GapDetectionCardPr
   const [isLoading, setIsLoading] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
 
-  const localApiUrl = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
+  const localApiUrl = getDuckDBApiUrl();
 
   const fetchGaps = async () => {
     try {

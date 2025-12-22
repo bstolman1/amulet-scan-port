@@ -16,12 +16,11 @@ interface BackendConfig {
   duckdbApiUrl: string;
 }
 
-// Configuration - hardcoded for local DuckDB backend
-// The Lovable preview can't access localhost, so this only works when running locally
+// Configuration - use env variable or fallback to Cloudflare tunnel
 const config: BackendConfig = {
   ledgerBackend: 'duckdb',
   metadataBackend: 'supabase', // Keep Supabase for small metadata tables  
-  duckdbApiUrl: 'http://localhost:3001',
+  duckdbApiUrl: import.meta.env.VITE_DUCKDB_API_URL || 'https://accordance-victor-todd-pick.trycloudflare.com',
 };
 
 export function getBackendConfig(): BackendConfig {
