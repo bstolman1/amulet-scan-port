@@ -153,11 +153,12 @@ export async function getLastSuccessfulBuild() {
 export async function queryVoteRequests({ limit = 100, status = 'all', offset = 0 } = {}) {
   let whereClause = '';
   if (status === 'active') {
-    whereClause = 'WHERE status = \'active\'';
+    whereClause = "WHERE status IN ('active', 'in_progress')";
   } else if (status === 'historical') {
-    whereClause = 'WHERE status = \'historical\'';
+    // Historical = completed votes
+    whereClause = "WHERE status IN ('executed', 'rejected', 'expired', 'historical')";
   }
-  
+
   const results = await query(`
     SELECT 
       event_id, contract_id, template_id, effective_at,
@@ -170,7 +171,7 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
     ORDER BY effective_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
-  
+
   const safeJsonParse = (val) => {
     if (val === null || val === undefined) return null;
     if (typeof val !== 'string') return val;
@@ -477,8 +478,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           )
           ON CONFLICT (event_id) DO UPDATE SET
             stable_id = EXCLUDED.stable_id,
+            contract_id = EXCLUDED.contract_id,
+            template_id = EXCLUDED.template_id,
+            effective_at = EXCLUDED.effective_at,
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
+            action_tag = EXCLUDED.action_tag,
+            action_value = EXCLUDED.action_value,
+            requester = EXCLUDED.requester,
+            reason = EXCLUDED.reason,
+            votes = EXCLUDED.votes,
+            vote_count = EXCLUDED.vote_count,
+            vote_before = EXCLUDED.vote_before,
+            target_effective_at = EXCLUDED.target_effective_at,
+            tracking_cid = EXCLUDED.tracking_cid,
+            dso = EXCLUDED.dso,
             payload = EXCLUDED.payload,
             updated_at = now()
         `);
@@ -617,10 +631,15 @@ async function scanFilesForVoteRequests(files, eventType) {
           // Capture all exercise choices that close VoteRequests:
           // - Archive (explicit archive)
           // - VoteRequest_Accept, VoteRequest_Reject, VoteRequest_Expire (direct choices)
-          // - ARC_DsoRules_VoteRequest_Accept, etc. (DsoRules arc variants)
-          // - Any choice containing VoteRequest for safety
-          const choice = record.choice || '';
-          if (choice === 'Archive' || choice.includes('VoteRequest') || choice.includes('Accept') || choice.includes('Reject') || choice.includes('Expire')) {
+          // Only keep exercised events that actually CLOSE the VoteRequest contract.
+          // IMPORTANT: Do NOT include CastVote; that would mark every proposal as closed.
+          const choice = String(record.choice || '');
+          const isClosingChoice =
+            choice === 'Archive' ||
+            /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
+            choice === 'VoteRequest_ExpireVoteRequest';
+
+          if (isClosingChoice) {
             records.push(record);
           }
         }
@@ -669,20 +688,15 @@ async function scanAllFilesForVoteRequests(eventType) {
   const filter = eventType === 'created'
     ? (e) => e.template_id?.endsWith(':VoteRequest') && e.event_type === 'created'
     : (e) => {
-        // For exercised events, capture both:
-        // 1. Direct exercises on VoteRequest template
-        // 2. DsoRules_CloseVoteRequest exercises (the actual closing event)
         if (e.event_type !== 'exercised') return false;
-        
-        // DsoRules_CloseVoteRequest is the key choice that closes VoteRequests
-        const choice = e.choice || '';
-        if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
-          return true;
-        }
-        
-        // Also check VoteRequest direct exercises (only the actual VoteRequest template)
         if (!e.template_id?.endsWith(':VoteRequest')) return false;
-        return choice === 'Archive' || choice.includes('VoteRequest') || choice.includes('Accept') || choice.includes('Reject') || choice.includes('Expire');
+
+        const choice = String(e.choice || '');
+        return (
+          choice === 'Archive' ||
+          /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
+          choice === 'VoteRequest_ExpireVoteRequest'
+        );
       };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
