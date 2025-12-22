@@ -71,7 +71,8 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
       event_id, contract_id, template_id, effective_at,
       status, is_closed, action_tag, action_value,
       requester, reason, votes, vote_count,
-      vote_before, target_effective_at, tracking_cid, dso
+      vote_before, target_effective_at, tracking_cid, dso,
+      payload
     FROM vote_requests
     ${whereClause}
     ORDER BY effective_at DESC
@@ -93,6 +94,7 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
     ...r,
     action_value: safeJsonParse(r.action_value),
     votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
+    payload: safeJsonParse(r.payload),
   }));
 }
 
@@ -109,7 +111,7 @@ export async function isIndexPopulated() {
  */
 async function ensureIndexTables() {
   try {
-    // Create vote_requests table if it doesn't exist
+    // Create vote_requests table if it doesn't exist (with payload column for full JSON)
     await query(`
       CREATE TABLE IF NOT EXISTS vote_requests (
         event_id VARCHAR PRIMARY KEY,
@@ -128,9 +130,17 @@ async function ensureIndexTables() {
         target_effective_at VARCHAR,
         tracking_cid VARCHAR,
         dso VARCHAR,
+        payload VARCHAR,
         updated_at TIMESTAMP
       )
     `);
+    
+    // Try to add payload column if table exists but column doesn't
+    try {
+      await query(`ALTER TABLE vote_requests ADD COLUMN IF NOT EXISTS payload VARCHAR`);
+    } catch (alterErr) {
+      // Column might already exist or syntax not supported, ignore
+    }
     
     // Create state table if it doesn't exist
     await query(`
@@ -254,9 +264,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         target_effective_at: event.payload?.targetEffectiveAt || null,
         tracking_cid: event.payload?.trackingCid || null,
         dso: event.payload?.dso || null,
+        payload: event.payload ? JSON.stringify(event.payload) : null,
       };
       
       try {
+        // Escape helper for safe SQL string values
+        const escapeStr = (val) => val ? val.replace(/'/g, "''") : null;
+        const payloadStr = voteRequest.payload ? escapeStr(voteRequest.payload) : null;
+        
         // Upsert - insert or update on conflict
         await query(`
           INSERT INTO vote_requests (
@@ -264,7 +279,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
-            updated_at
+            payload, updated_at
           ) VALUES (
             '${voteRequest.event_id}',
             '${voteRequest.contract_id}',
@@ -272,21 +287,23 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.effective_at ? `'${voteRequest.effective_at}'` : 'NULL'},
             '${voteRequest.status}',
             ${voteRequest.is_closed},
-            ${voteRequest.action_tag ? `'${voteRequest.action_tag.replace(/'/g, "''")}'` : 'NULL'},
-            ${voteRequest.action_value ? `'${voteRequest.action_value.replace(/'/g, "''")}'` : 'NULL'},
+            ${voteRequest.action_tag ? `'${escapeStr(voteRequest.action_tag)}'` : 'NULL'},
+            ${voteRequest.action_value ? `'${escapeStr(voteRequest.action_value)}'` : 'NULL'},
             ${voteRequest.requester ? `'${voteRequest.requester}'` : 'NULL'},
-            ${voteRequest.reason ? `'${voteRequest.reason.replace(/'/g, "''")}'` : 'NULL'},
-            '${voteRequest.votes.replace(/'/g, "''")}',
+            ${voteRequest.reason ? `'${escapeStr(voteRequest.reason)}'` : 'NULL'},
+            '${escapeStr(voteRequest.votes)}',
             ${voteRequest.vote_count},
             ${voteRequest.vote_before ? `'${voteRequest.vote_before}'` : 'NULL'},
             ${voteRequest.target_effective_at ? `'${voteRequest.target_effective_at}'` : 'NULL'},
             ${voteRequest.tracking_cid ? `'${voteRequest.tracking_cid}'` : 'NULL'},
             ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
+            ${payloadStr ? `'${payloadStr}'` : 'NULL'},
             now()
           )
           ON CONFLICT (event_id) DO UPDATE SET
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
+            payload = EXCLUDED.payload,
             updated_at = now()
         `);
         inserted++;

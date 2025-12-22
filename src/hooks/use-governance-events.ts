@@ -65,7 +65,11 @@ export function useGovernanceEvents() {
           return true;
         })
         .map((r) => {
-          const payload = {
+          // Use full payload if available (new indexer stores complete JSON)
+          // Fall back to reconstructed payload for backwards compatibility
+          const fullPayload = (r as any).payload;
+          
+          const payload = fullPayload || {
             action: r.action_tag ? { tag: r.action_tag, value: r.action_value } : undefined,
             requester: r.requester ?? undefined,
             reason: r.reason ?? undefined,
