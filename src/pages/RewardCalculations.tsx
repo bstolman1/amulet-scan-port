@@ -27,15 +27,20 @@ import { getDuckDBApiUrl } from "@/lib/backend-config";
 interface RewardResult {
   partyId: string;
   totalRewards: number;
+  totalWeight: number;
   rewardCount: number;
-  byRound: Record<string, { count: number; amount: number }>;
+  byRound: Record<string, { count: number; amount: number; weight: number }>;
   events: Array<{
     event_id: string;
     round: number;
     amount: number;
+    weight: number;
     effective_at: string;
     template_id: string;
+    templateType: string;
   }>;
+  hasIssuanceData: boolean;
+  note: string | null;
 }
 
 const RewardCalculations = () => {
@@ -260,6 +265,18 @@ const RewardCalculations = () => {
         {/* Results */}
         {data && !isLoading && (
           <div className="space-y-6">
+            {/* Note about data */}
+            {data.note && (
+              <Card className="border-amber-500/50 bg-amber-500/10">
+                <CardContent className="pt-4 pb-4">
+                  <p className="text-sm text-amber-400 flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4" />
+                    {data.note}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="glass-card">
@@ -269,8 +286,12 @@ const RewardCalculations = () => {
                       <Coins className="h-6 w-6 text-primary" />
                     </div>
                     <div>
-                      <p className="text-sm text-muted-foreground">Total Rewards</p>
-                      <p className="text-2xl font-bold">{formatAmount(data.totalRewards)} CC</p>
+                      <p className="text-sm text-muted-foreground">
+                        {data.hasIssuanceData ? 'Total CC Rewards' : 'Total Weight'}
+                      </p>
+                      <p className="text-2xl font-bold">
+                        {formatAmount(data.totalRewards)} {data.hasIssuanceData ? 'CC' : ''}
+                      </p>
                     </div>
                   </div>
                 </CardContent>
@@ -283,7 +304,7 @@ const RewardCalculations = () => {
                       <Award className="h-6 w-6 text-green-500" />
                     </div>
                     <div>
-                      <p className="text-sm text-muted-foreground">Reward Events</p>
+                      <p className="text-sm text-muted-foreground">Reward Coupons</p>
                       <p className="text-2xl font-bold">{data.rewardCount.toLocaleString()}</p>
                     </div>
                   </div>
@@ -326,32 +347,36 @@ const RewardCalculations = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Award className="h-5 w-5" />
-                    Reward Events ({data.events.length})
+                    Reward Coupons ({data.events.length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ScrollArea className="h-[400px]">
                     <div className="space-y-1">
                       {/* Header */}
-                      <div className="grid grid-cols-4 gap-4 text-xs text-muted-foreground font-medium px-3 py-2 bg-muted/50 rounded sticky top-0">
+                      <div className="grid grid-cols-5 gap-4 text-xs text-muted-foreground font-medium px-3 py-2 bg-muted/50 rounded sticky top-0">
                         <span>Round</span>
-                        <span>Amount</span>
-                        <span>Template</span>
-                        <span>Effective At</span>
+                        <span>Type</span>
+                        <span>{data.hasIssuanceData ? 'CC Amount' : 'Weight'}</span>
+                        <span>Weight</span>
+                        <span>Date</span>
                       </div>
                       {data.events.map((event, idx) => (
                         <div
                           key={event.event_id || idx}
-                          className={`grid grid-cols-4 gap-4 text-sm py-2 px-3 rounded hover:bg-muted/50 ${
+                          className={`grid grid-cols-5 gap-4 text-sm py-2 px-3 rounded hover:bg-muted/50 ${
                             idx % 2 === 0 ? "bg-muted/20" : ""
                           }`}
                         >
                           <span className="font-mono">{event.round?.toLocaleString()}</span>
-                          <span className="font-mono text-green-500">
-                            +{formatAmount(event.amount)} CC
+                          <span className="text-xs truncate" title={event.templateType}>
+                            {event.templateType || "—"}
                           </span>
-                          <span className="text-xs truncate" title={event.template_id}>
-                            {event.template_id?.split(":").pop() || "—"}
+                          <span className="font-mono text-green-500">
+                            +{formatAmount(event.amount)} {data.hasIssuanceData ? 'CC' : ''}
+                          </span>
+                          <span className="font-mono text-muted-foreground">
+                            {event.weight?.toFixed(4) || '—'}
                           </span>
                           <span className="text-muted-foreground text-xs">
                             {event.effective_at
