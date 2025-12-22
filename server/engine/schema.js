@@ -100,6 +100,7 @@ export async function initEngineSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS vote_requests (
       event_id            VARCHAR PRIMARY KEY,
+      stable_id           VARCHAR,
       contract_id         VARCHAR,
       template_id         VARCHAR,
       effective_at        TIMESTAMP,
@@ -120,6 +121,19 @@ export async function initEngineSchema() {
       updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Backward-compatible schema fixes for existing DuckDB files
+  // (DuckDB CREATE TABLE IF NOT EXISTS does not modify existing tables)
+  try {
+    await query(`ALTER TABLE vote_requests ADD COLUMN stable_id VARCHAR`);
+  } catch {
+    // Column may already exist
+  }
+  try {
+    await query(`ALTER TABLE vote_requests ALTER COLUMN stable_id DROP NOT NULL`);
+  } catch {
+    // Column may not exist or already nullable
+  }
 
   // DuckDB requires UNIQUE indexes for ON CONFLICT targets
   await query(`
