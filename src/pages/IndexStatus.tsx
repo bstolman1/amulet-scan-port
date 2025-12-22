@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronUp,
   Coins,
+  Users,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -88,6 +89,22 @@ const rebuildRewardCouponIndex = async () => {
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) throw new Error("Failed to rebuild reward coupon index");
+  return res.json();
+};
+
+const fetchPartyIndexStatus = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/party/index/status`);
+  if (!res.ok) throw new Error("Failed to fetch party index status");
+  return res.json();
+};
+
+const rebuildPartyIndex = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/party/index/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ forceRebuild: true }),
+  });
+  if (!res.ok) throw new Error("Failed to rebuild party index");
   return res.json();
 };
 
@@ -316,6 +333,13 @@ const IndexStatus = () => {
     retry: false,
   });
 
+  const { data: partyIndex, isLoading: partyLoading, error: partyError } = useQuery({
+    queryKey: ["partyIndexStatus"],
+    queryFn: fetchPartyIndexStatus,
+    refetchInterval: 5000,
+    retry: false,
+  });
+
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
     queryKey: ["indexedTemplates"],
     queryFn: fetchIndexedTemplates,
@@ -404,11 +428,30 @@ const IndexStatus = () => {
     },
   });
 
+  const partyRebuildMutation = useMutation({
+    mutationFn: rebuildPartyIndex,
+    onSuccess: (data) => {
+      toast({
+        title: "Party index build started",
+        description: data.message || "Building in background...",
+      });
+      queryClient.invalidateQueries({ queryKey: ["partyIndexStatus"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to build party index",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRefreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ["templateIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["voteRequestIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["aggregationState"] });
     queryClient.invalidateQueries({ queryKey: ["rewardCouponIndexStatus"] });
+    queryClient.invalidateQueries({ queryKey: ["partyIndexStatus"] });
     toast({ title: "Refreshing status..." });
   };
 
@@ -449,7 +492,16 @@ const IndexStatus = () => {
     return "empty";
   };
 
-  const allStatuses = [getTemplateStatus(), getVoteStatus(), getAggStatus(), getRewardStatus()];
+  // Derive party index status
+  const getPartyStatus = (): IndexCardProps["status"] => {
+    if (partyLoading) return "loading";
+    if (partyError) return "error";
+    if (partyIndex?.indexing) return "building";
+    if (partyIndex?.isPopulated) return "ready";
+    return "empty";
+  };
+
+  const allStatuses = [getTemplateStatus(), getVoteStatus(), getAggStatus(), getRewardStatus(), getPartyStatus()];
 
   return (
     <DashboardLayout>
@@ -478,7 +530,7 @@ const IndexStatus = () => {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Total Indexes</p>
-                  <p className="text-2xl font-bold">4</p>
+                  <p className="text-2xl font-bold">5</p>
                 </div>
               </div>
             </CardContent>
@@ -616,6 +668,31 @@ const IndexStatus = () => {
             lastUpdated={aggregationState?.states?.[0]?.last_updated}
             onCreateTable={aggregationState?.tableExists === false ? () => initSchemaMutation.mutate() : undefined}
             isCreatingTable={initSchemaMutation.isPending}
+          />
+
+          {/* Party Index */}
+          <IndexCard
+            title="Party Index"
+            description="Maps party IDs to event files for instant lookups"
+            icon={<Users className="w-5 h-5" />}
+            status={getPartyStatus()}
+            stats={
+              partyIndex?.isPopulated
+                ? [
+                    { label: "Unique Parties", value: partyIndex.totalParties?.toLocaleString() || 0 },
+                    { label: "Files Indexed", value: partyIndex.totalFiles?.toLocaleString() || 0 },
+                    { label: "Files Scanned", value: partyIndex.filesIndexed?.toLocaleString() || 0 },
+                  ]
+                : []
+            }
+            lastUpdated={partyIndex?.lastIndexedAt}
+            onRebuild={() => partyRebuildMutation.mutate()}
+            isRebuilding={partyRebuildMutation.isPending}
+            buildProgress={
+              partyIndex?.indexing
+                ? { current: partyIndex.indexing.filesScanned || 0, total: partyIndex.indexing.totalFiles || 1 }
+                : null
+            }
           />
         </div>
 
