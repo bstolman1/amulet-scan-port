@@ -270,19 +270,21 @@ const extractTimestampFromPath = extractWriteTimestampFromPath;
  */
 export async function readBinaryFile(filePath) {
   const { EventBatch, UpdateBatch } = await getEncoders();
-  
+
   const basename = path.basename(filePath);
   const isEvents = basename.startsWith('events-');
   const isUpdates = basename.startsWith('updates-');
-  
+
   if (!isEvents && !isUpdates) {
     throw new Error(`Cannot determine type from filename: ${basename}`);
   }
-  
+
   const BatchType = isEvents ? EventBatch : UpdateBatch;
   const recordKey = isEvents ? 'events' : 'updates';
-  
-  const fileBuffer = fs.readFileSync(filePath);
+
+  // IMPORTANT: avoid fs.readFileSync() here because it blocks the event loop
+  // and can make higher-level timeouts (e.g. in indexers) ineffective.
+  const fileBuffer = await fs.promises.readFile(filePath);
   const allRecords = [];
   let offset = 0;
   

@@ -335,6 +335,7 @@ async function scanFilesForVoteRequests(files, eventType) {
   };
 
   for (const file of files) {
+    const fileStart = Date.now();
     try {
       const result = await readWithTimeout(file, 30000);
       const fileRecords = result.records || [];
@@ -350,7 +351,10 @@ async function scanFilesForVoteRequests(files, eventType) {
           }
         }
       }
-
+    } catch (err) {
+      // Skip unreadable/hanging files (but still advance progress)
+      console.warn(`   ⚠️ Skipping VoteRequest file due to read error: ${file} (${err?.message || err})`);
+    } finally {
       filesProcessed++;
 
       // Log progress every 50 files or every 5 seconds
@@ -361,9 +365,12 @@ async function scanFilesForVoteRequests(files, eventType) {
         console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} files | ${records.length} ${eventType} events | ${elapsed.toFixed(1)}s`);
         lastLogTime = now;
       }
-    } catch (err) {
-      // Skip unreadable/hanging files
-      console.warn(`   ⚠️ Skipping VoteRequest file due to read error: ${file} (${err?.message || err})`);
+
+      // If a single file takes a long time, surface it so we know where it stalls
+      const tookMs = Date.now() - fileStart;
+      if (tookMs > 15000) {
+        console.log(`   🐢 Slow VoteRequest file: ${file} (${(tookMs / 1000).toFixed(1)}s)`);
+      }
     }
   }
 
