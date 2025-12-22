@@ -58,18 +58,18 @@ const Governance = () => {
     data: localVoteRequestsData,
     isLoading: localLoading,
     isError: localError,
-  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
+  } = useAggregatedTemplateData(undefined, "Splice.DsoRules:VoteRequest");
 
   // Fetch DsoRules from LOCAL ACS
   const { data: localDsoRulesData } = useAggregatedTemplateData(
     undefined,
-    "Splice:DsoRules:DsoRules",
+    "Splice.DsoRules:DsoRules",
   );
 
   // Fetch Confirmations from LOCAL ACS
   const { data: localConfirmationsData } = useAggregatedTemplateData(
     undefined,
-    "Splice:DsoRules:Confirmation",
+    "Splice.DsoRules:Confirmation",
   );
 
   // Check if local ACS has governance data
@@ -914,9 +914,9 @@ const Governance = () => {
         <DataSourcesFooter
           snapshotId={latestSnapshot?.id}
           templateSuffixes={[
-            "Splice:DsoRules:VoteRequest",
-            "Splice:DsoRules:DsoRules",
-            "Splice:DsoRules:Confirmation",
+            "Splice.DsoRules:VoteRequest",
+            "Splice.DsoRules:DsoRules",
+            "Splice.DsoRules:Confirmation",
           ]}
           isProcessing={false}
         />

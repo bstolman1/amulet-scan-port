@@ -17,11 +17,11 @@ export const templatePageMap: Record<TemplateSuffix, string[]> = {
   'Splice:AmuletTransferInstruction:AmuletTransferInstruction': ['Transfers'],
 
   // Governance
-  'Splice:DsoRules:DsoRules': ['Governance'],
-  'Splice:DsoRules:VoteRequest': ['Governance'],
-  'Splice:DSO:AmuletPrice:AmuletPriceVote': ['Governance'],
-  'Splice:DsoRules:Confirmation': ['Governance'],
-  'Splice:AmuletRules:AmuletRules': ['Governance'],
+  'Splice.DsoRules:DsoRules': ['Governance'],
+  'Splice.DsoRules:VoteRequest': ['Governance'],
+  'Splice.DSO.AmuletPrice:AmuletPriceVote': ['Governance'],
+  'Splice.DsoRules:Confirmation': ['Governance'],
+  'Splice.AmuletRules:AmuletRules': ['Governance'],
 
   // Unclaimed SV Rewards
   'Splice:Amulet:ValidatorRewardCoupon': ['Unclaimed SV Rewards'],

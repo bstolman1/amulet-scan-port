@@ -82,7 +82,7 @@ export function useGovernanceEvents() {
             event_id: r.event_id,
             event_type: r.is_closed ? "archived" : "created",
             contract_id: r.contract_id,
-            template_id: r.template_id ?? "Splice:DsoRules:VoteRequest",
+            template_id: r.template_id ?? "Splice.DsoRules:VoteRequest",
             effective_at: r.effective_at ?? undefined,
             timestamp: r.effective_at ?? undefined,
             payload,
