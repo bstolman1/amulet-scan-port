@@ -819,7 +819,7 @@ router.get('/governance-history', async (req, res) => {
 // GET /api/events/vote-requests - Dedicated endpoint for VoteRequest events with deep scanning
 router.get('/vote-requests', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 10000);
     const status = req.query.status || 'all'; // 'active', 'historical', 'all'
     const verbose = req.query.verbose === 'true';
     const ensureFresh = req.query.ensureFresh === 'true';
@@ -831,17 +831,20 @@ router.get('/vote-requests', async (req, res) => {
     
     // First, try to use the persistent DuckDB index
     const indexPopulated = await voteRequestIndexer.isIndexPopulated();
+    const indexing = voteRequestIndexer.isIndexingInProgress();
     
-    // If caller requests fresh/complete data, trigger a background rebuild and fall back to a deep scan
-    // for this response (so the UI isn't stuck with a stale/partial index).
-    if (indexPopulated && ensureFresh) {
-      if (!voteRequestIndexer.isIndexingInProgress()) {
-        console.log('   ensureFresh=true → triggering background VoteRequest index rebuild');
-        voteRequestIndexer.buildVoteRequestIndex({ force: true }).catch(err => {
-          console.error('Background index rebuild failed:', err);
-        });
-      }
-    } else if (indexPopulated) {
+    // If caller requests fresh/complete data AND index is NOT already indexing, trigger a rebuild.
+    // But only on explicit ensureFresh (usually a manual trigger, NOT normal page loads).
+    if (ensureFresh && indexPopulated && !indexing) {
+      console.log('   ensureFresh=true → triggering background VoteRequest index rebuild');
+      voteRequestIndexer.buildVoteRequestIndex({ force: true }).catch(err => {
+        console.error('Background index rebuild failed:', err);
+      });
+    }
+    
+    // Use index if populated (even if a rebuild is running in background, serve from existing data)
+    if (indexPopulated) {
+      console.log(`   Using persistent DuckDB index`);
       console.log(`   Using persistent DuckDB index`);
       
       const voteRequests = await voteRequestIndexer.queryVoteRequests({ limit, status, offset });
