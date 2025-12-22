@@ -16,26 +16,11 @@ let schemaInitialized = false;
  * Initialize all engine tables if they don't exist
  */
 export async function initEngineSchema() {
-  if (schemaInitialized) return;
+  // Even if we already initialized during this process, we still need to ensure
+  // compatibility migrations run against the *persistent* DuckDB file.
 
   console.log('🔧 Initializing engine schema...');
 
-  // Raw files metadata table
-  await query(`
-    CREATE TABLE IF NOT EXISTS raw_files (
-      file_id       INTEGER PRIMARY KEY,
-      file_path     VARCHAR NOT NULL,
-      file_type     VARCHAR NOT NULL,
-      migration_id  INTEGER,
-      record_date   DATE,
-      record_count  BIGINT DEFAULT 0,
-      min_ts        TIMESTAMP,
-      max_ts        TIMESTAMP,
-      ingested      BOOLEAN DEFAULT FALSE,
-      ingested_at   TIMESTAMP,
-      created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
 
   // Events table - matches existing event schema
   await query(`
@@ -217,6 +202,7 @@ export async function initEngineSchema() {
   schemaInitialized = true;
   console.log('✅ Engine schema initialized');
 }
+
 
 export async function resetEngineSchema() {
   console.log('🗑️ Resetting engine schema...');

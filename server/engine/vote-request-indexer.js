@@ -326,15 +326,22 @@ async function scanFilesForVoteRequests(files, eventType) {
   let filesProcessed = 0;
   const startTime = Date.now();
   let lastLogTime = startTime;
-  
+
+  const readWithTimeout = async (file, timeoutMs = 30000) => {
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)
+    );
+    return Promise.race([binaryReader.readBinaryFile(file), timeout]);
+  };
+
   for (const file of files) {
     try {
-      const result = await binaryReader.readBinaryFile(file);
+      const result = await readWithTimeout(file, 30000);
       const fileRecords = result.records || [];
-      
+
       for (const record of fileRecords) {
         if (!record.template_id?.includes('VoteRequest')) continue;
-        
+
         if (eventType === 'created' && record.event_type === 'created') {
           records.push(record);
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
@@ -343,9 +350,9 @@ async function scanFilesForVoteRequests(files, eventType) {
           }
         }
       }
-      
+
       filesProcessed++;
-      
+
       // Log progress every 50 files or every 5 seconds
       const now = Date.now();
       if (filesProcessed % 50 === 0 || (now - lastLogTime > 5000)) {
@@ -355,10 +362,11 @@ async function scanFilesForVoteRequests(files, eventType) {
         lastLogTime = now;
       }
     } catch (err) {
-      // Skip unreadable files
+      // Skip unreadable/hanging files
+      console.warn(`   ⚠️ Skipping VoteRequest file due to read error: ${file} (${err?.message || err})`);
     }
   }
-  
+
   return { records, filesScanned: filesProcessed };
 }
 
