@@ -1306,6 +1306,121 @@ router.delete('/vote-request-index/lock', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-request-index/validate - Self-test: sample proposals and show evidence
+router.get('/vote-request-index/validate', async (req, res) => {
+  try {
+    const sampleSize = Math.min(parseInt(req.query.size) || 5, 20);
+    
+    // Query samples from each status category
+    const sampleStatuses = ['executed', 'rejected', 'expired', 'in_progress'];
+    const samples = {};
+    
+    for (const status of sampleStatuses) {
+      const rows = await db.safeQuery(`
+        SELECT 
+          contract_id, event_id, template_id, effective_at,
+          status, is_closed, action_tag, action_value,
+          requester, reason, votes, vote_count,
+          vote_before, payload
+        FROM vote_requests
+        WHERE status = '${status}'
+        ORDER BY effective_at DESC
+        LIMIT ${sampleSize}
+      `);
+      
+      samples[status] = rows.map(r => {
+        // Parse votes to show accept/reject breakdown
+        let acceptCount = 0;
+        let rejectCount = 0;
+        const votesArray = Array.isArray(r.votes) ? r.votes : (typeof r.votes === 'string' ? JSON.parse(r.votes || '[]') : []);
+        
+        for (const vote of votesArray) {
+          const [, voteData] = Array.isArray(vote) ? vote : ['', vote];
+          if (!voteData || typeof voteData !== 'object') continue;
+          
+          // Normalize vote
+          if (voteData.accept === true || voteData.Accept === true) acceptCount++;
+          else if (voteData.reject === true || voteData.Reject === true) rejectCount++;
+          else if (voteData.accept === false) rejectCount++;
+          else {
+            const tag = voteData.tag || voteData.Tag || voteData.vote?.tag;
+            if (typeof tag === 'string') {
+              const t = tag.toLowerCase();
+              if (t === 'accept') acceptCount++;
+              else if (t === 'reject') rejectCount++;
+            } else if (Object.prototype.hasOwnProperty.call(voteData, 'Accept')) acceptCount++;
+            else if (Object.prototype.hasOwnProperty.call(voteData, 'Reject')) rejectCount++;
+          }
+        }
+        
+        const voteBefore = r.vote_before ? new Date(r.vote_before) : null;
+        const isExpired = voteBefore && voteBefore < new Date();
+        
+        return {
+          contract_id: r.contract_id,
+          event_id: r.event_id,
+          effective_at: r.effective_at,
+          status: r.status,
+          is_closed: r.is_closed,
+          action_tag: r.action_tag,
+          vote_count: r.vote_count || votesArray.length,
+          accept_count: acceptCount,
+          reject_count: rejectCount,
+          vote_before: r.vote_before,
+          deadline_passed: isExpired,
+          reason_preview: typeof r.reason === 'string' ? r.reason.slice(0, 100) : null,
+          // Evidence summary
+          evidence: {
+            has_votes: votesArray.length > 0,
+            has_rejects: rejectCount > 0,
+            has_accepts: acceptCount > 0,
+            closed: r.is_closed,
+            expired: isExpired,
+          },
+        };
+      });
+    }
+    
+    // Summary
+    const summary = {
+      executed: samples.executed?.length || 0,
+      rejected: samples.rejected?.length || 0,
+      expired: samples.expired?.length || 0,
+      in_progress: samples.in_progress?.length || 0,
+    };
+    
+    // Potential issues: executed with reject votes, rejected with only accept votes
+    const potentialIssues = [];
+    for (const r of samples.executed || []) {
+      if (r.reject_count > 0) {
+        potentialIssues.push({
+          type: 'executed_with_rejects',
+          contract_id: r.contract_id,
+          message: `Executed proposal has ${r.reject_count} reject votes`,
+        });
+      }
+    }
+    for (const r of samples.rejected || []) {
+      if (r.accept_count > 0 && r.reject_count === 0) {
+        potentialIssues.push({
+          type: 'rejected_but_only_accepts',
+          contract_id: r.contract_id,
+          message: `Rejected proposal has ${r.accept_count} accept votes and 0 reject votes`,
+        });
+      }
+    }
+    
+    res.json({
+      summary,
+      potentialIssues,
+      samples,
+    });
+  } catch (err) {
+    console.error('Error validating vote request index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============ REWARD COUPON INDEX ROUTES ============
 
 // GET /api/events/reward-coupon-index/status - Get index status
