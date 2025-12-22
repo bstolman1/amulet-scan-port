@@ -176,10 +176,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
     console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events`);
     
-    // Build set of closed contract IDs
-    const closedContractIds = new Set(
-      exercisedResult.records.map(r => r.contract_id).filter(Boolean)
-    );
+    // Build map of closed contract IDs -> archived event data (with final vote counts)
+    const archivedEventsMap = new Map();
+    for (const record of exercisedResult.records) {
+      if (record.contract_id) {
+        archivedEventsMap.set(record.contract_id, record);
+      }
+    }
+    const closedContractIds = new Set(archivedEventsMap.keys());
     
     const now = new Date();
     
@@ -198,9 +202,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let updated = 0;
     
     for (const event of createdResult.records) {
+      const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
+      
+      // Use archived event data for final vote counts if available
+      const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
+      const finalVotes = archivedEvent?.payload?.votes || event.payload?.votes;
+      const finalVoteCount = finalVotes?.length || 0;
+      
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-      const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
       const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
       
       // Normalize reason - can be string or object
@@ -222,8 +232,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         action_value: event.payload?.action?.value ? JSON.stringify(event.payload.action.value) : null,
         requester: event.payload?.requester || null,
         reason: reasonStr,
-        votes: event.payload?.votes ? JSON.stringify(event.payload.votes) : '[]',
-        vote_count: event.payload?.votes?.length || 0,
+        // Use final votes from archived event if available, otherwise use created event votes
+        votes: finalVotes ? JSON.stringify(finalVotes) : '[]',
+        vote_count: finalVoteCount,
         vote_before: voteBefore || null,
         target_effective_at: event.payload?.targetEffectiveAt || null,
         tracking_cid: event.payload?.trackingCid || null,
