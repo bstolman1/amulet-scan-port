@@ -1,9 +1,21 @@
 import { useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
+import {
+  Vote,
+  CheckCircle,
+  XCircle,
+  Clock,
+  Users,
+  Code,
+  DollarSign,
+  History,
+  Database,
+  AlertTriangle,
+  ExternalLink,
+} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -142,6 +154,13 @@ const Governance = () => {
       if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
     }
     return undefined;
+  };
+
+  // Extract CIP reference for linking into Governance Flow
+  const extractCipReference = (reasonBody?: string, reasonUrl?: string) => {
+    const text = `${reasonBody || ""} ${reasonUrl || ""}`;
+    const match = text.match(/CIP[#\-\s]?0*(\d+)/i);
+    return match ? `CIP-${match[1].padStart(4, "0")}` : null;
   };
 
   // Helper to parse action structure and extract meaningful title
@@ -528,7 +547,21 @@ const Governance = () => {
                         <div className="flex items-center space-x-3">
                           <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
                           <div className="flex-1">
-                            <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                              <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                              {(() => {
+                                const cip = extractCipReference(proposal.reasonBody, proposal.reasonUrl);
+                                if (!cip) return null;
+                                return (
+                                  <Button asChild variant="outline" size="sm">
+                                    <Link to={`/governance-flow?q=${encodeURIComponent(cip)}`}>
+                                      <ExternalLink className="h-4 w-4 mr-2" />
+                                      View in Governance Flow
+                                    </Link>
+                                  </Button>
+                                );
+                              })()}
+                            </div>
                             <p className="text-sm text-muted-foreground">
                               Proposal #{proposal.id}
                               <span className="mx-2">•</span>
