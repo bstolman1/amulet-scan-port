@@ -211,6 +211,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       const voteRequest = {
         event_id: event.event_id,
+        stable_id: event.contract_id || event.event_id,
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: event.effective_at,
@@ -237,13 +238,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         // Upsert - insert or update on conflict
         await query(`
           INSERT INTO vote_requests (
-            event_id, contract_id, template_id, effective_at,
+            event_id, stable_id, contract_id, template_id, effective_at,
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
             payload, updated_at
           ) VALUES (
             '${voteRequest.event_id}',
+            '${escapeStr(voteRequest.stable_id)}',
             ${voteRequest.contract_id ? `'${voteRequest.contract_id}'` : 'NULL'},
             ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
             ${voteRequest.effective_at ? `'${voteRequest.effective_at}'` : 'NULL'},
@@ -263,6 +265,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             now()
           )
           ON CONFLICT (event_id) DO UPDATE SET
+            stable_id = EXCLUDED.stable_id,
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
             payload = EXCLUDED.payload,
