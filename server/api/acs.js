@@ -270,26 +270,30 @@ function getSnapshotFilesSource(snapshotPath) {
   
   const normalizedPath = snapshotPath.replace(/\\/g, '/');
   
-  // Check what file types exist in this snapshot
-  const files = fs.readdirSync(snapshotPath);
+  // Check what file types exist in this snapshot - RECURSIVE scan to find files in subdirs
+  const files = fs.readdirSync(snapshotPath, { recursive: true })
+    .map(f => String(f));
+  
   const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
   const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
   const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
   
   const parts = [];
   if (hasJsonl) {
-    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl', union_by_name=true, ignore_errors=true)`);
+    // Use ** glob for recursive matching in subdirectories
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/**/*.jsonl', union_by_name=true, ignore_errors=true)`);
   }
   if (hasGz) {
-    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   }
   if (hasZst) {
-    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/**/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   }
   
   if (parts.length === 0) return null;
   
-  console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl')).length} files)`);
+  const fileCount = files.filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst')).length;
+  console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${fileCount} files, recursive)`);
   // Use UNION (not UNION ALL) to prevent duplicate records across file types
   return `(${parts.join(' UNION ')})`;
 }
