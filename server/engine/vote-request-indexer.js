@@ -618,7 +618,9 @@ async function scanFilesForVoteRequests(files, eventType) {
       const fileRecords = result.records || [];
 
       for (const record of fileRecords) {
-        if (!record.template_id?.includes('VoteRequest')) continue;
+        // Match only the actual VoteRequest template, not VoteRequestResult, VoteRequestTrackingCid, etc.
+        // Template IDs look like: "Splice.DsoRules:VoteRequest"
+        if (!record.template_id?.endsWith(':VoteRequest')) continue;
 
         if (eventType === 'created' && record.event_type === 'created') {
           records.push(record);
@@ -676,7 +678,7 @@ async function scanFilesForVoteRequests(files, eventType) {
  */
 async function scanAllFilesForVoteRequests(eventType) {
   const filter = eventType === 'created'
-    ? (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
+    ? (e) => e.template_id?.endsWith(':VoteRequest') && e.event_type === 'created'
     : (e) => {
         // For exercised events, capture both:
         // 1. Direct exercises on VoteRequest template
@@ -689,8 +691,8 @@ async function scanAllFilesForVoteRequests(eventType) {
           return true;
         }
         
-        // Also check VoteRequest direct exercises
-        if (!e.template_id?.includes('VoteRequest')) return false;
+        // Also check VoteRequest direct exercises (only the actual VoteRequest template)
+        if (!e.template_id?.endsWith(':VoteRequest')) return false;
         return choice === 'Archive' || choice.includes('VoteRequest') || choice.includes('Accept') || choice.includes('Reject') || choice.includes('Expire');
       };
   
