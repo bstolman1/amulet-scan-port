@@ -41,9 +41,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Default WSL path: /home/bstolz/canton-explorer/data
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
-const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+// Default Windows path: C:/ledger_raw
+const WIN_DEFAULT = 'C:/ledger_raw';
+const DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
 
 // Track state
 let lastTimestamp = null;
