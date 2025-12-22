@@ -6,7 +6,8 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.join(__dirname, '.env');
 console.log('📁 Loading .env from:', envPath);
-const result = dotenv.config({ path: envPath });
+// Important: npm scripts may also pass --env-file; we want server/.env to win.
+const result = dotenv.config({ path: envPath, override: true });
 if (result.error) {
   console.error('❌ Failed to load .env:', result.error.message);
 }
