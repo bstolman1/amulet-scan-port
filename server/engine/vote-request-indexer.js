@@ -562,7 +562,13 @@ async function scanFilesForVoteRequests(files, eventType) {
         if (eventType === 'created' && record.event_type === 'created') {
           records.push(record);
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
-          if (record.choice === 'Archive' || (typeof record.choice === 'string' && record.choice.startsWith('VoteRequest_'))) {
+          // Capture all exercise choices that close VoteRequests:
+          // - Archive (explicit archive)
+          // - VoteRequest_Accept, VoteRequest_Reject, VoteRequest_Expire (direct choices)
+          // - ARC_DsoRules_VoteRequest_Accept, etc. (DsoRules arc variants)
+          // - Any choice containing VoteRequest for safety
+          const choice = record.choice || '';
+          if (choice === 'Archive' || choice.includes('VoteRequest') || choice.includes('Accept') || choice.includes('Reject') || choice.includes('Expire')) {
             records.push(record);
           }
         }
@@ -612,7 +618,9 @@ async function scanAllFilesForVoteRequests(eventType) {
     : (e) => {
         if (!e.template_id?.includes('VoteRequest')) return false;
         if (e.event_type !== 'exercised') return false;
-        return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
+        // Capture all exercise choices that close VoteRequests
+        const choice = e.choice || '';
+        return choice === 'Archive' || choice.includes('VoteRequest') || choice.includes('Accept') || choice.includes('Reject') || choice.includes('Expire');
       };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
