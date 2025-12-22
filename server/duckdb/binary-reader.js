@@ -283,73 +283,32 @@ export async function readBinaryFile(filePath) {
   const recordKey = isEvents ? 'events' : 'updates';
   
   const fileBuffer = fs.readFileSync(filePath);
-  
-  // Debug: log file size
-  console.log(`[binary-reader] Reading ${basename}: ${fileBuffer.length} bytes`);
-  
-  if (fileBuffer.length === 0) {
-    console.warn(`[binary-reader] File is empty: ${filePath}`);
-    return { type: recordKey, count: 0, records: [] };
-  }
-  
   const allRecords = [];
   let offset = 0;
-  let chunkIndex = 0;
   
   // Read chunks: [4-byte length][compressed data]...
   while (offset < fileBuffer.length) {
-    if (offset + 4 > fileBuffer.length) {
-      console.warn(`[binary-reader] Incomplete length header at offset ${offset}`);
-      break;
-    }
+    if (offset + 4 > fileBuffer.length) break;
     
     const chunkLength = fileBuffer.readUInt32BE(offset);
     offset += 4;
     
-    if (chunkLength === 0) {
-      console.warn(`[binary-reader] Zero-length chunk at index ${chunkIndex}`);
-      continue;
-    }
-    
-    if (offset + chunkLength > fileBuffer.length) {
-      console.warn(`[binary-reader] Chunk ${chunkIndex} would exceed file bounds: needs ${chunkLength} bytes at offset ${offset}, file size ${fileBuffer.length}`);
-      break;
-    }
+    if (offset + chunkLength > fileBuffer.length) break;
     
     const compressedChunk = fileBuffer.subarray(offset, offset + chunkLength);
     offset += chunkLength;
     
     // Decompress chunk
-    let decompressed;
-    try {
-      decompressed = await decompress(compressedChunk);
-    } catch (err) {
-      console.error(`[binary-reader] Failed to decompress chunk ${chunkIndex}: ${err.message}`);
-      chunkIndex++;
-      continue;
-    }
+    const decompressed = await decompress(compressedChunk);
     
     // Decode protobuf
-    let message;
-    try {
-      message = BatchType.decode(decompressed);
-    } catch (err) {
-      console.error(`[binary-reader] Failed to decode protobuf chunk ${chunkIndex}: ${err.message}`);
-      chunkIndex++;
-      continue;
-    }
-    
+    const message = BatchType.decode(decompressed);
     const records = message[recordKey] || [];
-    console.log(`[binary-reader] Chunk ${chunkIndex}: decompressed ${decompressed.length} bytes, decoded ${records.length} ${recordKey}`);
 
     for (const r of records) {
       allRecords.push(toPlainObject(r, isEvents, filePath));
     }
-    
-    chunkIndex++;
   }
-  
-  console.log(`[binary-reader] Total: ${chunkIndex} chunks, ${allRecords.length} records from ${basename}`);
   
   return {
     type: recordKey,
@@ -533,17 +492,8 @@ export async function streamRecords(dirPath, type = 'events', options = {}) {
     console.log(`   📂 Found ${files.length} total ${type} files`);
   } else {
     files = findBinaryFilesFast(dirPath, type, { maxDays, maxFiles: maxFilesToScanLimit });
-
-    // Fallback: if date-based scan finds nothing (timezone/partition mismatch), do a capped full scan
-    if (files.length === 0) {
-      console.log(`   ⚠️ Fast scan found 0 ${type} files. Falling back to capped full scan...`);
-      const all = findBinaryFiles(dirPath, type);
-      all.sort((a, b) => extractWriteTimestampFromPath(b) - extractWriteTimestampFromPath(a));
-      files = all.slice(0, maxFilesToScanLimit);
-      console.log(`   📂 Fallback scan selected ${files.length}/${all.length} ${type} files`);
-    }
   }
-
+  
   if (files.length === 0) {
     return { records: [], total: 0, hasMore: false };
   }

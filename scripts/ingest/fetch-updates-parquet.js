@@ -17,7 +17,7 @@ import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './parquet-schema.js';
 // Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId, shutdown as shutdownWriter } from './write-binary.js';
+import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -41,26 +41,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const REPO_DATA_DIR = path.join(path.resolve(__dirname, '..', '..'), 'data');
-// Default paths (checked in order)
-const WSL_DEFAULT = '/mnt/c/ledger_raw';
-const WINDOWS_DEFAULT = 'C:\\ledger_raw';
-
-function selectBaseDataDir() {
-  if (process.env.DATA_DIR) {
-    if (!path.isAbsolute(process.env.DATA_DIR)) {
-      throw new Error(`[fetch-updates] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
-    }
-    return process.env.DATA_DIR;
-  }
-
-  if (fs.existsSync(REPO_DATA_DIR)) return REPO_DATA_DIR;
-  if (fs.existsSync(WSL_DEFAULT)) return WSL_DEFAULT;
-  if (fs.existsSync(WINDOWS_DEFAULT)) return WINDOWS_DEFAULT;
-  return WSL_DEFAULT; // Fallback for consistent behavior
-}
-
-const DATA_DIR = selectBaseDataDir();
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+const DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 
 // Track state
 let lastTimestamp = null;
@@ -521,17 +504,11 @@ async function shutdown() {
   console.log('\n🛑 Shutting down...');
   isRunning = false;
   
-  // Flush remaining data AND wait for all writes to complete
-  console.log('💾 Flushing buffers and waiting for writes to complete...');
+  // Flush remaining data
   const flushed = await flushAll();
   if (flushed.length > 0) {
-    console.log(`💾 Flushed ${flushed.length} files`);
+    console.log(`💾 Flushed ${flushed.length} files on shutdown`);
   }
-  
-  // Properly shut down the writer pool (waits for workers to finish)
-  console.log('⏳ Shutting down writer pool...');
-  await shutdownWriter();
-  console.log('✅ Writer pool shutdown complete');
   
   // Save final live cursor state
   if (LIVE_MODE && lastTimestamp) {

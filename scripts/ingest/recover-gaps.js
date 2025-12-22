@@ -41,8 +41,8 @@ if (INSECURE_TLS) {
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
-// Default WSL path: /mnt/c/ledger_raw
-const WSL_DEFAULT = '/mnt/c/ledger_raw';
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
 const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
 const CURSOR_DIR = process.env.CURSOR_DIR || path.join(BASE_DATA_DIR, 'cursors');
 const RAW_DIR = path.join(BASE_DATA_DIR, 'raw');

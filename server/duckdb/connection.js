@@ -11,8 +11,8 @@ const REPO_DATA_DIR = path.join(__dirname, '../../data');
 const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
 // DATA_DIR should point to the base directory
-// Default WSL path: /mnt/c/ledger_raw (Windows-backed disk, survives WSL resets)
-const WSL_DEFAULT_DATA_DIR = '/mnt/c/ledger_raw';
+// Default WSL path: /home/bstolz/canton-explorer/data
+const WSL_DEFAULT_DATA_DIR = '/home/bstolz/canton-explorer/data';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
