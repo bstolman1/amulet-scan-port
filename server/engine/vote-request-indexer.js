@@ -274,9 +274,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       console.log(`   📋 Using template index (${templateIndexStats.totalFiles} files indexed)`);
 
       const voteRequestFiles = await getFilesForTemplate('VoteRequest');
-      const dsoRulesFiles = await getFilesForTemplate('DsoRules');
       console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events`);
-      console.log(`   📂 Found ${dsoRulesFiles.length} files containing DsoRules events`);
 
       if (voteRequestFiles.length === 0) {
         console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
@@ -290,21 +288,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         indexingProgress = { ...indexingProgress, phase: 'scan:created', current: 0, total: voteRequestFiles.length, records: 0 };
         createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
 
-        // Scan VoteRequest files for direct exercised events
-        console.log('   Scanning VoteRequest files for exercised events...');
-        indexingProgress = { ...indexingProgress, phase: 'scan:exercised (VoteRequest)', current: 0, total: voteRequestFiles.length, records: 0 };
+        // Scan VoteRequest files for archive/exercised events
+        // When a VoteRequest is closed (accepted/rejected/expired), the contract is archived
+        // These archive events are in the same VoteRequest files, no need to scan DsoRules
+        console.log('   Scanning VoteRequest files for archive events...');
+        indexingProgress = { ...indexingProgress, phase: 'scan:archived', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
-
-        // CRITICAL: Also scan DsoRules files for DsoRules_CloseVoteRequest exercises
-        // These are the events that ACTUALLY close VoteRequests when votes pass/fail
-        if (dsoRulesFiles.length > 0) {
-          console.log('   Scanning DsoRules files for CloseVoteRequest exercises...');
-          indexingProgress = { ...indexingProgress, phase: 'scan:exercised (DsoRules)', current: 0, total: dsoRulesFiles.length, records: 0 };
-          const dsoCloseResult = await scanFilesForDsoCloseVoteRequests(dsoRulesFiles);
-          console.log(`   Found ${dsoCloseResult.records.length} DsoRules_CloseVoteRequest events`);
-          // Merge with exercised results
-          exercisedResult.records.push(...dsoCloseResult.records);
-        }
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
