@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { GovernanceHistoryEvent, useGovernanceHistory } from "./use-governance-history";
+import { GovernanceAction, useGovernanceHistory } from "./use-governance-history";
 
 export interface UniqueProposal {
   proposalId: string; // hash + actionType
@@ -18,32 +18,10 @@ export interface UniqueProposal {
   totalVotes: number;
   contractId: string;
   cipReference: string | null;
-  eventCount: number; // How many events this proposal has
+  eventCount: number;
   lastEventType: 'created' | 'archived';
+  rawData: GovernanceAction; // Include raw data for display
 }
-
-// Extract CIP reference from reason
-const extractCipReference = (reason: { url?: string; body?: string } | null): string | null => {
-  if (!reason) return null;
-  const text = `${reason.body || ''} ${reason.url || ''}`;
-  const match = text.match(/CIP[#\-\s]?0*(\d+)/i);
-  return match ? `CIP-${match[1].padStart(4, '0')}` : null;
-};
-
-// Parse votes array to count for/against
-const parseVotes = (votes: GovernanceHistoryEvent['votes']): { votesFor: number; votesAgainst: number } => {
-  let votesFor = 0;
-  let votesAgainst = 0;
-  
-  for (const vote of votes || []) {
-    const [, voteData] = Array.isArray(vote) ? vote : ['', vote];
-    const isAccept = voteData?.accept === true || (voteData as any)?.Accept === true;
-    if (isAccept) votesFor++;
-    else votesAgainst++;
-  }
-  
-  return { votesFor, votesAgainst };
-};
 
 // Format action tag to human-readable title
 const formatActionTitle = (actionTag: string | null): string => {
@@ -60,7 +38,7 @@ const extractProposalHash = (contractId: string): string => {
 };
 
 export function useUniqueProposals(votingThreshold = 10) {
-  const { data: governanceActions, isLoading, error } = useGovernanceHistory(1000);
+  const { data: governanceActions, isLoading, error } = useGovernanceHistory(2000);
 
   const uniqueProposals = useMemo(() => {
     if (!governanceActions?.length) return [];
@@ -100,18 +78,32 @@ export function useUniqueProposals(votingThreshold = 10) {
       const proposalHash = extractProposalHash(latestEvent.contractId);
       const actionType = latestEvent.actionTag || 'Unknown';
       
-      // Determine status based on latest event
-      let status: UniqueProposal['status'] = 'pending';
-      if (latestEvent.status === 'passed') {
-        status = 'approved';
-      } else if (latestEvent.status === 'failed') {
-        status = 'rejected';
-      } else if (latestEvent.status === 'expired') {
-        status = 'expired';
-      } else if (latestEvent.votesFor >= votingThreshold) {
-        status = 'approved';
-      } else if (latestEvent.type === 'vote_completed') {
-        status = latestEvent.votesFor >= votingThreshold ? 'approved' : 'rejected';
+      // Status is already determined correctly in useGovernanceHistory
+      // Map the status from GovernanceAction to UniqueProposal status
+      let status: UniqueProposal['status'];
+      switch (latestEvent.status) {
+        case 'passed':
+          status = 'approved';
+          break;
+        case 'failed':
+          status = 'rejected';
+          break;
+        case 'expired':
+          status = 'expired';
+          break;
+        case 'executed':
+          // Executed means it was approved and enacted
+          status = 'approved';
+          break;
+        default:
+          // Fallback - check votes
+          if (latestEvent.votesFor >= votingThreshold) {
+            status = 'approved';
+          } else if (latestEvent.type === 'vote_completed') {
+            status = 'rejected';
+          } else {
+            status = 'expired'; // Historical data without clear status
+          }
       }
 
       // Find earliest created event
@@ -128,7 +120,7 @@ export function useUniqueProposals(votingThreshold = 10) {
         status,
         latestEventTime: latestEvent.effectiveAt,
         createdAt,
-        voteBefore: null, // Not available in processed actions
+        voteBefore: null,
         requester: latestEvent.requester,
         reason: latestEvent.reason,
         reasonUrl: latestEvent.reasonUrl,
@@ -139,6 +131,7 @@ export function useUniqueProposals(votingThreshold = 10) {
         cipReference: latestEvent.cipReference,
         eventCount: events.length,
         lastEventType: latestEvent.type === 'vote_completed' ? 'archived' : 'created',
+        rawData: latestEvent,
       });
     }
 
