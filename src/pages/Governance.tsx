@@ -625,7 +625,7 @@ const Governance = () => {
                   All Historical VoteRequests
                 </h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  One row per unique contract_id — every historical VoteRequest record
+                  One row per unique <code className="bg-muted px-1 rounded">payload.id</code> (falls back to contract_id)
                 </p>
               </div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">

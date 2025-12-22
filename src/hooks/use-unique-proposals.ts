@@ -17,6 +17,8 @@ export interface GovernanceAction {
   votesAgainst: number;
   totalVotes: number;
   contractId: string;
+  /** Stable VoteRequest identifier from payload.id (preferred dedupe key). */
+  payloadId: string | null;
   cipReference: string | null;
   voteBefore: string | null;
   targetEffectiveAt: string | null;
@@ -24,7 +26,8 @@ export interface GovernanceAction {
 }
 
 export interface UniqueProposal {
-  proposalId: string; // hash + actionType
+  /** Stable dedupe key (payloadId when available). */
+  proposalId: string;
   proposalHash: string;
   actionType: string;
   title: string;
@@ -120,47 +123,49 @@ export function useUniqueProposals(votingThreshold = 10) {
     for (const event of rawEvents) {
       const templateId = event.template_id || '';
       if (!templateId.includes('VoteRequest')) continue;
-      
+
       // Process ALL events (not just archived) to get complete data
       const payload = event.payload as Record<string, unknown> | undefined;
       if (!payload) continue;
-      
+
+      const payloadId = typeof payload.id === 'string' ? (payload.id as string) : null;
+
       // Parse action using same logic as Governance History
       const action = payload.action || {};
       const { title, actionType, actionDetails } = parseAction(action);
-      
+
       // Parse votes using same logic as Governance History
       const votesRaw = payload.votes;
       const { votesFor, votesAgainst } = parseVotes(votesRaw);
       const totalVotes = votesFor + votesAgainst;
-      
+
       // Extract requester
       const requester = (payload.requester as string) || null;
-      
+
       // Extract reason (has url and body)
       const reasonObj = payload.reason as { url?: string; body?: string } | string | null;
       const reasonBody = typeof reasonObj === 'string' ? reasonObj : (reasonObj?.body || null);
       const reasonUrl = typeof reasonObj === 'object' ? (reasonObj?.url || null) : null;
-      
+
       // Extract timing fields
       const voteBefore = (payload.voteBefore as string) || null;
       const targetEffectiveAt = (payload.targetEffectiveAt as string) || null;
-      
+
       // Determine status based on votes and deadline
       const now = new Date();
       const voteDeadline = voteBefore ? new Date(voteBefore) : null;
       const isExpired = voteDeadline && voteDeadline < now;
       const isClosed = event.event_type === 'archived';
-      
+
       let status: GovernanceAction['status'] = 'failed';
       if (votesFor >= votingThreshold) {
         status = 'passed';
       } else if (isClosed || (isExpired && votesFor < votingThreshold)) {
         status = totalVotes === 0 ? 'expired' : 'failed';
       }
-      
+
       actions.push({
-        id: event.event_id || event.contract_id || '',
+        id: event.event_id || event.contract_id || payloadId || '',
         type: 'vote_completed',
         actionTag: actionType,
         actionTitle: title || 'Unknown',
@@ -174,6 +179,7 @@ export function useUniqueProposals(votingThreshold = 10) {
         votesAgainst,
         totalVotes,
         contractId: event.contract_id || '',
+        payloadId,
         cipReference: extractCipReference(reasonBody, reasonUrl),
         voteBefore,
         targetEffectiveAt,
@@ -189,31 +195,33 @@ export function useUniqueProposals(votingThreshold = 10) {
   const uniqueProposals = useMemo(() => {
     if (!governanceActions?.length) return [];
 
-    // Deduplicate by contract_id only (one row per unique contract)
-    const contractMap = new Map<string, typeof governanceActions[0]>();
+    // Deduplicate by payload.id (preferred), falling back to contract_id.
+    // Keep latest event by effectiveAt and count how many events were merged.
+    const keyMap = new Map<string, { latest: (typeof governanceActions)[0]; count: number }>();
 
-    for (const event of governanceActions) {
-      const cid = event.contractId;
-      if (!cid) continue;
+    for (const ev of governanceActions) {
+      const key = ev.payloadId || ev.contractId;
+      if (!key) continue;
 
-      const existing = contractMap.get(cid);
+      const existing = keyMap.get(key);
       if (!existing) {
-        contractMap.set(cid, event);
-      } else {
-        // Keep the latest event by effectiveAt for the same contract
-        const currentTime = new Date(event.effectiveAt).getTime();
-        const existingTime = new Date(existing.effectiveAt).getTime();
-        if (currentTime > existingTime) {
-          contractMap.set(cid, event);
-        }
+        keyMap.set(key, { latest: ev, count: 1 });
+        continue;
+      }
+
+      existing.count += 1;
+      const currentTime = new Date(ev.effectiveAt).getTime();
+      const existingTime = new Date(existing.latest.effectiveAt).getTime();
+      if (currentTime > existingTime) {
+        existing.latest = ev;
       }
     }
 
-    // Convert to unique proposals array
     const proposals: UniqueProposal[] = [];
 
-    for (const [contractId, event] of contractMap) {
-      const proposalHash = extractProposalHash(contractId);
+    for (const [proposalId, entry] of keyMap) {
+      const event = entry.latest;
+      const proposalHash = extractProposalHash(proposalId);
       const actionType = event.actionTag || 'Unknown';
 
       // Map the status from GovernanceAction to UniqueProposal status
@@ -242,7 +250,7 @@ export function useUniqueProposals(votingThreshold = 10) {
       }
 
       proposals.push({
-        proposalId: contractId,
+        proposalId,
         proposalHash,
         actionType,
         title: event.actionTitle || 'Unknown',
@@ -256,9 +264,9 @@ export function useUniqueProposals(votingThreshold = 10) {
         votesFor: event.votesFor,
         votesAgainst: event.votesAgainst,
         totalVotes: event.totalVotes,
-        contractId,
+        contractId: event.contractId,
         cipReference: event.cipReference,
-        eventCount: 1,
+        eventCount: entry.count,
         lastEventType: event.type === 'vote_completed' ? 'archived' : 'created',
         actionDetails: event.actionDetails,
         rawData: event,

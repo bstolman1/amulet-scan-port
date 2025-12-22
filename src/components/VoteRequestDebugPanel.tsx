@@ -143,11 +143,11 @@ export function VoteRequestDebugPanel() {
             {/* Created Event */}
             <div className="space-y-2">
               <h4 className="text-sm font-medium flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-green-500" />
+                <CheckCircle2 className="w-4 h-4 text-success" />
                 Created Event
               </h4>
               {data.createdEvent ? (
-                <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 text-sm">
+                <div className="bg-success/10 border border-success/30 rounded-lg p-3 text-sm">
                   <div className="grid grid-cols-2 gap-2">
                     <span className="text-muted-foreground">Event ID:</span>
                     <span className="font-mono text-xs truncate">{data.createdEvent.event_id}</span>
@@ -171,11 +171,11 @@ export function VoteRequestDebugPanel() {
             {/* Closing Event */}
             <div className="space-y-2">
               <h4 className="text-sm font-medium flex items-center gap-2">
-                <XCircle className="w-4 h-4 text-red-500" />
+                <XCircle className="w-4 h-4 text-destructive" />
                 Closing Event Used
               </h4>
               {data.closingEventUsed ? (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm">
+                <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm">
                   <div className="grid grid-cols-2 gap-2">
                     <span className="text-muted-foreground">Choice:</span>
                     <Badge variant="outline" className="w-fit">{data.closingEventUsed.choice}</Badge>
@@ -192,8 +192,8 @@ export function VoteRequestDebugPanel() {
                   </div>
                 </div>
               ) : (
-                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-sm flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                <div className="bg-warning/10 border border-warning/30 rounded-lg p-3 text-sm flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-warning" />
                   <span>No closing event detected (proposal may still be open)</span>
                 </div>
               )}
