@@ -409,6 +409,23 @@ export async function getACSRichList(params: { limit?: number; search?: string }
   return apiFetch(`/api/acs/rich-list?${queryParams}`);
 }
 
+// ANS (Amulet Name Service) search via ACS
+export interface AnsEntry {
+  contract_id: string;
+  name: string;
+  user: string;
+  expires_at: string;
+  payload: any;
+}
+
+export async function searchAnsEntries(search: string, limit = 25): Promise<ApiResponse<AnsEntry[]>> {
+  const queryParams = new URLSearchParams();
+  queryParams.set('template', 'AnsEntry');
+  queryParams.set('limit', limit.toString());
+  if (search) queryParams.set('search', search);
+  return apiFetch(`/api/acs/contracts?${queryParams}`);
+}
+
 // Real-time supply (snapshot + v2/updates delta)
 export interface RealtimeSupplyData {
   snapshot: {
