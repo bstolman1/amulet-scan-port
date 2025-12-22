@@ -34,8 +34,14 @@ router.get('/calculate', async (req, res) => {
     const filters = [];
     
     // Party filter - check in payload for provider/beneficiary
+    // Look for AppRewardCoupon, ValidatorRewardCoupon, SvRewardCoupon templates
     filters.push((e) => {
-      if (!e.template_id?.includes('RewardCoupon')) return false;
+      const templateName = e.template_id || '';
+      const isRewardTemplate = templateName.includes('AppRewardCoupon') || 
+                               templateName.includes('ValidatorRewardCoupon') ||
+                               templateName.includes('SvRewardCoupon') ||
+                               templateName.includes('RewardCoupon');
+      if (!isRewardTemplate) return false;
       if (!e.payload) return false;
       
       // Check various fields where party might appear
@@ -85,10 +91,18 @@ router.get('/calculate', async (req, res) => {
     let records = [];
     
     if (templateIndexPopulated) {
-      // Fast path: use template index
+      // Fast path: use template index - search for all reward coupon types
       console.log('   ⚡ Using template index for fast scanning');
-      const rewardFiles = await getFilesForTemplate('RewardCoupon');
-      console.log(`   📂 Found ${rewardFiles.length} files with RewardCoupon events`);
+      const rewardTemplates = ['AppRewardCoupon', 'ValidatorRewardCoupon', 'SvRewardCoupon', 'RewardCoupon'];
+      const allRewardFiles = new Set();
+      
+      for (const template of rewardTemplates) {
+        const files = await getFilesForTemplate(template);
+        files.forEach(f => allRewardFiles.add(f));
+      }
+      
+      const rewardFiles = Array.from(allRewardFiles);
+      console.log(`   📂 Found ${rewardFiles.length} files with reward events`);
       
       // Scan files with filter
       for (const file of rewardFiles) {
