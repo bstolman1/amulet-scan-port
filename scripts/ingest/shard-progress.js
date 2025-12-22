@@ -15,9 +15,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Default WSL path: /home/bstolz/canton-explorer/data/cursors
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data/cursors';
-const CURSOR_DIR = process.env.CURSOR_DIR || WSL_DEFAULT;
+// Default Windows path: C:/ledger_raw/cursors
+const WIN_DEFAULT = 'C:/ledger_raw/cursors';
+const CURSOR_DIR = process.env.CURSOR_DIR || WIN_DEFAULT;
 const WATCH_MODE = process.argv.includes('--watch') || process.argv.includes('-w');
 const REFRESH_INTERVAL = 2000; // 2 seconds
 
