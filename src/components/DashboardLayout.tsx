@@ -52,6 +52,7 @@ const navigation = [
   { name: "Amulet Rules", href: "/amulet-rules", icon: Shield },
   { name: "Statistics", href: "/stats", icon: Database },
   { name: "SV Rewards", href: "/unclaimed-sv-rewards", icon: Award },
+  { name: "Reward Calc", href: "/reward-calculations", icon: Award },
   { name: "Member Traffic", href: "/member-traffic", icon: Radio },
   { name: "Subscriptions", href: "/subscriptions", icon: Package },
   { name: "DSO State", href: "/dso-state", icon: Users },
