@@ -2,6 +2,7 @@ import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
+import * as rewardIndexer from '../engine/reward-indexer.js';
 import {
   getFilesForTemplate,
   isTemplateIndexPopulated,
@@ -1261,6 +1262,101 @@ router.post('/vote-request-index/build', async (req, res) => {
     });
   } catch (err) {
     console.error('Error starting vote request index build:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ REWARD COUPON INDEX ROUTES ============
+
+// GET /api/events/reward-coupon-index/status - Get index status
+router.get('/reward-coupon-index/status', async (req, res) => {
+  try {
+    const stats = await rewardIndexer.getRewardCouponStats();
+    const state = await rewardIndexer.getIndexState();
+    const isIndexing = rewardIndexer.isIndexingInProgress();
+    const progress = rewardIndexer.getIndexingProgress();
+    
+    res.json({
+      populated: stats.total > 0,
+      isIndexing,
+      stats,
+      lastIndexedAt: state.last_indexed_at,
+      totalIndexed: state.total_indexed,
+      progress: isIndexing ? progress : null,
+    });
+  } catch (err) {
+    console.error('Error getting reward coupon index status:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/events/reward-coupon-index/build - Trigger index build
+router.post('/reward-coupon-index/build', async (req, res) => {
+  try {
+    const force = req.body?.force === true || req.query.force === 'true';
+    
+    if (rewardIndexer.isIndexingInProgress()) {
+      return res.json({ status: 'in_progress', message: 'Indexing already in progress' });
+    }
+    
+    // Start indexing in background
+    res.json({ status: 'started', message: 'RewardCoupon index build started' });
+    
+    // Run async
+    rewardIndexer.buildRewardCouponIndex({ force }).catch(err => {
+      console.error('Background reward index build failed:', err);
+    });
+  } catch (err) {
+    console.error('Error starting reward coupon index build:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/reward-coupon-index/query - Query indexed rewards
+router.get('/reward-coupon-index/query', async (req, res) => {
+  try {
+    const { limit, offset, couponType, beneficiary, startRound, endRound, startDate, endDate } = req.query;
+    
+    const results = await rewardIndexer.queryRewardCoupons({
+      limit: parseInt(limit) || 100,
+      offset: parseInt(offset) || 0,
+      couponType: couponType || null,
+      beneficiary: beneficiary || null,
+      startRound: startRound ? parseInt(startRound) : null,
+      endRound: endRound ? parseInt(endRound) : null,
+      startDate: startDate || null,
+      endDate: endDate || null,
+    });
+    
+    const stats = await rewardIndexer.getRewardCouponStats();
+    
+    res.json({
+      data: results,
+      count: results.length,
+      stats,
+    });
+  } catch (err) {
+    console.error('Error querying reward coupons:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/reward-coupon-index/beneficiary/:id - Get rewards for a specific beneficiary
+router.get('/reward-coupon-index/beneficiary/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { startRound, endRound, startDate, endDate } = req.query;
+    
+    const result = await rewardIndexer.getRewardsByBeneficiary(id, {
+      startRound: startRound ? parseInt(startRound) : null,
+      endRound: endRound ? parseInt(endRound) : null,
+      startDate: startDate || null,
+      endDate: endDate || null,
+    });
+    
+    res.json(result);
+  } catch (err) {
+    console.error('Error getting rewards for beneficiary:', err);
     res.status(500).json({ error: err.message });
   }
 });
