@@ -962,34 +962,45 @@ router.get('/contracts', async (req, res) => {
     let whereClause = '1=1';
     if (template) {
       // Normalize template query to handle all separator formats.
-      // IMPORTANT: Some rows may have template_id/entity_name missing at top-level,
-      // so filtering is applied against normalized fields computed in the SQL (tid, ename).
+      // IMPORTANT: Template IDs have format: "hash:Module.Path:EntityName"
+      // e.g., "996a3b619d...:Splice.DsoRules:VoteRequest"
+      // Queries may come as "Splice:DsoRules:VoteRequest" or "Splice.DsoRules:VoteRequest"
       const t = String(template);
       const entityName = t.split(/[:._]/).pop() || t;
-
+      
+      // Parse query parts (e.g., "Splice:DsoRules:VoteRequest" -> ["Splice", "DsoRules", "VoteRequest"])
+      const parts = t.split(/[:._]/);
+      const modulePath = parts.length >= 2 ? parts.slice(0, -1).join('.') : parts[0]; // "Splice.DsoRules"
+      
+      // Generate comprehensive variants for matching
       const variants = new Set([
-        t,
-        t.replaceAll(':', '.'),
-        t.replaceAll('.', ':'),
-        t.replaceAll(':', '_'),
-        t.replaceAll('.', '_'),
-        t.replaceAll('_', ':'),
-        t.replaceAll('_', '.'),
-        entityName,
+        t,                              // Original query
+        t.replaceAll(':', '.'),         // All dots
+        t.replaceAll('.', ':'),         // All colons
+        `${modulePath}:${entityName}`,  // "Splice.DsoRules:VoteRequest" (canonical format)
+        `${modulePath.replaceAll('.', ':')}:${entityName}`, // "Splice:DsoRules:VoteRequest"
+        entityName,                     // Just entity name
       ]);
 
+      // Build WHERE clause: match against template_id with LIKE or entity_name exactly
       const likeClauses = [...variants]
         .filter(Boolean)
-        .map((v) => `tid LIKE '%${String(v).replace(/'/g, "''")}%'
-          OR ename = '${String(v).split(/[:._]/).pop()?.replace(/'/g, "''") || String(v).replace(/'/g, "''")}'`);
+        .map((v) => {
+          const escaped = String(v).replace(/'/g, "''");
+          const entity = String(v).split(/[:._]/).pop()?.replace(/'/g, "''") || escaped;
+          // For template_id: use LIKE with the variant (handles hash prefix)
+          // For entity_name: exact match on just the entity part
+          return `tid LIKE '%${escaped}%' OR ename = '${entity}'`;
+        });
 
       whereClause = `(${likeClauses.join(' OR ')})`;
+      console.log(`[ACS] Template variants for "${t}":`, [...variants]);
     } else if (entity) {
       const e = String(entity).replace(/'/g, "''");
       whereClause = `(ename = '${e}' OR tid LIKE '%:${e}:%' OR tid LIKE '%:${e}' OR tid LIKE '%_${e}_%' OR tid LIKE '%_${e}')`;
     }
 
-    console.log(`[ACS] WHERE clause: ${whereClause}`);
+    console.log(`[ACS] WHERE clause: ${whereClause.substring(0, 500)}...`);
 
     // Use optimized snapshot source (reads only files from selected snapshot)
     const { snapshot, source: acsSource, type } = getBestSnapshotAndSource();
