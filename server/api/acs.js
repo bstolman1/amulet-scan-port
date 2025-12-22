@@ -146,7 +146,11 @@ function findCompleteSnapshots() {
           snapshotTime = `${year}-${month}-${day}T${hh}:${mm}:${ss}`;
         }
         
-        return { migrationId, snapshotTime, path: f };
+        // Get the directory path (parent of _COMPLETE file) as absolute path
+        const relativeDirPath = f.replace(/[\/\\]_COMPLETE$/, '');
+        const absoluteDirPath = path.join(ACS_DATA_PATH, relativeDirPath);
+        
+        return { migrationId, snapshotTime, path: absoluteDirPath };
       })
       .filter(s => s.migrationId !== null && s.snapshotTime !== null);
   } catch {
