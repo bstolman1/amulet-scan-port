@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
-import { scanApi } from "@/lib/api-client";
+import { getPartyEvents, searchAnsEntries } from "@/lib/duckdb-api-client";
 import {
   Command,
   CommandDialog,
@@ -30,44 +30,28 @@ export const SearchBar = () => {
     try {
       if (trimmedQuery.includes("::")) {
         try {
-          const transactions = await scanApi.fetchTransactionsByParty(trimmedQuery, 20);
+          const result = await getPartyEvents(trimmedQuery, 100);
 
-          if (transactions.transactions.length > 0) {
+          if (result.data && result.data.length > 0) {
             navigate(`/transactions?search=${encodeURIComponent(trimmedQuery)}`);
             setOpen(false);
             toast({
               title: "Search Results",
-              description: `Found ${transactions.transactions.length} transaction(s) for this party`,
+              description: `Found ${result.data.length} event(s) for this party`,
             });
             return;
+          } else {
+            toast({
+              title: "No Results",
+              description: "No events found for this party ID",
+              variant: "destructive",
+            });
           }
         } catch (partyError) {
-          console.warn("Party search via API failed, falling back to local filter", partyError);
-        }
-
-        const fallback = await scanApi.fetchTransactions({
-          page_size: 20,
-          sort_order: "desc",
-        });
-
-        const matchingTxs = fallback.transactions.filter((tx) => {
-          const lowerQuery = trimmedQuery.toLowerCase();
-          const senderMatch = tx.transfer?.sender?.party?.toLowerCase().includes(lowerQuery);
-          const receiverMatch = tx.transfer?.receivers?.some((r) => r.party?.toLowerCase().includes(lowerQuery));
-          return senderMatch || receiverMatch;
-        });
-
-        if (matchingTxs.length > 0) {
-          navigate(`/transactions?search=${encodeURIComponent(trimmedQuery)}`);
-          setOpen(false);
+          console.error("Party search failed", partyError);
           toast({
-            title: "Search Results",
-            description: `Found ${matchingTxs.length} transaction(s) for this party`,
-          });
-        } else {
-          toast({
-            title: "No Results",
-            description: "No transactions found for this party ID",
+            title: "Search Error",
+            description: "Unable to search party events",
             variant: "destructive",
           });
         }
@@ -76,9 +60,12 @@ export const SearchBar = () => {
         setOpen(false);
       } else {
         try {
-          const ansResults = await scanApi.fetchAnsEntries(trimmedQuery.toLowerCase(), 25);
+          const result = await searchAnsEntries(trimmedQuery.toLowerCase(), 25);
           const lowerQuery = trimmedQuery.toLowerCase();
-          const matchingAns = ansResults.entries.filter((entry) => entry.name.toLowerCase().includes(lowerQuery));
+          const matchingAns = (result.data || []).filter((entry: any) => {
+            const name = entry.payload?.name || entry.name || '';
+            return name.toLowerCase().includes(lowerQuery);
+          });
 
           if (matchingAns.length > 0) {
             navigate(`/ans?search=${encodeURIComponent(trimmedQuery)}`);
