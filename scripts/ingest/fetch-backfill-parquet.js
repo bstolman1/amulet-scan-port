@@ -50,9 +50,9 @@ if (INSECURE_TLS) {
 // Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
-// Default WSL path: /home/bstolz/canton-explorer/data
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
-const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+// Default Windows path: C:\ledger_raw
+const WIN_DEFAULT = 'C:\\ledger_raw';
+const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
 const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5;
 

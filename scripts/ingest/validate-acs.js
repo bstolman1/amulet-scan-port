@@ -34,7 +34,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const BASE_DATA_DIR = process.env.DATA_DIR || '/home/bstolz/canton-explorer/data';
+const BASE_DATA_DIR = process.env.DATA_DIR || 'C:\\ledger_raw';
 const RAW_DIR = process.env.RAW_DIR || path.join(BASE_DATA_DIR, 'raw');
 const ACS_DIR = path.join(RAW_DIR, 'acs');
 

@@ -20,8 +20,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Configuration
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
-const BASE_DATA_DIR = process.env.DATA_DIR || WSL_DEFAULT;
+const WIN_DEFAULT = 'C:\\ledger_raw';
+const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
 const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
 const RAW_DIR = join(BASE_DATA_DIR, 'raw');
 
