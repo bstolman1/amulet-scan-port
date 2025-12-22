@@ -1045,6 +1045,34 @@ router.get('/contracts', async (req, res) => {
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
 
+    // If a template filter returns nothing, emit lightweight debug info so we can see what template_id
+    // formats actually exist in the selected snapshot without dumping the whole dataset.
+    let debug = undefined;
+    if (template && totalCount === 0) {
+      try {
+        const q = String(template);
+        const entityHint = q.split(/[:._]/).pop() || q;
+        const sampleRows = await db.safeQuery(`
+          ${baseCte}
+          SELECT DISTINCT tid
+          FROM base
+          WHERE tid IS NOT NULL
+            AND (tid LIKE '%${entityHint.replace(/'/g, "''")}%' OR ename = '${entityHint.replace(/'/g, "''")}')
+          ORDER BY tid
+          LIMIT 20
+        `);
+
+        debug = {
+          templateQuery: q,
+          entityHint,
+          sampleMatchingTemplateIds: sampleRows.map((r) => r.tid).filter(Boolean),
+        };
+        console.log('[ACS] Zero results debug:', debug);
+      } catch (e) {
+        console.warn('[ACS] Failed to generate zero-results debug:', e.message);
+      }
+    }
+
     // Use GROUP BY contract_id to deduplicate (handles any duplicate records)
     const sql = `
       ${baseCte}
@@ -1088,7 +1116,7 @@ router.get('/contracts', async (req, res) => {
       };
     });
     
-    res.json(serializeBigInt({ data: parsedRows, count: totalCount }));
+    res.json(serializeBigInt({ data: parsedRows, count: totalCount, debug }));
   } catch (err) {
     console.error('ACS contracts error:', err);
     res.status(500).json({ error: err.message });
