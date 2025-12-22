@@ -12,17 +12,17 @@ const __dirname = dirname(__filename);
 
 const router = Router();
 
-// Path to data directory - configurable via env var for WSL/cross-platform support
+// Path to data directory - configurable via env var for cross-platform support
 // Prefer repo-local ./data if present (matches server/duckdb/connection.js)
-const WSL_DEFAULT = '/home/bstolz/canton-explorer/data';
+const WIN_DEFAULT = 'C:/ledger_raw';
 const REPO_DATA_DIR = join(__dirname, '../../data');
 const repoCursorDir = join(REPO_DATA_DIR, 'cursors');
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
 // 2) repo-local data/ (if present)
-// 3) WSL default path
-const DATA_DIR = process.env.DATA_DIR || (existsSync(repoCursorDir) ? REPO_DATA_DIR : WSL_DEFAULT);
+// 3) Windows default path
+const DATA_DIR = process.env.DATA_DIR || (existsSync(repoCursorDir) ? REPO_DATA_DIR : WIN_DEFAULT);
 const CURSOR_DIR = process.env.CURSOR_DIR || join(DATA_DIR, 'cursors');
 
 /**

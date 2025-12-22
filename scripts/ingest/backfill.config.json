@@ -22,9 +22,9 @@
   "targetMigration": 3,
 
   "dirs": {
-    "data": "/mnt/c/ledger_raw",
-    "cursor": "/mnt/c/ledger_raw/cursors",
-    "logs": "/mnt/c/ledger_raw/logs"
+    "data": "C:/ledger_raw",
+    "cursor": "C:/ledger_raw/cursors",
+    "logs": "C:/ledger_raw/logs"
   },
 
   "scanApi": {
