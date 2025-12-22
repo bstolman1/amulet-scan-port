@@ -211,7 +211,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       const voteRequest = {
         event_id: event.event_id,
-        stable_id: event.contract_id || event.event_id,
+        // Always set stable_id to a non-null identifier (some older records may lack contract_id)
+        stable_id: event.contract_id || event.event_id || event.update_id,
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: event.effective_at,
@@ -234,7 +235,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         // Escape helper for safe SQL string values
         const escapeStr = (val) => (val === null || val === undefined) ? null : String(val).replace(/'/g, "''");
         const payloadStr = voteRequest.payload ? escapeStr(voteRequest.payload) : null;
-        const stableIdSql = voteRequest.stable_id ? `'${escapeStr(voteRequest.stable_id)}'` : 'NULL';
+        // stable_id should never be NULL; fall back to event_id if needed
+        const stableIdSql = `'${escapeStr(voteRequest.stable_id ?? voteRequest.event_id)}'`;
         
         // Upsert - insert or update on conflict
         await query(`
