@@ -47,6 +47,35 @@ async function acquireIndexLock() {
 }
 
 /**
+ * Force clear a stale lock (e.g., from a crashed process)
+ */
+export async function clearStaleLock() {
+  const lockDir = path.join(DATA_PATH, '.locks');
+  const lockPath = path.join(lockDir, 'vote_request_index.lock');
+  
+  try {
+    const stat = await fs.promises.stat(lockPath);
+    const lockAge = Date.now() - stat.mtimeMs;
+    const lockData = JSON.parse(await fs.promises.readFile(lockPath, 'utf8'));
+    
+    await fs.promises.unlink(lockPath);
+    console.log(`🔓 Cleared stale vote request index lock (age: ${(lockAge / 1000 / 60).toFixed(1)}min, pid: ${lockData.pid})`);
+    
+    return { 
+      cleared: true, 
+      lockAge: lockAge, 
+      previousPid: lockData.pid,
+      startedAt: lockData.startedAt 
+    };
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return { cleared: false, reason: 'No lock file exists' };
+    }
+    throw err;
+  }
+}
+
+/**
  * Get current indexing state
  */
 export async function getIndexState() {
