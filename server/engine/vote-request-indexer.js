@@ -64,23 +64,35 @@ export async function getIndexState() {
 
 /**
  * Get vote request counts from the index
+ * Status breakdown: in_progress, executed, rejected, expired
  */
 export async function getVoteRequestStats() {
   try {
     const total = await queryOne(`SELECT COUNT(*) as count FROM vote_requests`);
-    const active = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'active'`);
-    const historical = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'historical'`);
+    const inProgress = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'in_progress'`);
+    const executed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'executed'`);
+    const rejected = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'rejected'`);
+    const expired = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'expired'`);
+    
+    // Legacy fields for backwards compatibility
+    const active = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'active' OR status = 'in_progress'`);
+    const historical = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status IN ('executed', 'rejected', 'expired', 'historical')`);
     const closed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE is_closed = true`);
     
     return {
       total: Number(total?.count || 0),
+      inProgress: Number(inProgress?.count || 0),
+      executed: Number(executed?.count || 0),
+      rejected: Number(rejected?.count || 0),
+      expired: Number(expired?.count || 0),
+      // Legacy fields
       active: Number(active?.count || 0),
       historical: Number(historical?.count || 0),
       closed: Number(closed?.count || 0),
     };
   } catch (err) {
     console.error('Error getting vote request stats:', err);
-    return { total: 0, active: 0, historical: 0, closed: 0 };
+    return { total: 0, inProgress: 0, executed: 0, rejected: 0, expired: 0, active: 0, historical: 0, closed: 0 };
   }
 }
 
@@ -279,7 +291,45 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-      const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
+      const isExpired = voteBeforeDate && voteBeforeDate < now;
+
+      // Determine proper status matching the target UI:
+      // - in_progress: not closed, vote deadline not passed
+      // - executed: closed AND reached voting threshold (we use votesFor >= threshold, but since we don't have threshold here, use choice == 'VoteRequest_Accept' or high vote count)
+      // - rejected: closed AND did not reach threshold
+      // - expired: vote deadline passed AND not closed (or closed with 0 votes)
+      let status = 'in_progress';
+      
+      // Count accept vs reject votes
+      const votesArray = Array.isArray(finalVotes) ? finalVotes : [];
+      let acceptCount = 0;
+      let rejectCount = 0;
+      for (const vote of votesArray) {
+        const [, voteData] = Array.isArray(vote) ? vote : ['', vote];
+        if (voteData?.accept === true || voteData?.Accept === true) acceptCount++;
+        else if (voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true) rejectCount++;
+      }
+      
+      // Check if this was an accepted/executed proposal by looking at the archived event choice
+      const archivedChoice = archivedEvent?.choice || '';
+      const wasExecuted = archivedChoice.includes('Accept') || archivedChoice === 'VoteRequest_Accept';
+      const wasRejected = archivedChoice.includes('Reject') || archivedChoice === 'VoteRequest_Reject';
+      
+      if (isClosed) {
+        if (wasExecuted || acceptCount >= 10) {
+          status = 'executed';
+        } else if (wasRejected) {
+          status = 'rejected';
+        } else if (finalVoteCount === 0 || isExpired) {
+          status = 'expired';
+        } else {
+          status = 'rejected'; // closed but didn't pass
+        }
+      } else if (isExpired) {
+        status = 'expired';
+      } else {
+        status = 'in_progress';
+      }
 
       // Normalize reason - can be string or object
       const rawReason = event.payload?.reason;
@@ -294,7 +344,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: event.effective_at,
-        status: isActive ? 'active' : 'historical',
+        status,
         is_closed: isClosed,
         action_tag: event.payload?.action?.tag || null,
         action_value: event.payload?.action?.value ? JSON.stringify(event.payload.action.value) : null,
