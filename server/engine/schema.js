@@ -141,10 +141,10 @@ export async function initEngineSchema() {
 
     if (isNotNull) {
       console.log('🔧 Migrating vote_requests.stable_id to nullable (table rebuild)...');
-      await query(`
-        CREATE TABLE vote_requests__tmp AS
-        SELECT * FROM vote_requests
-      `);
+
+      await query(`CREATE TABLE vote_requests__tmp AS SELECT * FROM vote_requests`);
+      const tmpCols = await query(`PRAGMA table_info('vote_requests__tmp')`);
+      const tmpColNames = new Set(tmpCols.map(c => c.name));
 
       await query(`DROP TABLE vote_requests`);
 
@@ -173,10 +173,47 @@ export async function initEngineSchema() {
         )
       `);
 
+      // Insert back only the columns that existed in the old table (avoid binder "N columns" errors)
+      const desiredOrder = [
+        'event_id',
+        'stable_id',
+        'contract_id',
+        'template_id',
+        'effective_at',
+        'status',
+        'is_closed',
+        'action_tag',
+        'action_value',
+        'requester',
+        'reason',
+        'votes',
+        'vote_count',
+        'vote_before',
+        'target_effective_at',
+        'tracking_cid',
+        'dso',
+        'payload',
+        'created_at',
+        'updated_at',
+      ];
+
+      const insertCols = desiredOrder.filter(c => c !== 'stable_id' ? tmpColNames.has(c) : tmpColNames.has('stable_id'));
+      const selectExprs = desiredOrder
+        .filter(c => insertCols.includes(c))
+        .map(c => {
+          if (c === 'stable_id') {
+            // stable_id exists but was NOT NULL; keep values, and if any are NULL, fall back to event_id
+            return `COALESCE(stable_id, event_id) AS stable_id`;
+          }
+          return c;
+        });
+
       await query(`
-        INSERT INTO vote_requests
-        SELECT * FROM vote_requests__tmp
+        INSERT INTO vote_requests (${insertCols.join(', ')})
+        SELECT ${selectExprs.join(', ')}
+        FROM vote_requests__tmp
       `);
+
       await query(`DROP TABLE vote_requests__tmp`);
       console.log('   ✓ vote_requests migrated');
     }
