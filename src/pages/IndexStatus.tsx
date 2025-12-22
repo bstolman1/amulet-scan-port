@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Database,
   RefreshCw,
@@ -16,10 +17,19 @@ import {
   Clock,
   Activity,
   Play,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
+import { useState } from "react";
+
+interface TemplateInfo {
+  template_name: string;
+  total_events: number;
+  file_count: number;
+}
 
 // API functions
 const fetchTemplateIndexStatus = async () => {
@@ -37,6 +47,12 @@ const fetchVoteRequestIndexStatus = async () => {
 const fetchAggregationState = async () => {
   const res = await fetch(`${getDuckDBApiUrl()}/api/stats/aggregation-state`);
   if (!res.ok) throw new Error("Failed to fetch aggregation state");
+  return res.json();
+};
+
+const fetchIndexedTemplates = async (): Promise<{ templates: TemplateInfo[] }> => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/engine/template-index/templates`);
+  if (!res.ok) throw new Error("Failed to fetch indexed templates");
   return res.json();
 };
 
@@ -193,6 +209,7 @@ const IndexCard = ({
 const IndexStatus = () => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [showAllTemplates, setShowAllTemplates] = useState(false);
 
   // Fetch statuses
   const { data: templateIndex, isLoading: templateLoading, error: templateError } = useQuery({
@@ -215,6 +232,16 @@ const IndexStatus = () => {
     refetchInterval: 10000,
     retry: false,
   });
+
+  const { data: templatesData, isLoading: templatesLoading } = useQuery({
+    queryKey: ["indexedTemplates"],
+    queryFn: fetchIndexedTemplates,
+    refetchInterval: 30000,
+    retry: false,
+    enabled: templateIndex?.isPopulated,
+  });
+
+  const templates = templatesData?.templates || [];
 
   // Mutations
   const templateRebuildMutation = useMutation({
@@ -445,6 +472,76 @@ const IndexStatus = () => {
             isCreatingTable={initSchemaMutation.isPending}
           />
         </div>
+
+        {/* Indexed Templates List */}
+        {templateIndex?.isPopulated && templates.length > 0 && (
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-primary" />
+                    Indexed Templates ({templates.length})
+                  </CardTitle>
+                  <CardDescription>All unique templates found across binary files</CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowAllTemplates(!showAllTemplates)}
+                >
+                  {showAllTemplates ? (
+                    <>
+                      <ChevronUp className="w-4 h-4 mr-1" />
+                      Show Less
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-4 h-4 mr-1" />
+                      Show All
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className={showAllTemplates ? "h-[400px]" : "h-[200px]"}>
+                <div className="space-y-1">
+                  {/* Header */}
+                  <div className="grid grid-cols-3 gap-4 text-xs text-muted-foreground font-medium px-3 py-2 bg-muted/50 rounded sticky top-0">
+                    <span>Template Name</span>
+                    <span className="text-right">Events</span>
+                    <span className="text-right">Files</span>
+                  </div>
+                  {templates.map((t, idx) => (
+                    <div
+                      key={t.template_name}
+                      className={`grid grid-cols-3 gap-4 text-sm py-2 px-3 rounded hover:bg-muted/50 ${
+                        idx % 2 === 0 ? "bg-muted/20" : ""
+                      }`}
+                    >
+                      <span className="font-mono text-xs truncate" title={t.template_name}>
+                        {t.template_name}
+                      </span>
+                      <span className="text-right tabular-nums">
+                        {Number(t.total_events).toLocaleString()}
+                      </span>
+                      <span className="text-right tabular-nums text-muted-foreground">
+                        {Number(t.file_count).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              {templatesLoading && (
+                <div className="flex items-center justify-center py-4 text-muted-foreground">
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Loading templates...
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Info Section */}
         <Card className="bg-muted/30">
