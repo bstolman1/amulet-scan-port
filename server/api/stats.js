@@ -4,8 +4,20 @@ import binaryReader from '../duckdb/binary-reader.js';
 import { getTotalCounts, getTimeRange, getTemplateEventCounts } from '../engine/aggregations.js';
 import { getIngestionStats } from '../engine/ingest.js';
 import { query } from '../duckdb/connection.js';
+import { initEngineSchema } from '../engine/schema.js';
 
 const router = Router();
+
+// POST /api/stats/init-engine-schema - Initialize the engine schema (creates tables)
+router.post('/init-engine-schema', async (req, res) => {
+  try {
+    await initEngineSchema();
+    res.json({ success: true, message: 'Engine schema initialized successfully' });
+  } catch (err) {
+    console.error('Error initializing engine schema:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Check if engine mode is enabled
 const ENGINE_ENABLED = process.env.ENGINE_ENABLED === 'true';

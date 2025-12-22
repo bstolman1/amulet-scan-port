@@ -62,6 +62,8 @@ interface IndexCardProps {
   onRebuild?: () => void;
   isRebuilding?: boolean;
   buildProgress?: { current: number; total: number } | null;
+  onCreateTable?: () => void;
+  isCreatingTable?: boolean;
 }
 
 const IndexCard = ({
@@ -74,6 +76,8 @@ const IndexCard = ({
   onRebuild,
   isRebuilding,
   buildProgress,
+  onCreateTable,
+  isCreatingTable,
 }: IndexCardProps) => {
   const statusConfig = {
     ready: { label: "Ready", variant: "default" as const, color: "text-green-500", bg: "bg-green-500/10" },
@@ -134,6 +138,29 @@ const IndexCard = ({
             <Clock className="w-4 h-4" />
             <span>Updated {formatDistanceToNow(new Date(lastUpdated), { addSuffix: true })}</span>
           </div>
+        )}
+
+        {/* Create Table Button (for Aggregation State when table doesn't exist) */}
+        {onCreateTable && status === "empty" && (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={onCreateTable}
+            disabled={isCreatingTable}
+            className="w-full"
+          >
+            {isCreatingTable ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Creating...
+              </>
+            ) : (
+              <>
+                <Database className="w-4 h-4 mr-2" />
+                Create Table
+              </>
+            )}
+          </Button>
         )}
 
         {/* Rebuild Button */}
@@ -220,6 +247,29 @@ const IndexStatus = () => {
     onError: (error: Error) => {
       toast({
         title: "Failed to build vote request index",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation to initialize engine schema (create aggregation_state table)
+  const initSchemaMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`${getDuckDBApiUrl()}/api/stats/init-engine-schema`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to initialize engine schema");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Engine schema initialized",
+        description: "Aggregation state table created successfully",
+      });
+      queryClient.invalidateQueries({ queryKey: ["aggregationState"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to initialize schema",
         description: error.message,
         variant: "destructive",
       });
@@ -391,6 +441,8 @@ const IndexStatus = () => {
                 : []
             }
             lastUpdated={aggregationState?.states?.[0]?.last_updated}
+            onCreateTable={aggregationState?.tableExists === false ? () => initSchemaMutation.mutate() : undefined}
+            isCreatingTable={initSchemaMutation.isPending}
           />
         </div>
 
