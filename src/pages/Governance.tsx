@@ -1,21 +1,9 @@
 import { useEffect, useRef } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Vote,
-  CheckCircle,
-  XCircle,
-  Clock,
-  Users,
-  Code,
-  DollarSign,
-  History,
-  Database,
-  AlertTriangle,
-  ExternalLink,
-} from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -70,18 +58,18 @@ const Governance = () => {
     data: localVoteRequestsData,
     isLoading: localLoading,
     isError: localError,
-  } = useAggregatedTemplateData(undefined, "Splice.DsoRules:VoteRequest");
+  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
 
   // Fetch DsoRules from LOCAL ACS
   const { data: localDsoRulesData } = useAggregatedTemplateData(
     undefined,
-    "Splice.DsoRules:DsoRules",
+    "Splice:DsoRules:DsoRules",
   );
 
   // Fetch Confirmations from LOCAL ACS
   const { data: localConfirmationsData } = useAggregatedTemplateData(
     undefined,
-    "Splice.DsoRules:Confirmation",
+    "Splice:DsoRules:Confirmation",
   );
 
   // Check if local ACS has governance data
@@ -156,13 +144,6 @@ const Governance = () => {
     return undefined;
   };
 
-  // Extract CIP reference for linking into Governance Flow
-  const extractCipReference = (reasonBody?: string, reasonUrl?: string) => {
-    const text = `${reasonBody || ""} ${reasonUrl || ""}`;
-    const match = text.match(/CIP[#\-\s]?0*(\d+)/i);
-    return match ? `CIP-${match[1].padStart(4, "0")}` : null;
-  };
-
   // Helper to parse action structure and extract meaningful title
   const parseAction = (action: any): { title: string; actionType: string; actionDetails: any } => {
     if (!action) return { title: "Unknown Action", actionType: "Unknown", actionDetails: null };
@@ -218,82 +199,51 @@ const Governance = () => {
     return { votesFor, votesAgainst, votedSvs };
   };
 
-  // Normalize VoteRequest row formats between:
-  // - DuckDB ACS rows (payload may wrap create_arguments)
-  // - Canton Scan API contracts (payload is already the create_arguments)
-  const normalizeVoteRequestPayload = (row: any) => {
-    if (!row) return {};
-
-    // Common shapes we've seen:
-    // 1) { payload: { action, votes, ... } }
-    // 2) { payload: { create_arguments: { action, votes, ... } } }
-    // 3) { create_arguments: { action, votes, ... } }
-    // 4) { payload: { payload: { action, votes, ... } } } (double-wrapped)
-    const p1 = row.payload ?? row;
-    const p2 = p1?.payload ?? p1; // unwrap accidental double nesting
-    const p3 = p2?.create_arguments ?? p2?.createArguments ?? p2;
-    return p3 && typeof p3 === "object" ? p3 : {};
-  };
-
   // Process proposals from ACS data with full JSON parsing
   const proposals =
     voteRequestsData?.data?.map((voteRequest: any) => {
-      const payload = normalizeVoteRequestPayload(voteRequest);
-
+      // Handle both flat structure and nested payload structure from DuckDB
+      const payload = voteRequest.payload || voteRequest;
+      
       // Parse action
-      const action =
-        getField(payload, "action") ??
-        getField(voteRequest, "action") ??
-        getField(voteRequest?.payload, "action") ??
-        {};
+      const action = payload.action || voteRequest.action || {};
       const { title, actionType, actionDetails } = parseAction(action);
-
+      
       // Parse votes
-      const votesRaw = getField(payload, "votes") ?? getField(voteRequest, "votes") ?? [];
+      const votesRaw = payload.votes || voteRequest.votes || [];
       const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
 
       // Extract requester information
-      const requesterRaw = getField(payload, "requester") ?? getField(voteRequest, "requester");
-      const requester =
-        typeof requesterRaw === "string"
-          ? requesterRaw
-          : requesterRaw?.party ?? requesterRaw?.sv ?? requesterRaw?.id ?? "Unknown";
+      const requester = payload.requester || voteRequest.requester || "Unknown";
 
       // Extract reason (has url and body)
-      const reasonObj = getField(payload, "reason") ?? getField(voteRequest, "reason") ?? {};
+      const reasonObj = payload.reason || voteRequest.reason || {};
       const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
       const reasonUrl = reasonObj?.url || "";
 
       // Extract timing fields
-      const voteBefore = getField(payload, "voteBefore") ?? getField(payload, "vote_before") ?? getField(voteRequest, "voteBefore");
-      const targetEffectiveAt =
-        getField(payload, "targetEffectiveAt") ??
-        getField(payload, "target_effective_at") ??
-        getField(voteRequest, "targetEffectiveAt");
-
-      const trackingCid =
-        getField(payload, "trackingCid") ??
-        getField(payload, "tracking_cid") ??
-        getField(voteRequest, "trackingCid") ??
-        voteRequest.contract_id;
+      const voteBefore = payload.voteBefore || voteRequest.voteBefore;
+      const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
+      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
 
       // Determine status based on votes and threshold
       const threshold = votingThreshold || svCount || 1;
       let status: "approved" | "rejected" | "pending" = "pending";
-
+      
       // Check if voting deadline has passed
       const now = new Date();
       const voteDeadline = voteBefore ? new Date(voteBefore) : null;
       const isExpired = voteDeadline && voteDeadline < now;
-
+      
       // Only mark as approved if enough votes FOR
       if (votesFor >= threshold) {
         status = "approved";
-      }
+      } 
       // Only mark as rejected if deadline passed AND not enough votes
       else if (isExpired && votesFor < threshold) {
         status = "rejected";
       }
+      // Otherwise it's still pending (deadline not reached or voting ongoing)
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
@@ -488,17 +438,7 @@ const Governance = () => {
           <TabsContent value="active">
             <Card className="glass-card">
               <div className="p-6">
-                <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                  Active Proposals
-                  <Badge variant="secondary" className="ml-2 text-xs">
-                    ACS Snapshot
-                  </Badge>
-                  {proposals?.length > 0 && (
-                    <Badge variant="outline" className="ml-1">
-                      {proposals.length} active
-                    </Badge>
-                  )}
-                </h3>
+                <h3 className="text-xl font-bold mb-6">Recent Proposals</h3>
 
             {isError ? (
               <div className="text-center py-12">
@@ -547,21 +487,7 @@ const Governance = () => {
                         <div className="flex items-center space-x-3">
                           <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(proposal.status)}</div>
                           <div className="flex-1">
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                              <h4 className="font-semibold text-lg">{proposal.title}</h4>
-                              {(() => {
-                                const cip = extractCipReference(proposal.reasonBody, proposal.reasonUrl);
-                                if (!cip) return null;
-                                return (
-                                  <Button asChild variant="outline" size="sm">
-                                    <Link to={`/governance-flow?q=${encodeURIComponent(cip)}`}>
-                                      <ExternalLink className="h-4 w-4 mr-2" />
-                                      View in Governance Flow
-                                    </Link>
-                                  </Button>
-                                );
-                              })()}
-                            </div>
+                            <h4 className="font-semibold text-lg">{proposal.title}</h4>
                             <p className="text-sm text-muted-foreground">
                               Proposal #{proposal.id}
                               <span className="mx-2">•</span>
@@ -711,24 +637,13 @@ const Governance = () => {
           <div className="p-6">
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
               <History className="h-5 w-5" />
-              Governance History
-              <Badge variant="secondary" className="ml-2 text-xs">
-                Ledger Events
-              </Badge>
+              Historical Governance Events (DuckDB)
               {governanceEvents?.length ? (
-                <Badge variant="outline" className="ml-1">
-                  {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} archived
+                <Badge variant="outline" className="ml-2">
+                  {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} VoteRequests
                 </Badge>
               ) : null}
             </h3>
-            
-            <Alert className="mb-4 bg-muted/30 border-border/50">
-              <Database className="h-4 w-4" />
-              <AlertDescription className="text-sm">
-                History shows <strong>archived</strong> VoteRequest contracts from ledger backfill/updates. 
-                These are proposals that have been completed (approved/rejected/expired).
-              </AlertDescription>
-            </Alert>
             
             {eventsLoading ? (
               <div className="space-y-3">
@@ -740,11 +655,8 @@ const Governance = () => {
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">No historical governance events found</p>
-                <p className="text-xs text-muted-foreground mb-4">
-                  Governance history requires ledger backfill data with archived VoteRequest events.
-                </p>
                 <p className="text-xs text-muted-foreground">
-                  Run backfill ingestion to populate historical governance data.
+                  Governance history is extracted from local DuckDB backfill data
                 </p>
               </div>
             ) : (
@@ -978,9 +890,9 @@ const Governance = () => {
         <DataSourcesFooter
           snapshotId={latestSnapshot?.id}
           templateSuffixes={[
-            "Splice.DsoRules:VoteRequest",
-            "Splice.DsoRules:DsoRules",
-            "Splice.DsoRules:Confirmation",
+            "Splice:DsoRules:VoteRequest",
+            "Splice:DsoRules:DsoRules",
+            "Splice:DsoRules:Confirmation",
           ]}
           isProcessing={false}
         />

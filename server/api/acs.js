@@ -270,30 +270,26 @@ function getSnapshotFilesSource(snapshotPath) {
   
   const normalizedPath = snapshotPath.replace(/\\/g, '/');
   
-  // Check what file types exist in this snapshot - RECURSIVE scan to find files in subdirs
-  const files = fs.readdirSync(snapshotPath, { recursive: true })
-    .map(f => String(f));
-  
+  // Check what file types exist in this snapshot
+  const files = fs.readdirSync(snapshotPath);
   const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
   const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
   const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
   
   const parts = [];
   if (hasJsonl) {
-    // Use ** glob for recursive matching in subdirectories
-    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/**/*.jsonl', union_by_name=true, ignore_errors=true)`);
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl', union_by_name=true, ignore_errors=true)`);
   }
   if (hasGz) {
-    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/**/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   }
   if (hasZst) {
-    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/**/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+    parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   }
   
   if (parts.length === 0) return null;
   
-  const fileCount = files.filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst')).length;
-  console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${fileCount} files, recursive)`);
+  console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl')).length} files)`);
   // Use UNION (not UNION ALL) to prevent duplicate records across file types
   return `(${parts.join(' UNION ')})`;
 }
@@ -965,46 +961,39 @@ router.get('/contracts', async (req, res) => {
 
     let whereClause = '1=1';
     if (template) {
-      // Normalize template query to handle all separator formats.
-      // IMPORTANT: Template IDs have format: "hash:Module.Path:EntityName"
-      // e.g., "996a3b619d...:Splice.DsoRules:VoteRequest"
-      // Queries may come as "Splice:DsoRules:VoteRequest" or "Splice.DsoRules:VoteRequest"
+      // Normalize template query to handle all separator formats:
+      // UI sends "Splice:DsoRules:VoteRequest" but stored format could be:
+      // - "<pkg-hash>:Splice.DsoRules:VoteRequest" (dots for module)
+      // - "<pkg-hash>_Splice_DsoRules_VoteRequest" (underscores)
       const t = String(template);
       const entityName = t.split(/[:._]/).pop() || t;
       
-      // Parse query parts (e.g., "Splice:DsoRules:VoteRequest" -> ["Splice", "DsoRules", "VoteRequest"])
-      const parts = t.split(/[:._]/);
-      const modulePath = parts.length >= 2 ? parts.slice(0, -1).join('.') : parts[0]; // "Splice.DsoRules"
-      
-      // Generate comprehensive variants for matching
       const variants = new Set([
-        t,                              // Original query
-        t.replaceAll(':', '.'),         // All dots
-        t.replaceAll('.', ':'),         // All colons
-        `${modulePath}:${entityName}`,  // "Splice.DsoRules:VoteRequest" (canonical format)
-        `${modulePath.replaceAll('.', ':')}:${entityName}`, // "Splice:DsoRules:VoteRequest"
-        entityName,                     // Just entity name
+        t,
+        t.replaceAll(':', '.'),
+        t.replaceAll('.', ':'),
+        t.replaceAll(':', '_'),
+        t.replaceAll('.', '_'),
+        t.replaceAll('_', ':'),
+        t.replaceAll('_', '.'),
+        entityName, // Also try just the entity name
       ]);
 
-      // Build WHERE clause: match against template_id with LIKE or entity_name exactly
       const likeClauses = [...variants]
         .filter(Boolean)
-        .map((v) => {
-          const escaped = String(v).replace(/'/g, "''");
-          const entity = String(v).split(/[:._]/).pop()?.replace(/'/g, "''") || escaped;
-          // For template_id: use LIKE with the variant (handles hash prefix)
-          // For entity_name: exact match on just the entity part
-          return `tid LIKE '%${escaped}%' OR ename = '${entity}'`;
-        });
+        .map((v) => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
+      
+      // Also match by entity_name directly
+      likeClauses.push(`entity_name = '${entityName.replace(/'/g, "''")}'`);
 
       whereClause = `(${likeClauses.join(' OR ')})`;
-      console.log(`[ACS] Template variants for "${t}":`, [...variants]);
     } else if (entity) {
+      // Match by entity_name OR template_id containing the entity name
       const e = String(entity).replace(/'/g, "''");
-      whereClause = `(ename = '${e}' OR tid LIKE '%:${e}:%' OR tid LIKE '%:${e}' OR tid LIKE '%_${e}_%' OR tid LIKE '%_${e}')`;
+      whereClause = `(entity_name = '${e}' OR template_id LIKE '%:${e}:%' OR template_id LIKE '%:${e}' OR template_id LIKE '%_${e}_%' OR template_id LIKE '%_${e}')`;
     }
 
-    console.log(`[ACS] WHERE clause: ${whereClause.substring(0, 500)}...`);
+    console.log(`[ACS] WHERE clause: ${whereClause}`);
 
     // Use optimized snapshot source (reads only files from selected snapshot)
     const { snapshot, source: acsSource, type } = getBestSnapshotAndSource();
@@ -1013,84 +1002,29 @@ router.get('/contracts', async (req, res) => {
       console.log('[ACS] No snapshot found, falling back to full scan');
     }
     
-    // Build a normalized base to support older/newer ACS row formats
-    const baseCte = `
-      WITH base AS (
-        SELECT
-          contract_id,
-          COALESCE(
-            template_id,
-            json_extract_string(payload, '$.template_id'),
-            json_extract_string(payload, '$.templateId')
-          ) AS tid,
-          COALESCE(
-            entity_name,
-            json_extract_string(payload, '$.entity_name'),
-            json_extract_string(payload, '$.entityName')
-          ) AS ename,
-          module_name,
-          signatories,
-          observers,
-          payload,
-          record_time,
-          snapshot_time
-        FROM ${acsSource} acs
-      )
-    `;
-
     // First get total count (deduplicated by contract_id)
     const countSql = `
-      ${baseCte}
       SELECT COUNT(DISTINCT contract_id) as total_count
-      FROM base
+      FROM ${acsSource} acs
       WHERE ${whereClause}
     `;
-
+    
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
-
-    // If a template filter returns nothing, emit lightweight debug info so we can see what template_id
-    // formats actually exist in the selected snapshot without dumping the whole dataset.
-    let debug = undefined;
-    if (template && totalCount === 0) {
-      try {
-        const q = String(template);
-        const entityHint = q.split(/[:._]/).pop() || q;
-        const sampleRows = await db.safeQuery(`
-          ${baseCte}
-          SELECT DISTINCT tid
-          FROM base
-          WHERE tid IS NOT NULL
-            AND (tid LIKE '%${entityHint.replace(/'/g, "''")}%' OR ename = '${entityHint.replace(/'/g, "''")}')
-          ORDER BY tid
-          LIMIT 20
-        `);
-
-        debug = {
-          templateQuery: q,
-          entityHint,
-          sampleMatchingTemplateIds: sampleRows.map((r) => r.tid).filter(Boolean),
-        };
-        console.log('[ACS] Zero results debug:', debug);
-      } catch (e) {
-        console.warn('[ACS] Failed to generate zero-results debug:', e.message);
-      }
-    }
-
+    
     // Use GROUP BY contract_id to deduplicate (handles any duplicate records)
     const sql = `
-      ${baseCte}
-      SELECT
+      SELECT 
         contract_id,
-        any_value(tid) as template_id,
-        any_value(ename) as entity_name,
+        any_value(template_id) as template_id,
+        any_value(entity_name) as entity_name,
         any_value(module_name) as module_name,
         any_value(signatories) as signatories,
         any_value(observers) as observers,
         any_value(payload) as payload,
         any_value(record_time) as record_time,
         any_value(snapshot_time) as snapshot_time
-      FROM base
+      FROM ${acsSource} acs
       WHERE ${whereClause}
       GROUP BY contract_id
       ORDER BY contract_id
@@ -1120,7 +1054,7 @@ router.get('/contracts', async (req, res) => {
       };
     });
     
-    res.json(serializeBigInt({ data: parsedRows, count: totalCount, debug }));
+    res.json(serializeBigInt({ data: parsedRows, count: totalCount }));
   } catch (err) {
     console.error('ACS contracts error:', err);
     res.status(500).json({ error: err.message });

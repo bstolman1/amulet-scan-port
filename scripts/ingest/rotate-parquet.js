@@ -11,9 +11,9 @@ import { execSync } from 'child_process';
 import { readdirSync, statSync, unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 
-// Default Windows path: C:/ledger_raw/raw
-const WIN_DEFAULT = 'C:/ledger_raw/raw';
-const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WIN_DEFAULT;
+// Default WSL path: /home/bstolz/canton-explorer/data/raw
+const WSL_DEFAULT = '/home/bstolz/canton-explorer/data/raw';
+const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WSL_DEFAULT;
 const MIN_FILE_SIZE_MB = 100;  // Minimum file size before compaction (increased for larger files)
 const TARGET_FILE_SIZE_MB = 500;  // Target file size after compaction (larger = faster reads)
 

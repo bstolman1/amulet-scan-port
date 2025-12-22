@@ -180,7 +180,7 @@ const Templates = () => {
                   The Supabase database has exceeded its storage quota. Please contact support or upgrade your plan.
                   <br />
                   <span className="text-xs mt-1 block opacity-75">
-                    Alternatively, ensure the DuckDB API server is running and accessible
+                    Alternatively, ensure the local DuckDB server is running at localhost:3001
                   </span>
                 </>
               ) : errorMessage?.includes('Failed to fetch') ? (

@@ -56,14 +56,12 @@ export function useGovernanceEvents() {
         "/api/events/vote-requests?status=historical&limit=1000&ensureFresh=true",
       );
 
-      // Dedupe by contract_id (each VoteRequest contract is unique) rather than event_id
-      // This handles duplicates from multiple migration_ids or ingestion passes
-      const seenContracts = new Set<string>();
+      const seen = new Set<string>();
       const mapped = (response.data || [])
         .filter((r) => {
-          if (!r?.contract_id) return false;
-          if (seenContracts.has(r.contract_id)) return false;
-          seenContracts.add(r.contract_id);
+          if (!r?.event_id) return false;
+          if (seen.has(r.event_id)) return false;
+          seen.add(r.event_id);
           return true;
         })
         .map((r) => {
@@ -82,7 +80,7 @@ export function useGovernanceEvents() {
             event_id: r.event_id,
             event_type: r.is_closed ? "archived" : "created",
             contract_id: r.contract_id,
-            template_id: r.template_id ?? "Splice.DsoRules:VoteRequest",
+            template_id: r.template_id ?? "Splice:DsoRules:VoteRequest",
             effective_at: r.effective_at ?? undefined,
             timestamp: r.effective_at ?? undefined,
             payload,

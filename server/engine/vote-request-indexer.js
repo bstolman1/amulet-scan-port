@@ -68,7 +68,7 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
   
   const results = await query(`
     SELECT 
-      stable_id, event_id, contract_id, template_id, effective_at,
+      event_id, contract_id, template_id, effective_at,
       status, is_closed, action_tag, action_value,
       requester, reason, votes, vote_count,
       vote_before, target_effective_at, tracking_cid, dso
@@ -107,95 +107,13 @@ export async function isIndexPopulated() {
 /**
  * Ensure index tables exist
  */
-/**
- * Extract candidate stable identifiers from a payload.
- * We look for any leaf string field whose key ends with "Cid" (case-insensitive).
- */
-function extractCidCandidates(payload) {
-  const out = [];
-  const walk = (obj, prefix = '') => {
-    if (!obj || typeof obj !== 'object') return;
-    for (const [k, v] of Object.entries(obj)) {
-      const path = prefix ? `${prefix}.${k}` : k;
-      if (typeof v === 'string' && /cid$/i.test(k) && v.length > 0) {
-        out.push({ path, value: v });
-      } else if (v && typeof v === 'object') {
-        walk(v, path);
-      }
-    }
-  };
-  walk(payload);
-  return out;
-}
-
-function getValueAtPath(obj, path) {
-  try {
-    return path.split('.').reduce((acc, k) => (acc && typeof acc === 'object' ? acc[k] : undefined), obj);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Generate a stable identifier for a VoteRequest that persists across migrations.
- * Strategy:
- *  1) Use payload.trackingCid when present.
- *  2) Otherwise, use the "best" *Cid field across the dataset (chosen in buildVoteRequestIndex).
- *  3) Fallback: hash of action/value/requester/reason.
- */
-function generateStableVoteRequestId(event, bestCidPath) {
-  const payload = event?.payload;
-
-  const trackingCid = payload?.trackingCid;
-  if (typeof trackingCid === 'string' && trackingCid.length > 0) {
-    return { stableId: `trackingCid:${trackingCid}`, kind: 'trackingCid' };
-  }
-
-  if (bestCidPath) {
-    const v = getValueAtPath(payload, bestCidPath);
-    if (typeof v === 'string' && v.length > 0) {
-      return { stableId: `payloadCid:${bestCidPath}:${v}`, kind: 'payloadCid' };
-    }
-  }
-
-  const actionTag = payload?.action?.tag || '';
-  const actionValue = payload?.action?.value ? JSON.stringify(payload.action.value) : '';
-  const requester = payload?.requester || '';
-  const reason = payload?.reason
-    ? (typeof payload.reason === 'string' ? payload.reason : JSON.stringify(payload.reason))
-    : '';
-
-  const composite = `${actionTag}::${actionValue}::${requester}::${reason}`;
-
-  // cyrb53 hash - 53-bit hash with good distribution
-  const cyrb53 = (str, seed = 0) => {
-    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
-    for (let i = 0, ch; i < str.length; i++) {
-      ch = str.charCodeAt(i);
-      h1 = Math.imul(h1 ^ ch, 2654435761);
-      h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
-    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
-    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-  };
-
-  const hash = cyrb53(composite);
-  return { stableId: `${actionTag}-${hash.toString(36)}`, kind: 'hash' };
-}
-
 async function ensureIndexTables() {
   try {
     // Create vote_requests table if it doesn't exist
-    // Use stable_id as primary key - a composite of action+requester that persists across migrations
-    // This correctly deduplicates VoteRequests that get new contract_ids during ledger upgrades
     await query(`
       CREATE TABLE IF NOT EXISTS vote_requests (
-        stable_id VARCHAR PRIMARY KEY,
+        event_id VARCHAR PRIMARY KEY,
         contract_id VARCHAR,
-        event_id VARCHAR,
         template_id VARCHAR,
         effective_at TIMESTAMP,
         status VARCHAR,
@@ -247,24 +165,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
   try {
     const startTime = Date.now();
     
-    // If force, drop and recreate tables to apply schema changes
-    if (force) {
-      try {
-        await query('DROP TABLE IF EXISTS vote_requests');
-        await query('DROP TABLE IF EXISTS vote_request_index_state');
-        console.log('   Dropped existing tables for schema update');
-      } catch (err) {
-        // Ignore drop errors
-      }
-    }
-    
-    // Ensure tables exist (will create with new schema if dropped)
+    // Ensure tables exist first
     await ensureIndexTables();
     
     // Check if template index is available for faster scanning
     const templateIndexPopulated = await isTemplateIndexPopulated();
-    let createdRecords = [];
-    let exercisedRecords = [];
+    let createdResult, exercisedResult;
     
     if (templateIndexPopulated) {
       // FAST PATH: Use template index to scan only relevant files
@@ -276,88 +182,32 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       if (voteRequestFiles.length === 0) {
         console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
-        const result = await scanAllFilesForVoteRequestsSinglePass();
-        createdRecords = result.created;
-        exercisedRecords = result.exercised;
+        createdResult = await scanAllFilesForVoteRequests('created');
+        exercisedResult = await scanAllFilesForVoteRequests('exercised');
       } else {
-        // SINGLE PASS: Scan files once and collect both event types
-        console.log('   📊 Scanning files for VoteRequest events (single pass)...');
-        const result = await scanFilesForVoteRequestsSinglePass(voteRequestFiles);
-        createdRecords = result.created;
-        exercisedRecords = result.exercised;
+        // Scan only the relevant files
+        console.log('   Scanning VoteRequest files for created events...');
+        createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
+        
+        console.log('   Scanning VoteRequest files for exercised events...');
+        exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
       console.log('   ⚠️ Template index not available, using full scan (this will be slow)');
       console.log('   💡 Run template index build first for faster VoteRequest indexing');
       
-      const result = await scanAllFilesForVoteRequestsSinglePass();
-      createdRecords = result.created;
-      exercisedRecords = result.exercised;
+      createdResult = await scanAllFilesForVoteRequests('created');
+      exercisedResult = await scanAllFilesForVoteRequests('exercised');
     }
     
-    // Dedupe created records by STABLE ID, keeping newest by effective_at.
-    // We first discover which *Cid field (other than trackingCid) is the best candidate
-    // by looking for the path with the highest number of unique values.
-    const stableIdMap = new Map();
-    const contractIdToStableId = new Map();
-
-    // Pass 1: find the best payload *Cid path
-    const cidPathToValues = new Map();
-    for (const e of createdRecords) {
-      if (typeof e?.payload?.trackingCid === 'string' && e.payload.trackingCid.length > 0) continue;
-      for (const c of extractCidCandidates(e.payload)) {
-        if (c.path === 'trackingCid') continue;
-        if (!cidPathToValues.has(c.path)) cidPathToValues.set(c.path, new Set());
-        cidPathToValues.get(c.path).add(c.value);
-      }
-    }
-
-    let bestCidPath = null;
-    let bestCidUniques = 0;
-    for (const [path, set] of cidPathToValues.entries()) {
-      const uniques = set.size;
-      if (uniques > bestCidUniques) {
-        bestCidUniques = uniques;
-        bestCidPath = path;
-      }
-    }
-
-    console.log(`   🔍 Stable-id candidate: bestCidPath=${bestCidPath || 'none'} (unique=${bestCidUniques})`);
-
-    // Pass 2: generate stable IDs and dedupe
-    const kindCounts = { trackingCid: 0, payloadCid: 0, hash: 0 };
-
-    for (const event of createdRecords) {
-      const { stableId, kind } = generateStableVoteRequestId(event, bestCidPath);
-      if (!stableId) continue;
-      kindCounts[kind] = (kindCounts[kind] || 0) + 1;
-
-      event._stableId = stableId;
-      if (event.contract_id) contractIdToStableId.set(event.contract_id, stableId);
-
-      const existing = stableIdMap.get(stableId);
-      if (!existing || new Date(event.effective_at) > new Date(existing.effective_at)) {
-        stableIdMap.set(stableId, event);
-      }
-    }
-
-    const dedupedRecords = Array.from(stableIdMap.values());
-
-    console.log(`   📊 Deduplication: ${createdRecords.length} total → ${dedupedRecords.length} unique (stable_id)`);
-    console.log(`      Stable-id kind usage: trackingCid=${kindCounts.trackingCid}, payloadCid=${kindCounts.payloadCid}, hash=${kindCounts.hash}`);
+    console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
+    console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events`);
     
-    console.log(`   ✓ Found ${createdRecords.length} created (${dedupedRecords.length} unique), ${exercisedRecords.length} exercised`);
-    
-    // Build set of closed stable IDs (not contract IDs, since those can change across migrations)
-    const closedStableIds = new Set();
-    for (const exercised of exercisedRecords) {
-      const cid = exercised.contract_id;
-      if (!cid) continue;
-
-      const stableId = contractIdToStableId.get(cid);
-      if (stableId) closedStableIds.add(stableId);
-    }
+    // Build set of closed contract IDs
+    const closedContractIds = new Set(
+      exercisedResult.records.map(r => r.contract_id).filter(Boolean)
+    );
     
     const now = new Date();
     
@@ -375,11 +225,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let inserted = 0;
     let updated = 0;
     
-    for (const event of dedupedRecords) {
-      const stableId = event._stableId;
+    for (const event of createdResult.records) {
       const voteBefore = event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-      const isClosed = closedStableIds.has(stableId);
+      const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
       const isActive = !isClosed && (voteBeforeDate ? voteBeforeDate > now : true);
       
       // Normalize reason - can be string or object
@@ -389,7 +238,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         : null;
       
       const voteRequest = {
-        stable_id: stableId,
         event_id: event.event_id,
         contract_id: event.contract_id,
         template_id: event.template_id,
@@ -409,18 +257,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       };
       
       try {
-        // Upsert - insert or update on conflict by stable_id (unique per logical VoteRequest)
+        // Upsert - insert or update on conflict
         await query(`
           INSERT INTO vote_requests (
-            stable_id, contract_id, event_id, template_id, effective_at,
+            event_id, contract_id, template_id, effective_at,
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
             updated_at
           ) VALUES (
-            '${voteRequest.stable_id}',
-            '${voteRequest.contract_id}',
             '${voteRequest.event_id}',
+            '${voteRequest.contract_id}',
             ${voteRequest.template_id ? `'${voteRequest.template_id}'` : 'NULL'},
             ${voteRequest.effective_at ? `'${voteRequest.effective_at}'` : 'NULL'},
             '${voteRequest.status}',
@@ -437,18 +284,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.dso ? `'${voteRequest.dso}'` : 'NULL'},
             now()
           )
-          ON CONFLICT (stable_id) DO UPDATE SET
-            contract_id = EXCLUDED.contract_id,
+          ON CONFLICT (event_id) DO UPDATE SET
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
-            votes = EXCLUDED.votes,
-            vote_count = EXCLUDED.vote_count,
             updated_at = now()
         `);
         inserted++;
       } catch (err) {
         if (!err.message?.includes('duplicate')) {
-          console.error(`   Error inserting vote request ${voteRequest.contract_id}:`, err.message);
+          console.error(`   Error inserting vote request ${voteRequest.event_id}:`, err.message);
         } else {
           updated++;
         }
@@ -465,17 +309,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     `);
     
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`✅ VoteRequest index built: ${inserted} unique VoteRequests indexed in ${elapsed}s`);
+    console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
     
     indexingInProgress = false;
     
     return {
       status: 'complete',
-      uniqueVoteRequests: inserted,
-      totalIndexed: inserted,
       inserted,
       updated,
-      closedCount: closedStableIds.size,
+      closedCount: closedContractIds.size,
       elapsedSeconds: parseFloat(elapsed),
     };
     
@@ -494,31 +336,15 @@ export function isIndexingInProgress() {
 }
 
 /**
- * Scan specific files for VoteRequest events - SINGLE PASS collecting both created and exercised
+ * Scan specific files for VoteRequest events (fast path using template index)
  */
-async function scanFilesForVoteRequestsSinglePass(files) {
-  const fs = await import('fs');
-  const created = [];
-  const exercised = [];
+async function scanFilesForVoteRequests(files, eventType) {
+  const records = [];
   let filesProcessed = 0;
-  let filesMissing = 0;
-  let filesErrored = 0;
   const startTime = Date.now();
   let lastLogTime = startTime;
   
-  // Validate files exist before scanning
-  const existingFiles = files.filter(file => {
-    if (fs.existsSync(file)) return true;
-    filesMissing++;
-    return false;
-  });
-  
-  if (filesMissing > 0) {
-    console.log(`   ⚠️ ${filesMissing}/${files.length} files in template index no longer exist`);
-    console.log(`   💡 Template index may be stale - consider rebuilding with force: true`);
-  }
-  
-  for (const file of existingFiles) {
+  for (const file of files) {
     try {
       const result = await binaryReader.readBinaryFile(file);
       const fileRecords = result.records || [];
@@ -526,11 +352,11 @@ async function scanFilesForVoteRequestsSinglePass(files) {
       for (const record of fileRecords) {
         if (!record.template_id?.includes('VoteRequest')) continue;
         
-        if (record.event_type === 'created') {
-          created.push(record);
-        } else if (record.event_type === 'exercised') {
+        if (eventType === 'created' && record.event_type === 'created') {
+          records.push(record);
+        } else if (eventType === 'exercised' && record.event_type === 'exercised') {
           if (record.choice === 'Archive' || (typeof record.choice === 'string' && record.choice.startsWith('VoteRequest_'))) {
-            exercised.push(record);
+            records.push(record);
           }
         }
       }
@@ -541,52 +367,36 @@ async function scanFilesForVoteRequestsSinglePass(files) {
       const now = Date.now();
       if (filesProcessed % 50 === 0 || (now - lastLogTime > 5000)) {
         const elapsed = (now - startTime) / 1000;
-        const pct = ((filesProcessed / existingFiles.length) * 100).toFixed(0);
-        console.log(`   📂 [${pct}%] ${filesProcessed}/${existingFiles.length} files | ${created.length} created, ${exercised.length} exercised | ${elapsed.toFixed(1)}s`);
+        const pct = ((filesProcessed / files.length) * 100).toFixed(0);
+        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} files | ${records.length} ${eventType} events | ${elapsed.toFixed(1)}s`);
         lastLogTime = now;
       }
     } catch (err) {
-      filesErrored++;
-      if (filesErrored <= 3) {
-        console.warn(`   ⚠️ Error reading ${file}: ${err.message}`);
-      }
+      // Skip unreadable files
     }
   }
   
-  if (filesErrored > 3) {
-    console.warn(`   ⚠️ ${filesErrored} total files had read errors`);
-  }
-  
-  return { created, exercised, filesScanned: filesProcessed, filesMissing, filesErrored };
+  return { records, filesScanned: filesProcessed };
 }
 
 /**
- * Scan all files for VoteRequest events - SINGLE PASS (slow fallback path)
+ * Scan all files for VoteRequest events (slow fallback path)
  */
-async function scanAllFilesForVoteRequestsSinglePass() {
-  console.log(`   Scanning all files for VoteRequest events (full scan, single pass)...`);
+async function scanAllFilesForVoteRequests(eventType) {
+  const filter = eventType === 'created'
+    ? (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
+    : (e) => {
+        if (!e.template_id?.includes('VoteRequest')) return false;
+        if (e.event_type !== 'exercised') return false;
+        return e.choice === 'Archive' || (typeof e.choice === 'string' && e.choice.startsWith('VoteRequest_'));
+      };
   
-  const created = [];
-  const exercised = [];
-  
-  // Use streamRecords with a filter that captures both event types
-  const allResults = await binaryReader.streamRecords(DATA_PATH, 'events', {
+  console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
+  return binaryReader.streamRecords(DATA_PATH, 'events', {
     limit: Number.MAX_SAFE_INTEGER,
     offset: 0,
     fullScan: true,
     sortBy: 'effective_at',
-    filter: (e) => e.template_id?.includes('VoteRequest')
+    filter
   });
-  
-  for (const record of allResults.records || []) {
-    if (record.event_type === 'created') {
-      created.push(record);
-    } else if (record.event_type === 'exercised') {
-      if (record.choice === 'Archive' || (typeof record.choice === 'string' && record.choice.startsWith('VoteRequest_'))) {
-        exercised.push(record);
-      }
-    }
-  }
-  
-  return { created, exercised, filesScanned: allResults.filesScanned || 0 };
 }
