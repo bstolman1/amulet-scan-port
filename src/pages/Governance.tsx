@@ -45,7 +45,10 @@ const Governance = () => {
   });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
-  const { data: governanceEvents, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
+  const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
+  const governanceEvents = governanceEventsResult?.events;
+  const dataSource = governanceEventsResult?.source;
+  const fromIndex = governanceEventsResult?.fromIndex;
 
   // Fetch snapshot info for the banner
   const { data: snapshotInfo } = useQuery({
@@ -104,7 +107,14 @@ const Governance = () => {
   const votingThreshold = dsoInfo?.voting_threshold || Math.ceil(svCount * 0.67) || 1; // 2/3 majority
 
   // Unique proposals (deduplicated by proposal hash + action type)
-  const { proposals: uniqueProposals, stats: uniqueStats, isLoading: uniqueLoading, rawEventCount } = useUniqueProposals(votingThreshold);
+  const { 
+    proposals: uniqueProposals, 
+    stats: uniqueStats, 
+    isLoading: uniqueLoading, 
+    rawEventCount,
+    fromIndex: uniqueFromIndex,
+    dataSource: uniqueDataSource,
+  } = useUniqueProposals(votingThreshold);
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -618,13 +628,24 @@ const Governance = () => {
                   Grouped by proposal hash + action type, showing latest state only
                 </p>
               </div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                 <Badge variant="outline">
                   {rawEventCount} events → {uniqueStats.total} unique
                 </Badge>
                 {uniqueStats.duplicatesRemoved > 0 && (
                   <Badge variant="secondary" className="text-xs">
                     {uniqueStats.duplicatesRemoved} duplicates removed
+                  </Badge>
+                )}
+                {uniqueFromIndex && (
+                  <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+                    <Database className="w-3 h-3 mr-1" />
+                    From Index
+                  </Badge>
+                )}
+                {uniqueDataSource && !uniqueFromIndex && (
+                  <Badge variant="outline" className="text-yellow-400 border-yellow-500/30">
+                    Source: {uniqueDataSource}
                   </Badge>
                 )}
               </div>
@@ -833,9 +854,22 @@ const Governance = () => {
               <History className="h-5 w-5" />
               Historical Governance Events (DuckDB)
               {governanceEvents?.length ? (
-                <Badge variant="outline" className="ml-2">
-                  {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} VoteRequests
-                </Badge>
+                <>
+                  <Badge variant="outline" className="ml-2">
+                    {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} VoteRequests
+                  </Badge>
+                  {fromIndex && (
+                    <Badge variant="secondary" className="ml-1 bg-green-500/20 text-green-400 border-green-500/30">
+                      <Database className="w-3 h-3 mr-1" />
+                      From Index
+                    </Badge>
+                  )}
+                  {dataSource && !fromIndex && (
+                    <Badge variant="outline" className="ml-1 text-yellow-400 border-yellow-500/30">
+                      Source: {dataSource}
+                    </Badge>
+                  )}
+                </>
               ) : null}
             </h3>
             

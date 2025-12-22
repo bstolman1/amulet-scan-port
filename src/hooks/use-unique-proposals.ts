@@ -105,7 +105,10 @@ const extractCipReference = (reason: string | null, reasonUrl: string | null): s
 };
 
 export function useUniqueProposals(votingThreshold = 10) {
-  const { data: rawEvents, isLoading, error } = useGovernanceEvents();
+  const { data: rawEventsResult, isLoading, error } = useGovernanceEvents();
+  
+  // Extract events array from the result object
+  const rawEvents = rawEventsResult?.events;
 
   // Transform raw events from indexed data into GovernanceAction format
   // Use the SAME parsing logic as the Governance History tab
@@ -299,5 +302,9 @@ export function useUniqueProposals(votingThreshold = 10) {
     isLoading,
     error,
     rawEventCount: governanceActions?.length || 0,
+    // Expose data source info for the UI
+    dataSource: rawEventsResult?.source || null,
+    fromIndex: rawEventsResult?.fromIndex || false,
+    indexedAt: rawEventsResult?.indexedAt || null,
   };
 }

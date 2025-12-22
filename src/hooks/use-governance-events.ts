@@ -44,16 +44,36 @@ interface EventsResponse<T> {
   count: number;
   hasMore?: boolean;
   source?: string;
+  _summary?: {
+    activeCount: number;
+    historicalCount: number;
+    closedCount: number;
+    statusFilter: string;
+  };
+  _debug?: {
+    indexedAt?: string;
+    totalIndexed?: number;
+    fromIndex?: boolean;
+  };
+}
+
+export interface GovernanceEventsResult {
+  events: GovernanceEvent[];
+  source: string | null;
+  fromIndex: boolean;
+  indexedAt: string | null;
+  totalIndexed: number | null;
 }
 
 export function useGovernanceEvents() {
   return useQuery({
     queryKey: ["governanceEvents"],
-    queryFn: async (): Promise<GovernanceEvent[]> => {
+    queryFn: async (): Promise<GovernanceEventsResult> => {
       // Governance History needs VoteRequest data shaped like the rest of the UI expects (payload.action, payload.votes, etc.).
       // ensureFresh=true triggers a background index rebuild if the persistent index is stale/partial.
+      // verbose=true to get debug info about data source
       const response = await apiFetch<EventsResponse<VoteRequestRow>>(
-        "/api/events/vote-requests?status=historical&limit=1000&ensureFresh=true",
+        "/api/events/vote-requests?status=historical&limit=1000&ensureFresh=true&verbose=true",
       );
 
       const seen = new Set<string>();
@@ -91,7 +111,13 @@ export function useGovernanceEvents() {
           } satisfies GovernanceEvent;
         });
 
-      return mapped;
+      return {
+        events: mapped,
+        source: response.source || null,
+        fromIndex: response._debug?.fromIndex || response.source === 'duckdb-index',
+        indexedAt: response._debug?.indexedAt || null,
+        totalIndexed: response._debug?.totalIndexed || null,
+      };
     },
     staleTime: 30_000,
   });
