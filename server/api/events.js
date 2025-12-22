@@ -1368,4 +1368,108 @@ router.get('/reward-coupon-index/beneficiary/:id', async (req, res) => {
   }
 });
 
+// GET /api/events/by-contract/:contractId - Get all events for a specific contract (debug endpoint)
+router.get('/by-contract/:contractId', async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    const sources = getDataSources();
+    
+    console.log(`\n🔍 Searching for events with contract_id: ${contractId.slice(0, 20)}...`);
+    
+    if (sources.primarySource === 'binary') {
+      // Deep scan all binary files for this specific contract
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 100,
+        offset: 0,
+        maxDays: 3650, // 10 years - search all data
+        maxFilesToScan: 10000, // Search extensively
+        sortBy: 'effective_at',
+        filter: (e) => e.contract_id === contractId
+      });
+      
+      console.log(`   Found ${result.records.length} events for contract`);
+      result.records.forEach((e, i) => {
+        console.log(`   Event ${i + 1}: type=${e.event_type}, choice=${e.choice || 'N/A'}, template=${e.template_id?.split(':').pop()}`);
+      });
+      
+      return res.json({ 
+        data: result.records.map(r => ({
+          event_id: r.event_id,
+          event_type: r.event_type,
+          choice: r.choice,
+          template_id: r.template_id,
+          effective_at: r.effective_at,
+          payload: r.payload,
+        })),
+        count: result.records.length, 
+        hasMore: result.hasMore, 
+        source: 'binary' 
+      });
+    }
+    
+    res.json({ data: [], count: 0, source: 'none', error: 'Binary source required' });
+  } catch (err) {
+    console.error('Error fetching events by contract:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/debug-vote-requests - Analyze sample vote requests to understand choice patterns
+router.get('/debug-vote-requests', async (req, res) => {
+  try {
+    const contractIds = (req.query.ids || '').split(',').filter(Boolean);
+    if (contractIds.length === 0) {
+      return res.status(400).json({ error: 'Provide contract IDs as ?ids=id1,id2,id3' });
+    }
+    
+    console.log(`\n🔍 Analyzing ${contractIds.length} vote request contracts...`);
+    const sources = getDataSources();
+    
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary source required' });
+    }
+    
+    const results = [];
+    const choiceStats = {};
+    
+    for (const contractId of contractIds.slice(0, 50)) { // Max 50
+      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+        limit: 50,
+        maxDays: 3650,
+        maxFilesToScan: 10000,
+        filter: (e) => e.contract_id === contractId
+      });
+      
+      const events = result.records.map(r => ({
+        event_type: r.event_type,
+        choice: r.choice || null,
+        template: r.template_id?.split(':').pop() || r.template_id,
+      }));
+      
+      // Track choice patterns
+      events.forEach(e => {
+        if (e.choice) {
+          choiceStats[e.choice] = (choiceStats[e.choice] || 0) + 1;
+        }
+      });
+      
+      results.push({
+        contract_id: contractId.slice(0, 20) + '...',
+        events,
+      });
+    }
+    
+    console.log(`\n📊 Choice breakdown across ${contractIds.length} contracts:`, choiceStats);
+    
+    res.json({
+      analyzed: results.length,
+      choiceStats,
+      results,
+    });
+  } catch (err) {
+    console.error('Error debugging vote requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

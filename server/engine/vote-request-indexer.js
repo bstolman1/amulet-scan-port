@@ -245,7 +245,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       console.log(`   📋 Using template index (${templateIndexStats.totalFiles} files indexed)`);
 
       const voteRequestFiles = await getFilesForTemplate('VoteRequest');
+      const dsoRulesFiles = await getFilesForTemplate('DsoRules');
       console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events`);
+      console.log(`   📂 Found ${dsoRulesFiles.length} files containing DsoRules events`);
 
       if (voteRequestFiles.length === 0) {
         console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
@@ -259,9 +261,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         indexingProgress = { ...indexingProgress, phase: 'scan:created', current: 0, total: voteRequestFiles.length, records: 0 };
         createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
 
+        // Scan VoteRequest files for direct exercised events
         console.log('   Scanning VoteRequest files for exercised events...');
-        indexingProgress = { ...indexingProgress, phase: 'scan:exercised', current: 0, total: voteRequestFiles.length, records: 0 };
+        indexingProgress = { ...indexingProgress, phase: 'scan:exercised (VoteRequest)', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
+
+        // CRITICAL: Also scan DsoRules files for DsoRules_CloseVoteRequest exercises
+        // These are the events that ACTUALLY close VoteRequests when votes pass/fail
+        if (dsoRulesFiles.length > 0) {
+          console.log('   Scanning DsoRules files for CloseVoteRequest exercises...');
+          indexingProgress = { ...indexingProgress, phase: 'scan:exercised (DsoRules)', current: 0, total: dsoRulesFiles.length, records: 0 };
+          const dsoCloseResult = await scanFilesForDsoCloseVoteRequests(dsoRulesFiles);
+          console.log(`   Found ${dsoCloseResult.records.length} DsoRules_CloseVoteRequest events`);
+          // Merge with exercised results
+          exercisedResult.records.push(...dsoCloseResult.records);
+        }
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
@@ -275,7 +289,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     }
 
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
-    console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised events`);
+    console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised/closed events total`);
 
     // Build map of closed contract IDs -> archived event data (with final vote counts)
     const archivedEventsMap = new Map();
@@ -333,12 +347,27 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
       
       // Check if this was an accepted/executed proposal by looking at the archived event choice
-      // Choices can be: VoteRequest_Accept, ARC_DsoRules_VoteRequest_Accept, Archive, etc.
+      // Choices can be: VoteRequest_Accept, DsoRules_CloseVoteRequest, Archive, etc.
       const archivedChoice = archivedEvent?.choice || '';
       const choiceLower = archivedChoice.toLowerCase();
-      const wasExecuted = choiceLower.includes('accept') && !choiceLower.includes('reject');
-      const wasRejected = choiceLower.includes('reject');
-      const wasExpired = choiceLower.includes('expire');
+      
+      // DsoRules_CloseVoteRequest means the vote completed - determine outcome from vote counts
+      const isCloseVoteRequest = archivedChoice === 'DsoRules_CloseVoteRequest' || 
+                                  archivedChoice === 'DsoRules_CloseVoteRequestResult' ||
+                                  archivedChoice === 'DsoRules_ExecuteConfirmedAction';
+      
+      // Traditional choice-based detection
+      const wasExecutedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
+      const wasRejectedByChoice = choiceLower.includes('reject');
+      const wasExpiredByChoice = choiceLower.includes('expire');
+      
+      // Vote-based detection for CloseVoteRequest (all accepts = executed, any rejects or expired = rejected/expired)
+      const wasExecutedByVotes = isCloseVoteRequest && acceptCount > 0 && rejectCount === 0;
+      const wasRejectedByVotes = isCloseVoteRequest && rejectCount > 0;
+      
+      const wasExecuted = wasExecutedByChoice || wasExecutedByVotes;
+      const wasRejected = wasRejectedByChoice || wasRejectedByVotes;
+      const wasExpired = wasExpiredByChoice;
       
       if (isClosed) {
         if (wasExecuted) {
@@ -350,6 +379,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         } else if (isExpired) {
           // Closed after expiry without explicit action
           status = 'expired';
+        } else if (isCloseVoteRequest) {
+          // CloseVoteRequest with no clear outcome - check if expired
+          status = isExpired ? 'expired' : 'executed'; // Default to executed if closed via CloseVoteRequest
         } else {
           // Closed but no clear accept/reject - likely expired or archived
           status = 'rejected';
@@ -611,15 +643,25 @@ async function scanFilesForVoteRequests(files, eventType) {
 
 /**
  * Scan all files for VoteRequest events (slow fallback path)
+ * Includes DsoRules_CloseVoteRequest exercises for closed votes
  */
 async function scanAllFilesForVoteRequests(eventType) {
   const filter = eventType === 'created'
     ? (e) => e.template_id?.includes('VoteRequest') && e.event_type === 'created'
     : (e) => {
-        if (!e.template_id?.includes('VoteRequest')) return false;
+        // For exercised events, capture both:
+        // 1. Direct exercises on VoteRequest template
+        // 2. DsoRules_CloseVoteRequest exercises (the actual closing event)
         if (e.event_type !== 'exercised') return false;
-        // Capture all exercise choices that close VoteRequests
+        
+        // DsoRules_CloseVoteRequest is the key choice that closes VoteRequests
         const choice = e.choice || '';
+        if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
+          return true;
+        }
+        
+        // Also check VoteRequest direct exercises
+        if (!e.template_id?.includes('VoteRequest')) return false;
         return choice === 'Archive' || choice.includes('VoteRequest') || choice.includes('Accept') || choice.includes('Reject') || choice.includes('Expire');
       };
   
@@ -631,4 +673,72 @@ async function scanAllFilesForVoteRequests(eventType) {
     sortBy: 'effective_at',
     filter
   });
+}
+
+/**
+ * Scan DsoRules files specifically for CloseVoteRequest exercises
+ * These events close VoteRequests and determine their final status
+ */
+async function scanFilesForDsoCloseVoteRequests(files) {
+  const records = [];
+  let filesProcessed = 0;
+  const startTime = Date.now();
+  let lastLogTime = startTime;
+
+  const readWithTimeout = async (file, timeoutMs = 30000) => {
+    return Promise.race([
+      binaryReader.readBinaryFile(file),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Read timeout')), timeoutMs)
+      )
+    ]);
+  };
+
+  for (const file of files) {
+    const fileStart = Date.now();
+    try {
+      const result = await readWithTimeout(file, 30000);
+      const fileRecords = result.records || [];
+
+      for (const record of fileRecords) {
+        if (record.event_type !== 'exercised') continue;
+        
+        const choice = record.choice || '';
+        // Look for DsoRules_CloseVoteRequest and related choices
+        if (choice === 'DsoRules_CloseVoteRequest' || 
+            choice === 'DsoRules_CloseVoteRequestResult' ||
+            choice === 'DsoRules_ExecuteConfirmedAction') {
+          records.push(record);
+        }
+      }
+    } catch (err) {
+      console.warn(`   ⚠️ Skipping DsoRules file due to read error: ${file} (${err?.message || err})`);
+    } finally {
+      filesProcessed++;
+
+      if (indexingProgress) {
+        indexingProgress = {
+          ...indexingProgress,
+          current: filesProcessed,
+          total: files.length,
+          records: records.length,
+        };
+      }
+
+      const now = Date.now();
+      if (filesProcessed % 100 === 0 || (now - lastLogTime > 5000)) {
+        const elapsed = (now - startTime) / 1000;
+        const pct = ((filesProcessed / files.length) * 100).toFixed(0);
+        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} DsoRules files | ${records.length} close events | ${elapsed.toFixed(1)}s`);
+        lastLogTime = now;
+      }
+
+      const tookMs = Date.now() - fileStart;
+      if (tookMs > 15000) {
+        console.log(`   🐢 Slow DsoRules file: ${file} (${(tookMs / 1000).toFixed(1)}s)`);
+      }
+    }
+  }
+
+  return { records, filesScanned: filesProcessed };
 }
