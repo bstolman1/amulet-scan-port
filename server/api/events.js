@@ -612,7 +612,6 @@ router.get('/governance-history', async (req, res) => {
           return false;
         }
       });
-      });
       
       // Run all scans in parallel
       const [voteRequestArchivedResult, voteRequestCreatedResult, otherResult] = await Promise.all([
