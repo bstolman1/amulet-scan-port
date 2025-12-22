@@ -255,6 +255,8 @@ const IndexStatus = () => {
   const getAggStatus = (): IndexCardProps["status"] => {
     if (aggLoading) return "loading";
     if (aggError) return "error";
+    // If tableExists is explicitly false, show empty (not error)
+    if (aggregationState?.tableExists === false) return "empty";
     if (aggregationState?.states?.length > 0) return "ready";
     return "empty";
   };

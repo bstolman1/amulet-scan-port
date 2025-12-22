@@ -853,6 +853,18 @@ router.get('/live-status', async (req, res) => {
 // GET /api/stats/aggregation-state - Aggregation progress table (DuckDB)
 router.get('/aggregation-state', async (req, res) => {
   try {
+    // First check if the aggregation_state table exists
+    const tableCheck = await query(`
+      SELECT COUNT(*) as cnt 
+      FROM information_schema.tables 
+      WHERE table_name = 'aggregation_state'
+    `);
+    
+    if (!tableCheck?.[0]?.cnt || Number(tableCheck[0].cnt) === 0) {
+      // Table doesn't exist yet - return empty but valid response
+      return res.json({ states: [], tableExists: false });
+    }
+    
     // aggregation_state is used by engine/aggregations for incremental progress.
     const rows = await query(`
       SELECT agg_name, last_file_id, last_updated
@@ -865,12 +877,14 @@ router.get('/aggregation-state', async (req, res) => {
         agg_name: r.agg_name,
         last_file_id: Number(r.last_file_id || 0),
         last_updated: r.last_updated,
-      }))
+      })),
+      tableExists: true
     });
   } catch (err) {
     // If engine schema isn't initialized yet, the table may not exist.
-    if (String(err?.message || '').toLowerCase().includes('does not exist')) {
-      return res.json({ states: [] });
+    const errMsg = String(err?.message || '').toLowerCase();
+    if (errMsg.includes('does not exist') || errMsg.includes('not exist') || errMsg.includes('no such table')) {
+      return res.json({ states: [], tableExists: false });
     }
     console.error('Error fetching aggregation state:', err);
     res.status(500).json({ error: err.message });
