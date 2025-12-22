@@ -929,10 +929,24 @@ export const scanApi = {
   },
 
   async fetchStateAcs(request: StateAcsRequest): Promise<StateAcsResponse> {
+    // The Scan API expects template IDs in the format: package_name:module_name:entity_name.
+    // Some parts of the app use the shorthand: package.module:entity.
+    const normalizedRequest: StateAcsRequest = {
+      ...request,
+      templates: request.templates?.map((t) => {
+        // If it already looks like package:module:entity, keep it.
+        if ((t.match(/:/g) || []).length >= 2) return t;
+        // Convert package.module:entity -> package:module:entity
+        const idx = t.indexOf(".");
+        if (idx === -1) return t;
+        return `${t.slice(0, idx)}:${t.slice(idx + 1)}`;
+      }),
+    };
+
     const res = await fetch(`${API_BASE}/v0/state/acs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
+      body: JSON.stringify(normalizedRequest),
       mode: "cors",
     });
     if (!res.ok) throw new Error("Failed to fetch state ACS");
