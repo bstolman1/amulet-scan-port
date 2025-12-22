@@ -826,6 +826,12 @@ const IndexStatus = () => {
           </Card>
         )}
 
+        {/* VoteRequest Debug Panel */}
+        <section aria-labelledby="vote-request-debug" className="mt-2">
+          <h2 id="vote-request-debug" className="sr-only">VoteRequest Debug</h2>
+          <VoteRequestDebugPanel />
+        </section>
+
         {/* Info Section */}
         <Card className="bg-muted/30">
           <CardContent className="pt-6">
@@ -848,9 +854,6 @@ const IndexStatus = () => {
             </div>
           </CardContent>
         </Card>
-
-        {/* VoteRequest Debug Panel */}
-        <VoteRequestDebugPanel />
       </div>
     </DashboardLayout>
   );
