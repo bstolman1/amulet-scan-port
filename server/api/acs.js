@@ -961,13 +961,12 @@ router.get('/contracts', async (req, res) => {
 
     let whereClause = '1=1';
     if (template) {
-      // Normalize template query to handle all separator formats:
-      // UI sends "Splice:DsoRules:VoteRequest" but stored format could be:
-      // - "<pkg-hash>:Splice.DsoRules:VoteRequest" (dots for module)
-      // - "<pkg-hash>_Splice_DsoRules_VoteRequest" (underscores)
+      // Normalize template query to handle all separator formats.
+      // IMPORTANT: Some rows may have template_id/entity_name missing at top-level,
+      // so filtering is applied against normalized fields computed in the SQL (tid, ename).
       const t = String(template);
       const entityName = t.split(/[:._]/).pop() || t;
-      
+
       const variants = new Set([
         t,
         t.replaceAll(':', '.'),
@@ -976,21 +975,18 @@ router.get('/contracts', async (req, res) => {
         t.replaceAll('.', '_'),
         t.replaceAll('_', ':'),
         t.replaceAll('_', '.'),
-        entityName, // Also try just the entity name
+        entityName,
       ]);
 
       const likeClauses = [...variants]
         .filter(Boolean)
-        .map((v) => `template_id LIKE '%${v.replace(/'/g, "''")}%'`);
-      
-      // Also match by entity_name directly
-      likeClauses.push(`entity_name = '${entityName.replace(/'/g, "''")}'`);
+        .map((v) => `tid LIKE '%${String(v).replace(/'/g, "''")}%'
+          OR ename = '${String(v).split(/[:._]/).pop()?.replace(/'/g, "''") || String(v).replace(/'/g, "''")}'`);
 
       whereClause = `(${likeClauses.join(' OR ')})`;
     } else if (entity) {
-      // Match by entity_name OR template_id containing the entity name
       const e = String(entity).replace(/'/g, "''");
-      whereClause = `(entity_name = '${e}' OR template_id LIKE '%:${e}:%' OR template_id LIKE '%:${e}' OR template_id LIKE '%_${e}_%' OR template_id LIKE '%_${e}')`;
+      whereClause = `(ename = '${e}' OR tid LIKE '%:${e}:%' OR tid LIKE '%:${e}' OR tid LIKE '%_${e}_%' OR tid LIKE '%_${e}')`;
     }
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
@@ -1002,29 +998,56 @@ router.get('/contracts', async (req, res) => {
       console.log('[ACS] No snapshot found, falling back to full scan');
     }
     
+    // Build a normalized base to support older/newer ACS row formats
+    const baseCte = `
+      WITH base AS (
+        SELECT
+          contract_id,
+          COALESCE(
+            template_id,
+            json_extract_string(payload, '$.template_id'),
+            json_extract_string(payload, '$.templateId')
+          ) AS tid,
+          COALESCE(
+            entity_name,
+            json_extract_string(payload, '$.entity_name'),
+            json_extract_string(payload, '$.entityName')
+          ) AS ename,
+          module_name,
+          signatories,
+          observers,
+          payload,
+          record_time,
+          snapshot_time
+        FROM ${acsSource} acs
+      )
+    `;
+
     // First get total count (deduplicated by contract_id)
     const countSql = `
+      ${baseCte}
       SELECT COUNT(DISTINCT contract_id) as total_count
-      FROM ${acsSource} acs
+      FROM base
       WHERE ${whereClause}
     `;
-    
+
     const countResult = await db.safeQuery(countSql);
     const totalCount = Number(countResult[0]?.total_count || 0);
-    
+
     // Use GROUP BY contract_id to deduplicate (handles any duplicate records)
     const sql = `
-      SELECT 
+      ${baseCte}
+      SELECT
         contract_id,
-        any_value(template_id) as template_id,
-        any_value(entity_name) as entity_name,
+        any_value(tid) as template_id,
+        any_value(ename) as entity_name,
         any_value(module_name) as module_name,
         any_value(signatories) as signatories,
         any_value(observers) as observers,
         any_value(payload) as payload,
         any_value(record_time) as record_time,
         any_value(snapshot_time) as snapshot_time
-      FROM ${acsSource} acs
+      FROM base
       WHERE ${whereClause}
       GROUP BY contract_id
       ORDER BY contract_id
