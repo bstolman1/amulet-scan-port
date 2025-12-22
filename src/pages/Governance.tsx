@@ -199,51 +199,82 @@ const Governance = () => {
     return { votesFor, votesAgainst, votedSvs };
   };
 
+  // Normalize VoteRequest row formats between:
+  // - DuckDB ACS rows (payload may wrap create_arguments)
+  // - Canton Scan API contracts (payload is already the create_arguments)
+  const normalizeVoteRequestPayload = (row: any) => {
+    if (!row) return {};
+
+    // Common shapes we've seen:
+    // 1) { payload: { action, votes, ... } }
+    // 2) { payload: { create_arguments: { action, votes, ... } } }
+    // 3) { create_arguments: { action, votes, ... } }
+    // 4) { payload: { payload: { action, votes, ... } } } (double-wrapped)
+    const p1 = row.payload ?? row;
+    const p2 = p1?.payload ?? p1; // unwrap accidental double nesting
+    const p3 = p2?.create_arguments ?? p2?.createArguments ?? p2;
+    return p3 && typeof p3 === "object" ? p3 : {};
+  };
+
   // Process proposals from ACS data with full JSON parsing
   const proposals =
     voteRequestsData?.data?.map((voteRequest: any) => {
-      // Handle both flat structure and nested payload structure from DuckDB
-      const payload = voteRequest.payload || voteRequest;
-      
+      const payload = normalizeVoteRequestPayload(voteRequest);
+
       // Parse action
-      const action = payload.action || voteRequest.action || {};
+      const action =
+        getField(payload, "action") ??
+        getField(voteRequest, "action") ??
+        getField(voteRequest?.payload, "action") ??
+        {};
       const { title, actionType, actionDetails } = parseAction(action);
-      
+
       // Parse votes
-      const votesRaw = payload.votes || voteRequest.votes || [];
+      const votesRaw = getField(payload, "votes") ?? getField(voteRequest, "votes") ?? [];
       const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
 
       // Extract requester information
-      const requester = payload.requester || voteRequest.requester || "Unknown";
+      const requesterRaw = getField(payload, "requester") ?? getField(voteRequest, "requester");
+      const requester =
+        typeof requesterRaw === "string"
+          ? requesterRaw
+          : requesterRaw?.party ?? requesterRaw?.sv ?? requesterRaw?.id ?? "Unknown";
 
       // Extract reason (has url and body)
-      const reasonObj = payload.reason || voteRequest.reason || {};
+      const reasonObj = getField(payload, "reason") ?? getField(voteRequest, "reason") ?? {};
       const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
       const reasonUrl = reasonObj?.url || "";
 
       // Extract timing fields
-      const voteBefore = payload.voteBefore || voteRequest.voteBefore;
-      const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
-      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
+      const voteBefore = getField(payload, "voteBefore") ?? getField(payload, "vote_before") ?? getField(voteRequest, "voteBefore");
+      const targetEffectiveAt =
+        getField(payload, "targetEffectiveAt") ??
+        getField(payload, "target_effective_at") ??
+        getField(voteRequest, "targetEffectiveAt");
+
+      const trackingCid =
+        getField(payload, "trackingCid") ??
+        getField(payload, "tracking_cid") ??
+        getField(voteRequest, "trackingCid") ??
+        voteRequest.contract_id;
 
       // Determine status based on votes and threshold
       const threshold = votingThreshold || svCount || 1;
       let status: "approved" | "rejected" | "pending" = "pending";
-      
+
       // Check if voting deadline has passed
       const now = new Date();
       const voteDeadline = voteBefore ? new Date(voteBefore) : null;
       const isExpired = voteDeadline && voteDeadline < now;
-      
+
       // Only mark as approved if enough votes FOR
       if (votesFor >= threshold) {
         status = "approved";
-      } 
+      }
       // Only mark as rejected if deadline passed AND not enough votes
       else if (isExpired && votesFor < threshold) {
         status = "rejected";
       }
-      // Otherwise it's still pending (deadline not reached or voting ongoing)
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
