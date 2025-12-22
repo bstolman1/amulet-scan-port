@@ -20,7 +20,7 @@ interface BackendConfig {
 const config: BackendConfig = {
   ledgerBackend: 'duckdb',
   metadataBackend: 'supabase', // Keep Supabase for small metadata tables  
-  duckdbApiUrl: import.meta.env.VITE_DUCKDB_API_URL || 'https://entry-proceeds-trackbacks-architect.trycloudflare.com',
+  duckdbApiUrl: import.meta.env.VITE_DUCKDB_API_URL || 'https://accordance-victor-todd-pick.trycloudflare.com',
 };
 
 export function getBackendConfig(): BackendConfig {
