@@ -29,32 +29,14 @@ export const SearchBar = () => {
     setIsSearching(true);
     try {
       if (trimmedQuery.includes("::")) {
-        try {
-          const result = await getPartyEvents(trimmedQuery, 100);
-
-          if (result.data && result.data.length > 0) {
-            navigate(`/transactions?search=${encodeURIComponent(trimmedQuery)}`);
-            setOpen(false);
-            toast({
-              title: "Search Results",
-              description: `Found ${result.data.length} event(s) for this party`,
-            });
-            return;
-          } else {
-            toast({
-              title: "No Results",
-              description: "No events found for this party ID",
-              variant: "destructive",
-            });
-          }
-        } catch (partyError) {
-          console.error("Party search failed", partyError);
-          toast({
-            title: "Search Error",
-            description: "Unable to search party events",
-            variant: "destructive",
-          });
-        }
+        // Navigate directly to the Party page - it will handle the DuckDB query
+        navigate(`/party/${encodeURIComponent(trimmedQuery)}`);
+        setOpen(false);
+        setSearchQuery("");
+        toast({
+          title: "Loading Party",
+          description: "Fetching events from backfill data...",
+        });
       } else if (trimmedQuery.startsWith("#")) {
         navigate(`/transactions?search=${encodeURIComponent(trimmedQuery)}`);
         setOpen(false);

@@ -37,6 +37,7 @@ import AmuletRules from "./pages/AmuletRules";
 import GovernanceFlow from "./pages/GovernanceFlow";
 import KaikoFeed from "./pages/KaikoFeed";
 import RewardCalculations from "./pages/RewardCalculations";
+import Party from "./pages/Party";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -92,6 +93,7 @@ const App = () => (
           <Route path="/kaiko-feed" element={<KaikoFeed />} />
           <Route path="/index-status" element={<IndexStatus />} />
           <Route path="/reward-calculations" element={<RewardCalculations />} />
+          <Route path="/party/:partyId" element={<Party />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
