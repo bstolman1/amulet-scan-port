@@ -622,10 +622,10 @@ const Governance = () => {
               <div>
                 <h3 className="text-xl font-bold flex items-center gap-2">
                   <Database className="h-5 w-5" />
-                  Unique Proposals (Deduplicated)
+                  All Historical VoteRequests
                 </h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Grouped by proposal hash + action type, showing latest state only
+                  One row per unique contract_id — every historical VoteRequest record
                 </p>
               </div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
