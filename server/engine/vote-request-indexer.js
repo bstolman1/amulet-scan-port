@@ -343,17 +343,47 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           record.payload?.voteRequest;
         
         if (voteRequestCid) {
-          // Extract the outcome/action result from the event
-          // DsoRules_CloseVoteRequest typically has an 'outcome' or the result is in created events
+          // DsoRules_CloseVoteRequestResult contains the authoritative outcome
+          // The result is in exercise_result and contains:
+          // - request: VoteRequest (the original vote request)
+          // - completedAt: Time
+          // - offboardedVoters: [Text]
+          // - abstainingSvs: [Text]  
+          // - outcome: VoteRequestOutcome (the AUTHORITATIVE final result)
+          const exerciseResult = record.exercise_result || record.payload?.exercise_result || {};
           const outcome = 
+            exerciseResult.outcome ||
             record.exercise_argument?.outcome ||
-            record.payload?.outcome ||
-            record.exercise_result?.outcome;
+            record.payload?.outcome;
+          
+          // Extract outcome tag (e.g., "VRO_Accepted", "VRO_Rejected", "VRO_Expired")
+          // Outcome can be:
+          // - { tag: 'VRO_Accepted' } or { VRO_Accepted: {...} }
+          // - { tag: 'VRO_Rejected' } or { VRO_Rejected: {...} }
+          // - { tag: 'VRO_Expired' } or { VRO_Expired: {...} }
+          let outcomeTag = null;
+          if (outcome) {
+            if (typeof outcome === 'string') {
+              outcomeTag = outcome;
+            } else if (outcome.tag) {
+              outcomeTag = outcome.tag;
+            } else {
+              // Check for variant-as-key encoding: { VRO_Accepted: {...} }
+              const keys = Object.keys(outcome);
+              if (keys.length > 0 && keys[0].startsWith('VRO_')) {
+                outcomeTag = keys[0];
+              }
+            }
+          }
           
           archivedEventsMap.set(voteRequestCid, {
             ...record,
             contract_id: voteRequestCid,
             dso_close_outcome: outcome,
+            dso_close_outcome_tag: outcomeTag, // Parsed outcome tag for easy status detection
+            completedAt: exerciseResult.completedAt,
+            abstainingSvs: exerciseResult.abstainingSvs,
+            offboardedVoters: exerciseResult.offboardedVoters,
             choice: choice, // Preserve the choice for status detection
             close_source: 'dso_rules',
           });
@@ -487,16 +517,45 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const choiceLower = String(archivedChoice).toLowerCase();
       const wasAcceptedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
       const wasRejectedByChoice = choiceLower.includes('reject');
+      
+      // Get authoritative outcome from DsoRules_CloseVoteRequestResult if available
+      const outcomeTag = archivedEvent?.dso_close_outcome_tag || null;
 
-      // Determine status based on vote thresholds
+      // Determine status based on:
+      // 1. AUTHORITATIVE: outcomeTag from DsoRules_CloseVoteRequestResult (VRO_Accepted, VRO_Rejected, VRO_Expired)
+      // 2. FALLBACK: Vote thresholds (≥9 accepts = executed, ≥9 rejects = rejected)
+      // 3. LEGACY: Choice name hints
       if (isClosed) {
-        if (hasApprovalThreshold || wasAcceptedByChoice) {
-          status = 'executed';
-        } else if (hasRejectionThreshold || wasRejectedByChoice) {
-          status = 'rejected';
-        } else {
-          // Closed without reaching either threshold = expired
-          status = 'expired';
+        // PRIORITY 1: Use authoritative outcome from DsoRules_CloseVoteRequestResult
+        if (outcomeTag) {
+          const tagLower = outcomeTag.toLowerCase();
+          if (tagLower.includes('accepted') || tagLower === 'vro_accepted') {
+            status = 'executed';
+            statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
+          } else if (tagLower.includes('rejected') || tagLower === 'vro_rejected') {
+            status = 'rejected';
+            statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
+          } else if (tagLower.includes('expired') || tagLower === 'vro_expired') {
+            status = 'expired';
+            statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
+          } else {
+            // Unknown outcome tag - fall through to vote threshold logic
+            console.warn(`   ⚠️ Unknown outcome tag: ${outcomeTag}`);
+          }
+        }
+        
+        // PRIORITY 2: Fall back to vote threshold if outcome didn't set status
+        if (status === 'in_progress') {
+          if (hasApprovalThreshold || wasAcceptedByChoice) {
+            status = 'executed';
+            statusStats.detectedByMajority = (statusStats.detectedByMajority || 0) + 1;
+          } else if (hasRejectionThreshold || wasRejectedByChoice) {
+            status = 'rejected';
+            statusStats.detectedByMajority = (statusStats.detectedByMajority || 0) + 1;
+          } else {
+            // Closed without reaching either threshold = expired
+            status = 'expired';
+          }
         }
       } else if (isExpired) {
         // Deadline passed but not closed yet
@@ -507,6 +566,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         } else {
           status = 'expired';
         }
+        statusStats.detectedByExpiry = (statusStats.detectedByExpiry || 0) + 1;
       } else {
         // Still open and deadline not passed
         status = 'in_progress';
@@ -516,9 +576,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       statusStats[status]++;
       statusStats.totalAcceptVotes += acceptCount;
       statusStats.totalRejectVotes += rejectCount;
-      if (hasApprovalThreshold && status === 'executed') statusStats.detectedByMajority++;
-      if (wasAcceptedByChoice && status === 'executed') statusStats.detectedByChoice++;
-      if (isExpired && status === 'expired') statusStats.detectedByExpiry++;
 
       // Normalize reason - can be string or object
       const rawReason = event.payload?.reason;
@@ -630,11 +687,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
     
-    // Log vote-based detection statistics
-    console.log(`   📊 Vote-based status detection:`);
-    console.log(`      - Executed: ${statusStats.executed} (${statusStats.detectedByMajority} by majority, ${statusStats.detectedByChoice} by choice)`);
+    // Log status detection statistics
+    console.log(`   📊 Status detection breakdown:`);
+    console.log(`      - Executed: ${statusStats.executed} (${statusStats.detectedByOutcome || 0} by outcome, ${statusStats.detectedByMajority || 0} by vote threshold)`);
     console.log(`      - Rejected: ${statusStats.rejected}`);
-    console.log(`      - Expired: ${statusStats.expired} (${statusStats.detectedByExpiry} by deadline)`);
+    console.log(`      - Expired: ${statusStats.expired} (${statusStats.detectedByExpiry || 0} by deadline)`);
     console.log(`      - In Progress: ${statusStats.in_progress}`);
     console.log(`      - Total votes analyzed: ${statusStats.totalAcceptVotes} accepts, ${statusStats.totalRejectVotes} rejects`);
 
