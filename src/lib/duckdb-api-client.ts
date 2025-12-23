@@ -570,7 +570,7 @@ export async function purgeLiveCursor(): Promise<{ success: boolean; message: st
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function checkHealth(): Promise<{ status: string; timestamp: string }> {
-  return apiFetch('/api/health');
+  return apiFetch('/health');
 }
 
 /**

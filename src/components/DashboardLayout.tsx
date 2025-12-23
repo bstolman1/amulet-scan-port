@@ -1,6 +1,5 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { BackendStatusIndicator } from "./BackendStatusIndicator";
 import {
   Activity,
   BarChart3,
@@ -75,7 +74,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       {/* Header */}
       <header className="glass-card border-b border-border/50 sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
-          {/* Top row: Logo and Status */}
+          {/* Top row: Logo and Search */}
           <div className="flex items-center justify-between mb-4">
             <Link to="/" className="flex items-center space-x-3 group">
               <div className="relative">
@@ -91,7 +90,6 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                 <p className="text-xs text-muted-foreground">Canton Network Analytics</p>
               </div>
             </Link>
-            <BackendStatusIndicator />
           </div>
 
           {/* Bottom row: Navigation tabs with wrapping */}
