@@ -2347,8 +2347,12 @@ router.get('/governance/proposals/stream', async (req, res) => {
     
     sendEvent('start', { totalFiles });
     
-    // Map to track proposals by unique key (action type + reason URL)
+    // Map to track proposals by unique key
     const proposalMap = new Map();
+    // Debug: track deduplication events
+    const dedupLog = [];
+    const debug = req.query.debug === 'true';
+    
     let filesScanned = 0;
     let totalVoteRequests = 0;
     let lastProgressUpdate = 0;
@@ -2379,25 +2383,45 @@ router.get('/governance/proposals/stream', async (req, res) => {
           // Generate a unique proposal key
           // Use trackingCid if available (most reliable), otherwise use action-specific details
           let proposalKey;
+          let keySource;
           if (proposal.trackingCid) {
             // trackingCid uniquely identifies the original VoteRequest
             proposalKey = `cid::${proposal.trackingCid}`;
+            keySource = 'trackingCid';
           } else {
             // Fallback: combine actionType + requester + reasonUrl + action-specific details
             const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
             proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
+            keySource = 'composite';
           }
           
           const existing = proposalMap.get(proposalKey);
           const eventTimestamp = new Date(evt.timestamp).getTime();
           
+          if (debug && existing) {
+            // Log deduplication event
+            dedupLog.push({
+              key: proposalKey.slice(0, 100),
+              keySource,
+              action: 'merged',
+              existingTs: existing.rawTimestamp,
+              newTs: evt.timestamp,
+              kept: eventTimestamp > existing.latestTimestamp ? 'new' : 'existing',
+              actionType: proposal.actionType,
+              requester: proposal.requester,
+              reasonUrl: (proposal.reasonUrl || '').slice(0, 80),
+            });
+          }
+          
           if (!existing || eventTimestamp > existing.latestTimestamp) {
             proposalMap.set(proposalKey, {
               proposalKey,
+              keySource,
               latestTimestamp: eventTimestamp,
               latestContractId: evt.contract_id,
               ...proposal,
               rawTimestamp: evt.timestamp,
+              mergeCount: existing ? (existing.mergeCount || 1) + 1 : 1,
             });
           }
         }
@@ -2448,6 +2472,23 @@ router.get('/governance/proposals/stream', async (req, res) => {
       }
     }
     
+    // Analyze merge patterns
+    const byKeySource = { trackingCid: 0, composite: 0 };
+    const highMergeProposals = [];
+    for (const p of proposals) {
+      byKeySource[p.keySource] = (byKeySource[p.keySource] || 0) + 1;
+      if (p.mergeCount > 5) {
+        highMergeProposals.push({
+          key: p.proposalKey.slice(0, 80),
+          keySource: p.keySource,
+          mergeCount: p.mergeCount,
+          actionType: p.actionType,
+          requester: p.requester,
+          reasonUrl: (p.reasonUrl || '').slice(0, 60),
+        });
+      }
+    }
+    
     // Send final result
     sendEvent('complete', {
       summary: {
@@ -2458,6 +2499,17 @@ router.get('/governance/proposals/stream', async (req, res) => {
       },
       stats,
       proposals,
+      debug: debug ? {
+        dedupLog: dedupLog.slice(-500), // Last 500 dedup events
+        byKeySource,
+        highMergeProposals: highMergeProposals.slice(0, 50),
+        sampleKeys: proposals.slice(0, 20).map(p => ({
+          key: p.proposalKey.slice(0, 100),
+          keySource: p.keySource,
+          mergeCount: p.mergeCount,
+          actionType: p.actionType,
+        })),
+      } : undefined,
     });
     
     res.end();
