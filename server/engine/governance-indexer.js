@@ -4,6 +4,8 @@
  * Extracts unique governance proposals from VoteRequest created events,
  * groups by proposal identifier (action type + reason URL), and tracks
  * vote progress and final outcomes.
+ * 
+ * PERSISTENT: Stores proposals in DuckDB so index survives restarts.
  */
 
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
@@ -19,10 +21,18 @@ import {
 let indexingInProgress = false;
 let indexingProgress = null;
 
-// In-memory proposal cache (refreshed on demand)
-let proposalCache = null;
-let cacheTimestamp = null;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+/**
+ * Ensure governance tables exist
+ */
+async function ensureGovernanceTables() {
+  try {
+    const { initEngineSchema } = await import('./schema.js');
+    await initEngineSchema();
+  } catch (err) {
+    console.error('Error ensuring governance tables:', err);
+    throw err;
+  }
+}
 
 /**
  * Parse VoteRequest payload to extract structured proposal data
@@ -31,15 +41,12 @@ function parseVoteRequestPayload(payload) {
   if (!payload) return null;
 
   try {
-    // Handle both formats: { record: { fields: [...] } } and named fields
     const fields = payload.record?.fields || payload.fields || payload;
     
-    // Named field format (newer)
     if (payload.dso && payload.requester) {
       return parseNamedFields(payload);
     }
     
-    // Array field format (older)
     if (Array.isArray(fields)) {
       return parseArrayFields(fields);
     }
@@ -61,14 +68,12 @@ function parseNamedFields(payload) {
   const votes = payload.votes;
   const trackingCid = payload.trackingCid;
   
-  // Extract action type and details
   const actionType = action?.tag || action?.constructor || 
     Object.keys(action || {}).find(k => k.startsWith('ARC_') || k.startsWith('SRARC_') || k.startsWith('CRARC_'));
   
   let actionDetails = action;
   let innerActionType = actionType;
   
-  // Unwrap nested action structure
   if (action?.value?.dsoAction) {
     innerActionType = action.value.dsoAction.tag || 
       Object.keys(action.value.dsoAction).find(k => k.startsWith('SRARC_'));
@@ -79,7 +84,6 @@ function parseNamedFields(payload) {
     actionDetails = action.dsoAction;
   }
   
-  // Parse votes
   const parsedVotes = parseVotes(votes);
   
   return {
@@ -99,64 +103,27 @@ function parseNamedFields(payload) {
  * Parse array field format (older protobuf-style)
  */
 function parseArrayFields(fields) {
-  const extractValue = (field) => {
-    if (!field?.value) return null;
-    const v = field.value;
-    return v.party || v.text || v.timestamp || v.int64 || v.numeric || v.bool || v.contractId || v;
-  };
+  const getField = (idx) => fields[idx];
   
-  const dso = extractValue(fields[0]);
-  const requester = extractValue(fields[1]);
-  const action = fields[2]?.value?.variant || fields[2]?.value;
-  const reason = fields[3]?.value?.record?.fields || fields[3]?.value;
-  const voteBefore = fields[4]?.value?.timestamp;
-  const votes = fields[5]?.value?.genMap?.entries || fields[5]?.value?.list?.elements || [];
-  const trackingCid = fields[6]?.value?.optional?.value?.contractId || fields[6]?.value?.contractId;
+  const dso = getField(0);
+  const requester = getField(1);
+  const action = getField(2);
+  const reason = getField(3);
+  const voteBefore = getField(4);
+  const votes = getField(5);
+  const trackingCid = getField(6);
   
-  // Extract action type from variant
-  let actionType = action?.constructor;
-  let actionDetails = action;
-  
-  // Unwrap nested action structure for DsoRules actions
-  if (action?.constructor === 'ARC_DsoRules' || action?.tag === 'ARC_DsoRules') {
-    const innerAction = action?.value?.record?.fields?.[0]?.value?.variant || 
-                        action?.value?.dsoAction;
-    if (innerAction) {
-      actionType = innerAction.constructor || innerAction.tag;
-      actionDetails = innerAction;
-    }
-  } else if (action?.constructor === 'ARC_AmuletRules' || action?.tag === 'ARC_AmuletRules') {
-    const innerAction = action?.value?.record?.fields?.[0]?.value?.variant ||
-                        action?.value?.amuletRulesAction;
-    if (innerAction) {
-      actionType = innerAction.constructor || innerAction.tag;
-      actionDetails = innerAction;
-    }
-  }
-  
-  // Parse reason
-  let reasonUrl = '';
-  let reasonBody = '';
-  if (Array.isArray(reason)) {
-    reasonUrl = extractValue(reason[0]) || '';
-    reasonBody = extractValue(reason[1]) || '';
-  } else if (reason) {
-    reasonUrl = reason.url || reason.text || '';
-    reasonBody = reason.body || reason.description || '';
-  }
-  
-  // Parse votes
-  const parsedVotes = parseVotes(votes);
+  const actionType = action?.tag || (typeof action === 'object' ? Object.keys(action)[0] : null);
   
   return {
     dso,
     requester,
     actionType,
-    actionDetails,
-    reasonUrl,
-    reasonBody,
+    actionDetails: action,
+    reasonUrl: reason?.url || '',
+    reasonBody: reason?.body || '',
     voteBefore,
-    votes: parsedVotes,
+    votes: parseVotes(votes),
     trackingCid,
   };
 }
@@ -169,32 +136,34 @@ function parseVotes(votes) {
   
   const result = [];
   
-  // genMap format: { entries: [{ key, value }] }
   if (Array.isArray(votes)) {
-    for (const entry of votes) {
-      if (entry.key && entry.value) {
-        // genMap entry
-        const svName = entry.key.text || entry.key;
-        const voteData = entry.value.record?.fields || entry.value;
+    for (const vote of votes) {
+      if (Array.isArray(vote) && vote.length >= 2) {
+        const [svName, voteData] = vote;
+        const sv = voteData?.sv || svName;
+        const accept = voteData?.accept === true;
+        const reasonUrl = voteData?.reason?.url || '';
+        const reasonBody = voteData?.reason?.body || '';
+        const castAt = voteData?.optCastAt || null;
         
-        let sv, accept, reasonUrl, reasonBody, castAt;
-        
-        if (Array.isArray(voteData)) {
-          sv = voteData[0]?.value?.party;
-          accept = voteData[1]?.value?.bool;
-          const voteReason = voteData[2]?.value?.record?.fields;
-          if (voteReason) {
-            reasonUrl = voteReason[0]?.value?.text || '';
-            reasonBody = voteReason[1]?.value?.text || '';
-          }
-          castAt = voteData[3]?.value?.timestamp;
-        } else {
-          sv = voteData.sv;
-          accept = voteData.accept;
-          reasonUrl = voteData.reason?.url || '';
-          reasonBody = voteData.reason?.body || '';
-          castAt = voteData.castAt;
-        }
+        result.push({
+          svName,
+          sv,
+          accept: Boolean(accept),
+          reasonUrl: reasonUrl || '',
+          reasonBody: reasonBody || '',
+          castAt,
+        });
+      }
+    }
+  } else if (typeof votes === 'object') {
+    for (const [svName, voteData] of Object.entries(votes)) {
+      if (voteData && typeof voteData === 'object') {
+        const sv = voteData.sv || svName;
+        const accept = voteData.accept === true;
+        const reasonUrl = voteData.reason?.url || '';
+        const reasonBody = voteData.reason?.body || '';
+        const castAt = voteData.optCastAt || null;
         
         result.push({
           svName,
@@ -222,27 +191,23 @@ function getProposalKey(actionType, reasonUrl) {
  * Determine proposal status based on votes and expiry
  */
 function determineStatus(proposal, now = new Date()) {
-  const voteBeforeDate = proposal.voteBeforeTimestamp ? 
-    new Date(proposal.voteBeforeTimestamp) : null;
+  const voteBeforeDate = proposal.vote_before_timestamp ? 
+    new Date(proposal.vote_before_timestamp) : null;
   
-  // If we have tracking CID and majority accepts, it's approved
-  if (proposal.trackingCid && proposal.votesFor > proposal.votesAgainst) {
+  if (proposal.tracking_cid && proposal.votes_for > proposal.votes_against) {
     return 'approved';
   }
   
-  // Check if vote deadline has passed
   if (voteBeforeDate && voteBeforeDate < now) {
-    // Deadline passed - check vote outcome
-    if (proposal.votesFor > proposal.votesAgainst) {
+    if (proposal.votes_for > proposal.votes_against) {
       return 'approved';
-    } else if (proposal.votesAgainst > 0) {
+    } else if (proposal.votes_against > 0) {
       return 'rejected';
     } else {
       return 'expired';
     }
   }
   
-  // Still within voting period
   return 'pending';
 }
 
@@ -261,12 +226,10 @@ export function isGovernanceIndexingInProgress() {
 }
 
 /**
- * Clear the proposal cache
+ * Clear the proposal cache (no-op for persistent, but triggers re-query)
  */
 export function invalidateCache() {
-  proposalCache = null;
-  cacheTimestamp = null;
-  console.log('🗳️ Governance proposal cache invalidated');
+  console.log('🗳️ Governance proposal cache invalidated (will re-query from DB)');
 }
 
 /**
@@ -291,10 +254,8 @@ async function scanFilesForVoteRequests(files) {
       }
       
       for (const event of events) {
-        // Only created events
         if (event.event_type !== 'created') continue;
         
-        // Check for VoteRequest template
         const templateId = event.template_id || '';
         if (!templateId.includes('VoteRequest')) continue;
         
@@ -327,7 +288,6 @@ async function scanAllFilesForVoteRequests() {
   const dataDir = DATA_PATH;
   const allFiles = [];
   
-  // Recursively find all .pb.zst files
   const findFiles = async (dir) => {
     try {
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -350,29 +310,48 @@ async function scanAllFilesForVoteRequests() {
   return scanFilesForVoteRequests(allFiles);
 }
 
+// SQL helpers
+function sqlStr(val) {
+  if (val === null || val === undefined) return 'NULL';
+  return `'${String(val).replace(/'/g, "''")}'`;
+}
+
+function sqlJson(val) {
+  if (val === null || val === undefined) return 'NULL';
+  try {
+    const json = typeof val === 'string' ? val : JSON.stringify(val);
+    return `'${json.replace(/'/g, "''")}'`;
+  } catch {
+    return 'NULL';
+  }
+}
+
 /**
  * Build the governance proposal index by scanning VoteRequest events
+ * Persists results to DuckDB
  */
 export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false } = {}) {
-  // Check cache first
-  if (!forceRefresh && proposalCache && cacheTimestamp) {
-    const age = Date.now() - cacheTimestamp;
-    if (age < CACHE_TTL_MS) {
-      console.log(`🗳️ Using cached governance proposals (age: ${(age / 1000).toFixed(1)}s)`);
-      return proposalCache;
-    }
-  }
-  
   if (indexingInProgress) {
     console.log('⏳ Governance indexing already in progress');
     return { status: 'in_progress', progress: indexingProgress };
   }
   
+  // Check if already indexed (unless force)
+  if (!forceRefresh) {
+    const stats = await getProposalStats();
+    if (stats && stats.total > 0) {
+      console.log(`✅ Governance index already populated (${stats.total} proposals), skipping rebuild`);
+      return { status: 'already_populated', stats };
+    }
+  }
+  
   indexingInProgress = true;
-  indexingProgress = { phase: 'starting', current: 0, total: 0, records: 0, startedAt: new Date().toISOString() };
-  console.log('\n🗳️ Building governance proposal index...');
+  indexingProgress = { phase: 'starting', current: 0, total: 0, records: 0, proposals: 0, startedAt: new Date().toISOString() };
+  console.log('\n🗳️ Building governance proposal index (persistent)...');
   
   try {
+    await ensureGovernanceTables();
+    
     const startTime = Date.now();
     let scanResult;
     
@@ -412,21 +391,17 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
       const timestamp = record.timestamp ? new Date(record.timestamp).getTime() : 0;
       const existing = proposalMap.get(key);
       
-      // Keep the latest version of each proposal
       if (!existing || timestamp > existing.latestTimestamp) {
-        // Parse voteBefore timestamp
         let voteBeforeTimestamp = null;
         if (record.voteBefore) {
-          // Handle microsecond timestamp strings
           const vb = String(record.voteBefore);
           if (/^\d+$/.test(vb)) {
-            voteBeforeTimestamp = parseInt(vb.slice(0, 13), 10); // Convert to milliseconds
+            voteBeforeTimestamp = parseInt(vb.slice(0, 13), 10);
           } else {
             voteBeforeTimestamp = new Date(vb).getTime();
           }
         }
         
-        // Count votes
         let votesFor = 0;
         let votesAgainst = 0;
         for (const vote of record.votes || []) {
@@ -435,65 +410,101 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
         }
         
         proposalMap.set(key, {
-          proposalKey: key,
-          latestTimestamp: timestamp,
-          latestContractId: record.contract_id,
-          latestEventId: record.event_id,
+          proposal_key: key,
+          latest_timestamp: timestamp,
+          latest_contract_id: record.contract_id,
+          latest_event_id: record.event_id,
           requester: record.requester,
-          actionType: record.actionType,
-          actionDetails: record.actionDetails,
-          reasonUrl: record.reasonUrl,
-          reasonBody: record.reasonBody,
-          voteBefore: record.voteBefore,
-          voteBeforeTimestamp,
+          action_type: record.actionType,
+          action_details: record.actionDetails,
+          reason_url: record.reasonUrl,
+          reason_body: record.reasonBody,
+          vote_before: record.voteBefore,
+          vote_before_timestamp: voteBeforeTimestamp,
           votes: record.votes || [],
-          votesFor,
-          votesAgainst,
-          trackingCid: record.trackingCid,
-          rawTimestamp: record.timestamp,
+          votes_for: votesFor,
+          votes_against: votesAgainst,
+          tracking_cid: record.trackingCid,
         });
       }
     }
     
     // Convert to array and determine status
+    indexingProgress = { ...indexingProgress, phase: 'persisting', proposals: proposalMap.size };
     const now = new Date();
     const proposals = Array.from(proposalMap.values()).map(p => ({
       ...p,
       status: determineStatus(p, now),
     }));
     
-    // Sort by latest timestamp descending
-    proposals.sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+    console.log(`   📦 Persisting ${proposals.length} proposals to DuckDB...`);
     
-    // Limit results
-    const limitedProposals = proposals.slice(0, limit);
+    // Clear existing and insert new
+    await query(`DELETE FROM governance_proposals`);
     
-    // Calculate stats
-    const stats = {
-      total: proposals.length,
-      byActionType: {},
-      byStatus: {
-        approved: 0,
-        rejected: 0,
-        pending: 0,
-        expired: 0,
-      },
-    };
-    
-    for (const p of proposals) {
-      // By action type
-      const actionType = p.actionType || 'unknown';
-      stats.byActionType[actionType] = (stats.byActionType[actionType] || 0) + 1;
+    // Insert in batches
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < proposals.length; i += BATCH_SIZE) {
+      const batch = proposals.slice(i, i + BATCH_SIZE);
       
-      // By status
-      stats.byStatus[p.status] = (stats.byStatus[p.status] || 0) + 1;
+      const values = batch.map(p => `(
+        ${sqlStr(p.proposal_key)},
+        ${sqlStr(p.latest_event_id)},
+        ${sqlStr(p.latest_contract_id)},
+        ${p.latest_timestamp ? `TIMESTAMP '${new Date(p.latest_timestamp).toISOString()}'` : 'NULL'},
+        ${sqlStr(p.requester)},
+        ${sqlStr(p.action_type)},
+        ${sqlJson(p.action_details)},
+        ${sqlStr(p.reason_url)},
+        ${sqlStr(p.reason_body)},
+        ${sqlStr(p.vote_before)},
+        ${p.vote_before_timestamp || 'NULL'},
+        ${sqlJson(p.votes)},
+        ${p.votes_for},
+        ${p.votes_against},
+        ${sqlStr(p.tracking_cid)},
+        ${sqlStr(p.status)},
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      )`).join(',\n');
+      
+      await query(`
+        INSERT INTO governance_proposals (
+          proposal_key, latest_event_id, latest_contract_id, latest_timestamp,
+          requester, action_type, action_details, reason_url, reason_body,
+          vote_before, vote_before_timestamp, votes, votes_for, votes_against,
+          tracking_cid, status, created_at, updated_at
+        ) VALUES ${values}
+      `);
     }
     
-    const duration = Date.now() - startTime;
-    console.log(`   ✅ Indexed ${proposals.length} unique proposals in ${duration}ms`);
-    console.log(`   📊 Status: ${stats.byStatus.approved} approved, ${stats.byStatus.rejected} rejected, ${stats.byStatus.pending} pending, ${stats.byStatus.expired} expired`);
+    // Update index state
+    const stats = {
+      total: proposals.length,
+      approved: proposals.filter(p => p.status === 'approved').length,
+      rejected: proposals.filter(p => p.status === 'rejected').length,
+      pending: proposals.filter(p => p.status === 'pending').length,
+      expired: proposals.filter(p => p.status === 'expired').length,
+    };
     
-    const result = {
+    await query(`
+      INSERT INTO governance_index_state (id, last_indexed_at, total_indexed, files_scanned, approved_count, rejected_count, pending_count, expired_count)
+      VALUES (1, CURRENT_TIMESTAMP, ${stats.total}, ${scanResult.filesScanned}, ${stats.approved}, ${stats.rejected}, ${stats.pending}, ${stats.expired})
+      ON CONFLICT (id) DO UPDATE SET
+        last_indexed_at = CURRENT_TIMESTAMP,
+        total_indexed = ${stats.total},
+        files_scanned = ${scanResult.filesScanned},
+        approved_count = ${stats.approved},
+        rejected_count = ${stats.rejected},
+        pending_count = ${stats.pending},
+        expired_count = ${stats.expired}
+    `);
+    
+    const duration = Date.now() - startTime;
+    console.log(`   ✅ Persisted ${proposals.length} unique proposals in ${duration}ms`);
+    console.log(`   📊 Status: ${stats.approved} approved, ${stats.rejected} rejected, ${stats.pending} pending, ${stats.expired} expired`);
+    
+    return {
       summary: {
         filesScanned: scanResult.filesScanned,
         totalVoteRequests: scanResult.records.length,
@@ -501,14 +512,7 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
         duration,
       },
       stats,
-      proposals: limitedProposals,
     };
-    
-    // Update cache
-    proposalCache = result;
-    cacheTimestamp = Date.now();
-    
-    return result;
     
   } finally {
     indexingInProgress = false;
@@ -517,20 +521,53 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
 }
 
 /**
- * Get proposal stats without full rebuild
+ * Get proposal stats from persistent storage
  */
 export async function getProposalStats() {
-  if (proposalCache) {
-    return proposalCache.stats;
+  try {
+    const state = await queryOne(`
+      SELECT total_indexed, approved_count, rejected_count, pending_count, expired_count, last_indexed_at
+      FROM governance_index_state
+      WHERE id = 1
+    `);
+    
+    if (!state) {
+      // Check if we have any proposals even without state
+      const count = await queryOne(`SELECT COUNT(*) as count FROM governance_proposals`);
+      if (count && Number(count.count) > 0) {
+        // Count by status
+        const approved = await queryOne(`SELECT COUNT(*) as count FROM governance_proposals WHERE status = 'approved'`);
+        const rejected = await queryOne(`SELECT COUNT(*) as count FROM governance_proposals WHERE status = 'rejected'`);
+        const pending = await queryOne(`SELECT COUNT(*) as count FROM governance_proposals WHERE status = 'pending'`);
+        const expired = await queryOne(`SELECT COUNT(*) as count FROM governance_proposals WHERE status = 'expired'`);
+        
+        return {
+          total: Number(count.count),
+          approved: Number(approved?.count || 0),
+          rejected: Number(rejected?.count || 0),
+          pending: Number(pending?.count || 0),
+          expired: Number(expired?.count || 0),
+        };
+      }
+      return null;
+    }
+    
+    return {
+      total: Number(state.total_indexed || 0),
+      approved: Number(state.approved_count || 0),
+      rejected: Number(state.rejected_count || 0),
+      pending: Number(state.pending_count || 0),
+      expired: Number(state.expired_count || 0),
+      lastIndexedAt: state.last_indexed_at,
+    };
+  } catch (err) {
+    console.error('Error getting proposal stats:', err);
+    return null;
   }
-  
-  // Build index if not cached
-  const result = await buildGovernanceIndex();
-  return result.stats;
 }
 
 /**
- * Query proposals with filters
+ * Query proposals with filters from persistent storage
  */
 export async function queryProposals({ 
   limit = 100, 
@@ -540,71 +577,185 @@ export async function queryProposals({
   requester = null,
   search = null,
 } = {}) {
-  // Ensure cache is populated
-  if (!proposalCache) {
-    await buildGovernanceIndex();
+  try {
+    const conditions = [];
+    
+    if (status) {
+      conditions.push(`status = ${sqlStr(status)}`);
+    }
+    
+    if (actionType) {
+      conditions.push(`action_type = ${sqlStr(actionType)}`);
+    }
+    
+    if (requester) {
+      conditions.push(`LOWER(requester) LIKE LOWER('%' || ${sqlStr(requester)} || '%')`);
+    }
+    
+    if (search) {
+      conditions.push(`(
+        LOWER(reason_body) LIKE LOWER('%' || ${sqlStr(search)} || '%') OR
+        LOWER(reason_url) LIKE LOWER('%' || ${sqlStr(search)} || '%') OR
+        LOWER(requester) LIKE LOWER('%' || ${sqlStr(search)} || '%') OR
+        LOWER(action_type) LIKE LOWER('%' || ${sqlStr(search)} || '%')
+      )`);
+    }
+    
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    
+    // Get total count
+    const countResult = await queryOne(`SELECT COUNT(*) as count FROM governance_proposals ${whereClause}`);
+    const total = Number(countResult?.count || 0);
+    
+    // Get proposals
+    const rows = await query(`
+      SELECT * FROM governance_proposals
+      ${whereClause}
+      ORDER BY latest_timestamp DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+    
+    // Parse JSON fields
+    const proposals = rows.map(row => {
+      let actionDetails = row.action_details;
+      let votes = row.votes;
+      
+      try {
+        if (typeof actionDetails === 'string') actionDetails = JSON.parse(actionDetails);
+      } catch { /* ignore */ }
+      
+      try {
+        if (typeof votes === 'string') votes = JSON.parse(votes);
+      } catch { /* ignore */ }
+      
+      return {
+        proposalKey: row.proposal_key,
+        latestEventId: row.latest_event_id,
+        latestContractId: row.latest_contract_id,
+        latestTimestamp: row.latest_timestamp ? new Date(row.latest_timestamp).getTime() : null,
+        rawTimestamp: row.latest_timestamp,
+        requester: row.requester,
+        actionType: row.action_type,
+        actionDetails,
+        reasonUrl: row.reason_url,
+        reasonBody: row.reason_body,
+        voteBefore: row.vote_before,
+        voteBeforeTimestamp: row.vote_before_timestamp,
+        votes: votes || [],
+        votesFor: row.votes_for,
+        votesAgainst: row.votes_against,
+        trackingCid: row.tracking_cid,
+        status: row.status,
+      };
+    });
+    
+    return {
+      proposals,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total,
+      },
+    };
+  } catch (err) {
+    console.error('Error querying proposals:', err);
+    return { proposals: [], pagination: { total: 0, limit, offset, hasMore: false } };
   }
-  
-  let proposals = [...(proposalCache?.proposals || [])];
-  
-  // Apply filters
-  if (status) {
-    proposals = proposals.filter(p => p.status === status);
-  }
-  
-  if (actionType) {
-    proposals = proposals.filter(p => p.actionType === actionType);
-  }
-  
-  if (requester) {
-    proposals = proposals.filter(p => 
-      p.requester?.toLowerCase().includes(requester.toLowerCase())
-    );
-  }
-  
-  if (search) {
-    const searchLower = search.toLowerCase();
-    proposals = proposals.filter(p => 
-      p.reasonBody?.toLowerCase().includes(searchLower) ||
-      p.reasonUrl?.toLowerCase().includes(searchLower) ||
-      p.requester?.toLowerCase().includes(searchLower) ||
-      p.actionType?.toLowerCase().includes(searchLower)
-    );
-  }
-  
-  // Apply pagination
-  const total = proposals.length;
-  const paginatedProposals = proposals.slice(offset, offset + limit);
-  
-  return {
-    proposals: paginatedProposals,
-    pagination: {
-      total,
-      limit,
-      offset,
-      hasMore: offset + limit < total,
-    },
-  };
 }
 
 /**
  * Get a single proposal by key
  */
 export async function getProposalByKey(proposalKey) {
-  if (!proposalCache) {
-    await buildGovernanceIndex();
+  try {
+    const row = await queryOne(`
+      SELECT * FROM governance_proposals
+      WHERE proposal_key = ${sqlStr(proposalKey)}
+    `);
+    
+    if (!row) return null;
+    
+    let actionDetails = row.action_details;
+    let votes = row.votes;
+    
+    try {
+      if (typeof actionDetails === 'string') actionDetails = JSON.parse(actionDetails);
+    } catch { /* ignore */ }
+    
+    try {
+      if (typeof votes === 'string') votes = JSON.parse(votes);
+    } catch { /* ignore */ }
+    
+    return {
+      proposalKey: row.proposal_key,
+      latestEventId: row.latest_event_id,
+      latestContractId: row.latest_contract_id,
+      latestTimestamp: row.latest_timestamp ? new Date(row.latest_timestamp).getTime() : null,
+      rawTimestamp: row.latest_timestamp,
+      requester: row.requester,
+      actionType: row.action_type,
+      actionDetails,
+      reasonUrl: row.reason_url,
+      reasonBody: row.reason_body,
+      voteBefore: row.vote_before,
+      voteBeforeTimestamp: row.vote_before_timestamp,
+      votes: votes || [],
+      votesFor: row.votes_for,
+      votesAgainst: row.votes_against,
+      trackingCid: row.tracking_cid,
+      status: row.status,
+    };
+  } catch (err) {
+    console.error('Error getting proposal by key:', err);
+    return null;
   }
-  
-  return proposalCache?.proposals?.find(p => p.proposalKey === proposalKey) || null;
 }
 
 /**
  * Get proposals by contract ID
  */
 export async function getProposalByContractId(contractId) {
-  if (!proposalCache) {
-    await buildGovernanceIndex();
+  try {
+    const row = await queryOne(`
+      SELECT * FROM governance_proposals
+      WHERE latest_contract_id = ${sqlStr(contractId)}
+    `);
+    
+    if (!row) return null;
+    
+    let actionDetails = row.action_details;
+    let votes = row.votes;
+    
+    try {
+      if (typeof actionDetails === 'string') actionDetails = JSON.parse(actionDetails);
+    } catch { /* ignore */ }
+    
+    try {
+      if (typeof votes === 'string') votes = JSON.parse(votes);
+    } catch { /* ignore */ }
+    
+    return {
+      proposalKey: row.proposal_key,
+      latestEventId: row.latest_event_id,
+      latestContractId: row.latest_contract_id,
+      latestTimestamp: row.latest_timestamp ? new Date(row.latest_timestamp).getTime() : null,
+      rawTimestamp: row.latest_timestamp,
+      requester: row.requester,
+      actionType: row.action_type,
+      actionDetails,
+      reasonUrl: row.reason_url,
+      reasonBody: row.reason_body,
+      voteBefore: row.vote_before,
+      voteBeforeTimestamp: row.vote_before_timestamp,
+      votes: votes || [],
+      votesFor: row.votes_for,
+      votesAgainst: row.votes_against,
+      trackingCid: row.tracking_cid,
+      status: row.status,
+    };
+  } catch (err) {
+    console.error('Error getting proposal by contract:', err);
+    return null;
   }
-  
-  return proposalCache?.proposals?.find(p => p.latestContractId === contractId) || null;
 }
