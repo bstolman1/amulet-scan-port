@@ -1992,73 +1992,72 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
 // GET /api/events/debug/vote-request-lifecycle - Diagnostic endpoint to find VoteRequest created/archived events
 router.get('/debug/vote-request-lifecycle', async (req, res) => {
   try {
-    const dataPath = process.env.DATA_PATH || './data';
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required for this diagnostic' });
+    }
+
+    const maxFiles = Math.min(parseInt(req.query.files) || 500, 2000);
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     
-    // Find all binary files
-    const allFiles = [];
-    const findFiles = (dir) => {
-      if (!fs.existsSync(dir)) return;
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          findFiles(fullPath);
-        } else if (entry.name.endsWith('.bin') || entry.name.endsWith('.bin.gz') || entry.name.endsWith('.bin.zst')) {
-          allFiles.push(fullPath);
-        }
-      }
-    };
-    findFiles(dataPath);
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
-    // Sort by modification time, newest first
-    allFiles.sort((a, b) => {
-      try {
-        return fs.statSync(b).mtime - fs.statSync(a).mtime;
-      } catch { return 0; }
-    });
+    if (allFiles.length === 0) {
+      return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
+    }
+    
+    // Spread sampling across the dataset
+    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
     
     const createdEvents = [];
     const archivedEvents = [];
     let filesScanned = 0;
     
-    for (const filePath of allFiles) {
+    for (const filePath of binFiles) {
       if (createdEvents.length >= limit && archivedEvents.length >= limit) break;
       
       try {
-        const events = await readBinaryFile(filePath);
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
         filesScanned++;
         
         for (const evt of events) {
           // Look for VoteRequest template events
-          const templateId = evt.template_id || evt.templateId || '';
+          const templateId = evt.template_id || '';
           const isVoteRequest = templateId.includes('VoteRequest');
           
           if (!isVoteRequest) continue;
           
-          const eventType = evt.event_type || evt.eventType || '';
-          const raw = evt.raw || evt;
+          const eventType = evt.event_type || '';
+          const raw = evt.raw || {};
+          const payload = evt.payload || {};
           
           if (eventType === 'created' && createdEvents.length < limit) {
             createdEvents.push({
-              event_id: evt.event_id || evt.eventId,
-              contract_id: evt.contract_id || evt.contractId,
+              event_id: evt.event_id,
+              contract_id: evt.contract_id,
               template_id: templateId,
               timestamp: evt.timestamp,
               signatories: evt.signatories,
               observers: evt.observers,
-              payload_preview: JSON.stringify(evt.payload || raw.create_arguments || raw.payload)?.substring(0, 500),
-              raw_keys: Object.keys(raw || {}),
+              payload_keys: Object.keys(payload),
+              raw_keys: Object.keys(raw),
+              payload_preview: JSON.stringify(payload).substring(0, 1500),
             });
           } else if (eventType === 'archived' && archivedEvents.length < limit) {
             archivedEvents.push({
-              event_id: evt.event_id || evt.eventId,
-              contract_id: evt.contract_id || evt.contractId,
+              event_id: evt.event_id,
+              contract_id: evt.contract_id,
               template_id: templateId,
               timestamp: evt.timestamp,
-              raw_keys: Object.keys(raw || {}),
+              raw_keys: Object.keys(raw),
             });
           }
+        }
+        
+        if (filesScanned % 100 === 0) {
+          console.log(`[vote-request-lifecycle] ${filesScanned}/${binFiles.length} files | created: ${createdEvents.length}, archived: ${archivedEvents.length}`);
         }
       } catch (err) {
         // Skip unreadable files
@@ -2084,69 +2083,69 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
 // GET /api/events/debug/cast-vote - Diagnostic endpoint to sample DsoRules_CastVote events
 router.get('/debug/cast-vote', async (req, res) => {
   try {
-    const dataPath = process.env.DATA_PATH || './data';
-    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required for this diagnostic' });
+    }
+
+    const maxFiles = Math.min(parseInt(req.query.files) || 500, 2000);
+    const maxSamples = Math.min(parseInt(req.query.limit) || 20, 100);
     
-    // Find all binary files
-    const allFiles = [];
-    const findFiles = (dir) => {
-      if (!fs.existsSync(dir)) return;
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          findFiles(fullPath);
-        } else if (entry.name.endsWith('.bin') || entry.name.endsWith('.bin.gz') || entry.name.endsWith('.bin.zst')) {
-          allFiles.push(fullPath);
-        }
-      }
-    };
-    findFiles(dataPath);
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
-    // Sort by modification time, newest first
-    allFiles.sort((a, b) => {
-      try {
-        return fs.statSync(b).mtime - fs.statSync(a).mtime;
-      } catch { return 0; }
-    });
+    if (allFiles.length === 0) {
+      return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
+    }
+    
+    // Spread sampling across the dataset
+    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
     
     const samples = [];
     let filesScanned = 0;
     let matchCount = 0;
     
-    for (const filePath of allFiles) {
-      if (samples.length >= limit) break;
+    for (const filePath of binFiles) {
+      if (samples.length >= maxSamples) break;
       
       try {
-        const events = await readBinaryFile(filePath);
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
         filesScanned++;
         
         for (const evt of events) {
-          const raw = evt.raw || evt;
-          const choice = raw.choice || evt.choice || '';
+          if (evt.event_type !== 'exercised') continue;
+          
+          const choice = evt.choice || '';
           
           // Look for CastVote choice exercises
           if (choice.includes('CastVote') || choice === 'DsoRules_CastVote') {
             matchCount++;
             
-            if (samples.length < limit) {
-              const choiceArg = raw.choice_argument || raw.choiceArgument || evt.payload;
+            if (samples.length < maxSamples) {
+              const raw = evt.raw || {};
+              const payload = evt.payload || {};
+              const choiceArg = raw.choice_argument || payload.choice_argument || payload;
               
               samples.push({
-                contract_id: evt.contract_id || evt.contractId,
-                template_id: evt.template_id || evt.templateId,
+                contract_id: evt.contract_id,
+                template_id: evt.template_id,
                 timestamp: evt.timestamp,
                 choice: choice,
-                event_type: evt.event_type || evt.eventType,
-                payload_keys: Object.keys(evt.payload || {}),
-                raw_keys: Object.keys(raw || {}),
-                choice_argument_preview: JSON.stringify(choiceArg)?.substring(0, 1000),
+                event_type: evt.event_type,
+                payload_keys: Object.keys(payload),
+                raw_keys: Object.keys(raw),
+                choice_argument_preview: JSON.stringify(choiceArg)?.substring(0, 1500),
                 exercise_result_preview: JSON.stringify(raw.exercise_result)?.substring(0, 500),
-                acting_parties: raw.acting_parties || evt.acting_parties,
-                child_event_ids: raw.child_event_ids?.length || 0,
+                acting_parties: evt.acting_parties,
+                child_event_ids_count: (evt.child_event_ids || []).length,
               });
             }
           }
+        }
+        
+        if (filesScanned % 100 === 0) {
+          console.log(`[cast-vote] ${filesScanned}/${binFiles.length} files | ${matchCount} matches`);
         }
       } catch (err) {
         // Skip unreadable files
