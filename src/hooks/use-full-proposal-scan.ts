@@ -65,13 +65,14 @@ interface ScanProgress {
   totalVoteRequests: number;
   filesPerSec?: number;
   etaSeconds?: number;
-  workerCount?: number;
+  concurrency?: number;
   rawCount?: number;
 }
 
 interface ScanOptions {
   debug?: boolean;
   raw?: boolean;
+  concurrency?: number;
   limit?: number;
 }
 
@@ -125,7 +126,7 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
           percent: 0,
           uniqueProposals: 0,
           totalVoteRequests: 0,
-          workerCount: data.workerCount,
+          concurrency: data.concurrency,
         });
       });
 
