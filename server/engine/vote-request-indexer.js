@@ -391,6 +391,19 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: createdResult.records.length, records: 0 };
     let inserted = 0;
     let updated = 0;
+    
+    // Track vote-based status detection stats
+    const statusStats = {
+      executed: 0,
+      rejected: 0,
+      expired: 0,
+      in_progress: 0,
+      detectedByMajority: 0,
+      detectedByChoice: 0,
+      detectedByExpiry: 0,
+      totalAcceptVotes: 0,
+      totalRejectVotes: 0
+    };
 
     for (const event of createdResult.records) {
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
@@ -449,54 +462,72 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         else if (normalized === 'reject') rejectCount++;
       }
 
-      // Closing choice can often be just "Archive" on VoteRequest; don't treat that as "rejected".
-      // Prefer explicit choice labels when present; otherwise infer from votes.
+      // ============================================================
+      // STATUS DETECTION: Votes Array Majority (Primary Method)
+      // ============================================================
+      // Since DsoRules_CloseVoteRequest events are not found in backfill data,
+      // we derive status directly from the votes array using majority detection.
+      //
+      // Canton/Splice governance rules (from ACS data observation):
+      // - Votes accumulate in the VoteRequest contract's votes array
+      // - Each SV can cast one vote with accept: true/false
+      // - Majority of accept votes = executed
+      // - Any reject vote OR expired with no majority = rejected/expired
+      // ============================================================
+
+      // Total votes cast (each entry is [sv_name, vote_data])
+      const totalVotesCast = finalVoteCount;
+      
+      // Majority detection: more than half of cast votes are accepts
+      // Note: We don't know total eligible voters, so we use cast votes as denominator
+      const hasMajorityAccept = acceptCount > 0 && acceptCount > rejectCount;
+      const hasAnyReject = rejectCount > 0;
+      
+      // Archived choice can provide hints (e.g., "Archive", "VoteRequest_Accept")
       const archivedChoice = archivedEvent?.choice || '';
       const choiceLower = String(archivedChoice).toLowerCase();
-
-      // Check DsoRules_CloseVoteRequest outcome if available
-      // The outcome field typically contains: 'VRO_Accepted', 'VRO_Rejected', 'VRO_Expired', etc.
-      const dsoOutcome = archivedEvent?.dso_close_outcome;
-      const dsoOutcomeStr = typeof dsoOutcome === 'string' 
-        ? dsoOutcome.toLowerCase() 
-        : (dsoOutcome?.tag || '').toLowerCase();
-      
-      // DsoRules_CloseVoteRequest is the authoritative source for vote outcomes
-      const wasExecutedByDso = dsoOutcomeStr.includes('accept') || dsoOutcomeStr.includes('vro_accepted');
-      const wasRejectedByDso = dsoOutcomeStr.includes('reject') || dsoOutcomeStr.includes('vro_rejected');
-      const wasExpiredByDso = dsoOutcomeStr.includes('expire') || dsoOutcomeStr.includes('vro_expired');
-
-      const wasExecutedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
+      const wasAcceptedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
       const wasRejectedByChoice = choiceLower.includes('reject');
-      const wasExpiredByChoice = choiceLower.includes('expire');
 
-      // Vote-based inference:
-      // - Any explicit reject votes => rejected
-      // - If there are votes and no rejects => executed (most governance votes are accept-only)
-      const wasRejectedByVotes = rejectCount > 0;
-      const wasExecutedByVotes = finalVoteCount > 0 && rejectCount === 0;
-
-      // Prioritize DSO outcome > choice name > vote inference
-      const wasExecuted = wasExecutedByDso || wasExecutedByChoice || wasExecutedByVotes;
-      const wasRejected = wasRejectedByDso || wasRejectedByChoice || wasRejectedByVotes;
-      const wasExpired = wasExpiredByDso || wasExpiredByChoice;
-
+      // Determine status based on votes array (primary) and deadline
       if (isClosed) {
-        if (wasExpired || (finalVoteCount === 0 && isExpired)) {
-          status = 'expired';
-        } else if (wasRejected) {
+        // Contract was archived - determine outcome from votes
+        if (hasAnyReject) {
+          // Any explicit reject = rejected
           status = 'rejected';
-        } else if (wasExecuted) {
+        } else if (hasMajorityAccept || wasAcceptedByChoice) {
+          // Majority accepts or explicit accept choice = executed
           status = 'executed';
+        } else if (isExpired || totalVotesCast === 0) {
+          // Expired with no clear majority = expired
+          status = 'expired';
         } else {
-          // Closed but we couldn't classify; default to executed (safer than marking everything rejected)
-          status = 'executed';
+          // Closed with only accept votes = executed
+          status = acceptCount > 0 ? 'executed' : 'expired';
         }
       } else if (isExpired) {
-        status = 'expired';
+        // Not closed but deadline passed
+        // Check if it would have passed based on current votes
+        if (hasAnyReject) {
+          status = 'rejected';
+        } else if (hasMajorityAccept) {
+          // Has enough votes to pass but not yet closed - pending execution
+          status = 'executed';
+        } else {
+          status = 'expired';
+        }
       } else {
+        // Still open and deadline not passed
         status = 'in_progress';
       }
+
+      // Track detection statistics
+      statusStats[status]++;
+      statusStats.totalAcceptVotes += acceptCount;
+      statusStats.totalRejectVotes += rejectCount;
+      if (hasMajorityAccept && status === 'executed') statusStats.detectedByMajority++;
+      if (wasAcceptedByChoice && status === 'executed') statusStats.detectedByChoice++;
+      if (isExpired && status === 'expired') statusStats.detectedByExpiry++;
 
       // Normalize reason - can be string or object
       const rawReason = event.payload?.reason;
@@ -607,6 +638,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
+    
+    // Log vote-based detection statistics
+    console.log(`   📊 Vote-based status detection:`);
+    console.log(`      - Executed: ${statusStats.executed} (${statusStats.detectedByMajority} by majority, ${statusStats.detectedByChoice} by choice)`);
+    console.log(`      - Rejected: ${statusStats.rejected}`);
+    console.log(`      - Expired: ${statusStats.expired} (${statusStats.detectedByExpiry} by deadline)`);
+    console.log(`      - In Progress: ${statusStats.in_progress}`);
+    console.log(`      - Total votes analyzed: ${statusStats.totalAcceptVotes} accepts, ${statusStats.totalRejectVotes} rejects`);
 
     // Persist successful build summary for audit trail
     const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
