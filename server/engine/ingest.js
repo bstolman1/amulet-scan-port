@@ -97,10 +97,23 @@ function sqlJson(val) {
 }
 
 /**
+ * Convert stored path (always forward slashes) to platform-native path
+ */
+function toNativePath(storedPath) {
+  if (process.platform === 'win32') {
+    return storedPath.replace(/\//g, '\\');
+  }
+  return storedPath;
+}
+
+/**
  * Ingest a single file using streaming decode
  */
 async function ingestOneFile(fileRow) {
   const { file_id, file_path, file_type } = fileRow;
+  
+  // Convert stored forward-slash path to native platform path
+  const nativePath = toNativePath(file_path);
   
   try {
     const insertFn = file_type === 'events' ? insertEventBatch : insertUpdateBatch;
@@ -111,7 +124,7 @@ async function ingestOneFile(fileRow) {
     let maxTs = null;
     
     // Stream records and insert in batches
-    for await (const record of decodeFile(file_path)) {
+    for await (const record of decodeFile(nativePath)) {
       batch.push(record);
       totalCount++;
       
