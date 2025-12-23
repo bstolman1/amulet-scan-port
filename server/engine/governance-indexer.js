@@ -1,22 +1,14 @@
 /**
  * Governance Proposal Indexer
  * 
- * Scans binary files for VoteRequest created events, extracts unique proposals
- * by grouping on (action type + reason URL), and tracks vote progress.
+ * Queries the vote_requests table (populated by vote-request-indexer) and groups
+ * VoteRequest events into unique proposals by (action type + reason URL).
  * 
  * PERSISTENT: Stores proposals in DuckDB so index survives restarts.
- * RELIABLE: Scans raw binary files directly for complete payload access.
+ * RELIABLE: Uses already-indexed vote_requests table for complete data.
  */
 
-import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
-import * as binaryReader from '../duckdb/binary-reader.js';
-import fs from 'fs';
-import path from 'path';
-import {
-  getFilesForTemplate,
-  isTemplateIndexPopulated,
-  getTemplateIndexStats
-} from './template-file-index.js';
+import { query, queryOne } from '../duckdb/connection.js';
 
 let indexingInProgress = false;
 let indexingProgress = null;
@@ -42,94 +34,90 @@ function getProposalKey(actionType, reasonUrl) {
 }
 
 /**
- * Extract the specific action type from a VoteRequest payload
- * Handles nested structures like: { tag: "ARC_DsoRules", value: { dsoAction: { tag: "SRARC_SetConfig" } } }
+ * Extract the specific action type from action_tag and action_value
  */
-function extractActionType(payload) {
-  if (!payload) return 'unknown';
-  
-  const action = payload.action;
-  if (!action) return 'unknown';
-  
-  // Get outer tag
-  const outerTag = action.tag || Object.keys(action).find(k => 
-    k.startsWith('ARC_') || k.startsWith('SRARC_') || k.startsWith('CRARC_')
-  );
-  
-  // Check for nested dsoAction with specific action type
-  const dsoAction = action.value?.dsoAction || action.dsoAction;
-  if (dsoAction) {
-    const innerTag = dsoAction.tag || Object.keys(dsoAction).find(k => 
-      k.startsWith('SRARC_') || k.startsWith('CRARC_') || k.startsWith('ARC_')
-    );
-    if (innerTag) return innerTag;
+function extractActionType(actionTag, actionValue) {
+  // Check for nested action types in action_value
+  if (actionValue) {
+    const parsed = typeof actionValue === 'string' ? JSON.parse(actionValue) : actionValue;
+    
+    // Check for dsoAction with specific tag
+    const dsoAction = parsed?.dsoAction;
+    if (dsoAction?.tag) {
+      return dsoAction.tag;
+    }
+    
+    // Check for amuletRulesAction
+    const amuletAction = parsed?.amuletRulesAction;
+    if (amuletAction?.tag) {
+      return amuletAction.tag;
+    }
+    
+    // Check for direct tag in value
+    if (parsed?.tag) {
+      return parsed.tag;
+    }
   }
   
-  // Check for value.tag
-  if (action.value?.tag) {
-    return action.value.tag;
-  }
-  
-  return outerTag || 'unknown';
+  // Fall back to outer action tag
+  return actionTag || 'unknown';
 }
 
 /**
- * Extract reason URL and body from payload
+ * Extract reason URL from the reason column
  */
-function extractReason(payload) {
-  if (!payload) return { reasonUrl: '', reasonBody: '' };
+function extractReasonUrl(reason) {
+  if (!reason) return '';
   
-  const reason = payload.reason;
-  if (!reason) return { reasonUrl: '', reasonBody: '' };
-  
-  if (typeof reason === 'string') {
-    return { reasonUrl: reason, reasonBody: '' };
+  try {
+    const parsed = typeof reason === 'string' ? JSON.parse(reason) : reason;
+    return parsed?.url || parsed?.text || '';
+  } catch {
+    return typeof reason === 'string' ? reason : '';
   }
-  
-  return {
-    reasonUrl: reason.url || reason.text || '',
-    reasonBody: reason.body || reason.description || '',
-  };
 }
 
 /**
- * Parse votes from payload
+ * Extract reason body from the reason column
+ */
+function extractReasonBody(reason) {
+  if (!reason) return '';
+  
+  try {
+    const parsed = typeof reason === 'string' ? JSON.parse(reason) : reason;
+    return parsed?.body || parsed?.description || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Parse votes from the votes column
  */
 function parseVotes(votes) {
   if (!votes) return [];
   
-  const result = [];
-  
-  if (Array.isArray(votes)) {
-    for (const vote of votes) {
+  try {
+    const parsed = typeof votes === 'string' ? JSON.parse(votes) : votes;
+    if (!Array.isArray(parsed)) return [];
+    
+    return parsed.map(vote => {
       if (Array.isArray(vote) && vote.length >= 2) {
         const [svName, voteData] = vote;
-        result.push({
+        return {
           svName,
           sv: voteData?.sv || svName,
           accept: voteData?.accept === true,
           reasonUrl: voteData?.reason?.url || '',
           reasonBody: voteData?.reason?.body || '',
           castAt: voteData?.optCastAt || null,
-        });
+        };
       }
-    }
-  } else if (typeof votes === 'object') {
-    for (const [svName, voteData] of Object.entries(votes)) {
-      if (voteData && typeof voteData === 'object') {
-        result.push({
-          svName,
-          sv: voteData.sv || svName,
-          accept: voteData.accept === true,
-          reasonUrl: voteData.reason?.url || '',
-          reasonBody: voteData.reason?.body || '',
-          castAt: voteData.optCastAt || null,
-        });
-      }
-    }
+      return null;
+    }).filter(Boolean);
+  } catch {
+    return [];
   }
-  
-  return result;
 }
 
 /**
@@ -195,115 +183,7 @@ function sqlJson(val) {
 }
 
 /**
- * Scan binary files for VoteRequest created events
- */
-async function scanFilesForVoteRequests(files) {
-  const records = [];
-  let filesScanned = 0;
-  
-  for (const filePath of files) {
-    try {
-      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(DATA_PATH, filePath);
-      
-      if (!fs.existsSync(fullPath)) continue;
-      
-      const events = await binaryReader.readBinaryFile(fullPath);
-      filesScanned++;
-      
-      if (indexingProgress) {
-        indexingProgress.current = filesScanned;
-        indexingProgress.records = records.length;
-      }
-      
-      for (const event of events) {
-        if (event.event_type !== 'created') continue;
-        
-        const templateId = event.template_id || '';
-        if (!templateId.includes('VoteRequest')) continue;
-        
-        const payload = event.create_arguments || event.payload;
-        if (!payload) continue;
-        
-        const actionType = extractActionType(payload);
-        const { reasonUrl, reasonBody } = extractReason(payload);
-        const votes = parseVotes(payload.votes);
-        
-        let votesFor = 0;
-        let votesAgainst = 0;
-        for (const v of votes) {
-          if (v.accept) votesFor++;
-          else votesAgainst++;
-        }
-        
-        // Parse voteBefore timestamp
-        let voteBeforeTimestamp = null;
-        if (payload.voteBefore) {
-          const vb = String(payload.voteBefore);
-          if (/^\d+$/.test(vb)) {
-            voteBeforeTimestamp = parseInt(vb.slice(0, 13), 10);
-          } else {
-            const parsedVb = new Date(vb).getTime();
-            voteBeforeTimestamp = Number.isFinite(parsedVb) ? parsedVb : null;
-          }
-        }
-        
-        records.push({
-          event_id: event.event_id,
-          contract_id: event.contract_id,
-          template_id: templateId,
-          timestamp: event.effective_at || event.created_at || event.timestamp,
-          requester: payload.requester,
-          actionType,
-          actionDetails: payload.action,
-          reasonUrl,
-          reasonBody,
-          voteBefore: payload.voteBefore,
-          voteBeforeTimestamp,
-          votes,
-          votesFor,
-          votesAgainst,
-          trackingCid: payload.trackingCid?.value || payload.trackingCid || null,
-        });
-      }
-    } catch (err) {
-      console.error(`Error scanning file ${filePath}:`, err.message);
-    }
-  }
-  
-  return { records, filesScanned };
-}
-
-/**
- * Full scan of all binary files (fallback when template index unavailable)
- */
-async function scanAllFilesForVoteRequests() {
-  const dataDir = DATA_PATH;
-  const allFiles = [];
-  
-  const findFiles = async (dir) => {
-    try {
-      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory() && !entry.name.startsWith('.')) {
-          await findFiles(fullPath);
-        } else if (entry.name.endsWith('.pb.zst')) {
-          allFiles.push(fullPath);
-        }
-      }
-    } catch (err) {
-      // Ignore permission errors
-    }
-  };
-  
-  await findFiles(dataDir);
-  console.log(`   Found ${allFiles.length} binary files to scan`);
-  
-  return scanFilesForVoteRequests(allFiles);
-}
-
-/**
- * Build the governance proposal index by scanning binary files
+ * Build the governance proposal index by querying vote_requests table
  * Persists results to DuckDB
  */
 export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false } = {}) {
@@ -330,79 +210,96 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
     proposals: 0,
     startedAt: new Date().toISOString(),
   };
-  console.log('\n🗳️ Building governance proposal index (scanning binary files)...');
+  console.log('\n🗳️ Building governance proposal index (from vote_requests table)...');
 
   try {
     await ensureGovernanceTables();
 
     const startTime = Date.now();
-    let scanResult;
 
-    // Check if template index is available for faster scanning
-    const templateIndexPopulated = await isTemplateIndexPopulated();
+    // Query vote_requests table for all VoteRequest records
+    indexingProgress = { ...indexingProgress, phase: 'querying' };
+    
+    const rows = await query(`
+      SELECT 
+        event_id,
+        contract_id,
+        template_id,
+        effective_at,
+        requester,
+        action_tag,
+        action_value,
+        reason,
+        votes,
+        vote_count,
+        vote_before,
+        tracking_cid,
+        payload
+      FROM vote_requests
+      ORDER BY effective_at DESC
+      LIMIT ${limit}
+    `);
 
-    if (templateIndexPopulated) {
-      const templateIndexStats = await getTemplateIndexStats();
-      console.log(`   📋 Using template index (${templateIndexStats.totalFiles} files indexed)`);
-
-      const voteRequestFiles = await getFilesForTemplate('VoteRequest');
-      console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events`);
-
-      if (voteRequestFiles.length === 0) {
-        console.log('   ⚠️ No VoteRequest files in index, using full scan');
-        indexingProgress = { ...indexingProgress, phase: 'full_scan', total: 0 };
-        scanResult = await scanAllFilesForVoteRequests();
-      } else {
-        indexingProgress = { ...indexingProgress, phase: 'scanning', total: voteRequestFiles.length };
-        scanResult = await scanFilesForVoteRequests(voteRequestFiles);
-      }
-    } else {
-      console.log('   ⚠️ Template index not available, using full scan');
-      indexingProgress = { ...indexingProgress, phase: 'full_scan', total: 0 };
-      scanResult = await scanAllFilesForVoteRequests();
-    }
-
-    console.log(`   Found ${scanResult.records.length} VoteRequest created events from ${scanResult.filesScanned} files`);
-
-    // Log sample for debugging
-    if (scanResult.records.length > 0) {
-      const sample = scanResult.records[0];
-      console.log(`   Sample: actionType=${sample.actionType}, reasonUrl=${sample.reasonUrl?.substring(0, 50)}...`);
-    }
+    console.log(`   Queried ${rows.length} vote request records from table`);
+    indexingProgress = { ...indexingProgress, phase: 'scanning', total: rows.length, records: rows.length };
 
     // Group by unique proposal (action type + reason URL)
     indexingProgress = { ...indexingProgress, phase: 'grouping' };
     const proposalMap = new Map();
 
-    for (const record of scanResult.records) {
-      const key = getProposalKey(record.actionType, record.reasonUrl);
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      
+      const actionType = extractActionType(row.action_tag, row.action_value);
+      const reasonUrl = extractReasonUrl(row.reason);
+      const reasonBody = extractReasonBody(row.reason);
+      const votes = parseVotes(row.votes);
+      
+      let votesFor = 0;
+      let votesAgainst = 0;
+      for (const v of votes) {
+        if (v.accept) votesFor++;
+        else votesAgainst++;
+      }
 
-      const timestamp = record.timestamp ? new Date(record.timestamp).getTime() : 0;
+      // Parse voteBefore timestamp
+      let voteBeforeTimestamp = null;
+      if (row.vote_before) {
+        const vb = String(row.vote_before);
+        if (/^\d+$/.test(vb)) {
+          voteBeforeTimestamp = parseInt(vb.slice(0, 13), 10);
+        } else {
+          const parsedVb = new Date(vb).getTime();
+          voteBeforeTimestamp = Number.isFinite(parsedVb) ? parsedVb : null;
+        }
+      }
+
+      const key = getProposalKey(actionType, reasonUrl);
+      const timestamp = row.effective_at ? new Date(row.effective_at).getTime() : 0;
       const existing = proposalMap.get(key);
 
       if (!existing || timestamp > existing.latest_timestamp) {
         proposalMap.set(key, {
           proposal_key: key,
           latest_timestamp: timestamp,
-          latest_contract_id: record.contract_id,
-          latest_event_id: record.event_id,
-          requester: record.requester,
-          action_type: record.actionType,
-          action_details: record.actionDetails,
-          reason_url: record.reasonUrl,
-          reason_body: record.reasonBody,
-          vote_before: record.voteBefore,
-          vote_before_timestamp: record.voteBeforeTimestamp,
-          votes: record.votes,
-          votes_for: record.votesFor,
-          votes_against: record.votesAgainst,
-          tracking_cid: record.trackingCid,
+          latest_contract_id: row.contract_id,
+          latest_event_id: row.event_id,
+          requester: row.requester,
+          action_type: actionType,
+          action_details: row.action_value,
+          reason_url: reasonUrl,
+          reason_body: reasonBody,
+          vote_before: row.vote_before,
+          vote_before_timestamp: voteBeforeTimestamp,
+          votes,
+          votes_for: votesFor,
+          votes_against: votesAgainst,
+          tracking_cid: row.tracking_cid,
         });
       }
 
-      if (indexingProgress) {
-        indexingProgress.proposals = proposalMap.size;
-      }
+      indexingProgress.current = i + 1;
+      indexingProgress.proposals = proposalMap.size;
     }
 
     // Convert to array and determine status
@@ -465,11 +362,11 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
 
     await query(`
       INSERT INTO governance_index_state (id, last_indexed_at, total_indexed, files_scanned, approved_count, rejected_count, pending_count, expired_count)
-      VALUES (1, CURRENT_TIMESTAMP, ${stats.total}, ${scanResult.filesScanned}, ${stats.approved}, ${stats.rejected}, ${stats.pending}, ${stats.expired})
+      VALUES (1, CURRENT_TIMESTAMP, ${stats.total}, 0, ${stats.approved}, ${stats.rejected}, ${stats.pending}, ${stats.expired})
       ON CONFLICT (id) DO UPDATE SET
         last_indexed_at = CURRENT_TIMESTAMP,
         total_indexed = ${stats.total},
-        files_scanned = ${scanResult.filesScanned},
+        files_scanned = 0,
         approved_count = ${stats.approved},
         rejected_count = ${stats.rejected},
         pending_count = ${stats.pending},
@@ -482,8 +379,7 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
 
     return {
       summary: {
-        filesScanned: scanResult.filesScanned,
-        totalVoteRequests: scanResult.records.length,
+        recordsQueried: rows.length,
         uniqueProposals: proposals.length,
         duration,
       },
