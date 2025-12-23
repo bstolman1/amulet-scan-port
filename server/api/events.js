@@ -12,6 +12,21 @@ import {
 
 const router = Router();
 
+// Helper to convert BigInt values to numbers for JSON serialization
+function convertBigInts(obj) {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'bigint') return Number(obj);
+  if (Array.isArray(obj)) return obj.map(convertBigInts);
+  if (typeof obj === 'object') {
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = convertBigInts(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
 // VoteRequest cache - only used when index is not populated
 let voteRequestCache = null;
 let voteRequestCacheTime = 0;
@@ -2209,7 +2224,7 @@ router.get('/governance-proposals', async (req, res) => {
     const stats = await voteRequestIndexer.getVoteRequestStats();
     const indexState = await voteRequestIndexer.getIndexState();
     
-    res.json({
+    res.json(convertBigInts({
       data: proposals,
       count: proposals.length,
       stats,
@@ -2229,7 +2244,7 @@ router.get('/governance-proposals', async (req, res) => {
           },
         },
       },
-    });
+    }));
   } catch (err) {
     console.error('Error in governance-proposals:', err);
     res.status(500).json({ error: err.message });
