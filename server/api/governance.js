@@ -218,4 +218,20 @@ router.get('/action-types', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/governance/index/purge
+ * Purge the governance index completely (delete all proposals and reset state)
+ */
+router.post('/index/purge', async (req, res) => {
+  try {
+    await query(`DELETE FROM governance_proposals`);
+    await query(`DELETE FROM governance_index_state`);
+    console.log('🗑️ Governance index purged');
+    res.json({ status: 'ok', message: 'Governance index purged' });
+  } catch (err) {
+    console.error('Error purging governance index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
