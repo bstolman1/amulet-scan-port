@@ -312,11 +312,18 @@ export async function readBinaryFile(filePath) {
     }
   }
   
-  return {
+  const result = {
     type: recordKey,
     count: allRecords.length,
-    records: allRecords
+    records: allRecords,
+    // Backwards compatible: allow `for (const r of await readBinaryFile(...))`
+    // for older code paths that expected an array.
+    [Symbol.iterator]: function* () {
+      yield* allRecords;
+    },
   };
+
+  return result;
 }
 
 /**
