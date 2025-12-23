@@ -47,6 +47,12 @@ interface FullProposalScanResponse {
   };
   stats: Stats;
   proposals: Proposal[];
+  debug?: {
+    dedupLog: any[];
+    byKeySource: Record<string, number>;
+    highMergeProposals: any[];
+    sampleKeys: any[];
+  };
 }
 
 interface ScanProgress {
@@ -57,7 +63,7 @@ interface ScanProgress {
   totalVoteRequests: number;
 }
 
-export function useFullProposalScan(enabled: boolean = false) {
+export function useFullProposalScan(enabled: boolean = false, debug: boolean = false) {
   const [data, setData] = useState<FullProposalScanResponse | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -75,7 +81,7 @@ export function useFullProposalScan(enabled: boolean = false) {
 
     try {
       const backendUrl = getDuckDBApiUrl();
-      const url = `${backendUrl}/api/events/governance/proposals/stream`;
+      const url = `${backendUrl}/api/events/governance/proposals/stream${debug ? '?debug=true' : ''}`;
       
       // Close any existing connection
       if (eventSourceRef.current) {

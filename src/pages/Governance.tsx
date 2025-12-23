@@ -40,6 +40,7 @@ const Governance = () => {
   const highlightedProposalId = searchParams.get("proposal");
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [runFullScan, setRunFullScan] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
   
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -54,7 +55,7 @@ const Governance = () => {
     isLoading: fullScanLoading, 
     error: fullScanError,
     refetch: refetchFullScan,
-  } = useFullProposalScan(runFullScan);
+  } = useFullProposalScan(runFullScan, debugMode);
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -886,24 +887,35 @@ const Governance = () => {
                   </>
                 )}
               </h3>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => refetchFullScan()}
-                disabled={fullScanLoading}
-              >
-                {fullScanLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Scanning...
-                  </>
-                ) : (
-                  <>
-                    <FileSearch className="h-4 w-4 mr-2" />
-                    Re-scan
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input 
+                    type="checkbox" 
+                    checked={debugMode} 
+                    onChange={(e) => setDebugMode(e.target.checked)}
+                    className="rounded"
+                  />
+                  Debug Mode
+                </label>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => refetchFullScan()}
+                  disabled={fullScanLoading}
+                >
+                  {fullScanLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Scanning...
+                    </>
+                  ) : (
+                    <>
+                      <FileSearch className="h-4 w-4 mr-2" />
+                      Re-scan
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
 
             {!runFullScan ? (
@@ -912,6 +924,17 @@ const Governance = () => {
                 <p className="text-muted-foreground mb-4">
                   Click the "Full Scan" tab to scan all {fullScanData?.summary?.totalFilesInDataset?.toLocaleString() || "57,000+"} ledger files for governance proposals.
                 </p>
+                <div className="flex items-center justify-center gap-4 mb-4">
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <input 
+                      type="checkbox" 
+                      checked={debugMode} 
+                      onChange={(e) => setDebugMode(e.target.checked)}
+                      className="rounded"
+                    />
+                    Enable Debug Mode (shows deduplication details)
+                  </label>
+                </div>
                 <Button onClick={() => setRunFullScan(true)}>
                   <FileSearch className="h-4 w-4 mr-2" />
                   Start Full Scan
@@ -1089,6 +1112,83 @@ const Governance = () => {
                   </Table>
                 </div>
 
+                {/* Debug Output */}
+                {fullScanData.debug && (
+                  <div className="mt-6 p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+                    <h4 className="font-bold text-yellow-400 mb-4 flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      Deduplication Debug Info
+                    </h4>
+                    
+                    {/* Key Source Breakdown */}
+                    <div className="mb-4">
+                      <p className="text-sm font-semibold mb-2">Key Source Breakdown:</p>
+                      <div className="flex gap-4">
+                        {Object.entries(fullScanData.debug.byKeySource).map(([source, count]) => (
+                          <Badge key={source} variant="outline">
+                            {source}: {count as number}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {/* High Merge Proposals */}
+                    {fullScanData.debug.highMergeProposals?.length > 0 && (
+                      <details className="mb-4">
+                        <summary className="cursor-pointer text-sm font-medium text-yellow-400">
+                          High Merge Proposals ({fullScanData.debug.highMergeProposals.length}) - proposals with 5+ merges
+                        </summary>
+                        <div className="mt-2 max-h-60 overflow-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Key</TableHead>
+                                <TableHead>Source</TableHead>
+                                <TableHead>Merges</TableHead>
+                                <TableHead>Action</TableHead>
+                                <TableHead>Requester</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {fullScanData.debug.highMergeProposals.map((p: any, i: number) => (
+                                <TableRow key={i}>
+                                  <TableCell className="text-xs font-mono max-w-[200px] truncate">{p.key}</TableCell>
+                                  <TableCell className="text-xs">{p.keySource}</TableCell>
+                                  <TableCell className="text-xs font-bold text-warning">{p.mergeCount}</TableCell>
+                                  <TableCell className="text-xs">{p.actionType?.replace(/^SRARC_|^CRARC_/, '')}</TableCell>
+                                  <TableCell className="text-xs truncate max-w-[100px]">{p.requester}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </details>
+                    )}
+                    
+                    {/* Sample Keys */}
+                    <details className="mb-4">
+                      <summary className="cursor-pointer text-sm font-medium text-yellow-400">
+                        Sample Proposal Keys (first 20)
+                      </summary>
+                      <pre className="mt-2 text-xs overflow-x-auto p-3 bg-muted/30 rounded border max-h-60">
+                        {JSON.stringify(fullScanData.debug.sampleKeys, null, 2)}
+                      </pre>
+                    </details>
+                    
+                    {/* Dedup Log */}
+                    {fullScanData.debug.dedupLog?.length > 0 && (
+                      <details>
+                        <summary className="cursor-pointer text-sm font-medium text-yellow-400">
+                          Deduplication Log (last {fullScanData.debug.dedupLog.length} merges)
+                        </summary>
+                        <pre className="mt-2 text-xs overflow-x-auto p-3 bg-muted/30 rounded border max-h-60">
+                          {JSON.stringify(fullScanData.debug.dedupLog.slice(-100), null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                )}
+
                 {/* Collapsible raw data for each proposal */}
                 <details className="mt-6">
                   <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
@@ -1110,8 +1210,8 @@ const Governance = () => {
               <FileSearch className="h-4 w-4" />
               <AlertDescription className="text-sm">
                 This scan processes <strong>all</strong> binary ledger files to find VoteRequest events. 
-                Proposals are deduplicated by <code className="bg-muted px-1 rounded">action_type + reason_url</code> 
-                and show the latest state of each unique proposal.
+                Proposals are deduplicated by <code className="bg-muted px-1 rounded">trackingCid</code> (if available) or 
+                <code className="bg-muted px-1 rounded">actionType + requester + reasonUrl + action-specific-key</code>.
               </AlertDescription>
             </Alert>
           </div>
