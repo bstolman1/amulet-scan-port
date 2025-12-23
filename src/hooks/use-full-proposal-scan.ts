@@ -44,9 +44,11 @@ interface FullProposalScanResponse {
     totalFilesInDataset: number;
     totalVoteRequests: number;
     uniqueProposals: number;
+    rawMode?: boolean;
   };
   stats: Stats;
   proposals: Proposal[];
+  rawVoteRequests?: any[];
   debug?: {
     dedupLog: any[];
     byKeySource: Record<string, number>;
@@ -61,9 +63,10 @@ interface ScanProgress {
   percent: number;
   uniqueProposals: number;
   totalVoteRequests: number;
+  rawCount?: number;
 }
 
-export function useFullProposalScan(enabled: boolean = false, debug: boolean = false) {
+export function useFullProposalScan(enabled: boolean = false, debug: boolean = false, raw: boolean = false) {
   const [data, setData] = useState<FullProposalScanResponse | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -81,7 +84,11 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
 
     try {
       const backendUrl = getDuckDBApiUrl();
-      const url = `${backendUrl}/api/events/governance/proposals/stream${debug ? '?debug=true' : ''}`;
+      const params = new URLSearchParams();
+      if (debug) params.append('debug', 'true');
+      if (raw) params.append('raw', 'true');
+      const queryString = params.toString();
+      const url = `${backendUrl}/api/events/governance/proposals/stream${queryString ? '?' + queryString : ''}`;
       
       // Close any existing connection
       if (eventSourceRef.current) {

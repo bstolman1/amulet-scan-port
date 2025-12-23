@@ -2352,6 +2352,8 @@ router.get('/governance/proposals/stream', async (req, res) => {
     // Debug: track deduplication events
     const dedupLog = [];
     const debug = req.query.debug === 'true';
+    const rawMode = req.query.raw === 'true'; // Output all events without deduplication
+    const allRawVoteRequests = rawMode ? [] : null;
     
     let filesScanned = 0;
     let totalVoteRequests = 0;
@@ -2395,6 +2397,18 @@ router.get('/governance/proposals/stream', async (req, res) => {
             keySource = 'composite';
           }
           
+          // In raw mode, collect all events without deduplication
+          if (rawMode) {
+            allRawVoteRequests.push({
+              contractId: evt.contract_id,
+              eventId: evt.event_id,
+              timestamp: evt.timestamp,
+              proposalKey,
+              keySource,
+              ...proposal,
+            });
+          }
+          
           const existing = proposalMap.get(proposalKey);
           const eventTimestamp = new Date(evt.timestamp).getTime();
           
@@ -2436,6 +2450,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
             percent,
             uniqueProposals: proposalMap.size,
             totalVoteRequests,
+            rawCount: rawMode ? allRawVoteRequests.length : undefined,
           });
           lastProgressUpdate = now;
         }
@@ -2496,9 +2511,12 @@ router.get('/governance/proposals/stream', async (req, res) => {
         totalFilesInDataset: allFiles.length,
         totalVoteRequests,
         uniqueProposals: proposals.length,
+        rawMode: rawMode,
       },
       stats,
       proposals,
+      // Raw mode: include all vote requests without deduplication
+      rawVoteRequests: rawMode ? allRawVoteRequests : undefined,
       debug: debug ? {
         dedupLog: dedupLog.slice(-500), // Last 500 dedup events
         byKeySource,
