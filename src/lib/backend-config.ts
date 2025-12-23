@@ -21,8 +21,9 @@ interface BackendConfig {
   duckdbApiUrl: string;
 }
 
-// Use relative /api path - works in all environments via Vite proxy or same-origin
-const API_BASE_PATH = '/api';
+// Use empty base path - endpoints already include /api prefix
+// Vite proxy intercepts /api/* and forwards to backend
+const API_BASE_PATH = '';
 
 const config: BackendConfig = {
   ledgerBackend: 'duckdb',
