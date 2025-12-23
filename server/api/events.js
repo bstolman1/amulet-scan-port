@@ -2314,6 +2314,230 @@ router.get('/governance/proposals', async (req, res) => {
   }
 });
 
+// GET /api/events/governance/proposals/stream - SSE endpoint for real-time progress
+router.get('/governance/proposals/stream', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required' });
+    }
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders();
+
+    const sendEvent = (type, data) => {
+      res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    
+    if (allFiles.length === 0) {
+      sendEvent('error', { error: 'No binary event files found' });
+      res.end();
+      return;
+    }
+
+    // Use all files for the stream endpoint
+    const binFiles = allFiles;
+    const totalFiles = binFiles.length;
+    
+    sendEvent('start', { totalFiles });
+    
+    // Map to track proposals by unique key
+    const proposalMap = new Map();
+    // Debug: track deduplication events
+    const dedupLog = [];
+    const debug = req.query.debug === 'true';
+    const rawMode = req.query.raw === 'true'; // Output all events without deduplication
+    const allRawVoteRequests = rawMode ? [] : null;
+    
+    let filesScanned = 0;
+    let totalVoteRequests = 0;
+    let lastProgressUpdate = 0;
+    
+    for (const filePath of binFiles) {
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
+        filesScanned++;
+        
+        for (const evt of events) {
+          const templateId = evt.template_id || '';
+          if (!templateId.includes('VoteRequest')) continue;
+          if (evt.event_type !== 'created') continue;
+          
+          totalVoteRequests++;
+          const payload = evt.payload || {};
+          
+          let proposal;
+          try {
+            proposal = parseVoteRequestPayload(payload);
+          } catch (parseErr) {
+            continue;
+          }
+          
+          if (!proposal) continue;
+          
+          // Generate a unique proposal key
+          // Use trackingCid if available (most reliable), otherwise use action-specific details
+          let proposalKey;
+          let keySource;
+          if (proposal.trackingCid) {
+            // trackingCid uniquely identifies the original VoteRequest
+            proposalKey = `cid::${proposal.trackingCid}`;
+            keySource = 'trackingCid';
+          } else {
+            // Fallback: combine actionType + requester + reasonUrl + action-specific details
+            const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
+            proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
+            keySource = 'composite';
+          }
+          
+          // In raw mode, collect all events without deduplication
+          if (rawMode) {
+            allRawVoteRequests.push({
+              contractId: evt.contract_id,
+              eventId: evt.event_id,
+              timestamp: evt.timestamp,
+              proposalKey,
+              keySource,
+              ...proposal,
+            });
+          }
+          
+          const existing = proposalMap.get(proposalKey);
+          const eventTimestamp = new Date(evt.timestamp).getTime();
+          
+          if (debug && existing) {
+            // Log deduplication event
+            dedupLog.push({
+              key: proposalKey.slice(0, 100),
+              keySource,
+              action: 'merged',
+              existingTs: existing.rawTimestamp,
+              newTs: evt.timestamp,
+              kept: eventTimestamp > existing.latestTimestamp ? 'new' : 'existing',
+              actionType: proposal.actionType,
+              requester: proposal.requester,
+              reasonUrl: (proposal.reasonUrl || '').slice(0, 80),
+            });
+          }
+          
+          if (!existing || eventTimestamp > existing.latestTimestamp) {
+            proposalMap.set(proposalKey, {
+              proposalKey,
+              keySource,
+              latestTimestamp: eventTimestamp,
+              latestContractId: evt.contract_id,
+              ...proposal,
+              rawTimestamp: evt.timestamp,
+              mergeCount: existing ? (existing.mergeCount || 1) + 1 : 1,
+            });
+          }
+        }
+        
+        // Send progress update every 100 files or 500ms
+        const now = Date.now();
+        if (filesScanned % 100 === 0 || now - lastProgressUpdate > 500) {
+          const percent = Math.round((filesScanned / totalFiles) * 100);
+          sendEvent('progress', {
+            filesScanned,
+            totalFiles,
+            percent,
+            uniqueProposals: proposalMap.size,
+            totalVoteRequests,
+            rawCount: rawMode ? allRawVoteRequests.length : undefined,
+          });
+          lastProgressUpdate = now;
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+    
+    // Convert to array and sort by latest timestamp (newest first)
+    const proposals = Array.from(proposalMap.values())
+      .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+    
+    // Calculate vote statistics
+    const stats = {
+      total: proposals.length,
+      byActionType: {},
+      byStatus: { approved: 0, rejected: 0, pending: 0 },
+    };
+    
+    for (const p of proposals) {
+      stats.byActionType[p.actionType] = (stats.byActionType[p.actionType] || 0) + 1;
+      
+      const now = Date.now();
+      const voteBefore = p.voteBeforeTimestamp || 0;
+      
+      if (voteBefore && voteBefore < now) {
+        if (p.votesFor > p.votesAgainst && p.votesFor > 0) {
+          stats.byStatus.approved++;
+        } else {
+          stats.byStatus.rejected++;
+        }
+      } else {
+        stats.byStatus.pending++;
+      }
+    }
+    
+    // Analyze merge patterns
+    const byKeySource = { trackingCid: 0, composite: 0 };
+    const highMergeProposals = [];
+    for (const p of proposals) {
+      byKeySource[p.keySource] = (byKeySource[p.keySource] || 0) + 1;
+      if (p.mergeCount > 5) {
+        highMergeProposals.push({
+          key: p.proposalKey.slice(0, 80),
+          keySource: p.keySource,
+          mergeCount: p.mergeCount,
+          actionType: p.actionType,
+          requester: p.requester,
+          reasonUrl: (p.reasonUrl || '').slice(0, 60),
+        });
+      }
+    }
+    
+    // Send final result
+    sendEvent('complete', {
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        totalVoteRequests,
+        uniqueProposals: proposals.length,
+        rawMode: rawMode,
+      },
+      stats,
+      proposals,
+      // Raw mode: include all vote requests without deduplication
+      rawVoteRequests: rawMode ? allRawVoteRequests : undefined,
+      debug: debug ? {
+        dedupLog: dedupLog.slice(-500), // Last 500 dedup events
+        byKeySource,
+        highMergeProposals: highMergeProposals.slice(0, 50),
+        sampleKeys: proposals.slice(0, 20).map(p => ({
+          key: p.proposalKey.slice(0, 100),
+          keySource: p.keySource,
+          mergeCount: p.mergeCount,
+          actionType: p.actionType,
+        })),
+      } : undefined,
+    });
+    
+    res.end();
+  } catch (err) {
+    console.error('Error in governance/proposals/stream:', err);
+    res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
 // Helper function to parse VoteRequest payload (handles both old and new formats)
 function parseVoteRequestPayload(payload) {
   // New format with named fields
@@ -2462,6 +2686,71 @@ function parseTimestamp(ts) {
   }
   
   return null;
+}
+
+// Extract action-specific identifier for deduplication
+function extractActionSpecificKey(actionDetails) {
+  if (!actionDetails) return 'none';
+  
+  try {
+    // Try new format first
+    const dsoAction = actionDetails.value?.dsoAction?.value || actionDetails.value?.value || actionDetails.value;
+    
+    // GrantFeaturedAppRight - use provider
+    if (dsoAction?.provider) {
+      return `provider:${dsoAction.provider}`;
+    }
+    
+    // RevokeFeaturedAppRight - use rightCid
+    if (dsoAction?.rightCid) {
+      return `rightCid:${dsoAction.rightCid}`;
+    }
+    
+    // UpdateSvRewardWeight - use svParty + weight
+    if (dsoAction?.svParty) {
+      return `sv:${dsoAction.svParty}:${dsoAction.newRewardWeight || ''}`;
+    }
+    
+    // CreateUnallocatedUnclaimedActivityRecord - use beneficiary
+    if (dsoAction?.beneficiary) {
+      return `beneficiary:${dsoAction.beneficiary}:${dsoAction.amount || ''}`;
+    }
+    
+    // SetConfig or AddFutureAmuletConfigSchedule - try to get a hash of the config
+    if (dsoAction?.newSchedule || dsoAction?.config) {
+      const configStr = JSON.stringify(dsoAction.newSchedule || dsoAction.config).slice(0, 100);
+      return `config:${configStr}`;
+    }
+    
+    // Old format - try to extract from variant structure
+    const variant = actionDetails.record?.fields?.[0]?.value?.variant;
+    if (variant?.value?.record?.fields) {
+      const innerFields = variant.value.record.fields;
+      // Look for provider, party, etc.
+      for (const f of innerFields) {
+        if (f.value?.party) return `party:${f.value.party}`;
+        if (f.value?.contractId) return `cid:${f.value.contractId}`;
+        if (f.value?.text && f.value.text.length < 100) return `txt:${f.value.text}`;
+      }
+    }
+    
+    // Fallback: use a short hash of the stringified action
+    const str = JSON.stringify(actionDetails).slice(0, 200);
+    return `hash:${simpleHash(str)}`;
+  } catch (e) {
+    return 'err';
+  }
+}
+
+// Simple hash function for deduplication
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
 }
 
 export default router;
