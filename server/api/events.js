@@ -1804,4 +1804,76 @@ router.get('/debug-vote-request/:contractId', async (req, res) => {
   }
 });
 
+// GET /api/events/debug/dsorules-choices - Sample DsoRules exercised events to see what choice names exist
+router.get('/debug/dsorules-choices', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required for this diagnostic' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit) || 5000, 50000);
+    const choiceCounts = {};
+    let exercisedCount = 0;
+    let dsoRulesCount = 0;
+    const sampleEvents = [];
+
+    // Stream DsoRules exercised events
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit,
+      offset: 0,
+      fullScan: true,
+      filter: (e) => {
+        if (e.event_type !== 'exercised') return false;
+        exercisedCount++;
+        const tmpl = e.template_id || e.template || '';
+        if (!tmpl.includes('DsoRules')) return false;
+        dsoRulesCount++;
+        return true;
+      }
+    });
+
+    for (const record of result.records) {
+      const choice = record.choice || '(no choice)';
+      choiceCounts[choice] = (choiceCounts[choice] || 0) + 1;
+      
+      // Keep a sample of vote/close-related events
+      const cl = choice.toLowerCase();
+      if (sampleEvents.length < 10 && (cl.includes('vote') || cl.includes('close'))) {
+        sampleEvents.push({
+          choice,
+          contract_id: record.contract_id,
+          template_id: record.template_id || record.template,
+          has_exercise_result: !!record.exercise_result,
+          exercise_result_keys: record.exercise_result ? Object.keys(record.exercise_result) : [],
+        });
+      }
+    }
+
+    const sortedChoices = Object.entries(choiceCounts)
+      .sort((a, b) => b[1] - a[1]);
+
+    const voteRelated = sortedChoices.filter(([c]) => {
+      const cl = c.toLowerCase();
+      return cl.includes('vote') || cl.includes('close') || cl.includes('expire') || cl.includes('reject') || cl.includes('accept');
+    });
+
+    res.json({
+      summary: {
+        scannedRecords: limit,
+        exercisedEventsFound: exercisedCount,
+        dsoRulesExercisedFound: dsoRulesCount,
+        uniqueChoices: sortedChoices.length,
+        voteRelatedChoices: voteRelated.length,
+      },
+      voteRelatedChoices: voteRelated,
+      allChoices: sortedChoices.slice(0, 100),
+      sampleVoteEvents: sampleEvents,
+    });
+  } catch (err) {
+    console.error('Error in dsorules-choices diagnostic:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
