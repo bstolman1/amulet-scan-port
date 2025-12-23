@@ -155,34 +155,57 @@ class DecompressPool {
   }
   
   /**
-   * Process multiple files in parallel
-   * Returns results as they complete via callback
+   * Process multiple files with bounded in-flight work (prevents 60k+ promises)
+   * Calls onProgress as each file completes.
    */
   async processFiles(filePaths, onProgress) {
     await this.init();
-    
+
     const results = [];
+    const total = filePaths.length;
     let completed = 0;
-    
-    // Process all files
-    const promises = filePaths.map(async (filePath) => {
-      const result = await this.processFile(filePath);
-      completed++;
-      
-      if (onProgress) {
-        onProgress({
-          completed,
-          total: filePaths.length,
-          percent: Math.round((completed / filePaths.length) * 100),
-          ...result,
+
+    // Keep a small multiple of worker count in-flight to avoid huge memory usage.
+    const maxInFlight = Math.max(this.size * 2, 4);
+
+    let idx = 0;
+    const inFlight = new Set();
+
+    const launchOne = (filePath) => {
+      const p = this.processFile(filePath)
+        .then((result) => {
+          completed++;
+          if (onProgress) {
+            onProgress({
+              completed,
+              total,
+              percent: Math.round((completed / total) * 100),
+              ...result,
+            });
+          }
+          results.push(result);
+          return result;
+        })
+        .finally(() => {
+          inFlight.delete(p);
         });
+
+      inFlight.add(p);
+    };
+
+    // Prime the pump
+    while (idx < total && inFlight.size < maxInFlight) {
+      launchOne(filePaths[idx++]);
+    }
+
+    // Drain
+    while (inFlight.size > 0) {
+      await Promise.race(inFlight);
+      while (idx < total && inFlight.size < maxInFlight) {
+        launchOne(filePaths[idx++]);
       }
-      
-      results.push(result);
-      return result;
-    });
-    
-    await Promise.all(promises);
+    }
+
     return results;
   }
   
