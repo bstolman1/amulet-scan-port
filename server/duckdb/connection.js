@@ -5,19 +5,18 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Prefer the repository-local data directory if it exists (common in Lovable setups)
+// Prefer the repository-local data directory by default (works cross-platform)
 // Repo layout: server/duckdb/connection.js -> ../../data
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
 
-// DATA_DIR should point to the base directory
-// Legacy Windows default path: C:\ledger_raw (often requires elevated permissions)
+// Legacy Windows default path (kept as last-resort fallback)
 const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
-// 2) repo-local data/ (if present)
-// 3) Windows default path
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(REPO_DATA_DIR) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+// 2) repo-local data/ (default)
+// 3) Windows legacy default path (last resort)
+const BASE_DATA_DIR = process.env.DATA_DIR || REPO_DATA_DIR || WIN_DEFAULT_DATA_DIR;
 console.log(`📁 BASE_DATA_DIR: ${BASE_DATA_DIR}`);
 
 // Ensure directories exist (DuckDB will fail to create the DB file if the parent dir is missing)
@@ -39,15 +38,23 @@ try {
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
 
-// ✅ Per-query connection pattern - Windows safe
-// DO NOT use global connections, they will crash on Windows
+// ✅ Per-query connection pattern
+// IMPORTANT: DuckDB's Node binding establishes connections asynchronously.
+// Always use the callback form of db.connect(), otherwise queries can run on a non-established connection.
 export function query(sql, params = []) {
   return new Promise((resolve, reject) => {
     const db = new duckdb.Database(DB_FILE);
-    const conn = db.connect();
 
-    try {
-      conn.all(sql, ...params, (err, rows) => {
+    db.connect((connectErr, conn) => {
+      if (connectErr) {
+        console.error('❌ DuckDB connect error:', connectErr?.message || connectErr);
+        console.error('   DB_FILE:', DB_FILE);
+        try { db.close(); } catch {}
+        reject(connectErr);
+        return;
+      }
+
+      const done = (err, rows) => {
         try {
           conn.close();
           db.close();
@@ -62,18 +69,16 @@ export function query(sql, params = []) {
           reject(err);
           return;
         }
-        resolve(rows);
-      });
-    } catch (err) {
-      try {
-        conn.close();
-        db.close();
-      } catch {}
-      console.error('❌ DuckDB conn.all threw:', err?.message || err);
-      console.error('   DB_FILE:', DB_FILE);
-      console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
-      reject(err);
-    }
+        resolve(rows ?? []);
+      };
+
+      // DuckDB expects params as a single array argument.
+      if (params && params.length > 0) {
+        conn.all(sql, params, done);
+      } else {
+        conn.all(sql, done);
+      }
+    });
   });
 }
 
