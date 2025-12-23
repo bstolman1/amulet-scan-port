@@ -2185,4 +2185,275 @@ router.get('/debug/cast-vote', async (req, res) => {
   }
 });
 
+// GET /api/events/governance/proposals - Get latest state for each unique proposal
+router.get('/governance/proposals', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required' });
+    }
+
+    const maxFiles = Math.min(parseInt(req.query.files) || 2000, 5000);
+    
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    
+    if (allFiles.length === 0) {
+      return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
+    }
+    
+    // Spread sampling across the dataset
+    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
+    
+    // Map to track proposals by unique key (action type + reason URL)
+    const proposalMap = new Map();
+    let filesScanned = 0;
+    let totalVoteRequests = 0;
+    
+    for (const filePath of binFiles) {
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
+        filesScanned++;
+        
+        for (const evt of events) {
+          const templateId = evt.template_id || '';
+          if (!templateId.includes('VoteRequest')) continue;
+          if (evt.event_type !== 'created') continue;
+          
+          totalVoteRequests++;
+          const payload = evt.payload || {};
+          
+          // Parse the proposal data - handle both old (record.fields) and new (named) formats
+          let proposal;
+          try {
+            proposal = parseVoteRequestPayload(payload);
+          } catch (parseErr) {
+            continue; // Skip unparseable payloads
+          }
+          
+          if (!proposal) continue;
+          
+          // Create unique key from action type + reason URL
+          const proposalKey = `${proposal.actionType}::${proposal.reasonUrl}`;
+          
+          const existing = proposalMap.get(proposalKey);
+          const eventTimestamp = new Date(evt.timestamp).getTime();
+          
+          // Keep the most recent version
+          if (!existing || eventTimestamp > existing.latestTimestamp) {
+            proposalMap.set(proposalKey, {
+              proposalKey,
+              latestTimestamp: eventTimestamp,
+              latestContractId: evt.contract_id,
+              ...proposal,
+              rawTimestamp: evt.timestamp,
+            });
+          }
+        }
+        
+        if (filesScanned % 200 === 0) {
+          console.log(`[governance/proposals] ${filesScanned}/${binFiles.length} files | ${proposalMap.size} unique proposals`);
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+    
+    // Convert to array and sort by latest timestamp (newest first)
+    const proposals = Array.from(proposalMap.values())
+      .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+    
+    // Calculate vote statistics
+    const stats = {
+      total: proposals.length,
+      byActionType: {},
+      byStatus: { approved: 0, rejected: 0, pending: 0 },
+    };
+    
+    for (const p of proposals) {
+      stats.byActionType[p.actionType] = (stats.byActionType[p.actionType] || 0) + 1;
+      
+      // Determine status based on votes
+      const now = Date.now();
+      const voteBefore = p.voteBeforeTimestamp || 0;
+      
+      if (voteBefore && voteBefore < now) {
+        // Voting period ended - check if approved
+        if (p.votesFor > p.votesAgainst && p.votesFor > 0) {
+          stats.byStatus.approved++;
+        } else {
+          stats.byStatus.rejected++;
+        }
+      } else {
+        stats.byStatus.pending++;
+      }
+    }
+    
+    res.json({
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        totalVoteRequests,
+        uniqueProposals: proposals.length,
+      },
+      stats,
+      proposals,
+    });
+  } catch (err) {
+    console.error('Error in governance/proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper function to parse VoteRequest payload (handles both old and new formats)
+function parseVoteRequestPayload(payload) {
+  // New format with named fields
+  if (payload.requester && payload.action) {
+    const votes = parseVotesArray(payload.votes);
+    return {
+      requester: payload.requester,
+      actionType: extractActionType(payload.action),
+      actionDetails: payload.action,
+      reasonUrl: payload.reason?.url || '',
+      reasonBody: payload.reason?.body || '',
+      voteBefore: payload.voteBefore,
+      voteBeforeTimestamp: parseTimestamp(payload.voteBefore),
+      votes: votes.list,
+      votesFor: votes.votesFor,
+      votesAgainst: votes.votesAgainst,
+      trackingCid: payload.trackingCid,
+    };
+  }
+  
+  // Old format with record.fields array
+  if (payload.record?.fields) {
+    const fields = payload.record.fields;
+    if (fields.length < 6) return null;
+    
+    const requester = fields[1]?.value?.text || '';
+    const actionVariant = fields[2]?.value?.variant || {};
+    const reason = fields[3]?.value?.record?.fields || [];
+    const voteBefore = fields[4]?.value?.timestamp || '';
+    const votesGenMap = fields[5]?.value?.genMap?.entries || [];
+    
+    const votes = parseVotesGenMap(votesGenMap);
+    
+    return {
+      requester,
+      actionType: extractActionTypeFromVariant(actionVariant),
+      actionDetails: actionVariant,
+      reasonUrl: reason[0]?.value?.text || '',
+      reasonBody: reason[1]?.value?.text || '',
+      voteBefore,
+      voteBeforeTimestamp: parseTimestamp(voteBefore),
+      votes: votes.list,
+      votesFor: votes.votesFor,
+      votesAgainst: votes.votesAgainst,
+      trackingCid: fields[6]?.value?.optional?.value?.contractId || null,
+    };
+  }
+  
+  return null;
+}
+
+// Extract action type from new format
+function extractActionType(action) {
+  if (!action) return 'unknown';
+  const tag = action.tag || action.constructor;
+  const innerAction = action.value?.dsoAction || action.value;
+  const innerTag = innerAction?.tag || innerAction?.constructor;
+  return innerTag || tag || 'unknown';
+}
+
+// Extract action type from old variant format
+function extractActionTypeFromVariant(variant) {
+  if (!variant) return 'unknown';
+  const outerType = variant.constructor || '';
+  const innerVariant = variant.value?.record?.fields?.[0]?.value?.variant;
+  const innerType = innerVariant?.constructor || '';
+  return innerType || outerType || 'unknown';
+}
+
+// Parse votes from new format array
+function parseVotesArray(votes) {
+  if (!Array.isArray(votes)) return { list: [], votesFor: 0, votesAgainst: 0 };
+  
+  let votesFor = 0;
+  let votesAgainst = 0;
+  const list = [];
+  
+  for (const [name, voteData] of votes) {
+    const accept = voteData?.accept ?? false;
+    if (accept) votesFor++;
+    else votesAgainst++;
+    
+    list.push({
+      svName: name,
+      sv: voteData?.sv,
+      accept,
+      reasonUrl: voteData?.reason?.url || '',
+      reasonBody: voteData?.reason?.body || '',
+      castAt: voteData?.optCastAt,
+    });
+  }
+  
+  return { list, votesFor, votesAgainst };
+}
+
+// Parse votes from old genMap format
+function parseVotesGenMap(entries) {
+  if (!Array.isArray(entries)) return { list: [], votesFor: 0, votesAgainst: 0 };
+  
+  let votesFor = 0;
+  let votesAgainst = 0;
+  const list = [];
+  
+  for (const entry of entries) {
+    const svName = entry.key?.text || '';
+    const voteRecord = entry.value?.record?.fields || [];
+    const sv = voteRecord[0]?.value?.party || '';
+    const accept = voteRecord[1]?.value?.bool ?? false;
+    const reasonFields = voteRecord[2]?.value?.record?.fields || [];
+    
+    if (accept) votesFor++;
+    else votesAgainst++;
+    
+    list.push({
+      svName,
+      sv,
+      accept,
+      reasonUrl: reasonFields[0]?.value?.text || '',
+      reasonBody: reasonFields[1]?.value?.text || '',
+    });
+  }
+  
+  return { list, votesFor, votesAgainst };
+}
+
+// Parse timestamp from various formats
+function parseTimestamp(ts) {
+  if (!ts) return null;
+  
+  // ISO string format
+  if (typeof ts === 'string' && ts.includes('-')) {
+    return new Date(ts).getTime();
+  }
+  
+  // Microsecond timestamp (16+ digits)
+  if (typeof ts === 'string' && /^\d{16,}$/.test(ts)) {
+    return Math.floor(parseInt(ts) / 1000); // Convert micros to millis
+  }
+  
+  // Millisecond timestamp
+  if (typeof ts === 'number' || /^\d+$/.test(ts)) {
+    const num = parseInt(ts);
+    if (num > 1e15) return Math.floor(num / 1000); // Micros
+    if (num > 1e12) return num; // Millis
+    return num * 1000; // Seconds
+  }
+  
+  return null;
+}
+
 export default router;
