@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,6 +12,7 @@ import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
+import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -38,11 +39,22 @@ const Governance = () => {
   const [searchParams] = useSearchParams();
   const highlightedProposalId = searchParams.get("proposal");
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [runFullScan, setRunFullScan] = useState(false);
+  
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
     queryFn: () => scanApi.fetchDsoInfo(),
     retry: 1,
   });
+  
+  // Full proposal scan - only enabled when user triggers it
+  const { 
+    data: fullScanData, 
+    isLoading: fullScanLoading, 
+    isFetching: fullScanFetching,
+    error: fullScanError,
+    refetch: refetchFullScan,
+  } = useFullProposalScan(runFullScan, true); // scanAll=true to scan all files
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -411,6 +423,15 @@ const Governance = () => {
               {uniqueStats.total > 0 && (
                 <Badge variant="secondary" className="ml-2 text-xs">
                   {uniqueStats.total}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="fullscan" onClick={() => !runFullScan && setRunFullScan(true)}>
+              <FileSearch className="h-4 w-4 mr-1" />
+              Full Scan
+              {fullScanData?.summary?.uniqueProposals && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  {fullScanData.summary.uniqueProposals}
                 </Badge>
               )}
             </TabsTrigger>
@@ -841,6 +862,223 @@ const Governance = () => {
               <AlertDescription className="text-sm">
                 This view deduplicates proposals by combining <code className="bg-muted px-1 rounded">proposal_hash + action_type</code>. 
                 Each row shows the <strong>latest state</strong> of a unique proposal. The "Events" column shows how many state updates exist for that proposal.
+              </AlertDescription>
+            </Alert>
+          </div>
+        </Card>
+      </TabsContent>
+
+      <TabsContent value="fullscan">
+        <Card className="glass-card">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                <FileSearch className="h-5 w-5" />
+                Full Proposal Scan
+                {fullScanData?.summary && (
+                  <>
+                    <Badge variant="outline" className="ml-2">
+                      {fullScanData.summary.uniqueProposals} unique proposals
+                    </Badge>
+                    <Badge variant="secondary" className="ml-1">
+                      {fullScanData.summary.filesScanned.toLocaleString()} / {fullScanData.summary.totalFilesInDataset.toLocaleString()} files
+                    </Badge>
+                  </>
+                )}
+              </h3>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => refetchFullScan()}
+                disabled={fullScanFetching}
+              >
+                {fullScanFetching ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Scanning...
+                  </>
+                ) : (
+                  <>
+                    <FileSearch className="h-4 w-4 mr-2" />
+                    Re-scan
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {!runFullScan ? (
+              <div className="text-center py-12">
+                <FileSearch className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-4">
+                  Click the "Full Scan" tab to scan all {fullScanData?.summary?.totalFilesInDataset?.toLocaleString() || "57,000+"} ledger files for governance proposals.
+                </p>
+                <Button onClick={() => setRunFullScan(true)}>
+                  <FileSearch className="h-4 w-4 mr-2" />
+                  Start Full Scan
+                </Button>
+              </div>
+            ) : fullScanLoading || fullScanFetching ? (
+              <div className="text-center py-12">
+                <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
+                <p className="text-muted-foreground mb-2">
+                  Scanning all ledger files for governance proposals...
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  This may take a few minutes depending on the dataset size.
+                </p>
+              </div>
+            ) : fullScanError ? (
+              <div className="text-center py-12">
+                <XCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">Error running full scan</p>
+                <p className="text-xs text-muted-foreground">{String(fullScanError)}</p>
+              </div>
+            ) : fullScanData?.proposals?.length ? (
+              <div className="space-y-4">
+                {/* Stats Summary */}
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+                  <div className="p-3 rounded-lg bg-muted/30">
+                    <p className="text-xs text-muted-foreground mb-1">Total Proposals</p>
+                    <p className="text-2xl font-bold">{fullScanData.stats.total}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-success/10">
+                    <p className="text-xs text-muted-foreground mb-1">Approved</p>
+                    <p className="text-2xl font-bold text-success">{fullScanData.stats.byStatus.approved}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-destructive/10">
+                    <p className="text-xs text-muted-foreground mb-1">Rejected</p>
+                    <p className="text-2xl font-bold text-destructive">{fullScanData.stats.byStatus.rejected}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-warning/10">
+                    <p className="text-xs text-muted-foreground mb-1">Pending</p>
+                    <p className="text-2xl font-bold text-warning">{fullScanData.stats.byStatus.pending}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/30">
+                    <p className="text-xs text-muted-foreground mb-1">Files Scanned</p>
+                    <p className="text-2xl font-bold">{fullScanData.summary.filesScanned.toLocaleString()}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/30">
+                    <p className="text-xs text-muted-foreground mb-1">Vote Requests</p>
+                    <p className="text-2xl font-bold">{fullScanData.summary.totalVoteRequests}</p>
+                  </div>
+                </div>
+
+                {/* Action Type Breakdown */}
+                <div className="mb-6">
+                  <p className="text-sm font-semibold mb-2">By Action Type:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(fullScanData.stats.byActionType).map(([type, count]) => (
+                      <Badge key={type} variant="outline" className="text-xs">
+                        {type.replace(/^SRARC_|^CRARC_/, "")}: {count as number}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Proposals Table */}
+                <div className="rounded-lg border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[200px]">Action Type</TableHead>
+                        <TableHead>Requester</TableHead>
+                        <TableHead>Reason</TableHead>
+                        <TableHead className="text-center">Votes</TableHead>
+                        <TableHead>Vote Deadline</TableHead>
+                        <TableHead>Last Updated</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {fullScanData.proposals.map((proposal, idx) => {
+                        const now = Date.now();
+                        const isExpired = proposal.voteBeforeTimestamp && proposal.voteBeforeTimestamp < now;
+                        const status = proposal.votesFor > proposal.votesAgainst && proposal.votesFor > 0 && isExpired 
+                          ? "approved" 
+                          : isExpired 
+                            ? "rejected" 
+                            : "pending";
+                        
+                        return (
+                          <TableRow key={idx}>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Badge className={cn(
+                                  "text-xs",
+                                  status === "approved" && "bg-success/10 text-success border-success/20",
+                                  status === "rejected" && "bg-destructive/10 text-destructive border-destructive/20",
+                                  status === "pending" && "bg-warning/10 text-warning border-warning/20",
+                                )}>
+                                  {status === "approved" && <CheckCircle className="h-3 w-3 mr-1" />}
+                                  {status === "rejected" && <XCircle className="h-3 w-3 mr-1" />}
+                                  {status === "pending" && <Clock className="h-3 w-3 mr-1" />}
+                                  {status}
+                                </Badge>
+                              </div>
+                              <span className="font-mono text-xs mt-1 block">
+                                {proposal.actionType.replace(/^SRARC_|^CRARC_/, "")}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-xs truncate max-w-[150px]">
+                              {proposal.requester}
+                            </TableCell>
+                            <TableCell>
+                              <div className="max-w-[300px]">
+                                {proposal.reasonUrl && (
+                                  <a 
+                                    href={proposal.reasonUrl} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-primary hover:underline block truncate"
+                                  >
+                                    {proposal.reasonUrl}
+                                  </a>
+                                )}
+                                {proposal.reasonBody && (
+                                  <p className="text-xs text-muted-foreground truncate">{proposal.reasonBody.slice(0, 100)}</p>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <span className="text-success font-medium">{proposal.votesFor}</span>
+                              <span className="text-muted-foreground mx-1">/</span>
+                              <span className="text-destructive font-medium">{proposal.votesAgainst}</span>
+                            </TableCell>
+                            <TableCell className="text-xs font-mono">
+                              {proposal.voteBefore ? safeFormatDate(proposal.voteBefore, "MMM d, yyyy") : "N/A"}
+                            </TableCell>
+                            <TableCell className="text-xs font-mono">
+                              {safeFormatDate(proposal.rawTimestamp, "MMM d, yyyy")}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Collapsible raw data for each proposal */}
+                <details className="mt-6">
+                  <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
+                    View Raw Proposal Data (JSON)
+                  </summary>
+                  <pre className="mt-2 text-xs overflow-x-auto p-4 bg-muted/30 rounded-lg border max-h-96">
+                    {JSON.stringify(fullScanData.proposals, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">No proposals found</p>
+              </div>
+            )}
+
+            <Alert className="mt-6">
+              <FileSearch className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                This scan processes <strong>all</strong> binary ledger files to find VoteRequest events. 
+                Proposals are deduplicated by <code className="bg-muted px-1 rounded">action_type + reason_url</code> 
+                and show the latest state of each unique proposal.
               </AlertDescription>
             </Alert>
           </div>
