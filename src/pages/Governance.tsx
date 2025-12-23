@@ -50,11 +50,11 @@ const Governance = () => {
   // Full proposal scan - only enabled when user triggers it
   const { 
     data: fullScanData, 
+    progress: scanProgress,
     isLoading: fullScanLoading, 
-    isFetching: fullScanFetching,
     error: fullScanError,
     refetch: refetchFullScan,
-  } = useFullProposalScan(runFullScan, true); // scanAll=true to scan all files
+  } = useFullProposalScan(runFullScan);
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -890,9 +890,9 @@ const Governance = () => {
                 variant="outline" 
                 size="sm" 
                 onClick={() => refetchFullScan()}
-                disabled={fullScanFetching}
+                disabled={fullScanLoading}
               >
-                {fullScanFetching ? (
+                {fullScanLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     Scanning...
@@ -917,14 +917,47 @@ const Governance = () => {
                   Start Full Scan
                 </Button>
               </div>
-            ) : fullScanLoading || fullScanFetching ? (
+            ) : fullScanLoading && scanProgress ? (
+              <div className="space-y-6 py-8">
+                <div className="flex flex-col items-center">
+                  <Loader2 className="h-12 w-12 text-primary mb-4 animate-spin" />
+                  <p className="text-lg font-semibold mb-2">Scanning Ledger Files...</p>
+                  <p className="text-muted-foreground text-sm mb-4">
+                    {scanProgress.filesScanned.toLocaleString()} / {scanProgress.totalFiles.toLocaleString()} files
+                  </p>
+                </div>
+                
+                {/* Progress Bar */}
+                <div className="w-full max-w-md mx-auto">
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-muted-foreground">Progress</span>
+                    <span className="font-bold text-primary">{scanProgress.percent}%</span>
+                  </div>
+                  <div className="h-3 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-300 ease-out"
+                      style={{ width: `${scanProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Live Stats */}
+                <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
+                  <div className="p-3 rounded-lg bg-muted/30 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Unique Proposals</p>
+                    <p className="text-xl font-bold text-primary">{scanProgress.uniqueProposals}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/30 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Vote Requests</p>
+                    <p className="text-xl font-bold">{scanProgress.totalVoteRequests}</p>
+                  </div>
+                </div>
+              </div>
+            ) : fullScanLoading ? (
               <div className="text-center py-12">
                 <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
                 <p className="text-muted-foreground mb-2">
-                  Scanning all ledger files for governance proposals...
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  This may take a few minutes depending on the dataset size.
+                  Connecting to scan endpoint...
                 </p>
               </div>
             ) : fullScanError ? (
