@@ -41,6 +41,7 @@ const Governance = () => {
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [runFullScan, setRunFullScan] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [rawMode, setRawMode] = useState(false);
   
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -55,7 +56,7 @@ const Governance = () => {
     isLoading: fullScanLoading, 
     error: fullScanError,
     refetch: refetchFullScan,
-  } = useFullProposalScan(runFullScan, debugMode);
+  } = useFullProposalScan(runFullScan, debugMode, rawMode);
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -887,7 +888,7 @@ const Governance = () => {
                   </>
                 )}
               </h3>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input 
                     type="checkbox" 
@@ -895,7 +896,16 @@ const Governance = () => {
                     onChange={(e) => setDebugMode(e.target.checked)}
                     className="rounded"
                   />
-                  Debug Mode
+                  Debug
+                </label>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input 
+                    type="checkbox" 
+                    checked={rawMode} 
+                    onChange={(e) => setRawMode(e.target.checked)}
+                    className="rounded"
+                  />
+                  Raw Mode
                 </label>
                 <Button 
                   variant="outline" 
@@ -924,7 +934,7 @@ const Governance = () => {
                 <p className="text-muted-foreground mb-4">
                   Click the "Full Scan" tab to scan all {fullScanData?.summary?.totalFilesInDataset?.toLocaleString() || "57,000+"} ledger files for governance proposals.
                 </p>
-                <div className="flex items-center justify-center gap-4 mb-4">
+                <div className="flex flex-col items-center gap-3 mb-4">
                   <label className="flex items-center gap-2 text-sm text-muted-foreground">
                     <input 
                       type="checkbox" 
@@ -932,7 +942,16 @@ const Governance = () => {
                       onChange={(e) => setDebugMode(e.target.checked)}
                       className="rounded"
                     />
-                    Enable Debug Mode (shows deduplication details)
+                    Debug Mode (deduplication details)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <input 
+                      type="checkbox" 
+                      checked={rawMode} 
+                      onChange={(e) => setRawMode(e.target.checked)}
+                      className="rounded"
+                    />
+                    Raw Mode (output ALL VoteRequests without deduplication)
                   </label>
                 </div>
                 <Button onClick={() => setRunFullScan(true)}>
@@ -1018,6 +1037,72 @@ const Governance = () => {
                     <p className="text-2xl font-bold">{fullScanData.summary.totalVoteRequests}</p>
                   </div>
                 </div>
+
+                {/* Raw Mode Output */}
+                {fullScanData.rawVoteRequests && (
+                  <div className="mb-6 p-4 rounded-lg bg-blue-500/10 border border-blue-500/30">
+                    <h4 className="font-bold text-blue-400 mb-4 flex items-center gap-2">
+                      <Database className="h-4 w-4" />
+                      Raw VoteRequests ({fullScanData.rawVoteRequests.length.toLocaleString()} total)
+                    </h4>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      All VoteRequest events without deduplication. Use this to analyze which events should be grouped together.
+                    </p>
+                    
+                    {/* Download as JSON button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mb-4"
+                      onClick={() => {
+                        const blob = new Blob([JSON.stringify(fullScanData.rawVoteRequests, null, 2)], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'raw-vote-requests.json';
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      Download as JSON
+                    </Button>
+                    
+                    {/* Sample table */}
+                    <div className="rounded-lg border overflow-hidden max-h-96 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[80px]">#</TableHead>
+                            <TableHead>Proposal Key</TableHead>
+                            <TableHead>Action Type</TableHead>
+                            <TableHead>Requester</TableHead>
+                            <TableHead>Timestamp</TableHead>
+                            <TableHead>Contract ID</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {fullScanData.rawVoteRequests.slice(0, 100).map((vr: any, idx: number) => (
+                            <TableRow key={idx}>
+                              <TableCell className="text-xs">{idx + 1}</TableCell>
+                              <TableCell className="text-xs font-mono max-w-[200px] truncate" title={vr.proposalKey}>
+                                {vr.proposalKey?.slice(0, 60)}...
+                              </TableCell>
+                              <TableCell className="text-xs">{vr.actionType?.replace(/^SRARC_|^CRARC_/, "")}</TableCell>
+                              <TableCell className="text-xs truncate max-w-[100px]">{vr.requester}</TableCell>
+                              <TableCell className="text-xs font-mono">{safeFormatDate(vr.timestamp, "MMM d HH:mm")}</TableCell>
+                              <TableCell className="text-xs font-mono max-w-[80px] truncate">{vr.contractId?.slice(0, 16)}...</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    {fullScanData.rawVoteRequests.length > 100 && (
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Showing first 100 of {fullScanData.rawVoteRequests.length.toLocaleString()} events. Download JSON for full data.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Action Type Breakdown */}
                 <div className="mb-6">
