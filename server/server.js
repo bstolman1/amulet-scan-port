@@ -6,6 +6,7 @@ import cors from 'cors';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import eventsRouter from './api/events.js';
 import updatesRouter from './api/updates.js';
@@ -222,9 +223,34 @@ cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
 // Startup logic
 app.listen(PORT, async () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
+  console.log(`   PID: ${process.pid}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
   console.log(`⏰ Governance data refresh scheduled every 4 hours`);
   console.log(`⏰ ACS snapshot scheduled every 3 hours (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)`);
+
+  // Prevent accidental double-start (common on Windows): create a simple lock file next to the DB.
+  // If another process owns the lock and is still alive, exit early with a clear message.
+  try {
+    const lockPath = `${db.DB_FILE}.lock`;
+    if (fs.existsSync(lockPath)) {
+      const existingPid = parseInt(String(fs.readFileSync(lockPath, 'utf8')).trim(), 10);
+      if (Number.isFinite(existingPid) && existingPid !== process.pid) {
+        try {
+          process.kill(existingPid, 0);
+          console.error(`❌ Another backend process is already running (PID ${existingPid}) and holding the DuckDB file.`);
+          console.error(`   Stop PID ${existingPid} (Task Manager) or delete: ${lockPath}`);
+          process.exit(1);
+        } catch {
+          // stale lock file - remove it
+          try { fs.unlinkSync(lockPath); } catch {}
+        }
+      }
+    }
+    fs.writeFileSync(lockPath, String(process.pid), { encoding: 'utf8' });
+    process.on('exit', () => { try { fs.unlinkSync(lockPath); } catch {} });
+    process.on('SIGINT', () => process.exit(0));
+    process.on('SIGTERM', () => process.exit(0));
+  } catch {}
 
   // Initialize DuckDB views on startup, but never crash the process if this fails.
   try {
