@@ -1997,8 +1997,9 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
       return res.status(400).json({ error: 'Binary files required for this diagnostic' });
     }
 
-    const maxFiles = Math.min(parseInt(req.query.files) || 500, 2000);
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const maxFiles = Math.min(parseInt(req.query.files) || 500, 5000);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const focusArchived = req.query.archived === 'true';
     
     const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
@@ -2013,9 +2014,14 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
     const createdEvents = [];
     const archivedEvents = [];
     let filesScanned = 0;
+    let totalVoteRequestEvents = 0;
     
     for (const filePath of binFiles) {
-      if (createdEvents.length >= limit && archivedEvents.length >= limit) break;
+      // Keep scanning if we're focusing on archived and haven't found enough
+      const shouldStop = focusArchived 
+        ? archivedEvents.length >= limit
+        : (createdEvents.length >= limit && archivedEvents.length >= limit);
+      if (shouldStop) break;
       
       try {
         const result = await binaryReader.readBinaryFile(filePath);
@@ -2028,6 +2034,7 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
           const isVoteRequest = templateId.includes('VoteRequest');
           
           if (!isVoteRequest) continue;
+          totalVoteRequestEvents++;
           
           const eventType = evt.event_type || '';
           const raw = evt.raw || {};
@@ -2052,12 +2059,13 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
               template_id: templateId,
               timestamp: evt.timestamp,
               raw_keys: Object.keys(raw),
+              raw_preview: JSON.stringify(raw).substring(0, 500),
             });
           }
         }
         
-        if (filesScanned % 100 === 0) {
-          console.log(`[vote-request-lifecycle] ${filesScanned}/${binFiles.length} files | created: ${createdEvents.length}, archived: ${archivedEvents.length}`);
+        if (filesScanned % 200 === 0) {
+          console.log(`[vote-request-lifecycle] ${filesScanned}/${binFiles.length} files | created: ${createdEvents.length}, archived: ${archivedEvents.length}, total VR events: ${totalVoteRequestEvents}`);
         }
       } catch (err) {
         // Skip unreadable files
@@ -2070,6 +2078,8 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
         totalFilesInDataset: allFiles.length,
         createdCount: createdEvents.length,
         archivedCount: archivedEvents.length,
+        totalVoteRequestEvents,
+        focusArchived,
       },
       createdEvents,
       archivedEvents,
