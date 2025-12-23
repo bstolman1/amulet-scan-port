@@ -908,6 +908,19 @@ const Governance = () => {
                   />
                   Raw Mode
                 </label>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span>Parallel:</span>
+                  <input
+                    type="range"
+                    min="5"
+                    max="50"
+                    value={concurrency}
+                    onChange={(e) => setConcurrency(parseInt(e.target.value))}
+                    className="w-16"
+                    disabled={fullScanLoading}
+                  />
+                  <span className="font-mono w-6">{concurrency}</span>
+                </div>
                 <Button 
                   variant="outline" 
                   size="sm" 
