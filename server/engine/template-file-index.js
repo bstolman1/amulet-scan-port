@@ -112,16 +112,27 @@ export async function getTemplateIndexState() {
 function normalizePath(storedPath) {
   // If running on Windows and storedPath is Unix-style, convert it relative to DATA_PATH
   if (process.platform === 'win32' && storedPath.startsWith('/')) {
-    // Extract the relative portion after "data/raw/" (or equivalent subdirectory)
-    const rawIdx = storedPath.indexOf('/data/raw/');
-    if (rawIdx !== -1) {
-      const relative = storedPath.slice(rawIdx + '/data/raw/'.length);
-      return path.join(DATA_PATH, relative);
+    // Try multiple patterns to extract the relative portion
+    
+    // Pattern 1: Look for "/data/raw/" anywhere in the path (handles /home/user/project/data/raw/...)
+    const dataRawMatch = storedPath.match(/\/data\/raw\/(.+)$/);
+    if (dataRawMatch) {
+      return path.join(DATA_PATH, dataRawMatch[1]);
     }
-    // Fallback: try extracting after "migration="
+    
+    // Pattern 2: Look for "migration=" partition path
     const migrationIdx = storedPath.indexOf('migration=');
     if (migrationIdx !== -1) {
       const relative = storedPath.slice(migrationIdx);
+      return path.join(DATA_PATH, relative);
+    }
+    
+    // Pattern 3: If it's an absolute Unix path with a file at the end, try extracting just the relative part
+    // This handles paths like /home/bstolz/canton-explorer/data/raw/migration=2/...
+    const parts = storedPath.split('/');
+    const rawIdx = parts.indexOf('raw');
+    if (rawIdx !== -1 && rawIdx < parts.length - 1) {
+      const relative = parts.slice(rawIdx + 1).join(path.sep);
       return path.join(DATA_PATH, relative);
     }
   }
