@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2, GitBranch, Link2 } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +13,6 @@ import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data"
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
-import { useGovernanceProposals, formatActionTitle, mapProposalStatus, parseProposalVotes } from "@/hooks/use-governance-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -132,13 +131,6 @@ const Governance = () => {
     fromIndex: uniqueFromIndex,
     dataSource: uniqueDataSource,
   } = useUniqueProposals(votingThreshold);
-
-  // Indexed governance proposals with semantic grouping
-  const {
-    data: indexedData,
-    isLoading: indexedLoading,
-    error: indexedError,
-  } = useGovernanceProposals("all", 200);
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -427,17 +419,8 @@ const Governance = () => {
         </Alert>
 
         {/* Proposals List */}
-        <Tabs defaultValue="indexed" className="space-y-6">
+        <Tabs defaultValue="active" className="space-y-6">
           <TabsList>
-            <TabsTrigger value="indexed">
-              <GitBranch className="h-4 w-4 mr-1" />
-              Indexed Proposals
-              {indexedData?.stats?.total ? (
-                <Badge variant="secondary" className="ml-2 text-xs">
-                  {indexedData.stats.total}
-                </Badge>
-              ) : null}
-            </TabsTrigger>
             <TabsTrigger value="active">Active Proposals</TabsTrigger>
             <TabsTrigger value="unique">
               Unique Proposals
@@ -458,262 +441,6 @@ const Governance = () => {
             </TabsTrigger>
             <TabsTrigger value="history">Governance History</TabsTrigger>
           </TabsList>
-
-          {/* Indexed Proposals Tab - Semantic Grouping */}
-          <TabsContent value="indexed">
-            <Card className="glass-card">
-              <div className="p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h3 className="text-xl font-bold flex items-center gap-2">
-                      <GitBranch className="h-5 w-5" />
-                      Governance Proposals (Indexed)
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Proposals grouped by <code className="bg-muted px-1 rounded">semantic_key</code> (action_type + subject)
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
-                    {indexedData?.source && (
-                      <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
-                        <Database className="w-3 h-3 mr-1" />
-                        {indexedData.source}
-                      </Badge>
-                    )}
-                    {indexedData?.indexedAt && (
-                      <span className="text-xs">
-                        Indexed: {safeFormatDate(indexedData.indexedAt, "MMM d, HH:mm")}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Stats Row */}
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
-                  <div className="p-3 rounded-lg bg-muted/30 text-center">
-                    <div className="text-2xl font-bold">{indexedData?.stats?.total || 0}</div>
-                    <div className="text-xs text-muted-foreground">Total</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-success/10 text-center">
-                    <div className="text-2xl font-bold text-success">{indexedData?.stats?.executed || 0}</div>
-                    <div className="text-xs text-muted-foreground">Executed</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-destructive/10 text-center">
-                    <div className="text-2xl font-bold text-destructive">{indexedData?.stats?.rejected || 0}</div>
-                    <div className="text-xs text-muted-foreground">Rejected</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-warning/10 text-center">
-                    <div className="text-2xl font-bold text-warning">{indexedData?.stats?.inProgress || 0}</div>
-                    <div className="text-xs text-muted-foreground">In Progress</div>
-                  </div>
-                  <div className="p-3 rounded-lg bg-muted/50 text-center">
-                    <div className="text-2xl font-bold text-muted-foreground">{indexedData?.stats?.expired || 0}</div>
-                    <div className="text-xs text-muted-foreground">Expired</div>
-                  </div>
-                </div>
-
-                {indexedLoading ? (
-                  <div className="space-y-3">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-24 w-full" />
-                    ))}
-                  </div>
-                ) : indexedError ? (
-                  <Alert variant="destructive">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertDescription>
-                      Failed to load indexed proposals: {(indexedError as Error).message}
-                    </AlertDescription>
-                  </Alert>
-                ) : indexedData?.isIndexEmpty ? (
-                  <div className="text-center py-12">
-                    <Database className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-2">VoteRequest index is empty</p>
-                    <p className="text-sm text-muted-foreground">
-                      Build the index using the banner above to see indexed proposals
-                    </p>
-                  </div>
-                ) : !indexedData?.proposals?.length ? (
-                  <div className="text-center py-12">
-                    <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-muted-foreground">No proposals found in index</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {indexedData.proposals.map((proposal) => {
-                      const uiStatus = mapProposalStatus(proposal.status);
-                      const { votesFor, votesAgainst, votedSvs } = parseProposalVotes(proposal.votes);
-                      const title = formatActionTitle(proposal.action_tag);
-                      const hasResubmissions = proposal.timeline.relatedCount > 1;
-
-                      return (
-                        <Collapsible key={proposal.event_id}>
-                          <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
-                            <div className="flex items-start justify-between mb-4">
-                              <div className="flex items-center space-x-3">
-                                <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(uiStatus)}</div>
-                                <div className="flex-1">
-                                  <h4 className="font-semibold text-lg">{title}</h4>
-                                  <p className="text-sm text-muted-foreground">
-                                    <span className="font-mono text-xs">{proposal.action_tag}</span>
-                                    {proposal.action_subject && (
-                                      <>
-                                        <span className="mx-2">•</span>
-                                        <span className="text-xs">{proposal.action_subject}</span>
-                                      </>
-                                    )}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    Requested by: <span className="font-medium text-foreground">{proposal.requester || 'Unknown'}</span>
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className="flex items-center gap-1 text-sm">
-                                  <span className="text-success font-medium">{votesFor}</span>
-                                  <span className="text-muted-foreground">/</span>
-                                  <span className="text-destructive font-medium">{votesAgainst}</span>
-                                </div>
-                                {hasResubmissions && (
-                                  <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-400 border-blue-500/30">
-                                    <Link2 className="h-3 w-3 mr-1" />
-                                    {proposal.timeline.relatedCount} versions
-                                  </Badge>
-                                )}
-                                <Badge className={cn(
-                                  "text-xs",
-                                  uiStatus === 'approved' && "bg-success/10 text-success border-success/20",
-                                  uiStatus === 'rejected' && "bg-destructive/10 text-destructive border-destructive/20",
-                                  uiStatus === 'pending' && "bg-warning/10 text-warning border-warning/20",
-                                  uiStatus === 'expired' && "bg-muted text-muted-foreground",
-                                )}>
-                                  {uiStatus === 'approved' && <CheckCircle className="h-3 w-3 mr-1" />}
-                                  {uiStatus === 'rejected' && <XCircle className="h-3 w-3 mr-1" />}
-                                  {uiStatus === 'pending' && <Clock className="h-3 w-3 mr-1" />}
-                                  {uiStatus}
-                                </Badge>
-                                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                                  {safeFormatDate(proposal.effective_at, "MMM d, yyyy")}
-                                </span>
-                                <CollapsibleTrigger asChild>
-                                  <Button variant="ghost" size="sm">
-                                    <ChevronDown className="h-4 w-4" />
-                                  </Button>
-                                </CollapsibleTrigger>
-                              </div>
-                            </div>
-
-                            {/* Timeline Info */}
-                            {hasResubmissions && (
-                              <div className="mb-4 p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
-                                <p className="text-sm text-muted-foreground mb-1 font-semibold flex items-center gap-2">
-                                  <Link2 className="h-4 w-4" />
-                                  Proposal Timeline ({proposal.timeline.relatedCount} related proposals)
-                                </p>
-                                <div className="flex gap-4 text-xs text-muted-foreground">
-                                  <span>First seen: {safeFormatDate(proposal.timeline.firstSeen, "MMM d, yyyy")}</span>
-                                  <span>Last updated: {safeFormatDate(proposal.timeline.lastSeen, "MMM d, yyyy")}</span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Reason Section */}
-                            <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
-                              <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                              {proposal.reason ? (
-                                <p className="text-sm">{typeof proposal.reason === 'string' ? proposal.reason : JSON.stringify(proposal.reason)}</p>
-                              ) : (
-                                <p className="text-sm text-muted-foreground italic">No reason provided</p>
-                              )}
-                            </div>
-
-                            {/* Stats Grid */}
-                            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                              <div className="p-3 rounded-lg bg-background/50">
-                                <p className="text-xs text-muted-foreground mb-1">Votes For</p>
-                                <p className="text-lg font-bold text-success">{votesFor}</p>
-                              </div>
-                              <div className="p-3 rounded-lg bg-background/50">
-                                <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
-                                <p className="text-lg font-bold text-destructive">{votesAgainst}</p>
-                              </div>
-                              <div className="p-3 rounded-lg bg-background/50">
-                                <p className="text-xs text-muted-foreground mb-1">Effective At</p>
-                                <p className="text-xs font-mono">
-                                  {safeFormatDate(proposal.effective_at, "MMM d, yyyy HH:mm")}
-                                </p>
-                              </div>
-                              <div className="p-3 rounded-lg bg-background/50">
-                                <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
-                                <p className="text-xs font-mono">
-                                  {safeFormatDate(proposal.vote_before)}
-                                </p>
-                              </div>
-                              <div className="p-3 rounded-lg bg-background/50">
-                                <p className="text-xs text-muted-foreground mb-1">Total Votes</p>
-                                <p className="text-lg font-bold">{proposal.vote_count}</p>
-                              </div>
-                            </div>
-
-                            <CollapsibleContent className="mt-4">
-                              <div className="space-y-3">
-                                {/* Semantic Key */}
-                                <div className="p-3 rounded-lg bg-background/70 border border-border/50">
-                                  <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                                    Semantic Key: <span className="font-mono">{proposal.semantic_key || 'N/A'}</span>
-                                  </p>
-                                  <p className="text-xs text-muted-foreground mb-2">
-                                    Contract ID: <span className="font-mono">{proposal.contract_id}</span>
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Event ID: <span className="font-mono">{proposal.event_id}</span>
-                                  </p>
-                                </div>
-
-                                {/* Votes Cast */}
-                                {votedSvs.length > 0 && (
-                                  <div className="p-3 rounded-lg bg-background/70 border border-border/50">
-                                    <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                                      Votes Cast ({votedSvs.length}):
-                                    </p>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                      {votedSvs.slice(0, 20).map((sv, idx) => (
-                                        <div 
-                                          key={idx}
-                                          className={`p-2 rounded border text-sm ${
-                                            sv.vote === "accept" 
-                                              ? "bg-success/5 border-success/30" 
-                                              : "bg-destructive/5 border-destructive/30"
-                                          }`}
-                                        >
-                                          <div className="flex items-center justify-between">
-                                            <span className="font-medium text-xs truncate">{sv.party}</span>
-                                            <Badge 
-                                              variant="outline" 
-                                              className={cn(
-                                                "text-xs",
-                                                sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"
-                                              )}
-                                            >
-                                              {sv.vote === "accept" ? "✓" : "✗"}
-                                            </Badge>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </CollapsibleContent>
-                          </div>
-                        </Collapsible>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </Card>
-          </TabsContent>
 
           <TabsContent value="active">
             <Card className="glass-card">
