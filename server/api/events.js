@@ -1896,4 +1896,90 @@ router.get('/debug/dsorules-choices', async (req, res) => {
   }
 });
 
+// GET /api/events/debug/execute-confirmed-action - Sample DsoRules_ExecuteConfirmedAction events
+router.get('/debug/execute-confirmed-action', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required for this diagnostic' });
+    }
+
+    const maxFiles = Math.min(parseInt(req.query.files) || 500, 2000);
+    const maxSamples = Math.min(parseInt(req.query.samples) || 20, 100);
+    let filesScanned = 0;
+    let matchCount = 0;
+    const samples = [];
+
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    
+    if (allFiles.length === 0) {
+      return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
+    }
+
+    // Spread sampling across the dataset
+    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
+
+    for (const filePath of binFiles) {
+      if (samples.length >= maxSamples) break;
+      
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
+        filesScanned++;
+
+        for (const e of events) {
+          if (e.event_type !== 'exercised') continue;
+          if (e.choice !== 'DsoRules_ExecuteConfirmedAction') continue;
+          
+          matchCount++;
+          
+          if (samples.length < maxSamples) {
+            const exerciseResult = e.exercise_result || {};
+            samples.push({
+              contract_id: e.contract_id,
+              template_id: e.template_id,
+              timestamp: e.timestamp,
+              exercise_result_keys: Object.keys(exerciseResult),
+              exercise_result_preview: JSON.stringify(exerciseResult).slice(0, 2000),
+              // Look for vote-request related data
+              has_action_name: !!exerciseResult.actionName,
+              action_name: exerciseResult.actionName || null,
+              has_vote_request_cid: !!exerciseResult.voteRequestCid,
+              vote_request_cid: exerciseResult.voteRequestCid || null,
+            });
+          }
+        }
+
+        if (filesScanned % 100 === 0) {
+          console.log(`[execute-confirmed] ${filesScanned}/${binFiles.length} files | ${matchCount} matches`);
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+
+    // Analyze the structure patterns
+    const structurePatterns = {};
+    for (const s of samples) {
+      const key = s.exercise_result_keys.sort().join(',');
+      structurePatterns[key] = (structurePatterns[key] || 0) + 1;
+    }
+
+    res.json({
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        executeConfirmedActionCount: matchCount,
+        samplesCollected: samples.length,
+      },
+      structurePatterns: Object.entries(structurePatterns).sort((a, b) => b[1] - a[1]),
+      samples,
+    });
+  } catch (err) {
+    console.error('Error in execute-confirmed-action diagnostic:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
