@@ -118,24 +118,10 @@ export async function initEngineSchema() {
       tracking_cid        VARCHAR,
       dso                 VARCHAR,
       payload             VARCHAR,
-      semantic_key        VARCHAR,
-      action_subject      VARCHAR,
       created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-
-  // Add semantic_key and action_subject columns to existing tables
-  try {
-    await query(`ALTER TABLE vote_requests ADD COLUMN semantic_key VARCHAR`);
-  } catch {
-    // Column may already exist
-  }
-  try {
-    await query(`ALTER TABLE vote_requests ADD COLUMN action_subject VARCHAR`);
-  } catch {
-    // Column may already exist
-  }
 
   // Backward-compatible schema fixes for existing DuckDB files
   // (DuckDB CREATE TABLE IF NOT EXISTS does not modify existing tables)
@@ -250,12 +236,6 @@ export async function initEngineSchema() {
   `);
   await query(`
     CREATE INDEX IF NOT EXISTS idx_vote_requests_contract_id ON vote_requests(contract_id)
-  `);
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_vote_requests_semantic_key ON vote_requests(semantic_key)
-  `);
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_vote_requests_action_subject ON vote_requests(action_subject)
   `);
 
   // Track indexing progress for vote_requests

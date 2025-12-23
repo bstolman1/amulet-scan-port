@@ -5,107 +5,30 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Prefer the repository-local data directory by default (works cross-platform)
+// Prefer the repository-local data directory if it exists (common in Lovable + WSL setups)
 // Repo layout: server/duckdb/connection.js -> ../../data
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
+const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
-// Legacy Windows default path (kept as last-resort fallback)
+// DATA_DIR should point to the base directory
+// Default Windows path: C:\ledger_raw
 const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
-// 2) repo-local data/ (default)
-// 3) Windows legacy default path (last resort)
-const BASE_DATA_DIR = process.env.DATA_DIR || REPO_DATA_DIR || WIN_DEFAULT_DATA_DIR;
-console.log(`📁 BASE_DATA_DIR: ${BASE_DATA_DIR}`);
-
-// Ensure directories exist (DuckDB will fail to create the DB file if the parent dir is missing)
-try {
-  fs.mkdirSync(BASE_DATA_DIR, { recursive: true });
-} catch {}
-
+// 2) repo-local data/ (if present)
+// 3) Windows default path
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
 // Ledger events/updates live under: <BASE_DATA_DIR>/raw
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
-try {
-  fs.mkdirSync(DATA_PATH, { recursive: true });
-  fs.mkdirSync(ACS_DATA_PATH, { recursive: true });
-} catch {}
-
-// Database file path (persistent storage)
-export const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
+// Persistent DuckDB instance (survives restarts, shareable between processes)
+const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
-
-// ✅ Single-process singleton DB handle (Windows safe)
-// Rule: new duckdb.Database() must be called once per process.
-let _db = null;
-
-export function getDB() {
-  if (!_db) {
-    _db = new duckdb.Database(DB_FILE);
-  }
-  return _db;
-}
-
-export function closeDB() {
-  if (_db) {
-    try {
-      _db.close();
-    } catch {}
-    _db = null;
-  }
-}
-
-// Query helper: open a short-lived connection for each query, but reuse the single DB handle.
-export function query(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    const db = getDB();
-    const conn = db.connect();
-
-    const cleanup = () => {
-      try {
-        conn.close();
-      } catch {}
-    };
-
-    const done = (err, rows) => {
-      cleanup();
-      if (err) {
-        console.error('❌ DuckDB query error:', err?.message || err);
-        console.error('   DB_FILE:', DB_FILE);
-        console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
-        reject(err);
-        return;
-      }
-      resolve(rows ?? []);
-    };
-
-    // Use conn.run for DDL (CREATE/DROP/ALTER/INSERT/UPDATE/DELETE) and conn.all for queries
-    const isDDL = /^\s*(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE)/i.test(sql);
-
-    try {
-      if (isDDL) {
-        conn.run(sql, done);
-      } else if (params && params.length > 0) {
-        conn.all(sql, params, done);
-      } else {
-        conn.all(sql, done);
-      }
-    } catch (err) {
-      cleanup();
-      console.error('❌ DuckDB threw:', err?.message || err);
-      reject(err);
-    }
-  });
-}
-
-// Helper to get a single row
-export async function queryOne(sql, params = []) {
-  const rows = await query(sql, params);
-  return rows[0] || null;
-}
+const db = new duckdb.Database(DB_FILE);
+const conn = db.connect();
 
 /**
  * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
@@ -152,7 +75,7 @@ function countDataFiles(type = 'events', maxScan = 10000) {
            entry.name.endsWith('.jsonl.zst') ||
            entry.name.endsWith('.pb.zst'))
         ) {
-          count++;
+          count++;  // Fixed: was missing this increment
           if (count >= maxScan) break;
         }
       }
@@ -174,6 +97,22 @@ function hasDataFiles(type = 'events') {
          hasFileType(type, '.jsonl.gz') || 
          hasFileType(type, '.jsonl.zst') ||
          hasFileType(type, '.pb.zst');
+}
+
+// Helper to run queries
+export function query(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    conn.all(sql, ...params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+
+// Helper to get a single row
+export async function queryOne(sql, params = []) {
+  const rows = await query(sql, params);
+  return rows[0] || null;
 }
 
 // Helper to get file glob pattern (supports both jsonl and parquet)
@@ -339,10 +278,9 @@ export async function initializeViews() {
   }
 }
 
-// NOTE: Do not auto-initialize views at import time.
-// It can crash the process on startup (unhandled promise rejection) and should be invoked explicitly by the server.
-// initializeViews();
+// Initialize on import
+initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH }; 
+export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
 
-export default { query, queryOne, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, DB_FILE, getDB, closeDB };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
