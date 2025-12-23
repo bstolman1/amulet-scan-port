@@ -38,61 +38,66 @@ try {
 export const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
 
-// ✅ Per-query connection pattern (Windows safe)
-// - Fresh database + connection for EACH query (no shared state)
-// - Uses callback form of Database constructor for async init
-// - Uses conn.run() for DDL, conn.all() for queries
+// ✅ Single-process singleton DB handle (Windows safe)
+// Rule: new duckdb.Database() must be called once per process.
+let _db = null;
+
+export function getDB() {
+  if (!_db) {
+    _db = new duckdb.Database(DB_FILE);
+  }
+  return _db;
+}
+
+export function closeDB() {
+  if (_db) {
+    try {
+      _db.close();
+    } catch {}
+    _db = null;
+  }
+}
+
+// Query helper: open a short-lived connection for each query, but reuse the single DB handle.
 export function query(sql, params = []) {
   return new Promise((resolve, reject) => {
-    const db = new duckdb.Database(DB_FILE, (dbErr) => {
-      if (dbErr) {
-        console.error('❌ DuckDB open error:', dbErr?.message || dbErr);
+    const db = getDB();
+    const conn = db.connect();
+
+    const cleanup = () => {
+      try {
+        conn.close();
+      } catch {}
+    };
+
+    const done = (err, rows) => {
+      cleanup();
+      if (err) {
+        console.error('❌ DuckDB query error:', err?.message || err);
         console.error('   DB_FILE:', DB_FILE);
-        // Common on Windows: another Node process still holds the file lock
-        if (/being used by another process/i.test(String(dbErr?.message || dbErr))) {
-          console.error('   HINT: Another node.exe is still running and holding a lock on the DuckDB file.');
-          console.error('         Stop the other process (Task Manager) or delete the .lock file if you use one.');
-        }
-        reject(dbErr);
+        console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
+        reject(err);
         return;
       }
+      resolve(rows ?? []);
+    };
 
-      const conn = db.connect();
+    // Use conn.run for DDL (CREATE/DROP/ALTER/INSERT/UPDATE/DELETE) and conn.all for queries
+    const isDDL = /^\s*(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE)/i.test(sql);
 
-      const cleanup = () => {
-        try { conn.close(); } catch {}
-        try { db.close(); } catch {}
-      };
-
-      const done = (err, rows) => {
-        cleanup();
-        if (err) {
-          console.error('❌ DuckDB query error:', err?.message || err);
-          console.error('   DB_FILE:', DB_FILE);
-          console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
-          reject(err);
-          return;
-        }
-        resolve(rows ?? []);
-      };
-
-      // Use conn.run for DDL (CREATE/DROP/ALTER/INSERT/UPDATE/DELETE) and conn.all for queries
-      const isDDL = /^\s*(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE)/i.test(sql);
-
-      try {
-        if (isDDL) {
-          conn.run(sql, done);
-        } else if (params && params.length > 0) {
-          conn.all(sql, params, done);
-        } else {
-          conn.all(sql, done);
-        }
-      } catch (err) {
-        cleanup();
-        console.error('❌ DuckDB threw:', err?.message || err);
-        reject(err);
+    try {
+      if (isDDL) {
+        conn.run(sql, done);
+      } else if (params && params.length > 0) {
+        conn.all(sql, params, done);
+      } else {
+        conn.all(sql, done);
       }
-    });
+    } catch (err) {
+      cleanup();
+      console.error('❌ DuckDB threw:', err?.message || err);
+      reject(err);
+    }
   });
 }
 
@@ -338,6 +343,6 @@ export async function initializeViews() {
 // It can crash the process on startup (unhandled promise rejection) and should be invoked explicitly by the server.
 // initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
+export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, getDB, closeDB }; 
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, DB_FILE };
+export default { query, queryOne, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, DB_FILE, getDB, closeDB };

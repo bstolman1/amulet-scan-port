@@ -57,15 +57,21 @@ async function gracefulShutdown(signal) {
     stopEngineWorker();
     console.log('   Engine worker stopped');
   } catch {}
-  
-  // 4. Remove lockfile
+
+  // 4. Close DuckDB (release Windows file lock)
+  try {
+    closeDB();
+    console.log('   DuckDB closed');
+  } catch {}
+
+  // 5. Remove lockfile
   if (lockPath) {
     try {
       fs.unlinkSync(lockPath);
       console.log('   Lockfile removed');
     } catch {}
   }
-  
+
   console.log('✅ Graceful shutdown complete');
   process.exit(0);
 }
@@ -93,7 +99,7 @@ import announcementsRouter from './api/announcements.js';
 import governanceLifecycleRouter, { fetchFreshData, writeCache } from './api/governance-lifecycle.js';
 import kaikoRouter from './api/kaiko.js';
 import rewardsRouter from './api/rewards.js';
-import db, { initializeViews } from './duckdb/connection.js';
+import db, { initializeViews, closeDB } from './duckdb/connection.js';
 import { refreshAllAggregations, invalidateACSCache } from './cache/aggregation-worker.js';
 import { getCacheStats } from './cache/stats-cache.js';
 // Warehouse engine imports
