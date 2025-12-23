@@ -27,10 +27,46 @@ async function ensureGovernanceTables() {
 }
 
 /**
- * Generate a unique proposal key from action type and reason URL
+ * Simple hash function for string content (djb2)
  */
-function getProposalKey(actionType, reasonUrl) {
-  return `${actionType || 'unknown'}::${reasonUrl || 'no-url'}`;
+function hashString(str) {
+  if (!str) return 'empty';
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(36);
+}
+
+/**
+ * Generate a unique proposal key from action type and reason URL/body/contract
+ * 
+ * Priority:
+ * 1. If reasonUrl exists → use it (same URL = same proposal)
+ * 2. Else if reasonBody exists → use hash of body
+ * 3. Else → use contract_id as fallback (each contract is unique proposal)
+ */
+function getProposalKey(actionType, reasonUrl, reasonBody, contractId) {
+  const type = actionType || 'unknown';
+  
+  // If we have a URL, use it (best case - same URL = same proposal)
+  if (reasonUrl && reasonUrl.trim() !== '') {
+    return `${type}::url::${reasonUrl}`;
+  }
+  
+  // If we have body text, use a hash of it
+  if (reasonBody && reasonBody.trim() !== '') {
+    return `${type}::body::${hashString(reasonBody)}`;
+  }
+  
+  // Fallback: use contract ID (each contract becomes its own proposal)
+  if (contractId) {
+    return `${type}::cid::${contractId}`;
+  }
+  
+  // Last resort (should rarely happen)
+  return `${type}::unknown::${Date.now()}`;
 }
 
 /**
@@ -274,7 +310,7 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
         }
       }
 
-      const key = getProposalKey(actionType, reasonUrl);
+      const key = getProposalKey(actionType, reasonUrl, reasonBody, row.contract_id);
       const timestamp = row.effective_at ? new Date(row.effective_at).getTime() : 0;
       const existing = proposalMap.get(key);
 
