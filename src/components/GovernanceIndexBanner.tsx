@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Vote, RefreshCw, CheckCircle, AlertTriangle, Loader2 } from "lucide-react";
+import { Vote, RefreshCw, CheckCircle, AlertTriangle, Loader2, Trash2 } from "lucide-react";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { toast } from "@/hooks/use-toast";
 
@@ -49,26 +49,7 @@ export function GovernanceIndexBanner() {
         title: "Governance Index Build Started",
         description: "Building proposals from the persistent VoteRequest index. This should be fast.",
       });
-      const pollInterval = setInterval(async () => {
-        try {
-          const fresh = await apiFetch<IndexStatus>("/api/governance/index/status");
-          queryClient.setQueryData(["governance-index-status"], fresh);
-          if (!fresh.isIndexing) {
-            clearInterval(pollInterval);
-            setIsBuilding(false);
-            // Invalidate proposals queries to refresh data
-            queryClient.invalidateQueries({ queryKey: ["governance-proposals"] });
-            queryClient.invalidateQueries({ queryKey: ["governance-proposal-stats"] });
-            queryClient.invalidateQueries({ queryKey: ["governance-action-types"] });
-            toast({
-              title: "Governance Index Complete",
-              description: `Indexed ${fresh.stats?.total ?? 0} unique proposals (${fresh.stats?.approved ?? 0} approved, ${fresh.stats?.rejected ?? 0} rejected).`,
-            });
-          }
-        } catch (err) {
-          console.error("Error polling governance index status:", err);
-        }
-      }, 2000);
+      pollUntilComplete();
     },
     onError: (err: Error) => {
       setIsBuilding(false);
@@ -79,6 +60,54 @@ export function GovernanceIndexBanner() {
       });
     },
   });
+
+  const purgeAndRebuildMutation = useMutation({
+    mutationFn: async () => {
+      setIsBuilding(true);
+      // Purge first
+      await apiFetch("/api/governance/index/purge", { method: "POST" });
+      // Then build
+      return apiFetch("/api/governance/index/build", { method: "POST" });
+    },
+    onSuccess: () => {
+      toast({
+        title: "Governance Index Purged & Rebuilding",
+        description: "Cleared old data and rebuilding from scratch.",
+      });
+      pollUntilComplete();
+    },
+    onError: (err: Error) => {
+      setIsBuilding(false);
+      toast({
+        title: "Purge & Rebuild Failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const pollUntilComplete = () => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const fresh = await apiFetch<IndexStatus>("/api/governance/index/status");
+        queryClient.setQueryData(["governance-index-status"], fresh);
+        if (!fresh.isIndexing) {
+          clearInterval(pollInterval);
+          setIsBuilding(false);
+          // Invalidate proposals queries to refresh data
+          queryClient.invalidateQueries({ queryKey: ["governance-proposals"] });
+          queryClient.invalidateQueries({ queryKey: ["governance-proposal-stats"] });
+          queryClient.invalidateQueries({ queryKey: ["governance-action-types"] });
+          toast({
+            title: "Governance Index Complete",
+            description: `Indexed ${fresh.stats?.total ?? 0} unique proposals (${fresh.stats?.approved ?? 0} approved, ${fresh.stats?.rejected ?? 0} rejected).`,
+          });
+        }
+      } catch (err) {
+        console.error("Error polling governance index status:", err);
+      }
+    }, 2000);
+  };
 
   if (isLoading) return null;
   if (error) return null;
@@ -140,16 +169,30 @@ export function GovernanceIndexBanner() {
             </>
           )}
         </div>
-        <Button
-          size="sm"
-          variant={isPopulated ? "outline" : "default"}
-          disabled={inProgress}
-          onClick={() => buildMutation.mutate()}
-          className="gap-1"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${inProgress ? "animate-spin" : ""}`} />
-          {inProgress ? "Building..." : isPopulated ? "Rebuild" : "Build Index"}
-        </Button>
+        <div className="flex gap-2">
+          {isPopulated && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={inProgress}
+              onClick={() => purgeAndRebuildMutation.mutate()}
+              className="gap-1"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Purge & Rebuild
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={isPopulated ? "outline" : "default"}
+            disabled={inProgress}
+            onClick={() => buildMutation.mutate()}
+            className="gap-1"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${inProgress ? "animate-spin" : ""}`} />
+            {inProgress ? "Building..." : isPopulated ? "Rebuild" : "Build Index"}
+          </Button>
+        </div>
       </AlertDescription>
     </Alert>
   );
