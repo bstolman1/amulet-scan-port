@@ -55,6 +55,75 @@ export async function queryOne(sql, params = []) {
   return rows[0] || null;
 }
 
+/**
+ * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
+ */
+function hasFileType(type, extension) {
+  try {
+    if (!fs.existsSync(DATA_PATH)) return false;
+    const stack = [DATA_PATH];
+    while (stack.length > 0) {
+      const dir = stack.pop();
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          stack.push(path.join(dir, entry.name));
+        } else if (entry.name.includes(`${type}-`) && entry.name.endsWith(extension)) {
+          return true; // Found one, stop immediately
+        }
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Count files matching pattern (for logging) - limited scan
+ */
+function countDataFiles(type = 'events', maxScan = 10000) {
+  try {
+    if (!fs.existsSync(DATA_PATH)) return 0;
+    let count = 0;
+    const stack = [DATA_PATH];
+    while (stack.length > 0 && count < maxScan) {
+      const dir = stack.pop();
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          stack.push(path.join(dir, entry.name));
+        } else if (
+          entry.name.includes(`${type}-`) && 
+          (entry.name.endsWith('.jsonl') || 
+           entry.name.endsWith('.jsonl.gz') || 
+           entry.name.endsWith('.jsonl.zst') ||
+           entry.name.endsWith('.pb.zst'))
+        ) {
+          count++;
+          if (count >= maxScan) break;
+        }
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+// Legacy function - now uses lazy detection
+function findDataFiles(type = 'events') {
+  console.warn('⚠️ findDataFiles() is deprecated for large datasets');
+  return []; // Return empty, force callers to use glob patterns
+}
+
+function hasDataFiles(type = 'events') {
+  return hasFileType(type, '.jsonl') || 
+         hasFileType(type, '.jsonl.gz') || 
+         hasFileType(type, '.jsonl.zst') ||
+         hasFileType(type, '.pb.zst');
+}
+
 // Helper to get file glob pattern (supports both jsonl and parquet)
 export function getFileGlob(type = 'events', dateFilter = null, format = 'jsonl') {
   const ext = format === 'parquet' ? 'parquet' : 'jsonl';
