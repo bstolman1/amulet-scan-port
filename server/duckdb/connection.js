@@ -5,30 +5,83 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Prefer the repository-local data directory if it exists (common in Lovable + WSL setups)
+// Prefer the repository-local data directory if it exists (common in Lovable setups)
 // Repo layout: server/duckdb/connection.js -> ../../data
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
-const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
 // DATA_DIR should point to the base directory
-// Default Windows path: C:\ledger_raw
+// Legacy Windows default path: C:\ledger_raw (often requires elevated permissions)
 const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
 // 2) repo-local data/ (if present)
 // 3) Windows default path
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(REPO_DATA_DIR) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+console.log(`📁 BASE_DATA_DIR: ${BASE_DATA_DIR}`);
+
+// Ensure directories exist (DuckDB will fail to create the DB file if the parent dir is missing)
+try {
+  fs.mkdirSync(BASE_DATA_DIR, { recursive: true });
+} catch {}
+
 // Ledger events/updates live under: <BASE_DATA_DIR>/raw
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
-// Persistent DuckDB instance (survives restarts, shareable between processes)
+try {
+  fs.mkdirSync(DATA_PATH, { recursive: true });
+  fs.mkdirSync(ACS_DATA_PATH, { recursive: true });
+} catch {}
+
+// Database file path (persistent storage)
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
-const db = new duckdb.Database(DB_FILE);
-const conn = db.connect();
+
+// ✅ Per-query connection pattern - Windows safe
+// DO NOT use global connections, they will crash on Windows
+export function query(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    const db = new duckdb.Database(DB_FILE);
+    const conn = db.connect();
+
+    try {
+      conn.all(sql, ...params, (err, rows) => {
+        try {
+          conn.close();
+          db.close();
+        } catch (closeErr) {
+          console.warn('DuckDB close warning:', closeErr?.message || closeErr);
+        }
+
+        if (err) {
+          console.error('❌ DuckDB query error:', err?.message || err);
+          console.error('   DB_FILE:', DB_FILE);
+          console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
+          reject(err);
+          return;
+        }
+        resolve(rows);
+      });
+    } catch (err) {
+      try {
+        conn.close();
+        db.close();
+      } catch {}
+      console.error('❌ DuckDB conn.all threw:', err?.message || err);
+      console.error('   DB_FILE:', DB_FILE);
+      console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
+      reject(err);
+    }
+  });
+}
+
+// Helper to get a single row
+export async function queryOne(sql, params = []) {
+  const rows = await query(sql, params);
+  return rows[0] || null;
+}
 
 /**
  * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
@@ -75,7 +128,7 @@ function countDataFiles(type = 'events', maxScan = 10000) {
            entry.name.endsWith('.jsonl.zst') ||
            entry.name.endsWith('.pb.zst'))
         ) {
-          count++;  // Fixed: was missing this increment
+          count++;
           if (count >= maxScan) break;
         }
       }
@@ -97,22 +150,6 @@ function hasDataFiles(type = 'events') {
          hasFileType(type, '.jsonl.gz') || 
          hasFileType(type, '.jsonl.zst') ||
          hasFileType(type, '.pb.zst');
-}
-
-// Helper to run queries
-export function query(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    conn.all(sql, ...params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-}
-
-// Helper to get a single row
-export async function queryOne(sql, params = []) {
-  const rows = await query(sql, params);
-  return rows[0] || null;
 }
 
 // Helper to get file glob pattern (supports both jsonl and parquet)
