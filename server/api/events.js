@@ -1805,6 +1805,7 @@ router.get('/debug-vote-request/:contractId', async (req, res) => {
 });
 
 // GET /api/events/debug/dsorules-choices - Sample DsoRules exercised events to see what choice names exist
+// Memory-efficient: counts without accumulating records
 router.get('/debug/dsorules-choices', async (req, res) => {
   try {
     const sources = getDataSources();
@@ -1812,41 +1813,61 @@ router.get('/debug/dsorules-choices', async (req, res) => {
       return res.status(400).json({ error: 'Binary files required for this diagnostic' });
     }
 
-    const limit = Math.min(parseInt(req.query.limit) || 5000, 50000);
+    const maxFiles = Math.min(parseInt(req.query.files) || 500, 2000);
     const choiceCounts = {};
+    let filesScanned = 0;
     let exercisedCount = 0;
     let dsoRulesCount = 0;
     const sampleEvents = [];
 
-    // Stream DsoRules exercised events
-    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-      limit,
-      offset: 0,
-      fullScan: true,
-      filter: (e) => {
-        if (e.event_type !== 'exercised') return false;
-        exercisedCount++;
-        const tmpl = e.template_id || e.template || '';
-        if (!tmpl.includes('DsoRules')) return false;
-        dsoRulesCount++;
-        return true;
-      }
-    });
+    // Scan files directly with early termination
+    const eventDirs = await fs.promises.readdir(db.DATA_PATH).catch(() => []);
+    const eventDir = eventDirs.find(d => d === 'events' || d.startsWith('events'));
+    
+    if (!eventDir) {
+      return res.json({ error: 'No events directory found', path: db.DATA_PATH });
+    }
 
-    for (const record of result.records) {
-      const choice = record.choice || '(no choice)';
-      choiceCounts[choice] = (choiceCounts[choice] || 0) + 1;
-      
-      // Keep a sample of vote/close-related events
-      const cl = choice.toLowerCase();
-      if (sampleEvents.length < 10 && (cl.includes('vote') || cl.includes('close'))) {
-        sampleEvents.push({
-          choice,
-          contract_id: record.contract_id,
-          template_id: record.template_id || record.template,
-          has_exercise_result: !!record.exercise_result,
-          exercise_result_keys: record.exercise_result ? Object.keys(record.exercise_result) : [],
-        });
+    const eventsPath = path.join(db.DATA_PATH, eventDir);
+    const files = await fs.promises.readdir(eventsPath).catch(() => []);
+    const binFiles = files.filter(f => f.endsWith('.bin')).slice(0, maxFiles);
+
+    for (const file of binFiles) {
+      try {
+        const filePath = path.join(eventsPath, file);
+        const records = await binaryReader.readBinaryFile(filePath, 'events');
+        filesScanned++;
+
+        for (const e of records) {
+          if (e.event_type !== 'exercised') continue;
+          exercisedCount++;
+          
+          const tmpl = e.template_id || e.template || '';
+          if (!tmpl.includes('DsoRules')) continue;
+          dsoRulesCount++;
+
+          const choice = e.choice || '(no choice)';
+          choiceCounts[choice] = (choiceCounts[choice] || 0) + 1;
+
+          // Keep samples of vote/close-related
+          const cl = choice.toLowerCase();
+          if (sampleEvents.length < 10 && (cl.includes('vote') || cl.includes('close'))) {
+            sampleEvents.push({
+              choice,
+              contract_id: e.contract_id,
+              template_id: tmpl,
+              has_exercise_result: !!e.exercise_result,
+              exercise_result_keys: e.exercise_result ? Object.keys(e.exercise_result) : [],
+            });
+          }
+        }
+
+        // Log progress every 50 files
+        if (filesScanned % 50 === 0) {
+          console.log(`[dsorules-choices] ${filesScanned}/${binFiles.length} files | ${dsoRulesCount} DsoRules exercised`);
+        }
+      } catch (err) {
+        // Skip unreadable files
       }
     }
 
@@ -1860,7 +1881,8 @@ router.get('/debug/dsorules-choices', async (req, res) => {
 
     res.json({
       summary: {
-        scannedRecords: limit,
+        filesScanned,
+        totalFiles: binFiles.length,
         exercisedEventsFound: exercisedCount,
         dsoRulesExercisedFound: dsoRulesCount,
         uniqueChoices: sortedChoices.length,
