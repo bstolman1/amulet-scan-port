@@ -42,7 +42,6 @@ const Governance = () => {
   const [runFullScan, setRunFullScan] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [rawMode, setRawMode] = useState(false);
-  const [concurrency, setConcurrency] = useState(20);
   
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -58,7 +57,7 @@ const Governance = () => {
     error: fullScanError,
     refetch: refetchFullScan,
     stop: stopFullScan,
-  } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode, concurrency });
+  } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -909,19 +908,6 @@ const Governance = () => {
                   />
                   Raw Mode
                 </label>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <span>Parallel:</span>
-                  <input
-                    type="range"
-                    min="5"
-                    max="50"
-                    value={concurrency}
-                    onChange={(e) => setConcurrency(parseInt(e.target.value))}
-                    className="w-16"
-                    disabled={fullScanLoading}
-                  />
-                  <span className="font-mono w-6">{concurrency}</span>
-                </div>
                 {fullScanLoading ? (
                   <Button 
                     variant="destructive" 
@@ -969,18 +955,6 @@ const Governance = () => {
                     />
                     Raw Mode (output ALL VoteRequests without deduplication)
                   </label>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <span>Parallel files:</span>
-                    <input
-                      type="range"
-                      min="5"
-                      max="50"
-                      value={concurrency}
-                      onChange={(e) => setConcurrency(parseInt(e.target.value))}
-                      className="w-24"
-                    />
-                    <span className="font-mono w-8">{concurrency}</span>
-                  </div>
                 </div>
                 <Button onClick={() => setRunFullScan(true)}>
                   <FileSearch className="h-4 w-4 mr-2" />
@@ -991,15 +965,25 @@ const Governance = () => {
               <div className="space-y-6 py-8">
                 <div className="flex flex-col items-center">
                   <Loader2 className="h-12 w-12 text-primary mb-4 animate-spin" />
-                  <p className="text-lg font-semibold mb-2">Scanning Ledger Files...</p>
+                  <p className="text-lg font-semibold mb-2">Scanning with {scanProgress.workerCount || 'multiple'} worker threads...</p>
                   <p className="text-muted-foreground text-sm mb-2">
                     {scanProgress.filesScanned.toLocaleString()} / {scanProgress.totalFiles.toLocaleString()} files
                   </p>
-                  {scanProgress.filesPerSec && scanProgress.filesPerSec > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      {scanProgress.filesPerSec} files/sec
-                    </p>
-                  )}
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    {scanProgress.filesPerSec && scanProgress.filesPerSec > 0 && (
+                      <span className="font-medium text-primary">
+                        {scanProgress.filesPerSec} files/sec
+                      </span>
+                    )}
+                    {scanProgress.etaSeconds && scanProgress.etaSeconds > 0 && (
+                      <span>
+                        ETA: {scanProgress.etaSeconds >= 60 
+                          ? `${Math.floor(scanProgress.etaSeconds / 60)}m ${scanProgress.etaSeconds % 60}s`
+                          : `${scanProgress.etaSeconds}s`
+                        }
+                      </span>
+                    )}
+                  </div>
                 </div>
                 
                 {/* Progress Bar */}
@@ -1017,15 +1001,35 @@ const Governance = () => {
                 </div>
 
                 {/* Live Stats */}
-                <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-lg mx-auto">
+                  <div className="p-3 rounded-lg bg-muted/30 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Speed</p>
+                    <p className="text-lg font-bold text-primary">{scanProgress.filesPerSec || 0}/s</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-muted/30 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Workers</p>
+                    <p className="text-lg font-bold">{scanProgress.workerCount || '-'}</p>
+                  </div>
                   <div className="p-3 rounded-lg bg-muted/30 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Unique Proposals</p>
-                    <p className="text-xl font-bold text-primary">{scanProgress.uniqueProposals}</p>
+                    <p className="text-lg font-bold text-primary">{scanProgress.uniqueProposals}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Vote Requests</p>
-                    <p className="text-xl font-bold">{scanProgress.totalVoteRequests}</p>
+                    <p className="text-lg font-bold">{scanProgress.totalVoteRequests}</p>
                   </div>
+                </div>
+                
+                {/* Stop Button */}
+                <div className="flex justify-center">
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    onClick={() => stopFullScan()}
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Stop Scan
+                  </Button>
                 </div>
               </div>
             ) : fullScanLoading ? (
