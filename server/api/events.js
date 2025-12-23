@@ -2345,7 +2345,9 @@ router.get('/governance/proposals/stream', async (req, res) => {
 
     // Worker pool for true parallel decompression
     const pool = getVoteRequestPool();
-    const workerCount = os.cpus().length - 1;
+    await pool.init();
+    pool.resetStats();
+    const workerCount = pool.getStats().poolSize;
     const maxFiles = req.query.limit ? parseInt(req.query.limit) : null;
     
     // Use all files or limit
@@ -2370,10 +2372,6 @@ router.get('/governance/proposals/stream', async (req, res) => {
     let filesScanned = 0;
     let totalVoteRequests = 0;
     let lastProgressUpdate = 0;
-    
-    // Initialize worker pool
-    await pool.init();
-    pool.resetStats();
     
     // Process events from a single file result
     const processEvents = (events, filePath) => {
