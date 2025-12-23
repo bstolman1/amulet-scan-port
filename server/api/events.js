@@ -1989,4 +1989,191 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
   }
 });
 
+// GET /api/events/debug/vote-request-lifecycle - Diagnostic endpoint to find VoteRequest created/archived events
+router.get('/debug/vote-request-lifecycle', async (req, res) => {
+  try {
+    const dataPath = process.env.DATA_PATH || './data';
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    
+    // Find all binary files
+    const allFiles = [];
+    const findFiles = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          findFiles(fullPath);
+        } else if (entry.name.endsWith('.bin') || entry.name.endsWith('.bin.gz') || entry.name.endsWith('.bin.zst')) {
+          allFiles.push(fullPath);
+        }
+      }
+    };
+    findFiles(dataPath);
+    
+    // Sort by modification time, newest first
+    allFiles.sort((a, b) => {
+      try {
+        return fs.statSync(b).mtime - fs.statSync(a).mtime;
+      } catch { return 0; }
+    });
+    
+    const createdEvents = [];
+    const archivedEvents = [];
+    let filesScanned = 0;
+    
+    for (const filePath of allFiles) {
+      if (createdEvents.length >= limit && archivedEvents.length >= limit) break;
+      
+      try {
+        const events = await readBinaryFile(filePath);
+        filesScanned++;
+        
+        for (const evt of events) {
+          // Look for VoteRequest template events
+          const templateId = evt.template_id || evt.templateId || '';
+          const isVoteRequest = templateId.includes('VoteRequest');
+          
+          if (!isVoteRequest) continue;
+          
+          const eventType = evt.event_type || evt.eventType || '';
+          const raw = evt.raw || evt;
+          
+          if (eventType === 'created' && createdEvents.length < limit) {
+            createdEvents.push({
+              event_id: evt.event_id || evt.eventId,
+              contract_id: evt.contract_id || evt.contractId,
+              template_id: templateId,
+              timestamp: evt.timestamp,
+              signatories: evt.signatories,
+              observers: evt.observers,
+              payload_preview: JSON.stringify(evt.payload || raw.create_arguments || raw.payload)?.substring(0, 500),
+              raw_keys: Object.keys(raw || {}),
+            });
+          } else if (eventType === 'archived' && archivedEvents.length < limit) {
+            archivedEvents.push({
+              event_id: evt.event_id || evt.eventId,
+              contract_id: evt.contract_id || evt.contractId,
+              template_id: templateId,
+              timestamp: evt.timestamp,
+              raw_keys: Object.keys(raw || {}),
+            });
+          }
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+    
+    res.json({
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        createdCount: createdEvents.length,
+        archivedCount: archivedEvents.length,
+      },
+      createdEvents,
+      archivedEvents,
+    });
+  } catch (err) {
+    console.error('Error in vote-request-lifecycle diagnostic:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/debug/cast-vote - Diagnostic endpoint to sample DsoRules_CastVote events
+router.get('/debug/cast-vote', async (req, res) => {
+  try {
+    const dataPath = process.env.DATA_PATH || './data';
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    
+    // Find all binary files
+    const allFiles = [];
+    const findFiles = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          findFiles(fullPath);
+        } else if (entry.name.endsWith('.bin') || entry.name.endsWith('.bin.gz') || entry.name.endsWith('.bin.zst')) {
+          allFiles.push(fullPath);
+        }
+      }
+    };
+    findFiles(dataPath);
+    
+    // Sort by modification time, newest first
+    allFiles.sort((a, b) => {
+      try {
+        return fs.statSync(b).mtime - fs.statSync(a).mtime;
+      } catch { return 0; }
+    });
+    
+    const samples = [];
+    let filesScanned = 0;
+    let matchCount = 0;
+    
+    for (const filePath of allFiles) {
+      if (samples.length >= limit) break;
+      
+      try {
+        const events = await readBinaryFile(filePath);
+        filesScanned++;
+        
+        for (const evt of events) {
+          const raw = evt.raw || evt;
+          const choice = raw.choice || evt.choice || '';
+          
+          // Look for CastVote choice exercises
+          if (choice.includes('CastVote') || choice === 'DsoRules_CastVote') {
+            matchCount++;
+            
+            if (samples.length < limit) {
+              const choiceArg = raw.choice_argument || raw.choiceArgument || evt.payload;
+              
+              samples.push({
+                contract_id: evt.contract_id || evt.contractId,
+                template_id: evt.template_id || evt.templateId,
+                timestamp: evt.timestamp,
+                choice: choice,
+                event_type: evt.event_type || evt.eventType,
+                payload_keys: Object.keys(evt.payload || {}),
+                raw_keys: Object.keys(raw || {}),
+                choice_argument_preview: JSON.stringify(choiceArg)?.substring(0, 1000),
+                exercise_result_preview: JSON.stringify(raw.exercise_result)?.substring(0, 500),
+                acting_parties: raw.acting_parties || evt.acting_parties,
+                child_event_ids: raw.child_event_ids?.length || 0,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+    
+    // Analyze structure patterns
+    const structurePatterns = {};
+    for (const s of samples) {
+      const key = (s.payload_keys || []).sort().join(',') || '(empty)';
+      structurePatterns[key] = (structurePatterns[key] || 0) + 1;
+    }
+    
+    res.json({
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        castVoteCount: matchCount,
+        samplesCollected: samples.length,
+      },
+      structurePatterns: Object.entries(structurePatterns).sort((a, b) => b[1] - a[1]),
+      samples,
+    });
+  } catch (err) {
+    console.error('Error in cast-vote diagnostic:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
