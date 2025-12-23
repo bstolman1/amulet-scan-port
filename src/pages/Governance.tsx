@@ -965,7 +965,7 @@ const Governance = () => {
               <div className="space-y-6 py-8">
                 <div className="flex flex-col items-center">
                   <Loader2 className="h-12 w-12 text-primary mb-4 animate-spin" />
-                  <p className="text-lg font-semibold mb-2">Scanning with concurrency {scanProgress.concurrency || 50}...</p>
+                  <p className="text-lg font-semibold mb-2">Scanning ledger files...</p>
                   <p className="text-muted-foreground text-sm mb-2">
                     {scanProgress.filesScanned.toLocaleString()} / {scanProgress.totalFiles.toLocaleString()} files
                   </p>
@@ -1007,8 +1007,8 @@ const Governance = () => {
                     <p className="text-lg font-bold text-primary">{scanProgress.filesPerSec || 0}/s</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30 text-center">
-                    <p className="text-xs text-muted-foreground mb-1">Concurrency</p>
-                    <p className="text-lg font-bold">{scanProgress.concurrency || 50}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Parallel</p>
+                    <p className="text-lg font-bold">{scanProgress.concurrency || 20}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Unique Proposals</p>
