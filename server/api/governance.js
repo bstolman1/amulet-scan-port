@@ -112,46 +112,67 @@ router.get('/proposals/by-contract/:contractId', async (req, res) => {
 
 /**
  * POST /api/governance/index/build
- * Trigger a full index rebuild
+ * Trigger a full index rebuild (async)
  */
 router.post('/index/build', async (req, res) => {
   try {
-    const { limit = '10000' } = req.query;
+    if (isGovernanceIndexingInProgress()) {
+      return res.json({ status: 'in_progress', message: 'Indexing already in progress' });
+    }
     
-    // Invalidate cache to force rebuild
+    // Respond immediately
+    res.json({ status: 'started', message: 'Governance index build started' });
+    
+    // Run async in background
+    const { limit = '10000' } = req.query;
     invalidateCache();
     
-    const result = await buildGovernanceIndex({
+    buildGovernanceIndex({
       limit: parseInt(limit, 10),
       forceRefresh: true,
-    });
-    
-    res.json({
-      status: 'ok',
-      summary: result.summary,
-      stats: result.stats,
+    }).catch(err => {
+      console.error('Background governance index build failed:', err);
     });
   } catch (err) {
-    console.error('Error building governance index:', err);
+    console.error('Error starting governance index build:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
 /**
  * GET /api/governance/index/status
- * Get indexing status
+ * Get indexing status with stats
  */
 router.get('/index/status', async (req, res) => {
   try {
-    const inProgress = isGovernanceIndexingInProgress();
+    const isIndexing = isGovernanceIndexingInProgress();
     const progress = getIndexingProgress();
     
+    // Get stats if available
+    let stats = null;
+    let cachePopulated = false;
+    try {
+      stats = await getProposalStats();
+      cachePopulated = stats && stats.total > 0;
+    } catch {
+      // Stats not available yet
+    }
+    
     res.json({
-      indexing: inProgress,
+      isIndexing,
       progress,
+      stats: stats ? {
+        total: stats.total || 0,
+        approved: stats.approved || 0,
+        rejected: stats.rejected || 0,
+        pending: stats.pending || 0,
+        expired: stats.expired || 0,
+      } : null,
+      cachePopulated,
+      lastIndexedAt: null, // Could track this if needed
     });
   } catch (err) {
-    console.error('Error getting index status:', err);
+    console.error('Error getting governance index status:', err);
     res.status(500).json({ error: err.message });
   }
 });
