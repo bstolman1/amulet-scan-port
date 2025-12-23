@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
-import { getDuckDBApiUrl } from "@/lib/backend-config";
+import { checkDuckDBConnection, getDuckDBApiUrl } from "@/lib/backend-config";
 import { useState } from "react";
 import { VoteRequestDebugPanel } from "@/components/VoteRequestDebugPanel";
 
@@ -341,48 +341,64 @@ const IndexStatus = () => {
   const queryClient = useQueryClient();
   const [showAllTemplates, setShowAllTemplates] = useState(false);
 
-  // Fetch statuses
+  // Check if DuckDB API is reachable (Lovable preview/deploy usually can't reach port 3001)
+  const { data: duckdbOk, isLoading: duckdbChecking } = useQuery({
+    queryKey: ["duckdbHealth"],
+    queryFn: checkDuckDBConnection,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+
+  const duckdbEnabled = duckdbOk === true;
+
+  // Fetch statuses (only when DuckDB is reachable)
   const { data: templateIndex, isLoading: templateLoading, error: templateError } = useQuery({
     queryKey: ["templateIndexStatus"],
     queryFn: fetchTemplateIndexStatus,
-    refetchInterval: 5000,
+    refetchInterval: duckdbEnabled ? 5000 : false,
     retry: false,
+    enabled: duckdbEnabled,
   });
 
   const { data: voteRequestIndex, isLoading: voteLoading, error: voteError } = useQuery({
     queryKey: ["voteRequestIndexStatus"],
     queryFn: fetchVoteRequestIndexStatus,
-    refetchInterval: 5000,
+    refetchInterval: duckdbEnabled ? 5000 : false,
     retry: false,
+    enabled: duckdbEnabled,
   });
 
   const { data: aggregationState, isLoading: aggLoading, error: aggError } = useQuery({
     queryKey: ["aggregationState"],
     queryFn: fetchAggregationState,
-    refetchInterval: 10000,
+    refetchInterval: duckdbEnabled ? 10000 : false,
     retry: false,
+    enabled: duckdbEnabled,
   });
 
   const { data: rewardCouponIndex, isLoading: rewardLoading, error: rewardError } = useQuery({
     queryKey: ["rewardCouponIndexStatus"],
     queryFn: fetchRewardCouponIndexStatus,
-    refetchInterval: 5000,
+    refetchInterval: duckdbEnabled ? 5000 : false,
     retry: false,
+    enabled: duckdbEnabled,
   });
 
   const { data: partyIndex, isLoading: partyLoading, error: partyError } = useQuery({
     queryKey: ["partyIndexStatus"],
     queryFn: fetchPartyIndexStatus,
-    refetchInterval: 5000,
+    refetchInterval: duckdbEnabled ? 5000 : false,
     retry: false,
+    enabled: duckdbEnabled,
   });
 
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
     queryKey: ["indexedTemplates"],
     queryFn: fetchIndexedTemplates,
-    refetchInterval: 30000,
+    refetchInterval: duckdbEnabled ? 30000 : false,
     retry: false,
-    enabled: templateIndex?.isPopulated,
+    enabled: duckdbEnabled && templateIndex?.isPopulated,
   });
 
   const templates = templatesData?.templates || [];
@@ -514,6 +530,7 @@ const IndexStatus = () => {
 
   // Derive template index status
   const getTemplateStatus = (): IndexCardProps["status"] => {
+    if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
     if (templateLoading) return "loading";
     if (templateError) return "error";
     if (templateIndex?.inProgress) return "building";
@@ -523,6 +540,7 @@ const IndexStatus = () => {
 
   // Derive vote request index status
   const getVoteStatus = (): IndexCardProps["status"] => {
+    if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
     if (voteLoading) return "loading";
     if (voteError) return "error";
     if (voteRequestIndex?.isIndexing) return "building";
@@ -533,6 +551,7 @@ const IndexStatus = () => {
 
   // Derive aggregation status
   const getAggStatus = (): IndexCardProps["status"] => {
+    if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
     if (aggLoading) return "loading";
     if (aggError) return "error";
     // If tableExists is explicitly false, show empty (not error)
@@ -543,6 +562,7 @@ const IndexStatus = () => {
 
   // Derive reward coupon index status
   const getRewardStatus = (): IndexCardProps["status"] => {
+    if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
     if (rewardLoading) return "loading";
     if (rewardError) return "error";
     if (rewardCouponIndex?.isIndexing) return "building";
@@ -552,6 +572,7 @@ const IndexStatus = () => {
 
   // Derive party index status
   const getPartyStatus = (): IndexCardProps["status"] => {
+    if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
     if (partyLoading) return "loading";
     if (partyError) return "error";
     if (partyIndex?.indexing) return "building";
@@ -572,11 +593,27 @@ const IndexStatus = () => {
               Monitor and manage persistent indexes for fast queries
             </p>
           </div>
-          <Button variant="outline" onClick={handleRefreshAll}>
+          <Button variant="outline" onClick={handleRefreshAll} disabled={!duckdbEnabled}>
             <RefreshCw className="w-4 h-4 mr-2" />
             Refresh All
           </Button>
         </div>
+
+        {!duckdbEnabled && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">DuckDB API not reachable</CardTitle>
+              <CardDescription>
+                This page polls a local DuckDB server on port 3001. In Lovable preview/deploy it usually isn’t reachable,
+                which is why you’re seeing many failed requests.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Status: {duckdbChecking ? "Checking…" : "Offline"}. If you run the backend locally, open the app at localhost so it can reach
+              <span className="font-mono"> http://localhost:3001</span>.
+            </CardContent>
+          </Card>
+        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
