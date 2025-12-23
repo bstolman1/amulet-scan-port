@@ -326,6 +326,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
     // Build map of closed contract IDs -> archived event data (with final vote counts and status)
     const archivedEventsMap = new Map();
+    let closedViaDsoRules = 0;
+    let closedViaDirectArchive = 0;
+    
     for (const record of exercisedResult.records) {
       const choice = String(record.choice || '');
       
@@ -352,14 +355,25 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             contract_id: voteRequestCid,
             dso_close_outcome: outcome,
             choice: choice, // Preserve the choice for status detection
+            close_source: 'dso_rules',
           });
+          closedViaDsoRules++;
         }
       } else if (record.contract_id) {
         // Direct archive on VoteRequest template
-        archivedEventsMap.set(record.contract_id, record);
+        archivedEventsMap.set(record.contract_id, {
+          ...record,
+          close_source: 'direct_archive',
+        });
+        closedViaDirectArchive++;
       }
     }
     const closedContractIds = new Set(archivedEventsMap.keys());
+    
+    console.log(`   📊 Close source breakdown:`);
+    console.log(`      - DsoRules_CloseVoteRequest: ${closedViaDsoRules}`);
+    console.log(`      - Direct VoteRequest archive: ${closedViaDirectArchive}`);
+    console.log(`      - Unique closed contracts: ${closedContractIds.size}`);
 
     const now = new Date();
 
