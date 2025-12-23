@@ -66,13 +66,28 @@ interface ScanProgress {
   rawCount?: number;
 }
 
-export function useFullProposalScan(enabled: boolean = false, debug: boolean = false, raw: boolean = false) {
+interface ScanOptions {
+  debug?: boolean;
+  raw?: boolean;
+  concurrency?: number;
+  limit?: number;
+}
+
+export function useFullProposalScan(enabled: boolean = false, options: ScanOptions = {}) {
   const [data, setData] = useState<FullProposalScanResponse | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const hasStartedRef = useRef(false);
+
+  const stopScan = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setIsLoading(false);
+  }, []);
 
   const startScan = useCallback(async () => {
     if (isLoading) return;
@@ -85,8 +100,10 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
     try {
       const backendUrl = getDuckDBApiUrl();
       const params = new URLSearchParams();
-      if (debug) params.append('debug', 'true');
-      if (raw) params.append('raw', 'true');
+      if (options.debug) params.append('debug', 'true');
+      if (options.raw) params.append('raw', 'true');
+      if (options.concurrency) params.append('concurrency', options.concurrency.toString());
+      if (options.limit) params.append('limit', options.limit.toString());
       const queryString = params.toString();
       const url = `${backendUrl}/api/events/governance/proposals/stream${queryString ? '?' + queryString : ''}`;
       
@@ -128,6 +145,7 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
         });
         setIsLoading(false);
         eventSource.close();
+        eventSourceRef.current = null;
       });
 
       eventSource.addEventListener('error', (e) => {
@@ -135,6 +153,7 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
         setError(new Error('SSE connection failed'));
         setIsLoading(false);
         eventSource.close();
+        eventSourceRef.current = null;
       });
 
       eventSource.onerror = () => {
@@ -144,6 +163,7 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
           setIsLoading(false);
         }
         eventSource.close();
+        eventSourceRef.current = null;
       };
 
     } catch (err) {
@@ -176,5 +196,6 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
     isLoading,
     error,
     refetch: startScan,
+    stop: stopScan,
   };
 }

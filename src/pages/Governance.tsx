@@ -42,6 +42,7 @@ const Governance = () => {
   const [runFullScan, setRunFullScan] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [rawMode, setRawMode] = useState(false);
+  const [concurrency, setConcurrency] = useState(20);
   
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -56,7 +57,8 @@ const Governance = () => {
     isLoading: fullScanLoading, 
     error: fullScanError,
     refetch: refetchFullScan,
-  } = useFullProposalScan(runFullScan, debugMode, rawMode);
+    stop: stopFullScan,
+  } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode, concurrency });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -907,24 +909,38 @@ const Governance = () => {
                   />
                   Raw Mode
                 </label>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => refetchFullScan()}
-                  disabled={fullScanLoading}
-                >
-                  {fullScanLoading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <FileSearch className="h-4 w-4 mr-2" />
-                      Re-scan
-                    </>
-                  )}
-                </Button>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span>Parallel:</span>
+                  <input
+                    type="range"
+                    min="5"
+                    max="50"
+                    value={concurrency}
+                    onChange={(e) => setConcurrency(parseInt(e.target.value))}
+                    className="w-16"
+                    disabled={fullScanLoading}
+                  />
+                  <span className="font-mono w-6">{concurrency}</span>
+                </div>
+                {fullScanLoading ? (
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    onClick={() => stopFullScan()}
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Stop
+                  </Button>
+                ) : (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => refetchFullScan()}
+                  >
+                    <FileSearch className="h-4 w-4 mr-2" />
+                    Re-scan
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -953,6 +969,18 @@ const Governance = () => {
                     />
                     Raw Mode (output ALL VoteRequests without deduplication)
                   </label>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span>Parallel files:</span>
+                    <input
+                      type="range"
+                      min="5"
+                      max="50"
+                      value={concurrency}
+                      onChange={(e) => setConcurrency(parseInt(e.target.value))}
+                      className="w-24"
+                    />
+                    <span className="font-mono w-8">{concurrency}</span>
+                  </div>
                 </div>
                 <Button onClick={() => setRunFullScan(true)}>
                   <FileSearch className="h-4 w-4 mr-2" />
