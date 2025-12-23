@@ -4,7 +4,9 @@
  * STREAMING-ONLY: Processes records in batches without loading entire file into memory.
  */
 
-import { query } from '../duckdb/connection.js';
+import fs from 'fs';
+import path from 'path';
+import { query, DATA_PATH } from '../duckdb/connection.js';
 import { decodeFile } from './decoder.js';
 
 const BATCH_SIZE = 2000; // Records per insert batch
@@ -107,13 +109,35 @@ function toNativePath(storedPath) {
 }
 
 /**
+ * Resolve an indexed file path into a real path on this machine.
+ *
+ * We store paths normalized with forward slashes for DB consistency.
+ * But some DBs may contain WSL/Linux absolute paths from earlier runs.
+ */
+function resolveIndexedPath(filePath) {
+  const native = toNativePath(filePath);
+  if (fs.existsSync(native)) return native;
+
+  // If DB contains a Linux/WSL absolute path, rebase it onto our configured DATA_PATH.
+  // Example stored: /home/.../data/raw/migration=2/year=.../events-....pb.zst
+  // We take everything from migration=... onward and join it under <DATA_PATH>.
+  const migrationIdx = filePath.search(/migration[=_]\d+/i);
+  if (migrationIdx !== -1) {
+    const rel = filePath.slice(migrationIdx).replace(/^\/+/, '');
+    const candidate = path.join(DATA_PATH, toNativePath(rel));
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return native;
+}
+
+/**
  * Ingest a single file using streaming decode
  */
 async function ingestOneFile(fileRow) {
   const { file_id, file_path, file_type } = fileRow;
-  
-  // Convert stored forward-slash path to native platform path
-  const nativePath = toNativePath(file_path);
+
+  const resolvedPath = resolveIndexedPath(file_path);
   
   try {
     const insertFn = file_type === 'events' ? insertEventBatch : insertUpdateBatch;
@@ -124,7 +148,7 @@ async function ingestOneFile(fileRow) {
     let maxTs = null;
     
     // Stream records and insert in batches
-    for await (const record of decodeFile(nativePath)) {
+    for await (const record of decodeFile(resolvedPath)) {
       batch.push(record);
       totalCount++;
       
