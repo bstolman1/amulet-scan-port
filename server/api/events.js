@@ -90,7 +90,7 @@ router.get('/latest', async (req, res) => {
         maxFilesToScan: 200,
         sortBy: 'timestamp', // Use write time, not effective_at
       });
-      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
+      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
     }
     
     const sql = `
@@ -115,7 +115,7 @@ router.get('/latest', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     console.error('Error fetching latest events:', err);
     res.status(500).json({ error: err.message });
@@ -139,7 +139,7 @@ router.get('/by-type/:type', async (req, res) => {
         sortBy: 'effective_at',
         filter: (e) => e.event_type === type
       });
-      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
+      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
     }
     
     const sql = `
@@ -151,7 +151,7 @@ router.get('/by-type/:type', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -174,7 +174,7 @@ router.get('/by-template/:templateId', async (req, res) => {
         sortBy: 'effective_at',
         filter: (e) => e.template_id?.includes(templateId)
       });
-      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
+      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
     }
     
     const sql = `
@@ -186,7 +186,7 @@ router.get('/by-template/:templateId', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -216,7 +216,7 @@ router.get('/by-date', async (req, res) => {
           return ts >= startDate && ts <= endDate;
         }
       });
-      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
+      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
     }
     
     let whereClause = '';
@@ -232,7 +232,7 @@ router.get('/by-date', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -247,7 +247,7 @@ router.get('/count', async (req, res) => {
       // Use fast count function that doesn't load all paths into memory
       const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
       const estimated = fileCount * 100; // ~100 records per file estimate
-      return res.json({ count: estimated, estimated: true, fileCount, source: 'binary' });
+      return res.json(convertBigInts({ count: estimated, estimated: true, fileCount, source: 'binary' }));
     }
     
     const sql = `
@@ -256,7 +256,7 @@ router.get('/count', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ count: rows[0]?.total || 0, source: sources.primarySource });
+    res.json(convertBigInts({ count: rows[0]?.total || 0, source: sources.primarySource }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -282,7 +282,7 @@ router.get('/debug', async (req, res) => {
       }
     }
     
-    res.json({
+    res.json(convertBigInts({
       dataPath: db.DATA_PATH,
       sources,
       totalBinaryFiles: fileCount,
@@ -300,7 +300,7 @@ router.get('/debug', async (req, res) => {
         })()
       })),
       sampleNewestRecord: sampleRecord,
-    });
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -331,12 +331,12 @@ router.get('/governance', async (req, res) => {
         sortBy: 'effective_at',
         filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
       });
-      return res.json({ 
+      return res.json(convertBigInts({ 
         data: result.records, 
         count: result.records.length, 
         hasMore: result.hasMore, 
         source: 'binary' 
-      });
+      }));
     }
     
     const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
@@ -350,7 +350,7 @@ router.get('/governance', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     console.error('Error fetching governance events:', err);
     res.status(500).json({ error: err.message });
@@ -381,12 +381,12 @@ router.get('/rewards', async (req, res) => {
         sortBy: 'effective_at',
         filter: (e) => rewardTemplates.some(t => e.template_id?.includes(t))
       });
-      return res.json({ 
+      return res.json(convertBigInts({ 
         data: result.records, 
         count: result.records.length, 
         hasMore: result.hasMore, 
         source: 'binary' 
-      });
+      }));
     }
     
     const templateFilter = rewardTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
@@ -400,7 +400,7 @@ router.get('/rewards', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     console.error('Error fetching reward events:', err);
     res.status(500).json({ error: err.message });
@@ -423,12 +423,12 @@ router.get('/member-traffic', async (req, res) => {
         sortBy: 'effective_at',
         filter: (e) => e.template_id?.includes('MemberTraffic')
       });
-      return res.json({ 
+      return res.json(convertBigInts({ 
         data: result.records, 
         count: result.records.length, 
         hasMore: result.hasMore, 
         source: 'binary' 
-      });
+      }));
     }
     
     const sql = `
@@ -441,7 +441,7 @@ router.get('/member-traffic', async (req, res) => {
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
   } catch (err) {
     console.error('Error fetching member traffic events:', err);
     res.status(500).json({ error: err.message });
@@ -577,7 +577,7 @@ router.get('/governance-history', async (req, res) => {
           .sort((a, b) => new Date(b.effective_at).getTime() - new Date(a.effective_at).getTime())
           .slice(0, limit);
 
-        return res.json({
+        return res.json(convertBigInts({
           data: merged,
           count: merged.length,
           hasMore: indexedHistorical.length === limit,
@@ -587,7 +587,7 @@ router.get('/governance-history', async (req, res) => {
             indexedHistoricalVotes: indexedHistorical.length,
             otherGovernanceIncluded: otherHistory.length,
           }
-        });
+        }));
       }
 
       console.log('   ⚠️ VoteRequest index is empty → falling back to binary scans (slow)');
@@ -769,7 +769,7 @@ router.get('/governance-history', async (req, res) => {
       console.log(`      Events with votes: ${withVotes}/${history.length}`);
       console.log(`      Events with exercise_result: ${withExerciseResult}/${history.length}`);
       
-      return res.json({ 
+      return res.json(convertBigInts({ 
         data: history, 
         count: history.length, 
         hasMore: limitedRecords.length < dedupedRecords.length, 
@@ -784,7 +784,7 @@ router.get('/governance-history', async (req, res) => {
           createdVoteRequestsFound: voteRequestCreatedResult.records.length,
           otherGovernanceFound: otherResult.records.length,
         }
-      });
+      }));
     }
     
     // Fallback to DuckDB query
@@ -826,7 +826,7 @@ router.get('/governance-history', async (req, res) => {
       vote_before: row.payload?.voteBefore || null,
     }));
     
-    res.json({ data: history, count: history.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: history, count: history.length, source: sources.primarySource }));
   } catch (err) {
     console.error('Error fetching governance history:', err);
     res.status(500).json({ error: err.message });
@@ -868,7 +868,7 @@ router.get('/vote-requests', async (req, res) => {
       const stats = await voteRequestIndexer.getVoteRequestStats();
       const indexState = await voteRequestIndexer.getIndexState();
       
-      return res.json({
+      return res.json(convertBigInts({
         data: voteRequests,
         count: voteRequests.length,
         totalFound: status === 'all' ? stats.total : (status === 'active' ? stats.active : stats.historical),
@@ -884,7 +884,7 @@ router.get('/vote-requests', async (req, res) => {
           totalIndexed: indexState.total_indexed,
           fromIndex: true,
         } : undefined,
-      });
+      }));
     }
     
     console.log(`   Primary source: ${sources.primarySource} (index not populated)`);
@@ -1071,7 +1071,7 @@ router.get('/vote-requests', async (req, res) => {
       const withVotes = voteRequests.filter(v => v.votes?.length > 0).length;
       const actionTags = [...new Set(voteRequests.map(v => v.action_tag).filter(Boolean))];
       
-      return res.json({
+      return res.json(convertBigInts({
         data: voteRequests,
         count: voteRequests.length,
         totalFound: allVoteRequests.length,
@@ -1086,7 +1086,7 @@ router.get('/vote-requests', async (req, res) => {
           statusFilter: status,
         },
         _debug: debugInfo,
-      });
+      }));
     }
     
     // Fallback to DuckDB/Parquet
@@ -1125,7 +1125,7 @@ router.get('/vote-requests', async (req, res) => {
       dso: row.payload?.dso || null,
     }));
     
-    res.json({ data: voteRequests, count: voteRequests.length, source: sources.primarySource });
+    res.json(convertBigInts({ data: voteRequests, count: voteRequests.length, source: sources.primarySource }));
   } catch (err) {
     console.error('Error fetching vote requests:', err);
     res.status(500).json({ error: err.message });
@@ -1225,7 +1225,7 @@ router.get('/template-scan', async (req, res) => {
     console.log(`   📈 Unique templates: ${Object.keys(templateCounts).length}`);
     console.log(`   🏛️ Governance templates found:`, governanceTemplates);
     
-    res.json({
+    res.json(convertBigInts({
       totalEventsScanned: totalEvents,
       dateRange: {
         oldest: oldestDate?.toISOString(),
@@ -1237,7 +1237,7 @@ router.get('/template-scan', async (req, res) => {
       governanceTemplates,
       topChoices: Object.entries(choiceCounts).sort((a, b) => b[1] - a[1]).slice(0, 30),
       sampleEvents: sampleEvents.length > 0 ? sampleEvents : undefined,
-    });
+    }));
   } catch (err) {
     console.error('Error in template scan:', err);
     res.status(500).json({ error: err.message });
@@ -1265,7 +1265,7 @@ router.get('/vote-request-index/status', async (req, res) => {
       }
     }
 
-    const payload = {
+    res.json(convertBigInts({
       populated: stats.total > 0,
       isIndexing,
       lockExists,
@@ -1274,12 +1274,7 @@ router.get('/vote-request-index/status', async (req, res) => {
       totalIndexed: state.total_indexed,
       progress: isIndexing ? progress : null,
       lastSuccessfulBuild,
-    };
-
-    // DuckDB can return BIGINT values as JS BigInt, which Express can't JSON.stringify.
-    // Avoid res.json() entirely and send a pre-stringified payload with BigInt -> string.
-    const json = JSON.stringify(payload, (_key, value) => (typeof value === 'bigint' ? value.toString() : value));
-    res.type('application/json').send(json);
+    }));
   } catch (err) {
     console.error('Error getting vote request index status:', err);
     res.status(500).json({ error: err.message });
@@ -1423,14 +1418,11 @@ router.get('/vote-request-index/validate', async (req, res) => {
       }
     }
     
-    const payload = {
+    res.json(convertBigInts({
       summary,
       potentialIssues,
       samples,
-    };
-
-    const json = JSON.stringify(payload, (_key, value) => (typeof value === 'bigint' ? value.toString() : value));
-    res.type('application/json').send(json);
+    }));
   } catch (err) {
     console.error('Error validating vote request index:', err);
     res.status(500).json({ error: err.message });
@@ -1478,9 +1470,7 @@ router.get('/vote-request-index/debug-event', async (req, res) => {
       full_payload: e.payload,
     }));
 
-    const json = JSON.stringify({ contract_id, events }, (_key, value) => 
-      (typeof value === 'bigint' ? value.toString() : value), 2);
-    res.type('application/json').send(json);
+    res.json(convertBigInts({ contract_id, events }));
   } catch (err) {
     console.error('Error debugging event:', err);
     res.status(500).json({ error: err.message });
@@ -1497,14 +1487,14 @@ router.get('/reward-coupon-index/status', async (req, res) => {
     const isIndexing = rewardIndexer.isIndexingInProgress();
     const progress = rewardIndexer.getIndexingProgress();
     
-    res.json({
+    res.json(convertBigInts({
       populated: stats.total > 0,
       isIndexing,
       stats,
       lastIndexedAt: state.last_indexed_at,
       totalIndexed: state.total_indexed,
       progress: isIndexing ? progress : null,
-    });
+    }));
   } catch (err) {
     console.error('Error getting reward coupon index status:', err);
     res.status(500).json({ error: err.message });
@@ -1551,11 +1541,11 @@ router.get('/reward-coupon-index/query', async (req, res) => {
     
     const stats = await rewardIndexer.getRewardCouponStats();
     
-    res.json({
+    res.json(convertBigInts({
       data: results,
       count: results.length,
       stats,
-    });
+    }));
   } catch (err) {
     console.error('Error querying reward coupons:', err);
     res.status(500).json({ error: err.message });
@@ -1575,7 +1565,7 @@ router.get('/reward-coupon-index/beneficiary/:id', async (req, res) => {
       endDate: endDate || null,
     });
     
-    res.json(result);
+    res.json(convertBigInts(result));
   } catch (err) {
     console.error('Error getting rewards for beneficiary:', err);
     res.status(500).json({ error: err.message });
@@ -1606,7 +1596,7 @@ router.get('/by-contract/:contractId', async (req, res) => {
         console.log(`   Event ${i + 1}: type=${e.event_type}, choice=${e.choice || 'N/A'}, template=${e.template_id?.split(':').pop()}`);
       });
       
-      return res.json({ 
+      return res.json(convertBigInts({ 
         data: result.records.map(r => ({
           event_id: r.event_id,
           event_type: r.event_type,
@@ -1618,7 +1608,7 @@ router.get('/by-contract/:contractId', async (req, res) => {
         count: result.records.length, 
         hasMore: result.hasMore, 
         source: 'binary' 
-      });
+      }));
     }
     
     res.json({ data: [], count: 0, source: 'none', error: 'Binary source required' });
@@ -1675,11 +1665,11 @@ router.get('/debug-vote-requests', async (req, res) => {
     
     console.log(`\n📊 Choice breakdown across ${contractIds.length} contracts:`, choiceStats);
     
-    res.json({
+    res.json(convertBigInts({
       analyzed: results.length,
       choiceStats,
       results,
-    });
+    }));
   } catch (err) {
     console.error('Error debugging vote requests:', err);
     res.status(500).json({ error: err.message });
@@ -1772,7 +1762,7 @@ router.get('/debug-vote-request/:contractId', async (req, res) => {
       dso: payload.dso || null,
     };
 
-    res.json({
+    res.json(convertBigInts({
       contractId,
       totalEventsFound: result.records.length,
       dedupedCount: deduped.length,
@@ -1812,7 +1802,7 @@ router.get('/debug-vote-request/:contractId', async (req, res) => {
         requester: indexedRecord.requester,
         reason: indexedRecord.reason,
       } : null,
-    });
+    }));
   } catch (err) {
     console.error('Error debugging vote request:', err);
     res.status(500).json({ error: err.message });
@@ -1892,7 +1882,7 @@ router.get('/debug/dsorules-choices', async (req, res) => {
       return cl.includes('vote') || cl.includes('close') || cl.includes('expire') || cl.includes('reject') || cl.includes('accept');
     });
 
-    res.json({
+    res.json(convertBigInts({
       summary: {
         filesScanned,
         totalFiles: binFiles.length,
@@ -1904,7 +1894,7 @@ router.get('/debug/dsorules-choices', async (req, res) => {
       voteRelatedChoices: voteRelated,
       allChoices: sortedChoices.slice(0, 100),
       sampleVoteEvents: sampleEvents,
-    });
+    }));
   } catch (err) {
     console.error('Error in dsorules-choices diagnostic:', err);
     res.status(500).json({ error: err.message });
@@ -1988,7 +1978,7 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
       structurePatterns[key] = (structurePatterns[key] || 0) + 1;
     }
 
-    res.json({
+    res.json(convertBigInts({
       summary: {
         filesScanned,
         totalFilesInDataset: allFiles.length,
@@ -1997,7 +1987,7 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
       },
       structurePatterns: Object.entries(structurePatterns).sort((a, b) => b[1] - a[1]),
       samples,
-    });
+    }));
   } catch (err) {
     console.error('Error in execute-confirmed-action diagnostic:', err);
     res.status(500).json({ error: err.message });
@@ -2087,7 +2077,7 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
       }
     }
     
-    res.json({
+    res.json(convertBigInts({
       summary: {
         filesScanned,
         totalFilesInDataset: allFiles.length,
@@ -2098,7 +2088,7 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
       },
       createdEvents,
       archivedEvents,
-    });
+    }));
   } catch (err) {
     console.error('Error in vote-request-lifecycle diagnostic:', err);
     res.status(500).json({ error: err.message });
@@ -2184,7 +2174,7 @@ router.get('/debug/cast-vote', async (req, res) => {
       structurePatterns[key] = (structurePatterns[key] || 0) + 1;
     }
     
-    res.json({
+    res.json(convertBigInts({
       summary: {
         filesScanned,
         totalFilesInDataset: allFiles.length,
@@ -2193,7 +2183,7 @@ router.get('/debug/cast-vote', async (req, res) => {
       },
       structurePatterns: Object.entries(structurePatterns).sort((a, b) => b[1] - a[1]),
       samples,
-    });
+    }));
   } catch (err) {
     console.error('Error in cast-vote diagnostic:', err);
     res.status(500).json({ error: err.message });
@@ -2269,7 +2259,7 @@ router.get('/governance-proposals/:semanticKey/timeline', async (req, res) => {
     const latest = timeline[0];
     const oldest = timeline[timeline.length - 1];
     
-    res.json({
+    res.json(convertBigInts({
       semanticKey,
       latestStatus: latest.status,
       latestContractId: latest.contract_id,
@@ -2283,7 +2273,7 @@ router.get('/governance-proposals/:semanticKey/timeline', async (req, res) => {
         subject: latest.action_subject,
       },
       source: 'duckdb-index',
-    });
+    }));
   } catch (err) {
     console.error('Error in governance-proposals timeline:', err);
     res.status(500).json({ error: err.message });
@@ -2403,7 +2393,7 @@ router.get('/governance/proposals', async (req, res) => {
       }
     }
     
-    res.json({
+    res.json(convertBigInts({
       summary: {
         filesScanned,
         totalFilesInDataset: allFiles.length,
@@ -2412,7 +2402,7 @@ router.get('/governance/proposals', async (req, res) => {
       },
       stats,
       proposals,
-    });
+    }));
   } catch (err) {
     console.error('Error in governance/proposals:', err);
     res.status(500).json({ error: err.message });
