@@ -27,8 +27,9 @@ export function VoteRequestIndexBanner() {
   const { data: status, isLoading, error } = useQuery({
     queryKey: ["vote-request-index-status"],
     queryFn: () => apiFetch<IndexStatus>("/api/events/vote-request-index/status"),
-    staleTime: 30_000,
-    refetchInterval: isBuilding ? 5000 : false,
+    staleTime: 5_000, // Short stale time to pick up index changes quickly
+    refetchInterval: isBuilding ? 3000 : 30_000, // Poll every 30s normally, faster when building
+    refetchOnWindowFocus: true,
   });
 
   const buildMutation = useMutation({
