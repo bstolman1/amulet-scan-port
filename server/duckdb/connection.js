@@ -24,85 +24,25 @@ const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
-// Persistent DuckDB instance (survives restarts, shareable between processes)
+// Database file path (persistent storage)
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
-const db = new duckdb.Database(DB_FILE);
-const conn = db.connect();
 
-/**
- * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
- */
-function hasFileType(type, extension) {
-  try {
-    if (!fs.existsSync(DATA_PATH)) return false;
-    const stack = [DATA_PATH];
-    while (stack.length > 0) {
-      const dir = stack.pop();
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          stack.push(path.join(dir, entry.name));
-        } else if (entry.name.includes(`${type}-`) && entry.name.endsWith(extension)) {
-          return true; // Found one, stop immediately
-        }
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Count files matching pattern (for logging) - limited scan
- */
-function countDataFiles(type = 'events', maxScan = 10000) {
-  try {
-    if (!fs.existsSync(DATA_PATH)) return 0;
-    let count = 0;
-    const stack = [DATA_PATH];
-    while (stack.length > 0 && count < maxScan) {
-      const dir = stack.pop();
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          stack.push(path.join(dir, entry.name));
-        } else if (
-          entry.name.includes(`${type}-`) && 
-          (entry.name.endsWith('.jsonl') || 
-           entry.name.endsWith('.jsonl.gz') || 
-           entry.name.endsWith('.jsonl.zst') ||
-           entry.name.endsWith('.pb.zst'))
-        ) {
-          count++;  // Fixed: was missing this increment
-          if (count >= maxScan) break;
-        }
-      }
-    }
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
-// Legacy function - now uses lazy detection
-function findDataFiles(type = 'events') {
-  console.warn('⚠️ findDataFiles() is deprecated for large datasets');
-  return []; // Return empty, force callers to use glob patterns
-}
-
-function hasDataFiles(type = 'events') {
-  return hasFileType(type, '.jsonl') || 
-         hasFileType(type, '.jsonl.gz') || 
-         hasFileType(type, '.jsonl.zst') ||
-         hasFileType(type, '.pb.zst');
-}
-
-// Helper to run queries
+// ✅ Per-query connection pattern - Windows safe
+// DO NOT use global connections, they will crash on Windows
 export function query(sql, params = []) {
   return new Promise((resolve, reject) => {
+    const db = new duckdb.Database(DB_FILE);
+    const conn = db.connect();
+    
     conn.all(sql, ...params, (err, rows) => {
+      try {
+        conn.close();
+        db.close();
+      } catch (closeErr) {
+        console.warn('DuckDB close warning:', closeErr.message);
+      }
+      
       if (err) reject(err);
       else resolve(rows);
     });
