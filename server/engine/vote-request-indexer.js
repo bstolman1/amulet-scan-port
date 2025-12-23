@@ -467,53 +467,42 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       // ============================================================
       // Canton/Splice governance rules:
       // - 13 SV (Super Validator) nodes total
-      // - Need 9 accept votes (supermajority ~69%) for approval
-      // - Votes accumulate in the VoteRequest contract's votes array
-      // - Each SV can cast one vote with accept: true/false
+      // - Need 9 votes (supermajority ~69%) for approval OR rejection
+      // - Executed: ≥9 accept votes
+      // - Rejected: ≥9 reject votes
+      // - Expired: Deadline passed without reaching either threshold
       // ============================================================
       
       const TOTAL_SV_NODES = 13;
-      const APPROVAL_THRESHOLD = 9; // Supermajority required
+      const THRESHOLD = 9; // Supermajority required for both approve and reject
       
       const totalVotesCast = finalVoteCount;
       
-      // Check if we have enough accept votes to meet threshold
-      const hasApprovalThreshold = acceptCount >= APPROVAL_THRESHOLD;
-      const hasAnyReject = rejectCount > 0;
+      // Check if thresholds are met
+      const hasApprovalThreshold = acceptCount >= THRESHOLD;
+      const hasRejectionThreshold = rejectCount >= THRESHOLD;
       
-      // Can approval still be reached? (remaining votes + accepts >= threshold)
-      const remainingVotes = TOTAL_SV_NODES - totalVotesCast;
-      const canStillReachApproval = (acceptCount + remainingVotes) >= APPROVAL_THRESHOLD;
-      
-      // Archived choice can provide hints (e.g., "Archive", "VoteRequest_Accept")
+      // Archived choice can provide hints
       const archivedChoice = archivedEvent?.choice || '';
       const choiceLower = String(archivedChoice).toLowerCase();
       const wasAcceptedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
       const wasRejectedByChoice = choiceLower.includes('reject');
 
-      // Determine status based on votes threshold
+      // Determine status based on vote thresholds
       if (isClosed) {
-        // Contract was archived - determine outcome from votes
         if (hasApprovalThreshold || wasAcceptedByChoice) {
-          // Met approval threshold or explicit accept = executed
           status = 'executed';
-        } else if (hasAnyReject || wasRejectedByChoice) {
-          // Has reject votes = rejected
+        } else if (hasRejectionThreshold || wasRejectedByChoice) {
           status = 'rejected';
-        } else if (isExpired || !canStillReachApproval) {
-          // Expired or can't reach threshold = expired
-          status = 'expired';
         } else {
-          // Closed but unclear - check if had any accepts
-          status = acceptCount > 0 ? 'executed' : 'expired';
+          // Closed without reaching either threshold = expired
+          status = 'expired';
         }
       } else if (isExpired) {
-        // Deadline passed but not closed
+        // Deadline passed but not closed yet
         if (hasApprovalThreshold) {
-          // Met threshold - should be executed (pending close)
-          status = 'executed';
-        } else if (hasAnyReject || !canStillReachApproval) {
-          // Can't reach threshold anymore
+          status = 'executed'; // Met threshold, pending close
+        } else if (hasRejectionThreshold) {
           status = 'rejected';
         } else {
           status = 'expired';
