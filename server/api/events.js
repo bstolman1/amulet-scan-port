@@ -2376,7 +2376,17 @@ router.get('/governance/proposals/stream', async (req, res) => {
           
           if (!proposal) continue;
           
-          const proposalKey = `${proposal.actionType}::${proposal.reasonUrl}`;
+          // Generate a unique proposal key
+          // Use trackingCid if available (most reliable), otherwise use action-specific details
+          let proposalKey;
+          if (proposal.trackingCid) {
+            // trackingCid uniquely identifies the original VoteRequest
+            proposalKey = `cid::${proposal.trackingCid}`;
+          } else {
+            // Fallback: combine actionType + requester + reasonUrl + action-specific details
+            const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
+            proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
+          }
           
           const existing = proposalMap.get(proposalKey);
           const eventTimestamp = new Date(evt.timestamp).getTime();
@@ -2606,6 +2616,71 @@ function parseTimestamp(ts) {
   }
   
   return null;
+}
+
+// Extract action-specific identifier for deduplication
+function extractActionSpecificKey(actionDetails) {
+  if (!actionDetails) return 'none';
+  
+  try {
+    // Try new format first
+    const dsoAction = actionDetails.value?.dsoAction?.value || actionDetails.value?.value || actionDetails.value;
+    
+    // GrantFeaturedAppRight - use provider
+    if (dsoAction?.provider) {
+      return `provider:${dsoAction.provider}`;
+    }
+    
+    // RevokeFeaturedAppRight - use rightCid
+    if (dsoAction?.rightCid) {
+      return `rightCid:${dsoAction.rightCid}`;
+    }
+    
+    // UpdateSvRewardWeight - use svParty + weight
+    if (dsoAction?.svParty) {
+      return `sv:${dsoAction.svParty}:${dsoAction.newRewardWeight || ''}`;
+    }
+    
+    // CreateUnallocatedUnclaimedActivityRecord - use beneficiary
+    if (dsoAction?.beneficiary) {
+      return `beneficiary:${dsoAction.beneficiary}:${dsoAction.amount || ''}`;
+    }
+    
+    // SetConfig or AddFutureAmuletConfigSchedule - try to get a hash of the config
+    if (dsoAction?.newSchedule || dsoAction?.config) {
+      const configStr = JSON.stringify(dsoAction.newSchedule || dsoAction.config).slice(0, 100);
+      return `config:${configStr}`;
+    }
+    
+    // Old format - try to extract from variant structure
+    const variant = actionDetails.record?.fields?.[0]?.value?.variant;
+    if (variant?.value?.record?.fields) {
+      const innerFields = variant.value.record.fields;
+      // Look for provider, party, etc.
+      for (const f of innerFields) {
+        if (f.value?.party) return `party:${f.value.party}`;
+        if (f.value?.contractId) return `cid:${f.value.contractId}`;
+        if (f.value?.text && f.value.text.length < 100) return `txt:${f.value.text}`;
+      }
+    }
+    
+    // Fallback: use a short hash of the stringified action
+    const str = JSON.stringify(actionDetails).slice(0, 200);
+    return `hash:${simpleHash(str)}`;
+  } catch (e) {
+    return 'err';
+  }
+}
+
+// Simple hash function for deduplication
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
 }
 
 export default router;
