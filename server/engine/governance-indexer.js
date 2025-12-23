@@ -152,6 +152,71 @@ function parseVotesFromRow(votesStr) {
 }
 
 /**
+ * Extract the specific action type from nested action structure
+ * Actions can be nested like: { tag: "ARC_DsoRules", value: { dsoAction: { tag: "SRARC_SetConfig" } } }
+ * We want the innermost specific action type for grouping
+ */
+function extractActionType(actionTag, actionValueStr, payloadStr) {
+  // Try to get the inner action type from action_value
+  if (actionValueStr) {
+    try {
+      const actionValue = typeof actionValueStr === 'string' ? JSON.parse(actionValueStr) : actionValueStr;
+      
+      // Check for dsoAction nested structure
+      if (actionValue?.dsoAction?.tag) {
+        return actionValue.dsoAction.tag;
+      }
+      if (actionValue?.dsoAction) {
+        // Check for variant-as-key encoding: { SRARC_SetConfig: {...} }
+        const keys = Object.keys(actionValue.dsoAction);
+        const actionKey = keys.find(k => 
+          k.startsWith('SRARC_') || k.startsWith('CRARC_') || k.startsWith('ARC_')
+        );
+        if (actionKey) return actionKey;
+      }
+      
+      // Check for direct tag in value
+      if (actionValue?.tag) {
+        return actionValue.tag;
+      }
+      
+      // Check for variant-as-key in value itself
+      const valueKeys = Object.keys(actionValue || {});
+      const directActionKey = valueKeys.find(k => 
+        k.startsWith('SRARC_') || k.startsWith('CRARC_') || k.startsWith('ARC_')
+      );
+      if (directActionKey) return directActionKey;
+    } catch {
+      // ignore parsing errors
+    }
+  }
+  
+  // Fallback: try parsing from full payload
+  if (payloadStr) {
+    try {
+      const payload = typeof payloadStr === 'string' ? JSON.parse(payloadStr) : payloadStr;
+      const action = payload?.action;
+      
+      if (action?.value?.dsoAction?.tag) {
+        return action.value.dsoAction.tag;
+      }
+      if (action?.value?.dsoAction) {
+        const keys = Object.keys(action.value.dsoAction);
+        const actionKey = keys.find(k => 
+          k.startsWith('SRARC_') || k.startsWith('CRARC_') || k.startsWith('ARC_')
+        );
+        if (actionKey) return actionKey;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  
+  // Fall back to the outer action tag
+  return actionTag || 'unknown';
+}
+
+/**
  * Build the governance proposal index from persistent vote_requests table
  * Persists results to DuckDB
  */
@@ -239,7 +304,8 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
     // Log sample of first few records for debugging
     if (voteRequestRows.length > 0) {
       const sample = voteRequestRows[0];
-      console.log(`   Sample record: action_tag=${sample.action_tag}, reason=${(sample.reason || '').substring(0, 50)}...`);
+      const sampleActionType = extractActionType(sample.action_tag, sample.action_value, sample.payload);
+      console.log(`   Sample record: outer_tag=${sample.action_tag}, extracted_type=${sampleActionType}`);
     }
 
     for (let i = 0; i < voteRequestRows.length; i++) {
@@ -251,7 +317,8 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
         indexingProgress.proposals = proposalMap.size;
       }
 
-      const actionType = row.action_tag || 'unknown';
+      // Extract the specific inner action type (e.g., SRARC_SetConfig from nested dsoAction)
+      const actionType = extractActionType(row.action_tag, row.action_value, row.payload);
       const { reasonUrl, reasonBody } = parseReasonFromRow(row.reason, row.payload);
       const key = getProposalKey(actionType, reasonUrl);
 
