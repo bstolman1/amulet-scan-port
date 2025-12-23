@@ -1,22 +1,14 @@
 /**
  * Governance Proposal Indexer
  * 
- * Extracts unique governance proposals from VoteRequest created events,
- * groups by proposal identifier (action type + reason URL), and tracks
- * vote progress and final outcomes.
+ * Builds unique governance proposals FROM the persistent vote_requests DuckDB table.
+ * Groups by proposal identifier (action type + reason URL), and tracks vote progress.
  * 
  * PERSISTENT: Stores proposals in DuckDB so index survives restarts.
+ * FAST: Reads from vote_requests table instead of rescanning binary files.
  */
 
-import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
-import * as binaryReader from '../duckdb/binary-reader.js';
-import fs from 'fs';
-import path from 'path';
-import {
-  getFilesForTemplate,
-  isTemplateIndexPopulated,
-  getTemplateIndexStats
-} from './template-file-index.js';
+import { query, queryOne } from '../duckdb/connection.js';
 
 let indexingInProgress = false;
 let indexingProgress = null;
@@ -35,152 +27,6 @@ async function ensureGovernanceTables() {
 }
 
 /**
- * Parse VoteRequest payload to extract structured proposal data
- */
-function parseVoteRequestPayload(payload) {
-  if (!payload) return null;
-
-  try {
-    const fields = payload.record?.fields || payload.fields || payload;
-    
-    if (payload.dso && payload.requester) {
-      return parseNamedFields(payload);
-    }
-    
-    if (Array.isArray(fields)) {
-      return parseArrayFields(fields);
-    }
-    
-    return null;
-  } catch (err) {
-    console.error('Error parsing VoteRequest payload:', err.message);
-    return null;
-  }
-}
-
-/**
- * Parse named field format
- */
-function parseNamedFields(payload) {
-  const action = payload.action;
-  const reason = payload.reason;
-  const voteBefore = payload.voteBefore;
-  const votes = payload.votes;
-  const trackingCid = payload.trackingCid;
-  
-  const actionType = action?.tag || action?.constructor || 
-    Object.keys(action || {}).find(k => k.startsWith('ARC_') || k.startsWith('SRARC_') || k.startsWith('CRARC_'));
-  
-  let actionDetails = action;
-  let innerActionType = actionType;
-  
-  if (action?.value?.dsoAction) {
-    innerActionType = action.value.dsoAction.tag || 
-      Object.keys(action.value.dsoAction).find(k => k.startsWith('SRARC_'));
-    actionDetails = action.value.dsoAction;
-  } else if (action?.dsoAction) {
-    innerActionType = action.dsoAction.tag || 
-      Object.keys(action.dsoAction).find(k => k.startsWith('SRARC_'));
-    actionDetails = action.dsoAction;
-  }
-  
-  const parsedVotes = parseVotes(votes);
-  
-  return {
-    dso: payload.dso,
-    requester: payload.requester,
-    actionType: innerActionType || actionType,
-    actionDetails,
-    reasonUrl: reason?.url || reason?.text || '',
-    reasonBody: reason?.body || reason?.description || '',
-    voteBefore,
-    votes: parsedVotes,
-    trackingCid: trackingCid?.value || trackingCid || null,
-  };
-}
-
-/**
- * Parse array field format (older protobuf-style)
- */
-function parseArrayFields(fields) {
-  const getField = (idx) => fields[idx];
-  
-  const dso = getField(0);
-  const requester = getField(1);
-  const action = getField(2);
-  const reason = getField(3);
-  const voteBefore = getField(4);
-  const votes = getField(5);
-  const trackingCid = getField(6);
-  
-  const actionType = action?.tag || (typeof action === 'object' ? Object.keys(action)[0] : null);
-  
-  return {
-    dso,
-    requester,
-    actionType,
-    actionDetails: action,
-    reasonUrl: reason?.url || '',
-    reasonBody: reason?.body || '',
-    voteBefore,
-    votes: parseVotes(votes),
-    trackingCid,
-  };
-}
-
-/**
- * Parse votes from various formats
- */
-function parseVotes(votes) {
-  if (!votes) return [];
-  
-  const result = [];
-  
-  if (Array.isArray(votes)) {
-    for (const vote of votes) {
-      if (Array.isArray(vote) && vote.length >= 2) {
-        const [svName, voteData] = vote;
-        const sv = voteData?.sv || svName;
-        const accept = voteData?.accept === true;
-        const reasonUrl = voteData?.reason?.url || '';
-        const reasonBody = voteData?.reason?.body || '';
-        const castAt = voteData?.optCastAt || null;
-        
-        result.push({
-          svName,
-          sv,
-          accept: Boolean(accept),
-          reasonUrl: reasonUrl || '',
-          reasonBody: reasonBody || '',
-          castAt,
-        });
-      }
-    }
-  } else if (typeof votes === 'object') {
-    for (const [svName, voteData] of Object.entries(votes)) {
-      if (voteData && typeof voteData === 'object') {
-        const sv = voteData.sv || svName;
-        const accept = voteData.accept === true;
-        const reasonUrl = voteData.reason?.url || '';
-        const reasonBody = voteData.reason?.body || '';
-        const castAt = voteData.optCastAt || null;
-        
-        result.push({
-          svName,
-          sv,
-          accept: Boolean(accept),
-          reasonUrl: reasonUrl || '',
-          reasonBody: reasonBody || '',
-          castAt,
-        });
-      }
-    }
-  }
-  
-  return result;
-}
-
-/**
  * Generate a unique proposal key from action type and reason URL
  */
 function getProposalKey(actionType, reasonUrl) {
@@ -191,13 +37,14 @@ function getProposalKey(actionType, reasonUrl) {
  * Determine proposal status based on votes and expiry
  */
 function determineStatus(proposal, now = new Date()) {
-  const voteBeforeDate = proposal.vote_before_timestamp ? 
-    new Date(proposal.vote_before_timestamp) : null;
-  
+  const voteBeforeDate = proposal.vote_before_timestamp
+    ? new Date(proposal.vote_before_timestamp)
+    : null;
+
   if (proposal.tracking_cid && proposal.votes_for > proposal.votes_against) {
     return 'approved';
   }
-  
+
   if (voteBeforeDate && voteBeforeDate < now) {
     if (proposal.votes_for > proposal.votes_against) {
       return 'approved';
@@ -207,7 +54,7 @@ function determineStatus(proposal, now = new Date()) {
       return 'expired';
     }
   }
-  
+
   return 'pending';
 }
 
@@ -232,84 +79,6 @@ export function invalidateCache() {
   console.log('🗳️ Governance proposal cache invalidated (will re-query from DB)');
 }
 
-/**
- * Scan binary files for VoteRequest created events
- */
-async function scanFilesForVoteRequests(files) {
-  const records = [];
-  let filesScanned = 0;
-  
-  for (const filePath of files) {
-    try {
-      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(DATA_PATH, filePath);
-      
-      if (!fs.existsSync(fullPath)) continue;
-      
-      const events = await binaryReader.readBinaryFile(fullPath);
-      filesScanned++;
-      
-      if (indexingProgress) {
-        indexingProgress.current = filesScanned;
-        indexingProgress.records = records.length;
-      }
-      
-      for (const event of events) {
-        if (event.event_type !== 'created') continue;
-        
-        const templateId = event.template_id || '';
-        if (!templateId.includes('VoteRequest')) continue;
-        
-        const payload = event.create_arguments || event.payload;
-        if (!payload) continue;
-        
-        const parsed = parseVoteRequestPayload(payload);
-        if (!parsed) continue;
-        
-        records.push({
-          event_id: event.event_id,
-          contract_id: event.contract_id,
-          template_id: templateId,
-          timestamp: event.created_at || event.timestamp,
-          ...parsed,
-        });
-      }
-    } catch (err) {
-      console.error(`Error scanning file ${filePath}:`, err.message);
-    }
-  }
-  
-  return { records, filesScanned };
-}
-
-/**
- * Full scan of all binary files (fallback when template index unavailable)
- */
-async function scanAllFilesForVoteRequests() {
-  const dataDir = DATA_PATH;
-  const allFiles = [];
-  
-  const findFiles = async (dir) => {
-    try {
-      const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory() && !entry.name.startsWith('.')) {
-          await findFiles(fullPath);
-        } else if (entry.name.endsWith('.pb.zst')) {
-          allFiles.push(fullPath);
-        }
-      }
-    } catch (err) {
-      // Ignore permission errors
-    }
-  };
-  
-  await findFiles(dataDir);
-  console.log(`   Found ${allFiles.length} binary files to scan`);
-  
-  return scanFilesForVoteRequests(allFiles);
-}
-
 // SQL helpers
 function sqlStr(val) {
   if (val === null || val === undefined) return 'NULL';
@@ -327,7 +96,63 @@ function sqlJson(val) {
 }
 
 /**
- * Build the governance proposal index by scanning VoteRequest events
+ * Parse reason from vote_requests table (can be JSON string or plain string)
+ * Falls back to parsing from full payload if needed
+ */
+function parseReasonFromRow(reasonStr, payloadStr) {
+  // Try reason column first
+  if (reasonStr) {
+    if (typeof reasonStr === 'string') {
+      try {
+        const parsed = JSON.parse(reasonStr);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            reasonUrl: parsed.url || parsed.text || '',
+            reasonBody: parsed.body || parsed.description || '',
+          };
+        }
+      } catch {
+        // Not JSON, treat as plain text/URL
+        return { reasonUrl: reasonStr, reasonBody: '' };
+      }
+    }
+  }
+
+  // Fallback: try extracting from full payload
+  if (payloadStr) {
+    try {
+      const payload = typeof payloadStr === 'string' ? JSON.parse(payloadStr) : payloadStr;
+      const reason = payload?.reason;
+      if (reason) {
+        return {
+          reasonUrl: reason.url || reason.text || '',
+          reasonBody: reason.body || reason.description || '',
+        };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return { reasonUrl: '', reasonBody: '' };
+}
+
+/**
+ * Parse votes from JSON string
+ */
+function parseVotesFromRow(votesStr) {
+  if (!votesStr) return [];
+  if (typeof votesStr !== 'string') return Array.isArray(votesStr) ? votesStr : [];
+  try {
+    const parsed = JSON.parse(votesStr);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build the governance proposal index from persistent vote_requests table
  * Persists results to DuckDB
  */
 export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false } = {}) {
@@ -354,7 +179,7 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
     proposals: 0,
     startedAt: new Date().toISOString(),
   };
-  console.log('\n🗳️ Building governance proposal index (persistent)...');
+  console.log('\n🗳️ Building governance proposal index (from vote_requests table)...');
 
   try {
     await ensureGovernanceTables();
@@ -362,7 +187,6 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
     const startTime = Date.now();
 
     // Build proposals FROM the persistent VoteRequest index (fast + consistent)
-    // rather than rescanning binary files.
     const countRow = await queryOne(`SELECT COUNT(*) as count FROM vote_requests`);
     const totalVoteRequests = Number(countRow?.count || 0);
 
@@ -374,6 +198,8 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
 
     if (totalVoteRequests === 0) {
       console.log('   ⚠️ vote_requests table is empty; build the VoteRequest index first');
+      indexingInProgress = false;
+      indexingProgress = null;
       return {
         summary: {
           voteRequestsScanned: 0,
@@ -396,7 +222,8 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
         vote_before,
         votes,
         vote_count,
-        tracking_cid
+        tracking_cid,
+        payload
       FROM vote_requests
       ORDER BY effective_at DESC
       LIMIT ${Number(limit) || 10000}
@@ -409,37 +236,11 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
     const proposalMap = new Map();
     const now = new Date();
 
-    const parseReason = (reasonStr) => {
-      if (!reasonStr) return { reasonUrl: '', reasonBody: '' };
-      if (typeof reasonStr !== 'string') return { reasonUrl: String(reasonStr), reasonBody: '' };
-
-      // Often stored as JSON string: { url, body }
-      try {
-        const parsed = JSON.parse(reasonStr);
-        if (parsed && typeof parsed === 'object') {
-          return {
-            reasonUrl: parsed.url || parsed.text || '',
-            reasonBody: parsed.body || parsed.description || '',
-          };
-        }
-      } catch {
-        // ignore
-      }
-
-      // Fallback: treat as URL/text
-      return { reasonUrl: reasonStr, reasonBody: '' };
-    };
-
-    const parseVotes = (votesStr) => {
-      if (!votesStr) return [];
-      if (typeof votesStr !== 'string') return Array.isArray(votesStr) ? votesStr : [];
-      try {
-        const parsed = JSON.parse(votesStr);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    };
+    // Log sample of first few records for debugging
+    if (voteRequestRows.length > 0) {
+      const sample = voteRequestRows[0];
+      console.log(`   Sample record: action_tag=${sample.action_tag}, reason=${(sample.reason || '').substring(0, 50)}...`);
+    }
 
     for (let i = 0; i < voteRequestRows.length; i++) {
       const row = voteRequestRows[i];
@@ -451,20 +252,20 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
       }
 
       const actionType = row.action_tag || 'unknown';
-      const { reasonUrl, reasonBody } = parseReason(row.reason);
+      const { reasonUrl, reasonBody } = parseReasonFromRow(row.reason, row.payload);
       const key = getProposalKey(actionType, reasonUrl);
 
       const ts = row.effective_at ? new Date(row.effective_at).getTime() : 0;
       const existing = proposalMap.get(key);
 
       if (!existing || ts > existing.latest_timestamp) {
-        const votes = parseVotes(row.votes);
-        let votesFor = 0;
-        let votesAgainst = 0;
-        for (const v of votes) {
-          if (v?.accept === true) votesFor++;
-          else if (v?.accept === false) votesAgainst++;
-        }
+      const votes = parseVotesFromRow(row.votes);
+      let votesFor = 0;
+      let votesAgainst = 0;
+      for (const v of votes) {
+        if (v?.accept === true) votesFor++;
+        else if (v?.accept === false) votesAgainst++;
+      }
 
         let voteBeforeTimestamp = null;
         if (row.vote_before) {
