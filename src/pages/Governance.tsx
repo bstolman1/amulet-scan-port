@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, Search, Filter, RefreshCw, ExternalLink } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,19 +12,15 @@ import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
-import { useGovernanceProposals, useProposalStats, useActionTypes, formatActionType, getStatusColor as getIndexedStatusColor, type Proposal } from "@/hooks/use-governance-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
 import { VoteRequestIndexBanner } from "@/components/VoteRequestIndexBanner";
-import { GovernanceIndexBanner } from "@/components/GovernanceIndexBanner";
 
 // Safe date formatter that won't crash on invalid dates
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
@@ -36,172 +32,6 @@ const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = 
   } catch {
     return "N/A";
   }
-};
-
-// Indexed Proposal Card Component
-const IndexedProposalCard = ({ proposal }: { proposal: Proposal }) => {
-  const getStatusIcon = (status: Proposal['status']) => {
-    switch (status) {
-      case 'approved': return <CheckCircle className="h-4 w-4" />;
-      case 'rejected': return <XCircle className="h-4 w-4" />;
-      case 'pending': return <Clock className="h-4 w-4" />;
-      default: return <Vote className="h-4 w-4" />;
-    }
-  };
-
-  return (
-    <Collapsible>
-      <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className={cn(
-              "p-2 rounded-lg shrink-0",
-              proposal.status === 'approved' && "bg-green-500/20",
-              proposal.status === 'rejected' && "bg-red-500/20",
-              proposal.status === 'pending' && "bg-yellow-500/20",
-              proposal.status === 'expired' && "bg-muted",
-            )}>
-              {getStatusIcon(proposal.status)}
-            </div>
-            <div className="min-w-0 flex-1">
-              <h4 className="font-semibold text-lg truncate">{formatActionType(proposal.actionType)}</h4>
-              <p className="text-sm text-muted-foreground truncate">
-                Requested by: <span className="font-medium text-foreground">{proposal.requester}</span>
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="flex items-center gap-1 text-sm">
-              <span className="text-green-400 font-medium">{proposal.votesFor}</span>
-              <span className="text-muted-foreground">/</span>
-              <span className="text-red-400 font-medium">{proposal.votesAgainst}</span>
-            </div>
-            <Badge className={cn("text-xs border", getIndexedStatusColor(proposal.status))}>
-              {getStatusIcon(proposal.status)}
-              <span className="ml-1 capitalize">{proposal.status}</span>
-            </Badge>
-            <span className="text-xs text-muted-foreground whitespace-nowrap hidden sm:inline">
-              {safeFormatDate(proposal.rawTimestamp, "MMM d, yyyy")}
-            </span>
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm">
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-            </CollapsibleTrigger>
-          </div>
-        </div>
-
-        {/* Reason Preview */}
-        {proposal.reasonBody && (
-          <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
-            {proposal.reasonBody}
-          </p>
-        )}
-
-        {/* Reason URL */}
-        {proposal.reasonUrl && (
-          <a 
-            href={proposal.reasonUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline mb-3"
-          >
-            <ExternalLink className="h-3 w-3" />
-            {proposal.reasonUrl.length > 60 ? proposal.reasonUrl.slice(0, 60) + '...' : proposal.reasonUrl}
-          </a>
-        )}
-
-        <CollapsibleContent className="mt-4 space-y-4">
-          {/* Action Details */}
-          {proposal.actionDetails && typeof proposal.actionDetails === "object" && (
-            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
-              <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
-              <pre className="text-xs font-mono overflow-x-auto max-h-48">
-                {JSON.stringify(proposal.actionDetails, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          {/* Full Reason */}
-          {proposal.reasonBody && (
-            <div className="p-3 rounded-lg bg-background/30 border border-border/30">
-              <p className="text-sm text-muted-foreground mb-1 font-semibold">Full Reason:</p>
-              <p className="text-sm whitespace-pre-wrap">{proposal.reasonBody}</p>
-            </div>
-          )}
-
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-3 rounded-lg bg-background/50">
-              <p className="text-xs text-muted-foreground mb-1">Votes For</p>
-              <p className="text-lg font-bold text-green-400">{proposal.votesFor}</p>
-            </div>
-            <div className="p-3 rounded-lg bg-background/50">
-              <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
-              <p className="text-lg font-bold text-red-400">{proposal.votesAgainst}</p>
-            </div>
-            <div className="p-3 rounded-lg bg-background/50">
-              <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
-              <p className="text-xs font-mono">{safeFormatDate(proposal.voteBefore)}</p>
-            </div>
-            <div className="p-3 rounded-lg bg-background/50">
-              <p className="text-xs text-muted-foreground mb-1">Last Updated</p>
-              <p className="text-xs font-mono">{safeFormatDate(proposal.rawTimestamp)}</p>
-            </div>
-          </div>
-
-          {/* Votes Cast */}
-          {proposal.votes?.length > 0 && (
-            <div>
-              <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                Votes Cast ({proposal.votes.length}):
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
-                {proposal.votes.map((vote, idx) => (
-                  <div 
-                    key={idx}
-                    className={cn(
-                      "p-2 rounded border text-sm",
-                      vote.accept 
-                        ? "bg-green-500/5 border-green-500/30" 
-                        : "bg-red-500/5 border-red-500/30"
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium truncate">{vote.svName}</span>
-                      <Badge 
-                        variant="outline" 
-                        className={cn(
-                          "text-xs",
-                          vote.accept ? "border-green-500 text-green-400" : "border-red-500 text-red-400"
-                        )}
-                      >
-                        {vote.accept ? "✓ Accept" : "✗ Reject"}
-                      </Badge>
-                    </div>
-                    {vote.reasonBody && (
-                      <p className="text-xs text-muted-foreground italic truncate">"{vote.reasonBody}"</p>
-                    )}
-                    {vote.castAt && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Cast: {safeFormatDate(vote.castAt)}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Contract ID */}
-          <div className="p-3 rounded-lg bg-muted/30 border border-border/30">
-            <p className="text-xs text-muted-foreground mb-1">Contract ID:</p>
-            <p className="text-xs font-mono break-all">{proposal.latestContractId}</p>
-          </div>
-        </CollapsibleContent>
-      </div>
-    </Collapsible>
-  );
 };
 
 const Governance = () => {
@@ -285,30 +115,6 @@ const Governance = () => {
     fromIndex: uniqueFromIndex,
     dataSource: uniqueDataSource,
   } = useUniqueProposals(votingThreshold);
-
-  // Indexed Proposals state
-  const [indexedSearch, setIndexedSearch] = useState("");
-  const [indexedStatusFilter, setIndexedStatusFilter] = useState<string>("all");
-  const [indexedActionFilter, setIndexedActionFilter] = useState<string>("all");
-  const [indexedPage, setIndexedPage] = useState(0);
-  const indexedLimit = 20;
-
-  // Indexed Proposals from governance indexer
-  const { 
-    data: indexedProposalsData, 
-    isLoading: indexedLoading, 
-    error: indexedError,
-    refetch: refetchIndexed,
-  } = useGovernanceProposals({
-    limit: indexedLimit,
-    offset: indexedPage * indexedLimit,
-    status: indexedStatusFilter === "all" ? null : indexedStatusFilter as any,
-    actionType: indexedActionFilter === "all" ? null : indexedActionFilter,
-    search: indexedSearch || null,
-  });
-
-  const { data: indexedStats } = useProposalStats();
-  const { data: actionTypes } = useActionTypes();
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -505,11 +311,8 @@ const Governance = () => {
           </Alert>
         )}
 
-        {/* Index Banners */}
-        <div className="space-y-3">
-          <GovernanceIndexBanner />
-          <VoteRequestIndexBanner />
-        </div>
+        {/* VoteRequest Index Banner */}
+        <VoteRequestIndexBanner />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -600,17 +403,9 @@ const Governance = () => {
         </Alert>
 
         {/* Proposals List */}
-        <Tabs defaultValue="indexed" className="space-y-6">
-          <TabsList className="flex-wrap h-auto gap-1">
-            <TabsTrigger value="indexed">
-              Indexed Proposals
-              {indexedStats?.total ? (
-                <Badge variant="secondary" className="ml-2 text-xs">
-                  {indexedStats.total}
-                </Badge>
-              ) : null}
-            </TabsTrigger>
-            <TabsTrigger value="active">Active (ACS)</TabsTrigger>
+        <Tabs defaultValue="active" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="active">Active Proposals</TabsTrigger>
             <TabsTrigger value="unique">
               Unique Proposals
               {uniqueStats.total > 0 && (
@@ -621,176 +416,6 @@ const Governance = () => {
             </TabsTrigger>
             <TabsTrigger value="history">Governance History</TabsTrigger>
           </TabsList>
-
-          {/* Indexed Proposals Tab - From Binary File Index */}
-          <TabsContent value="indexed">
-            <Card className="glass-card">
-              <div className="p-6">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-                  <div>
-                    <h3 className="text-xl font-bold flex items-center gap-2">
-                      <Database className="h-5 w-5" />
-                      Indexed Governance Proposals
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Historical proposals extracted from binary ledger files
-                    </p>
-                  </div>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => refetchIndexed()}
-                    disabled={indexedLoading}
-                  >
-                    <RefreshCw className={cn("h-4 w-4 mr-2", indexedLoading && "animate-spin")} />
-                    Refresh
-                  </Button>
-                </div>
-
-                {/* Stats Row */}
-                {indexedStats && (
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
-                    <div className="p-3 rounded-lg bg-muted/30 text-center">
-                      <div className="text-2xl font-bold">{indexedStats.total}</div>
-                      <div className="text-xs text-muted-foreground">Total</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-green-500/10 text-center">
-                      <div className="text-2xl font-bold text-green-400">{indexedStats.byStatus?.approved || 0}</div>
-                      <div className="text-xs text-muted-foreground">Approved</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-red-500/10 text-center">
-                      <div className="text-2xl font-bold text-red-400">{indexedStats.byStatus?.rejected || 0}</div>
-                      <div className="text-xs text-muted-foreground">Rejected</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-yellow-500/10 text-center">
-                      <div className="text-2xl font-bold text-yellow-400">{indexedStats.byStatus?.pending || 0}</div>
-                      <div className="text-xs text-muted-foreground">Pending</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-muted/50 text-center">
-                      <div className="text-2xl font-bold text-muted-foreground">{indexedStats.byStatus?.expired || 0}</div>
-                      <div className="text-xs text-muted-foreground">Expired</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Filters */}
-                <div className="flex flex-col sm:flex-row gap-3 mb-6">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search proposals..."
-                      value={indexedSearch}
-                      onChange={(e) => {
-                        setIndexedSearch(e.target.value);
-                        setIndexedPage(0);
-                      }}
-                      className="pl-10"
-                    />
-                  </div>
-                  <Select 
-                    value={indexedStatusFilter} 
-                    onValueChange={(v) => {
-                      setIndexedStatusFilter(v);
-                      setIndexedPage(0);
-                    }}
-                  >
-                    <SelectTrigger className="w-[140px]">
-                      <Filter className="h-4 w-4 mr-2" />
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-popover">
-                      <SelectItem value="all">All Status</SelectItem>
-                      <SelectItem value="approved">Approved</SelectItem>
-                      <SelectItem value="rejected">Rejected</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="expired">Expired</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select 
-                    value={indexedActionFilter} 
-                    onValueChange={(v) => {
-                      setIndexedActionFilter(v);
-                      setIndexedPage(0);
-                    }}
-                  >
-                    <SelectTrigger className="w-[200px]">
-                      <SelectValue placeholder="Action Type" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-popover max-h-[300px]">
-                      <SelectItem value="all">All Actions</SelectItem>
-                      {actionTypes?.map((at) => (
-                        <SelectItem key={at.type} value={at.type}>
-                          {formatActionType(at.type)} ({at.count})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Proposals List */}
-                {indexedError ? (
-                  <div className="text-center py-12">
-                    <AlertTriangle className="h-12 w-12 text-destructive mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-2">Failed to load indexed proposals</p>
-                    <p className="text-xs text-muted-foreground">
-                      Ensure the server is running and the governance indexer is enabled
-                    </p>
-                  </div>
-                ) : indexedLoading ? (
-                  <div className="space-y-4">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-32 w-full" />
-                    ))}
-                  </div>
-                ) : !indexedProposalsData?.proposals?.length ? (
-                  <div className="text-center py-12">
-                    <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-2">No proposals found</p>
-                    <p className="text-sm text-muted-foreground">
-                      {indexedSearch || indexedStatusFilter !== "all" || indexedActionFilter !== "all" 
-                        ? "Try adjusting your filters" 
-                        : "Run the governance indexer to populate proposals"}
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="space-y-4">
-                      {indexedProposalsData.proposals.map((proposal: Proposal) => (
-                        <IndexedProposalCard key={proposal.proposalKey} proposal={proposal} />
-                      ))}
-                    </div>
-
-                    {/* Pagination */}
-                    {indexedProposalsData.pagination && (
-                      <div className="flex items-center justify-between mt-6 pt-4 border-t border-border/50">
-                        <p className="text-sm text-muted-foreground">
-                          Showing {indexedPage * indexedLimit + 1}-{Math.min((indexedPage + 1) * indexedLimit, indexedProposalsData.pagination.total)} of {indexedProposalsData.pagination.total}
-                        </p>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setIndexedPage(p => Math.max(0, p - 1))}
-                            disabled={indexedPage === 0}
-                          >
-                            Previous
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setIndexedPage(p => p + 1)}
-                            disabled={!indexedProposalsData.pagination.hasMore}
-                          >
-                            Next
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </Card>
-          </TabsContent>
 
           <TabsContent value="active">
             <Card className="glass-card">

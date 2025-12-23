@@ -4,36 +4,10 @@
  * STREAMING-ONLY: Processes records in batches without loading entire file into memory.
  */
 
-import { query, DATA_PATH } from '../duckdb/connection.js';
+import { query } from '../duckdb/connection.js';
 import { decodeFile } from './decoder.js';
-import path from 'path';
 
 const BATCH_SIZE = 2000; // Records per insert batch
-
-function normalizeRawFilePath(filePath) {
-  if (process.platform === 'win32' && typeof filePath === 'string' && filePath.startsWith('/')) {
-    // Extract portion after /data/raw/ (handles /home/.../data/raw/....)
-    const dataRawMatch = filePath.match(/\/data\/raw\/(.+)$/);
-    if (dataRawMatch) {
-      return path.join(DATA_PATH, dataRawMatch[1]);
-    }
-
-    // Extract from migration= partition path
-    const migrationIdx = filePath.indexOf('migration=');
-    if (migrationIdx !== -1) {
-      return path.join(DATA_PATH, filePath.slice(migrationIdx));
-    }
-
-    // Last resort: treat everything after "raw/" as relative
-    const parts = filePath.split('/');
-    const rawIdx = parts.indexOf('raw');
-    if (rawIdx !== -1 && rawIdx < parts.length - 1) {
-      return path.join(DATA_PATH, parts.slice(rawIdx + 1).join(path.sep));
-    }
-  }
-
-  return filePath;
-}
 
 /**
  * Insert a batch of events into events_raw
@@ -128,8 +102,6 @@ function sqlJson(val) {
 async function ingestOneFile(fileRow) {
   const { file_id, file_path, file_type } = fileRow;
   
-  const normalizedPath = normalizeRawFilePath(file_path);
-  
   try {
     const insertFn = file_type === 'events' ? insertEventBatch : insertUpdateBatch;
     
@@ -139,7 +111,7 @@ async function ingestOneFile(fileRow) {
     let maxTs = null;
     
     // Stream records and insert in batches
-    for await (const record of decodeFile(normalizedPath)) {
+    for await (const record of decodeFile(file_path)) {
       batch.push(record);
       totalCount++;
       

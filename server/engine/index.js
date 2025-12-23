@@ -40,13 +40,3 @@ export {
   isTemplateIndexingInProgress,
   getTemplateIndexingProgress,
 } from './template-file-index.js';
-export {
-  buildGovernanceIndex,
-  getProposalStats,
-  queryProposals,
-  getProposalByKey,
-  getProposalByContractId,
-  getIndexingProgress as getGovernanceIndexingProgress,
-  isGovernanceIndexingInProgress,
-  invalidateCache as invalidateGovernanceCache,
-} from './governance-indexer.js';

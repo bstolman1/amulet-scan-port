@@ -25,24 +25,26 @@ const DEFAULT_DUCKDB_PORT = 3001;
 const CLOUDFLARE_TUNNEL_URL = 'https://nancy-kinds-extremely-creating.trycloudflare.com';
 
 function computeDuckDbApiUrl(): string {
+  // If Cloudflare tunnel is configured, always use it (works from any environment)
+  if (CLOUDFLARE_TUNNEL_URL) {
+    return CLOUDFLARE_TUNNEL_URL;
+  }
+  
   if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
 
   const host = window.location.hostname;
+  const protocol = window.location.protocol; // "http:" | "https:"
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
 
-  // Localhost UI → call localhost API directly
   if (isLocalHost) {
     return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
   }
 
-  // Remote (Lovable preview / deployed) → use Cloudflare tunnel if configured
-  if (CLOUDFLARE_TUNNEL_URL) {
-    return CLOUDFLARE_TUNNEL_URL;
-  }
-
-  // Fallback: same host with API port (unlikely to work remotely without tunnel)
-  const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
-  return `${protocol}://${host}:${DEFAULT_DUCKDB_PORT}`;
+  // In Lovable preview / deployed environments the UI is typically served over HTTPS.
+  // Using the same protocol avoids mixed-content blocks (HTTPS page calling HTTP API).
+  // Note: This assumes the DuckDB API is reachable on the same host + port.
+  const baseProtocol = protocol === 'https:' ? 'https' : 'http';
+  return `${baseProtocol}://${host}:${DEFAULT_DUCKDB_PORT}`;
 }
 
 const config: BackendConfig = {
