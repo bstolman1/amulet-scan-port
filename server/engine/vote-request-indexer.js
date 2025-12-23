@@ -5,6 +5,9 @@
  * a persistent table for instant historical queries.
  * 
  * Uses template-to-file index when available to dramatically reduce scan time.
+ * 
+ * Semantic Key: Each proposal gets a semantic_key that combines action_type + subject
+ * to link re-submitted proposals together across different contract IDs.
  */
 
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
@@ -20,6 +23,108 @@ import {
 let indexingInProgress = false;
 let indexingProgress = null;
 let lockRelease = null;
+
+/**
+ * Extract the subject/target of a governance action for semantic grouping.
+ * This is the "who" or "what" being acted upon.
+ * 
+ * Examples:
+ * - GrantFeaturedAppRight → provider party
+ * - UpdateSvRewardWeight → svParty
+ * - RevokeFeaturedAppRight → rightCid
+ * - SetConfig → config hash
+ */
+function extractActionSubject(actionDetails) {
+  if (!actionDetails) return null;
+  
+  try {
+    // Navigate to the inner action value
+    const dsoAction = actionDetails.value?.dsoAction?.value || 
+                      actionDetails.value?.dsoAction ||
+                      actionDetails.value?.value || 
+                      actionDetails.value ||
+                      actionDetails;
+    
+    // GrantFeaturedAppRight - provider is the subject
+    if (dsoAction?.provider) {
+      return `provider:${dsoAction.provider}`;
+    }
+    
+    // RevokeFeaturedAppRight - rightCid is the subject
+    if (dsoAction?.rightCid) {
+      return `right:${dsoAction.rightCid}`;
+    }
+    
+    // UpdateSvRewardWeight - svParty is the subject
+    if (dsoAction?.svParty) {
+      return `sv:${dsoAction.svParty}`;
+    }
+    
+    // CreateUnallocatedUnclaimedActivityRecord - beneficiary is the subject
+    if (dsoAction?.beneficiary) {
+      return `beneficiary:${dsoAction.beneficiary}`;
+    }
+    
+    // OnboardValidator / OffboardValidator - validator party
+    if (dsoAction?.validator) {
+      return `validator:${dsoAction.validator}`;
+    }
+    
+    // SetConfig or AddFutureAmuletConfigSchedule - hash the config for grouping
+    if (dsoAction?.newSchedule || dsoAction?.config) {
+      const configStr = JSON.stringify(dsoAction.newSchedule || dsoAction.config);
+      return `config:${simpleHash(configStr)}`;
+    }
+    
+    // Election-related - election request CID
+    if (dsoAction?.electionRequestCid) {
+      return `election:${dsoAction.electionRequestCid}`;
+    }
+    
+    // Fallback: no specific subject found
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Build a semantic key for a proposal that survives re-submissions.
+ * Format: action_type::subject
+ * 
+ * This allows grouping proposals that target the same thing even if
+ * they have different contract IDs.
+ */
+function buildSemanticKey(actionTag, actionDetails, requester) {
+  const subject = extractActionSubject(actionDetails);
+  
+  // If we have a specific subject, use it
+  if (subject) {
+    return `${actionTag || 'unknown'}::${subject}`;
+  }
+  
+  // Fallback: use requester as part of the key (less precise but still groups)
+  if (requester) {
+    return `${actionTag || 'unknown'}::requester:${requester}`;
+  }
+  
+  // Last resort: just the action type
+  return actionTag || 'unknown';
+}
+
+/**
+ * Simple hash function for deduplication
+ */
+function simpleHash(str) {
+  if (!str) return '0';
+  let hash = 0;
+  for (let i = 0; i < Math.min(str.length, 200); i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+}
 
 async function acquireIndexLock() {
   // Prevent multi-process index builds (e.g., two servers running, or the process restarting mid-build)
@@ -183,6 +288,140 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
   };
 
   // Parse JSON fields (DuckDB may return either JSON objects or strings depending on insertion/casting)
+  return results.map(r => ({
+    ...r,
+    action_value: safeJsonParse(r.action_value),
+    votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
+    payload: safeJsonParse(r.payload),
+  }));
+}
+
+/**
+ * Query governance proposals grouped by semantic_key.
+ * Returns the latest VoteRequest for each unique semantic_key, with timeline info.
+ */
+export async function queryGovernanceProposals({ limit = 100, status = 'all', offset = 0 } = {}) {
+  let statusFilter = '';
+  if (status === 'active' || status === 'in_progress') {
+    statusFilter = "WHERE status IN ('active', 'in_progress')";
+  } else if (status === 'executed' || status === 'approved') {
+    statusFilter = "WHERE status = 'executed'";
+  } else if (status === 'rejected') {
+    statusFilter = "WHERE status = 'rejected'";
+  } else if (status === 'expired') {
+    statusFilter = "WHERE status = 'expired'";
+  } else if (status === 'historical' || status === 'completed') {
+    statusFilter = "WHERE status IN ('executed', 'rejected', 'expired', 'historical')";
+  }
+
+  // Use window functions to get the latest record per semantic_key
+  // along with count of related proposals (re-submissions)
+  const results = await query(`
+    WITH ranked AS (
+      SELECT 
+        *,
+        ROW_NUMBER() OVER (PARTITION BY COALESCE(semantic_key, stable_id) ORDER BY effective_at DESC) as rn,
+        COUNT(*) OVER (PARTITION BY COALESCE(semantic_key, stable_id)) as related_count,
+        MIN(effective_at) OVER (PARTITION BY COALESCE(semantic_key, stable_id)) as first_seen,
+        MAX(effective_at) OVER (PARTITION BY COALESCE(semantic_key, stable_id)) as last_seen
+      FROM vote_requests
+      ${statusFilter}
+    )
+    SELECT 
+      event_id,
+      stable_id,
+      contract_id,
+      template_id,
+      effective_at,
+      status,
+      is_closed,
+      action_tag,
+      action_value,
+      requester,
+      reason,
+      votes,
+      vote_count,
+      vote_before,
+      target_effective_at,
+      tracking_cid,
+      dso,
+      payload,
+      semantic_key,
+      action_subject,
+      related_count,
+      first_seen,
+      last_seen
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY effective_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const safeJsonParse = (val) => {
+    if (val === null || val === undefined) return null;
+    if (typeof val !== 'string') return val;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  };
+
+  return results.map(r => ({
+    ...r,
+    action_value: safeJsonParse(r.action_value),
+    votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
+    payload: safeJsonParse(r.payload),
+    // Timeline info
+    timeline: {
+      firstSeen: r.first_seen,
+      lastSeen: r.last_seen,
+      relatedCount: Number(r.related_count) || 1,
+    }
+  }));
+}
+
+/**
+ * Get all VoteRequests related to a semantic_key (proposal history/timeline)
+ */
+export async function queryProposalTimeline(semanticKey) {
+  const results = await query(`
+    SELECT 
+      event_id,
+      stable_id,
+      contract_id,
+      template_id,
+      effective_at,
+      status,
+      is_closed,
+      action_tag,
+      action_value,
+      requester,
+      reason,
+      votes,
+      vote_count,
+      vote_before,
+      target_effective_at,
+      tracking_cid,
+      dso,
+      payload,
+      semantic_key,
+      action_subject
+    FROM vote_requests
+    WHERE semantic_key = '${semanticKey.replace(/'/g, "''")}'
+    ORDER BY effective_at DESC
+  `);
+
+  const safeJsonParse = (val) => {
+    if (val === null || val === undefined) return null;
+    if (typeof val !== 'string') return val;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  };
+
   return results.map(r => ({
     ...r,
     action_value: safeJsonParse(r.action_value),
@@ -583,6 +822,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         ? (typeof rawReason === 'string' ? rawReason : JSON.stringify(rawReason))
         : null;
 
+      // Build semantic key for proposal grouping
+      const actionTag = event.payload?.action?.tag || null;
+      const actionDetails = event.payload?.action || null;
+      const requester = event.payload?.requester || null;
+      const semanticKey = buildSemanticKey(actionTag, actionDetails, requester);
+      const actionSubject = extractActionSubject(actionDetails);
+
       const voteRequest = {
         event_id: event.event_id,
         // Always set stable_id to a non-null identifier (some older records may lack contract_id)
@@ -592,9 +838,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         effective_at: event.effective_at,
         status,
         is_closed: isClosed,
-        action_tag: event.payload?.action?.tag || null,
-        action_value: event.payload?.action?.value ? JSON.stringify(event.payload.action.value) : null,
-        requester: event.payload?.requester || null,
+        action_tag: actionTag,
+        action_value: actionDetails?.value ? JSON.stringify(actionDetails.value) : null,
+        requester: requester,
         reason: reasonStr,
         // Use final votes from archived event if available, otherwise use created event votes
         votes: finalVotes ? JSON.stringify(finalVotes) : '[]',
@@ -604,6 +850,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         tracking_cid: event.payload?.trackingCid || null,
         dso: event.payload?.dso || null,
         payload: event.payload ? JSON.stringify(event.payload) : null,
+        semantic_key: semanticKey,
+        action_subject: actionSubject,
       };
 
       try {
@@ -620,7 +868,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             status, is_closed, action_tag, action_value,
             requester, reason, votes, vote_count,
             vote_before, target_effective_at, tracking_cid, dso,
-            payload, updated_at
+            payload, semantic_key, action_subject, updated_at
           ) VALUES (
             '${escapeStr(voteRequest.event_id)}',
             ${stableIdSql},
@@ -640,6 +888,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.tracking_cid ? `'${escapeStr(voteRequest.tracking_cid)}'` : 'NULL'},
             ${voteRequest.dso ? `'${escapeStr(voteRequest.dso)}'` : 'NULL'},
             ${payloadStr ? `'${payloadStr}'` : 'NULL'},
+            ${voteRequest.semantic_key ? `'${escapeStr(voteRequest.semantic_key)}'` : 'NULL'},
+            ${voteRequest.action_subject ? `'${escapeStr(voteRequest.action_subject)}'` : 'NULL'},
             now()
           )
           ON CONFLICT (event_id) DO UPDATE SET
@@ -660,6 +910,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             tracking_cid = EXCLUDED.tracking_cid,
             dso = EXCLUDED.dso,
             payload = EXCLUDED.payload,
+            semantic_key = EXCLUDED.semantic_key,
+            action_subject = EXCLUDED.action_subject,
             updated_at = now()
         `);
         inserted++;

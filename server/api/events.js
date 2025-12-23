@@ -2185,6 +2185,96 @@ router.get('/debug/cast-vote', async (req, res) => {
   }
 });
 
+// GET /api/events/governance-proposals - Get governance proposals grouped by semantic key (from index)
+// This is the recommended endpoint for governance UIs - uses the persistent index with proper grouping
+router.get('/governance-proposals', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const status = req.query.status || 'all';
+    
+    // Check if index is populated
+    const indexPopulated = await voteRequestIndexer.isIndexPopulated();
+    if (!indexPopulated) {
+      return res.json({
+        data: [],
+        count: 0,
+        source: 'index-empty',
+        message: 'VoteRequest index not built yet. Trigger a rebuild at /api/events/vote-requests/index/build',
+      });
+    }
+    
+    // Query grouped proposals from the index
+    const proposals = await voteRequestIndexer.queryGovernanceProposals({ limit, status, offset });
+    const stats = await voteRequestIndexer.getVoteRequestStats();
+    const indexState = await voteRequestIndexer.getIndexState();
+    
+    res.json({
+      data: proposals,
+      count: proposals.length,
+      stats,
+      source: 'duckdb-index',
+      indexedAt: indexState.last_indexed_at,
+      totalIndexed: indexState.total_indexed,
+      _meta: {
+        endpoint: '/api/events/governance-proposals',
+        description: 'Governance proposals grouped by semantic_key for deduplication',
+        fields: {
+          semantic_key: 'Unique key combining action_type + subject for linking re-submitted proposals',
+          action_subject: 'The target of the action (provider, sv, validator, etc.)',
+          timeline: {
+            firstSeen: 'When the first proposal for this subject was created',
+            lastSeen: 'When the most recent proposal for this subject was created',
+            relatedCount: 'Number of related proposals (re-submissions)',
+          },
+        },
+      },
+    });
+  } catch (err) {
+    console.error('Error in governance-proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/governance-proposals/:semanticKey/timeline - Get full timeline for a proposal
+router.get('/governance-proposals/:semanticKey/timeline', async (req, res) => {
+  try {
+    const semanticKey = decodeURIComponent(req.params.semanticKey);
+    
+    const timeline = await voteRequestIndexer.queryProposalTimeline(semanticKey);
+    
+    if (timeline.length === 0) {
+      return res.status(404).json({ 
+        error: 'Proposal not found',
+        semanticKey,
+      });
+    }
+    
+    // Compute summary stats
+    const latest = timeline[0];
+    const oldest = timeline[timeline.length - 1];
+    
+    res.json({
+      semanticKey,
+      latestStatus: latest.status,
+      latestContractId: latest.contract_id,
+      timeline,
+      summary: {
+        totalVersions: timeline.length,
+        firstCreated: oldest.effective_at,
+        lastUpdated: latest.effective_at,
+        finalVoteCount: latest.vote_count,
+        actionType: latest.action_tag,
+        subject: latest.action_subject,
+      },
+      source: 'duckdb-index',
+    });
+  } catch (err) {
+    console.error('Error in governance-proposals timeline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/governance/proposals - Get latest state for each unique proposal
 router.get('/governance/proposals', async (req, res) => {
   try {
@@ -2316,9 +2406,15 @@ router.get('/governance/proposals', async (req, res) => {
 
 // GET /api/events/governance/proposals/stream - SSE endpoint for real-time progress
 router.get('/governance/proposals/stream', async (req, res) => {
+  const scanStartTime = Date.now();
+  console.log(`[SCAN] === Starting governance proposals stream scan ===`);
+  
   try {
     const sources = getDataSources();
+    console.log(`[SCAN] Data sources: ${JSON.stringify(sources)}`);
+    
     if (sources.primarySource !== 'binary') {
+      console.log(`[SCAN] ERROR: Binary files required, got ${sources.primarySource}`);
       return res.status(400).json({ error: 'Binary files required' });
     }
 
@@ -2328,24 +2424,38 @@ router.get('/governance/proposals/stream', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.flushHeaders();
+    console.log(`[SCAN] SSE headers sent`);
 
     const sendEvent = (type, data) => {
       res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
+    console.log(`[SCAN] Finding binary files in ${db.DATA_PATH}...`);
+    const findFilesStart = Date.now();
     const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    console.log(`[SCAN] Found ${allFiles.length} binary files in ${Date.now() - findFilesStart}ms`);
     
     if (allFiles.length === 0) {
+      console.log(`[SCAN] ERROR: No binary event files found`);
       sendEvent('error', { error: 'No binary event files found' });
       res.end();
       return;
     }
 
-    // Use all files for the stream endpoint
-    const binFiles = allFiles;
-    const totalFiles = binFiles.length;
+    // Parallel processing options
+    const concurrency = parseInt(req.query.concurrency) || 10; // Process N files at once
+    const maxFiles = req.query.limit ? parseInt(req.query.limit) : null;
+    console.log(`[SCAN] Config: concurrency=${concurrency}, limit=${maxFiles || 'none'}`);
     
-    sendEvent('start', { totalFiles });
+    // Use all files or limit
+    let binFiles = allFiles;
+    if (maxFiles && maxFiles > 0) {
+      binFiles = allFiles.slice(-maxFiles); // Take most recent files (last N)
+    }
+    const totalFiles = binFiles.length;
+    console.log(`[SCAN] Will process ${totalFiles} files`);
+    
+    sendEvent('start', { totalFiles, concurrency, totalAvailable: allFiles.length });
     
     // Map to track proposals by unique key
     const proposalMap = new Map();
@@ -2358,40 +2468,85 @@ router.get('/governance/proposals/stream', async (req, res) => {
     let filesScanned = 0;
     let totalVoteRequests = 0;
     let lastProgressUpdate = 0;
+    let totalFileReadTime = 0;
+    let totalParseTime = 0;
+    let filesWithErrors = 0;
     
-    for (const filePath of binFiles) {
+    // Process files in parallel batches
+    const processFile = async (filePath) => {
+      const fileStart = Date.now();
       try {
         const result = await binaryReader.readBinaryFile(filePath);
+        const fileReadTime = Date.now() - fileStart;
+        
+        const parseStart = Date.now();
         const events = result.records || [];
-        filesScanned++;
+        const voteRequests = [];
         
         for (const evt of events) {
           const templateId = evt.template_id || '';
           if (!templateId.includes('VoteRequest')) continue;
           if (evt.event_type !== 'created') continue;
           
-          totalVoteRequests++;
           const payload = evt.payload || {};
-          
           let proposal;
           try {
             proposal = parseVoteRequestPayload(payload);
           } catch (parseErr) {
             continue;
           }
-          
           if (!proposal) continue;
           
+          voteRequests.push({ evt, proposal });
+        }
+        
+        return { voteRequests, fileReadTime, parseTime: Date.now() - parseStart, events: events.length, error: null };
+      } catch (err) {
+        console.log(`[SCAN] ERROR reading file ${filePath}: ${err.message}`);
+        return { voteRequests: [], fileReadTime: Date.now() - fileStart, parseTime: 0, events: 0, error: err.message };
+      }
+    };
+    
+    // Process in batches for parallelism
+    let batchNum = 0;
+    for (let i = 0; i < binFiles.length; i += concurrency) {
+      batchNum++;
+      const batchStart = Date.now();
+      const batch = binFiles.slice(i, i + concurrency);
+      console.log(`[SCAN] Processing batch ${batchNum}: files ${i+1}-${Math.min(i+concurrency, binFiles.length)} of ${totalFiles}`);
+      const results = await Promise.all(batch.map(processFile));
+      const batchTime = Date.now() - batchStart;
+      
+      // Collect batch stats
+      let batchEvents = 0;
+      let batchVoteRequests = 0;
+      let batchReadTime = 0;
+      let batchParseTime = 0;
+      
+      // Merge results from this batch
+      for (const result of results) {
+        if (result.error) {
+          filesWithErrors++;
+        }
+        batchEvents += result.events || 0;
+        batchReadTime += result.fileReadTime || 0;
+        batchParseTime += result.parseTime || 0;
+        totalFileReadTime += result.fileReadTime || 0;
+        totalParseTime += result.parseTime || 0;
+        
+        const voteRequests = result.voteRequests || [];
+        batchVoteRequests += voteRequests.length;
+        
+        for (const { evt, proposal } of voteRequests) {
+          totalVoteRequests++;
+          
           // Generate a unique proposal key
-          // Use trackingCid if available (most reliable), otherwise use action-specific details
           let proposalKey;
           let keySource;
           if (proposal.trackingCid) {
-            // trackingCid uniquely identifies the original VoteRequest
             proposalKey = `cid::${proposal.trackingCid}`;
             keySource = 'trackingCid';
           } else {
-            // Fallback: combine actionType + requester + reasonUrl + action-specific details
             const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
             proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
             keySource = 'composite';
@@ -2413,7 +2568,6 @@ router.get('/governance/proposals/stream', async (req, res) => {
           const eventTimestamp = new Date(evt.timestamp).getTime();
           
           if (debug && existing) {
-            // Log deduplication event
             dedupLog.push({
               key: proposalKey.slice(0, 100),
               keySource,
@@ -2439,25 +2593,37 @@ router.get('/governance/proposals/stream', async (req, res) => {
             });
           }
         }
-        
-        // Send progress update every 100 files or 500ms
-        const now = Date.now();
-        if (filesScanned % 100 === 0 || now - lastProgressUpdate > 500) {
-          const percent = Math.round((filesScanned / totalFiles) * 100);
-          sendEvent('progress', {
-            filesScanned,
-            totalFiles,
-            percent,
-            uniqueProposals: proposalMap.size,
-            totalVoteRequests,
-            rawCount: rawMode ? allRawVoteRequests.length : undefined,
-          });
-          lastProgressUpdate = now;
-        }
-      } catch (err) {
-        // Skip unreadable files
+      }
+      
+      filesScanned += batch.length;
+      const elapsedSec = (Date.now() - scanStartTime) / 1000;
+      const filesPerSec = filesScanned / elapsedSec;
+      
+      console.log(`[SCAN] Batch ${batchNum} complete: ${batchTime}ms, ${batchEvents} events, ${batchVoteRequests} VoteRequests, ${proposalMap.size} unique proposals, ${filesPerSec.toFixed(1)} files/sec`);
+      
+      // Send progress update every batch
+      const now = Date.now();
+      if (now - lastProgressUpdate > 200) {
+        const percent = Math.round((filesScanned / totalFiles) * 100);
+        sendEvent('progress', {
+          filesScanned,
+          totalFiles,
+          percent,
+          uniqueProposals: proposalMap.size,
+          totalVoteRequests,
+          rawCount: rawMode ? allRawVoteRequests.length : undefined,
+        });
+        lastProgressUpdate = now;
       }
     }
+    
+    const totalScanTime = Date.now() - scanStartTime;
+    console.log(`[SCAN] === File scanning complete ===`);
+    console.log(`[SCAN] Total time: ${totalScanTime}ms (${(totalScanTime/1000).toFixed(1)}s)`);
+    console.log(`[SCAN] Files: ${filesScanned} processed, ${filesWithErrors} errors`);
+    console.log(`[SCAN] Performance: ${(filesScanned/(totalScanTime/1000)).toFixed(1)} files/sec`);
+    console.log(`[SCAN] Cumulative file read time: ${totalFileReadTime}ms, parse time: ${totalParseTime}ms`);
+    console.log(`[SCAN] Results: ${totalVoteRequests} VoteRequests -> ${proposalMap.size} unique proposals`);
     
     // Convert to array and sort by latest timestamp (newest first)
     const proposals = Array.from(proposalMap.values())
@@ -2505,6 +2671,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
     }
     
     // Send final result
+    console.log(`[SCAN] Sending complete event with ${proposals.length} proposals...`);
     sendEvent('complete', {
       summary: {
         filesScanned,
@@ -2512,6 +2679,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
         totalVoteRequests,
         uniqueProposals: proposals.length,
         rawMode: rawMode,
+        scanTimeMs: totalScanTime,
       },
       stats,
       proposals,
@@ -2530,9 +2698,11 @@ router.get('/governance/proposals/stream', async (req, res) => {
       } : undefined,
     });
     
+    console.log(`[SCAN] === Scan complete, closing connection ===`);
     res.end();
   } catch (err) {
-    console.error('Error in governance/proposals/stream:', err);
+    console.error(`[SCAN] FATAL ERROR in governance/proposals/stream:`, err);
+    console.error(`[SCAN] Stack:`, err.stack);
     res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
     res.end();
   }
