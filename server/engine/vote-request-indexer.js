@@ -970,7 +970,26 @@ async function scanFilesForDsoCloseVoteRequests(files) {
       if (filesProcessed % 100 === 0 || (now - lastLogTime > 5000)) {
         const elapsed = (now - startTime) / 1000;
         const pct = ((filesProcessed / files.length) * 100).toFixed(0);
-        console.log(`   📂 [${pct}%] ${filesProcessed}/${files.length} DsoRules files | ${records.length} close events | ${elapsed.toFixed(1)}s`);
+
+        // Surface "are we even seeing vote/close-ish choices" early (not only at the very end)
+        const voteRelatedSoFar = [...uniqueChoices].filter((c) => {
+          const cl = String(c || '').toLowerCase();
+          return (
+            cl.includes('vote') ||
+            cl.includes('close') ||
+            cl.includes('expire') ||
+            cl.includes('reject') ||
+            cl.includes('accept')
+          );
+        });
+
+        console.log(
+          `   📂 [${pct}%] ${filesProcessed}/${files.length} DsoRules files | ${records.length} close events | ${elapsed.toFixed(1)}s | ${voteRelatedSoFar.length} vote/close-ish choices seen`
+        );
+        if (voteRelatedSoFar.length === 0) {
+          console.log('      (none yet — likely different choice naming, or closes are not in DsoRules for this migration)');
+        }
+
         lastLogTime = now;
       }
 
