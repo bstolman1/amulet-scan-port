@@ -290,11 +290,25 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
 
         // Scan VoteRequest files for archive/exercised events
-        // When a VoteRequest is closed (accepted/rejected/expired), the contract is archived
-        // These archive events are in the same VoteRequest files, no need to scan DsoRules
         console.log('   Scanning VoteRequest files for archive events...');
         indexingProgress = { ...indexingProgress, phase: 'scan:archived', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
+
+        // CRITICAL: Also scan DsoRules files for DsoRules_CloseVoteRequest events
+        // VoteRequests are typically closed via DsoRules_CloseVoteRequest, not directly on VoteRequest
+        const dsoRulesFiles = await getFilesForTemplate('DsoRules');
+        if (dsoRulesFiles.length > 0) {
+          console.log(`   📂 Found ${dsoRulesFiles.length} files containing DsoRules events`);
+          console.log('   Scanning DsoRules files for CloseVoteRequest events...');
+          indexingProgress = { ...indexingProgress, phase: 'scan:dso_close', current: 0, total: dsoRulesFiles.length, records: 0 };
+          const dsoCloseResult = await scanFilesForDsoCloseVoteRequests(dsoRulesFiles);
+          console.log(`   Found ${dsoCloseResult.records.length} DsoRules_CloseVoteRequest events`);
+          
+          // Merge DsoRules close events into exercisedResult
+          // These events contain the VoteRequest contract_id being closed and the outcome
+          exercisedResult.records.push(...dsoCloseResult.records);
+          exercisedResult.filesScanned += dsoCloseResult.filesScanned;
+        }
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
@@ -310,10 +324,38 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
     console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised/closed events total`);
 
-    // Build map of closed contract IDs -> archived event data (with final vote counts)
+    // Build map of closed contract IDs -> archived event data (with final vote counts and status)
     const archivedEventsMap = new Map();
     for (const record of exercisedResult.records) {
-      if (record.contract_id) {
+      const choice = String(record.choice || '');
+      
+      // For DsoRules_CloseVoteRequest, extract the VoteRequest contract_id from the exercise arguments
+      // The voteRequestCid field contains the contract being closed
+      if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
+        // Extract VoteRequest contract ID from exercise arguments
+        const voteRequestCid = 
+          record.exercise_argument?.voteRequestCid || 
+          record.payload?.voteRequestCid ||
+          record.exercise_argument?.voteRequest ||
+          record.payload?.voteRequest;
+        
+        if (voteRequestCid) {
+          // Extract the outcome/action result from the event
+          // DsoRules_CloseVoteRequest typically has an 'outcome' or the result is in created events
+          const outcome = 
+            record.exercise_argument?.outcome ||
+            record.payload?.outcome ||
+            record.exercise_result?.outcome;
+          
+          archivedEventsMap.set(voteRequestCid, {
+            ...record,
+            contract_id: voteRequestCid,
+            dso_close_outcome: outcome,
+            choice: choice, // Preserve the choice for status detection
+          });
+        }
+      } else if (record.contract_id) {
+        // Direct archive on VoteRequest template
         archivedEventsMap.set(record.contract_id, record);
       }
     }
@@ -398,6 +440,18 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const archivedChoice = archivedEvent?.choice || '';
       const choiceLower = String(archivedChoice).toLowerCase();
 
+      // Check DsoRules_CloseVoteRequest outcome if available
+      // The outcome field typically contains: 'VRO_Accepted', 'VRO_Rejected', 'VRO_Expired', etc.
+      const dsoOutcome = archivedEvent?.dso_close_outcome;
+      const dsoOutcomeStr = typeof dsoOutcome === 'string' 
+        ? dsoOutcome.toLowerCase() 
+        : (dsoOutcome?.tag || '').toLowerCase();
+      
+      // DsoRules_CloseVoteRequest is the authoritative source for vote outcomes
+      const wasExecutedByDso = dsoOutcomeStr.includes('accept') || dsoOutcomeStr.includes('vro_accepted');
+      const wasRejectedByDso = dsoOutcomeStr.includes('reject') || dsoOutcomeStr.includes('vro_rejected');
+      const wasExpiredByDso = dsoOutcomeStr.includes('expire') || dsoOutcomeStr.includes('vro_expired');
+
       const wasExecutedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
       const wasRejectedByChoice = choiceLower.includes('reject');
       const wasExpiredByChoice = choiceLower.includes('expire');
@@ -408,9 +462,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const wasRejectedByVotes = rejectCount > 0;
       const wasExecutedByVotes = finalVoteCount > 0 && rejectCount === 0;
 
-      const wasExecuted = wasExecutedByChoice || wasExecutedByVotes;
-      const wasRejected = wasRejectedByChoice || wasRejectedByVotes;
-      const wasExpired = wasExpiredByChoice;
+      // Prioritize DSO outcome > choice name > vote inference
+      const wasExecuted = wasExecutedByDso || wasExecutedByChoice || wasExecutedByVotes;
+      const wasRejected = wasRejectedByDso || wasRejectedByChoice || wasRejectedByVotes;
+      const wasExpired = wasExpiredByDso || wasExpiredByChoice;
 
       if (isClosed) {
         if (wasExpired || (finalVoteCount === 0 && isExpired)) {
