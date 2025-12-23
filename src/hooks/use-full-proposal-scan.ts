@@ -81,6 +81,14 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
   const eventSourceRef = useRef<EventSource | null>(null);
   const hasStartedRef = useRef(false);
 
+  const stopScan = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setIsLoading(false);
+  }, []);
+
   const startScan = useCallback(async () => {
     if (isLoading) return;
     
@@ -137,6 +145,7 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
         });
         setIsLoading(false);
         eventSource.close();
+        eventSourceRef.current = null;
       });
 
       eventSource.addEventListener('error', (e) => {
@@ -144,6 +153,7 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
         setError(new Error('SSE connection failed'));
         setIsLoading(false);
         eventSource.close();
+        eventSourceRef.current = null;
       });
 
       eventSource.onerror = () => {
@@ -153,6 +163,7 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
           setIsLoading(false);
         }
         eventSource.close();
+        eventSourceRef.current = null;
       };
 
     } catch (err) {
@@ -185,5 +196,6 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
     isLoading,
     error,
     refetch: startScan,
+    stop: stopScan,
   };
 }
