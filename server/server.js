@@ -225,7 +225,16 @@ app.listen(PORT, async () => {
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
   console.log(`⏰ Governance data refresh scheduled every 4 hours`);
   console.log(`⏰ ACS snapshot scheduled every 3 hours (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)`);
-  
+
+  // Initialize DuckDB views on startup, but never crash the process if this fails.
+  try {
+    console.log('🔧 Initializing DuckDB views...');
+    await initializeViews();
+    console.log('✅ DuckDB views ready');
+  } catch (err) {
+    console.error('⚠️ DuckDB view initialization failed (continuing):', err?.message || err);
+  }
+
   if (ENGINE_ENABLED) {
     console.log(`⚙️ Warehouse engine ENABLED - starting background worker...`);
     try {
@@ -246,3 +255,4 @@ app.listen(PORT, async () => {
     }, 5000);
   }
 });
+

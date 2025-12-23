@@ -315,8 +315,9 @@ export async function initializeViews() {
   }
 }
 
-// Initialize on import
-initializeViews();
+// NOTE: Do not auto-initialize views at import time.
+// It can crash the process on startup (unhandled promise rejection) and should be invoked explicitly by the server.
+// initializeViews();
 
 export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
 
