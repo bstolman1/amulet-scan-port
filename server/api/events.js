@@ -2316,9 +2316,15 @@ router.get('/governance/proposals', async (req, res) => {
 
 // GET /api/events/governance/proposals/stream - SSE endpoint for real-time progress
 router.get('/governance/proposals/stream', async (req, res) => {
+  const scanStartTime = Date.now();
+  console.log(`[SCAN] === Starting governance proposals stream scan ===`);
+  
   try {
     const sources = getDataSources();
+    console.log(`[SCAN] Data sources: ${JSON.stringify(sources)}`);
+    
     if (sources.primarySource !== 'binary') {
+      console.log(`[SCAN] ERROR: Binary files required, got ${sources.primarySource}`);
       return res.status(400).json({ error: 'Binary files required' });
     }
 
@@ -2328,14 +2334,19 @@ router.get('/governance/proposals/stream', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.flushHeaders();
+    console.log(`[SCAN] SSE headers sent`);
 
     const sendEvent = (type, data) => {
       res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
+    console.log(`[SCAN] Finding binary files in ${db.DATA_PATH}...`);
+    const findFilesStart = Date.now();
     const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    console.log(`[SCAN] Found ${allFiles.length} binary files in ${Date.now() - findFilesStart}ms`);
     
     if (allFiles.length === 0) {
+      console.log(`[SCAN] ERROR: No binary event files found`);
       sendEvent('error', { error: 'No binary event files found' });
       res.end();
       return;
@@ -2344,6 +2355,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
     // Parallel processing options
     const concurrency = parseInt(req.query.concurrency) || 10; // Process N files at once
     const maxFiles = req.query.limit ? parseInt(req.query.limit) : null;
+    console.log(`[SCAN] Config: concurrency=${concurrency}, limit=${maxFiles || 'none'}`);
     
     // Use all files or limit
     let binFiles = allFiles;
@@ -2351,6 +2363,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
       binFiles = allFiles.slice(-maxFiles); // Take most recent files (last N)
     }
     const totalFiles = binFiles.length;
+    console.log(`[SCAN] Will process ${totalFiles} files`);
     
     sendEvent('start', { totalFiles, concurrency, totalAvailable: allFiles.length });
     
@@ -2365,11 +2378,18 @@ router.get('/governance/proposals/stream', async (req, res) => {
     let filesScanned = 0;
     let totalVoteRequests = 0;
     let lastProgressUpdate = 0;
+    let totalFileReadTime = 0;
+    let totalParseTime = 0;
+    let filesWithErrors = 0;
     
     // Process files in parallel batches
     const processFile = async (filePath) => {
+      const fileStart = Date.now();
       try {
         const result = await binaryReader.readBinaryFile(filePath);
+        const fileReadTime = Date.now() - fileStart;
+        
+        const parseStart = Date.now();
         const events = result.records || [];
         const voteRequests = [];
         
@@ -2390,19 +2410,43 @@ router.get('/governance/proposals/stream', async (req, res) => {
           voteRequests.push({ evt, proposal });
         }
         
-        return voteRequests;
+        return { voteRequests, fileReadTime, parseTime: Date.now() - parseStart, events: events.length, error: null };
       } catch (err) {
-        return [];
+        console.log(`[SCAN] ERROR reading file ${filePath}: ${err.message}`);
+        return { voteRequests: [], fileReadTime: Date.now() - fileStart, parseTime: 0, events: 0, error: err.message };
       }
     };
     
     // Process in batches for parallelism
+    let batchNum = 0;
     for (let i = 0; i < binFiles.length; i += concurrency) {
+      batchNum++;
+      const batchStart = Date.now();
       const batch = binFiles.slice(i, i + concurrency);
+      console.log(`[SCAN] Processing batch ${batchNum}: files ${i+1}-${Math.min(i+concurrency, binFiles.length)} of ${totalFiles}`);
       const results = await Promise.all(batch.map(processFile));
+      const batchTime = Date.now() - batchStart;
+      
+      // Collect batch stats
+      let batchEvents = 0;
+      let batchVoteRequests = 0;
+      let batchReadTime = 0;
+      let batchParseTime = 0;
       
       // Merge results from this batch
-      for (const voteRequests of results) {
+      for (const result of results) {
+        if (result.error) {
+          filesWithErrors++;
+        }
+        batchEvents += result.events || 0;
+        batchReadTime += result.fileReadTime || 0;
+        batchParseTime += result.parseTime || 0;
+        totalFileReadTime += result.fileReadTime || 0;
+        totalParseTime += result.parseTime || 0;
+        
+        const voteRequests = result.voteRequests || [];
+        batchVoteRequests += voteRequests.length;
+        
         for (const { evt, proposal } of voteRequests) {
           totalVoteRequests++;
           
@@ -2462,6 +2506,10 @@ router.get('/governance/proposals/stream', async (req, res) => {
       }
       
       filesScanned += batch.length;
+      const elapsedSec = (Date.now() - scanStartTime) / 1000;
+      const filesPerSec = filesScanned / elapsedSec;
+      
+      console.log(`[SCAN] Batch ${batchNum} complete: ${batchTime}ms, ${batchEvents} events, ${batchVoteRequests} VoteRequests, ${proposalMap.size} unique proposals, ${filesPerSec.toFixed(1)} files/sec`);
       
       // Send progress update every batch
       const now = Date.now();
@@ -2478,6 +2526,14 @@ router.get('/governance/proposals/stream', async (req, res) => {
         lastProgressUpdate = now;
       }
     }
+    
+    const totalScanTime = Date.now() - scanStartTime;
+    console.log(`[SCAN] === File scanning complete ===`);
+    console.log(`[SCAN] Total time: ${totalScanTime}ms (${(totalScanTime/1000).toFixed(1)}s)`);
+    console.log(`[SCAN] Files: ${filesScanned} processed, ${filesWithErrors} errors`);
+    console.log(`[SCAN] Performance: ${(filesScanned/(totalScanTime/1000)).toFixed(1)} files/sec`);
+    console.log(`[SCAN] Cumulative file read time: ${totalFileReadTime}ms, parse time: ${totalParseTime}ms`);
+    console.log(`[SCAN] Results: ${totalVoteRequests} VoteRequests -> ${proposalMap.size} unique proposals`);
     
     // Convert to array and sort by latest timestamp (newest first)
     const proposals = Array.from(proposalMap.values())
@@ -2525,6 +2581,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
     }
     
     // Send final result
+    console.log(`[SCAN] Sending complete event with ${proposals.length} proposals...`);
     sendEvent('complete', {
       summary: {
         filesScanned,
@@ -2532,6 +2589,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
         totalVoteRequests,
         uniqueProposals: proposals.length,
         rawMode: rawMode,
+        scanTimeMs: totalScanTime,
       },
       stats,
       proposals,
@@ -2550,9 +2608,11 @@ router.get('/governance/proposals/stream', async (req, res) => {
       } : undefined,
     });
     
+    console.log(`[SCAN] === Scan complete, closing connection ===`);
     res.end();
   } catch (err) {
-    console.error('Error in governance/proposals/stream:', err);
+    console.error(`[SCAN] FATAL ERROR in governance/proposals/stream:`, err);
+    console.error(`[SCAN] Stack:`, err.stack);
     res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
     res.end();
   }
