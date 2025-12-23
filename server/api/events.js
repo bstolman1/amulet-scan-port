@@ -1820,25 +1820,23 @@ router.get('/debug/dsorules-choices', async (req, res) => {
     let dsoRulesCount = 0;
     const sampleEvents = [];
 
-    // Scan files directly with early termination
-    const eventDirs = await fs.promises.readdir(db.DATA_PATH).catch(() => []);
-    const eventDir = eventDirs.find(d => d === 'events' || d.startsWith('events'));
+    // Use the binary reader's file finder which handles partition structure
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
-    if (!eventDir) {
-      return res.json({ error: 'No events directory found', path: db.DATA_PATH });
+    if (allFiles.length === 0) {
+      return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
     }
 
-    const eventsPath = path.join(db.DATA_PATH, eventDir);
-    const files = await fs.promises.readdir(eventsPath).catch(() => []);
-    const binFiles = files.filter(f => f.endsWith('.bin')).slice(0, maxFiles);
-
-    for (const file of binFiles) {
+    // Take a sample from the files (spread across the dataset)
+    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
+    for (const filePath of binFiles) {
       try {
-        const filePath = path.join(eventsPath, file);
-        const records = await binaryReader.readBinaryFile(filePath, 'events');
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
         filesScanned++;
 
-        for (const e of records) {
+        for (const e of events) {
           if (e.event_type !== 'exercised') continue;
           exercisedCount++;
           
