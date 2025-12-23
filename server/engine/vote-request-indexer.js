@@ -926,6 +926,30 @@ async function scanFilesForDsoCloseVoteRequests(files) {
         // governance actions (amulet price updates, validator confirmations, etc.)
         if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
           records.push(record);
+          
+          // DEBUG: Log first few events with full structure to verify exercise_result/outcome
+          if (records.length <= 3) {
+            console.log(`\n   🔍 DEBUG: DsoRules_CloseVoteRequest event #${records.length}:`);
+            console.log(`      - choice: ${record.choice}`);
+            console.log(`      - contract_id: ${record.contract_id}`);
+            console.log(`      - Top-level keys: ${Object.keys(record).join(', ')}`);
+            console.log(`      - Has exercise_result: ${!!record.exercise_result}`);
+            console.log(`      - Has exercise_argument: ${!!record.exercise_argument}`);
+            console.log(`      - Has payload: ${!!record.payload}`);
+            if (record.exercise_result) {
+              console.log(`      - exercise_result keys: ${Object.keys(record.exercise_result).join(', ')}`);
+              console.log(`      - exercise_result.outcome: ${JSON.stringify(record.exercise_result.outcome)}`);
+            }
+            if (record.exercise_argument) {
+              console.log(`      - exercise_argument keys: ${Object.keys(record.exercise_argument).join(', ')}`);
+            }
+            if (record.payload) {
+              console.log(`      - payload keys: ${Object.keys(record.payload).join(', ')}`);
+              if (record.payload.exercise_result) {
+                console.log(`      - payload.exercise_result keys: ${Object.keys(record.payload.exercise_result).join(', ')}`);
+              }
+            }
+          }
         }
       }
     } catch (err) {
