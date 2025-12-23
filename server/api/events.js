@@ -2341,8 +2341,8 @@ router.get('/governance/proposals/stream', async (req, res) => {
       return;
     }
 
-    // Use higher concurrency for parallel async I/O (not true CPU parallelism, but still faster)
-    const concurrency = parseInt(req.query.concurrency) || 50;
+    // Concurrency setting - lower values give more responsive progress updates
+    const concurrency = parseInt(req.query.concurrency) || 20;
     const maxFiles = req.query.limit ? parseInt(req.query.limit) : null;
     
     // Use all files or limit
@@ -2366,9 +2366,9 @@ router.get('/governance/proposals/stream', async (req, res) => {
     
     let filesScanned = 0;
     let totalVoteRequests = 0;
-    let lastProgressUpdate = 0;
+    let lastProgressUpdate = Date.now();
     
-    // Process a single file
+    // Process a single file with timeout
     const processFile = async (filePath) => {
       try {
         const result = await binaryReader.readBinaryFile(filePath);
@@ -2398,7 +2398,30 @@ router.get('/governance/proposals/stream', async (req, res) => {
       }
     };
     
-    // Process files in batches for concurrency
+    // Helper to send progress update
+    const sendProgress = () => {
+      const now = Date.now();
+      const elapsedSec = (now - scanStartTime) / 1000;
+      const filesPerSec = elapsedSec > 0 ? Math.round((filesScanned / elapsedSec) * 10) / 10 : 0;
+      const percent = Math.round((filesScanned / totalFiles) * 100);
+      const remainingFiles = totalFiles - filesScanned;
+      const etaSeconds = filesPerSec > 0 ? Math.round(remainingFiles / filesPerSec) : null;
+      
+      sendEvent('progress', {
+        filesScanned,
+        totalFiles,
+        percent,
+        uniqueProposals: proposalMap.size,
+        totalVoteRequests,
+        filesPerSec,
+        etaSeconds,
+        concurrency,
+        rawCount: rawMode ? allRawVoteRequests.length : undefined,
+      });
+      lastProgressUpdate = now;
+    };
+    
+    // Process files in smaller batches for more responsive updates
     for (let i = 0; i < binFiles.length; i += concurrency) {
       const batch = binFiles.slice(i, i + concurrency);
       const results = await Promise.all(batch.map(processFile));
@@ -2465,27 +2488,10 @@ router.get('/governance/proposals/stream', async (req, res) => {
       
       filesScanned += batch.length;
       
-      // Send progress update
+      // Send progress update every batch (more responsive)
       const now = Date.now();
-      if (now - lastProgressUpdate > 200) {
-        const elapsedSec = (now - scanStartTime) / 1000;
-        const filesPerSec = elapsedSec > 0 ? Math.round(filesScanned / elapsedSec) : 0;
-        const percent = Math.round((filesScanned / totalFiles) * 100);
-        const remainingFiles = totalFiles - filesScanned;
-        const etaSeconds = filesPerSec > 0 ? Math.round(remainingFiles / filesPerSec) : null;
-        
-        sendEvent('progress', {
-          filesScanned,
-          totalFiles,
-          percent,
-          uniqueProposals: proposalMap.size,
-          totalVoteRequests,
-          filesPerSec,
-          etaSeconds,
-          concurrency,
-          rawCount: rawMode ? allRawVoteRequests.length : undefined,
-        });
-        lastProgressUpdate = now;
+      if (now - lastProgressUpdate > 100) {
+        sendProgress();
       }
     }
     
