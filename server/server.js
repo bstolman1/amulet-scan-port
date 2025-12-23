@@ -8,6 +8,79 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+
+// ============= Graceful Shutdown Tracking =============
+const cronJobs = [];          // Track scheduled cron jobs
+const childProcesses = new Set(); // Track spawned child processes
+let isShuttingDown = false;
+let lockPath = null;          // Will be set after db import
+
+function trackCronJob(job) {
+  cronJobs.push(job);
+  return job;
+}
+
+function trackChildProcess(child) {
+  childProcesses.add(child);
+  child.on('close', () => childProcesses.delete(child));
+  child.on('error', () => childProcesses.delete(child));
+  return child;
+}
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  console.log(`\n🛑 ${signal} received - starting graceful shutdown...`);
+  
+  // 1. Stop all cron jobs
+  console.log(`   Stopping ${cronJobs.length} cron job(s)...`);
+  for (const job of cronJobs) {
+    try { job.stop(); } catch {}
+  }
+  
+  // 2. Kill all child processes
+  console.log(`   Killing ${childProcesses.size} child process(es)...`);
+  for (const child of childProcesses) {
+    try {
+      child.kill('SIGTERM');
+      // Force kill after 2s if still alive
+      setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 2000);
+    } catch {}
+  }
+  
+  // 3. Stop engine worker if running
+  try {
+    const { stopEngineWorker } = await import('./engine/worker.js');
+    stopEngineWorker();
+    console.log('   Engine worker stopped');
+  } catch {}
+  
+  // 4. Remove lockfile
+  if (lockPath) {
+    try {
+      fs.unlinkSync(lockPath);
+      console.log('   Lockfile removed');
+    } catch {}
+  }
+  
+  console.log('✅ Graceful shutdown complete');
+  process.exit(0);
+}
+
+// Register shutdown handlers early
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught exception:', err);
+  gracefulShutdown('uncaughtException');
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled rejection:', reason);
+  // Don't exit on unhandled rejection, just log
+});
 import eventsRouter from './api/events.js';
 import updatesRouter from './api/updates.js';
 import partyRouter from './api/party.js';
@@ -153,7 +226,8 @@ app.use('/api/rewards', rewardsRouter);
 app.use('/api/engine', engineRouter);
 
 // Schedule governance data refresh every 4 hours
-cron.schedule('0 */4 * * *', async () => {
+trackCronJob(cron.schedule('0 */4 * * *', async () => {
+  if (isShuttingDown) return;
   console.log('⏰ Scheduled governance data refresh starting...');
   try {
     const data = await fetchFreshData();
@@ -162,24 +236,26 @@ cron.schedule('0 */4 * * *', async () => {
   } catch (err) {
     console.error('❌ Scheduled governance refresh failed:', err.message);
   }
-});
+}));
 
 // Schedule aggregation refresh every 15 minutes (only if engine is disabled)
 if (!ENGINE_ENABLED) {
-  cron.schedule('*/15 * * * *', async () => {
+  trackCronJob(cron.schedule('*/15 * * * *', async () => {
+    if (isShuttingDown) return;
     console.log('⏰ Scheduled aggregation refresh starting...');
     try {
       await refreshAllAggregations();
     } catch (err) {
       console.error('❌ Scheduled aggregation refresh failed:', err.message);
     }
-  });
+  }));
 }
 
 // Schedule ACS snapshot every 3 hours starting at 00:00 UTC
 // Runs at: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
 let acsSnapshotRunning = false;
-cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
+trackCronJob(cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
+  if (isShuttingDown) return;
   if (acsSnapshotRunning) {
     console.log('⏭️ ACS snapshot already running, skipping...');
     return;
@@ -189,14 +265,15 @@ cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
   console.log('⏰ Scheduled ACS snapshot starting...');
   
   const scriptPath = path.resolve(__dirname, '../scripts/ingest/fetch-acs-parquet.js');
-  const child = spawn('node', [scriptPath], {
+  const child = trackChildProcess(spawn('node', [scriptPath], {
     cwd: path.resolve(__dirname, '../scripts/ingest'),
     stdio: 'inherit',
     env: { ...process.env },
-  });
+  }));
   
   child.on('close', async (code) => {
     acsSnapshotRunning = false;
+    if (isShuttingDown) return;
     if (code === 0) {
       console.log('✅ Scheduled ACS snapshot complete');
       
@@ -218,7 +295,7 @@ cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
     acsSnapshotRunning = false;
     console.error('❌ Failed to start ACS snapshot:', err.message);
   });
-});
+}));
 
 // Startup logic
 app.listen(PORT, async () => {
@@ -231,7 +308,7 @@ app.listen(PORT, async () => {
   // Prevent accidental double-start (common on Windows): create a simple lock file next to the DB.
   // If another process owns the lock and is still alive, exit early with a clear message.
   try {
-    const lockPath = `${db.DB_FILE}.lock`;
+    lockPath = `${db.DB_FILE}.lock`; // Set module-level lockPath for graceful shutdown
     if (fs.existsSync(lockPath)) {
       const existingPid = parseInt(String(fs.readFileSync(lockPath, 'utf8')).trim(), 10);
       if (Number.isFinite(existingPid) && existingPid !== process.pid) {
@@ -247,10 +324,10 @@ app.listen(PORT, async () => {
       }
     }
     fs.writeFileSync(lockPath, String(process.pid), { encoding: 'utf8' });
-    process.on('exit', () => { try { fs.unlinkSync(lockPath); } catch {} });
-    process.on('SIGINT', () => process.exit(0));
-    process.on('SIGTERM', () => process.exit(0));
-  } catch {}
+    // Note: SIGINT/SIGTERM handlers are already registered at module level for graceful shutdown
+  } catch (err) {
+    console.warn('⚠️ Could not create lockfile:', err?.message);
+  }
 
   // Initialize DuckDB views on startup, but never crash the process if this fails.
   try {
@@ -272,6 +349,7 @@ app.listen(PORT, async () => {
     console.log(`⏰ Aggregation refresh scheduled every 15 minutes (engine disabled)`);
     // Initial aggregation refresh on startup (delayed to allow server to start)
     setTimeout(async () => {
+      if (isShuttingDown) return;
       console.log('🚀 Running initial aggregation refresh...');
       try {
         await refreshAllAggregations();
@@ -281,4 +359,5 @@ app.listen(PORT, async () => {
     }, 5000);
   }
 });
+
 
