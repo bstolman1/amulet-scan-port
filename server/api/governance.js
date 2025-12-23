@@ -3,6 +3,7 @@
  */
 
 import express from 'express';
+import { query } from '../duckdb/connection.js';
 import {
   buildGovernanceIndex,
   getProposalStats,
@@ -167,9 +168,10 @@ router.get('/index/status', async (req, res) => {
         rejected: stats.rejected || 0,
         pending: stats.pending || 0,
         expired: stats.expired || 0,
+        expired: stats.expired || 0,
       } : null,
       cachePopulated,
-      lastIndexedAt: null, // Could track this if needed
+      lastIndexedAt: stats?.lastIndexedAt || null,
     });
   } catch (err) {
     console.error('Error getting governance index status:', err);
@@ -193,18 +195,21 @@ router.post('/cache/invalidate', async (req, res) => {
 
 /**
  * GET /api/governance/action-types
- * Get list of unique action types
+ * Get list of unique action types from persistent storage
  */
 router.get('/action-types', async (req, res) => {
   try {
-    const stats = await getProposalStats();
-    const actionTypes = Object.entries(stats.byActionType || {}).map(([type, count]) => ({
-      type,
-      count,
-    }));
+    const rows = await query(`
+      SELECT action_type, COUNT(*) as count
+      FROM governance_proposals
+      GROUP BY action_type
+      ORDER BY count DESC
+    `);
     
-    // Sort by count descending
-    actionTypes.sort((a, b) => b.count - a.count);
+    const actionTypes = rows.map(row => ({
+      type: row.action_type,
+      count: Number(row.count),
+    }));
     
     res.json(actionTypes);
   } catch (err) {

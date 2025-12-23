@@ -331,6 +331,66 @@ export async function initEngineSchema() {
     ON reward_coupon_index_state(id)
   `);
 
+  // Governance proposals persistent index table (aggregated unique proposals)
+  await query(`
+    CREATE TABLE IF NOT EXISTS governance_proposals (
+      proposal_key        VARCHAR PRIMARY KEY,
+      latest_event_id     VARCHAR,
+      latest_contract_id  VARCHAR,
+      latest_timestamp    TIMESTAMP,
+      requester           VARCHAR,
+      action_type         VARCHAR,
+      action_details      VARCHAR,
+      reason_url          VARCHAR,
+      reason_body         VARCHAR,
+      vote_before         VARCHAR,
+      vote_before_timestamp BIGINT,
+      votes               VARCHAR,
+      votes_for           INTEGER DEFAULT 0,
+      votes_against       INTEGER DEFAULT 0,
+      tracking_cid        VARCHAR,
+      status              VARCHAR DEFAULT 'pending',
+      created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_governance_proposals_key
+    ON governance_proposals(proposal_key)
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_governance_proposals_status ON governance_proposals(status)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_governance_proposals_action_type ON governance_proposals(action_type)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_governance_proposals_timestamp ON governance_proposals(latest_timestamp)
+  `);
+
+  // Track governance indexing state
+  await query(`
+    CREATE TABLE IF NOT EXISTS governance_index_state (
+      id                  INTEGER PRIMARY KEY DEFAULT 1,
+      last_indexed_file   VARCHAR,
+      last_indexed_at     TIMESTAMP,
+      total_indexed       BIGINT DEFAULT 0,
+      files_scanned       BIGINT DEFAULT 0,
+      approved_count      BIGINT DEFAULT 0,
+      rejected_count      BIGINT DEFAULT 0,
+      pending_count       BIGINT DEFAULT 0,
+      expired_count       BIGINT DEFAULT 0,
+      CHECK (id = 1)
+    )
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_governance_index_state_id
+    ON governance_index_state(id)
+  `);
+
   schemaInitialized = true;
   console.log('✅ Engine schema initialized');
 }
@@ -347,6 +407,8 @@ export async function resetEngineSchema() {
   await query('DROP TABLE IF EXISTS vote_request_index_state');
   await query('DROP TABLE IF EXISTS reward_coupons');
   await query('DROP TABLE IF EXISTS reward_coupon_index_state');
+  await query('DROP TABLE IF EXISTS governance_proposals');
+  await query('DROP TABLE IF EXISTS governance_index_state');
   await query('DROP SEQUENCE IF EXISTS raw_files_seq');
   
   schemaInitialized = false;
