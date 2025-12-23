@@ -73,16 +73,20 @@ app.get('/', async (req, res) => {
   });
 });
 
-// Health check
+// Health check with timeout to prevent hanging
 app.get('/health', async (req, res) => {
   const cacheStats = getCacheStats();
   let engineStatus = null;
   
   if (ENGINE_ENABLED) {
     try {
-      engineStatus = await getEngineStatus();
+      // Add 2-second timeout to prevent health check from hanging
+      engineStatus = await Promise.race([
+        getEngineStatus(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+      ]);
     } catch (err) {
-      engineStatus = { error: err.message };
+      engineStatus = { error: err.message === 'timeout' ? 'status check timed out' : err.message };
     }
   }
   
