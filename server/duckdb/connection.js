@@ -5,20 +5,20 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Prefer the repository-local data directory if it exists (common in Lovable + WSL setups)
+// Prefer the repository-local data directory if it exists (common in Lovable setups)
 // Repo layout: server/duckdb/connection.js -> ../../data
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
-const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
 // DATA_DIR should point to the base directory
-// Default Windows path: C:\ledger_raw
+// Legacy Windows default path: C:\ledger_raw (often requires elevated permissions)
 const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
 
 // Final selection order:
 // 1) process.env.DATA_DIR (explicit override)
 // 2) repo-local data/ (if present)
 // 3) Windows default path
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(REPO_DATA_DIR) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+console.log(`📁 BASE_DATA_DIR: ${BASE_DATA_DIR}`);
 
 // Ensure directories exist (DuckDB will fail to create the DB file if the parent dir is missing)
 try {
