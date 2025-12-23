@@ -805,6 +805,10 @@ async function scanFilesForDsoCloseVoteRequests(files) {
   let filesProcessed = 0;
   const startTime = Date.now();
   let lastLogTime = startTime;
+  
+  // DEBUG: Collect all unique choice names to discover the correct one
+  const uniqueChoices = new Set();
+  const choiceSamples = new Map(); // Store one sample per choice for inspection
 
   const readWithTimeout = async (file, timeoutMs = 30000) => {
     return Promise.race([
@@ -825,6 +829,25 @@ async function scanFilesForDsoCloseVoteRequests(files) {
         if (record.event_type !== 'exercised') continue;
         
         const choice = record.choice || '';
+        
+        // DEBUG: Track all unique choices
+        if (choice && !uniqueChoices.has(choice)) {
+          uniqueChoices.add(choice);
+          // Store first sample of each choice type
+          choiceSamples.set(choice, {
+            choice,
+            template_id: record.template_id,
+            contract_id: record.contract_id?.slice(0, 20) + '...',
+            has_voteRequestCid: !!(record.exercise_argument?.voteRequestCid || record.payload?.voteRequestCid),
+          });
+          
+          // Log when we find new choice types (especially vote-related ones)
+          const lowerChoice = choice.toLowerCase();
+          if (lowerChoice.includes('vote') || lowerChoice.includes('close') || lowerChoice.includes('accept') || lowerChoice.includes('reject')) {
+            console.log(`   🔍 DEBUG: Found potentially relevant choice: "${choice}"`);
+          }
+        }
+        
         // Only collect DsoRules_CloseVoteRequest - this specifically closes VoteRequests
         // Do NOT include DsoRules_ExecuteConfirmedAction as that's used for many other 
         // governance actions (amulet price updates, validator confirmations, etc.)
@@ -859,6 +882,24 @@ async function scanFilesForDsoCloseVoteRequests(files) {
         console.log(`   🐢 Slow DsoRules file: ${file} (${(tookMs / 1000).toFixed(1)}s)`);
       }
     }
+  }
+
+  // DEBUG: Print summary of all unique choices found
+  console.log(`\n   📊 DEBUG: Found ${uniqueChoices.size} unique DsoRules choice names:`);
+  const sortedChoices = [...uniqueChoices].sort();
+  for (const choice of sortedChoices) {
+    const sample = choiceSamples.get(choice);
+    const voteFlag = sample?.has_voteRequestCid ? ' [has voteRequestCid]' : '';
+    console.log(`      - ${choice}${voteFlag}`);
+  }
+  
+  // Highlight any that look vote-related
+  const voteRelated = sortedChoices.filter(c => {
+    const lower = c.toLowerCase();
+    return lower.includes('vote') || lower.includes('close') || lower.includes('accept') || lower.includes('reject') || lower.includes('expire');
+  });
+  if (voteRelated.length > 0) {
+    console.log(`   🗳️ Vote-related choices: ${voteRelated.join(', ')}`);
   }
 
   return { records, filesScanned: filesProcessed };
