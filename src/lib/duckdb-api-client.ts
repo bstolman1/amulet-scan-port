@@ -32,9 +32,11 @@ export async function apiFetch<T>(endpoint: string, options?: RequestInit): Prom
     },
   });
 
+
   if (!response.ok) {
     // Try JSON first, then fall back to text for non-JSON error bodies (e.g. HTML).
-    let errMsg = `API error: ${response.status}`;
+    const fullUrl = `${API_BASE_URL}${endpoint}`;
+    let errMsg = `API error: ${response.status} (${fullUrl})`;
     try {
       const errorJson = await response.json();
       errMsg = errorJson?.error || errorJson?.message || errMsg;
