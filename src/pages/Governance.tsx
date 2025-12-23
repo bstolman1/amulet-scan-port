@@ -57,6 +57,7 @@ const Governance = () => {
     isLoading: fullScanLoading, 
     error: fullScanError,
     refetch: refetchFullScan,
+    stop: stopFullScan,
   } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode, concurrency });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
@@ -921,24 +922,25 @@ const Governance = () => {
                   />
                   <span className="font-mono w-6">{concurrency}</span>
                 </div>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => refetchFullScan()}
-                  disabled={fullScanLoading}
-                >
-                  {fullScanLoading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <FileSearch className="h-4 w-4 mr-2" />
-                      Re-scan
-                    </>
-                  )}
-                </Button>
+                {fullScanLoading ? (
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    onClick={() => stopFullScan()}
+                  >
+                    <XCircle className="h-4 w-4 mr-2" />
+                    Stop
+                  </Button>
+                ) : (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => refetchFullScan()}
+                  >
+                    <FileSearch className="h-4 w-4 mr-2" />
+                    Re-scan
+                  </Button>
+                )}
               </div>
             </div>
 
