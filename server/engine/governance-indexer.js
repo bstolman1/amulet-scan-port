@@ -362,9 +362,9 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
 
     await query(`
       INSERT INTO governance_index_state (id, last_indexed_at, total_indexed, files_scanned, approved_count, rejected_count, pending_count, expired_count)
-      VALUES (1, CURRENT_TIMESTAMP, ${stats.total}, 0, ${stats.approved}, ${stats.rejected}, ${stats.pending}, ${stats.expired})
+      VALUES (1, now(), ${stats.total}, 0, ${stats.approved}, ${stats.rejected}, ${stats.pending}, ${stats.expired})
       ON CONFLICT (id) DO UPDATE SET
-        last_indexed_at = CURRENT_TIMESTAMP,
+        last_indexed_at = now(),
         total_indexed = ${stats.total},
         files_scanned = 0,
         approved_count = ${stats.approved},
@@ -487,6 +487,8 @@ export async function queryProposals({
     `);
 
     // Parse JSON fields
+    const toSafeNumber = (v) => (typeof v === 'bigint' ? Number(v) : v);
+
     const proposals = rows.map((row) => {
       let actionDetails = row.action_details;
       let votes = row.votes;
@@ -511,10 +513,10 @@ export async function queryProposals({
         reasonUrl: row.reason_url,
         reasonBody: row.reason_body,
         voteBefore: row.vote_before,
-        voteBeforeTimestamp: row.vote_before_timestamp,
+        voteBeforeTimestamp: row.vote_before_timestamp != null ? toSafeNumber(row.vote_before_timestamp) : null,
         votes: votes || [],
-        votesFor: row.votes_for,
-        votesAgainst: row.votes_against,
+        votesFor: toSafeNumber(row.votes_for),
+        votesAgainst: toSafeNumber(row.votes_against),
         trackingCid: row.tracking_cid,
         status: row.status,
       };
@@ -558,6 +560,8 @@ export async function getProposalByKey(proposalKey) {
       if (typeof votes === 'string') votes = JSON.parse(votes);
     } catch { /* ignore */ }
 
+    const toSafeNumber = (v) => (typeof v === 'bigint' ? Number(v) : v);
+
     return {
       proposalKey: row.proposal_key,
       latestEventId: row.latest_event_id,
@@ -570,10 +574,10 @@ export async function getProposalByKey(proposalKey) {
       reasonUrl: row.reason_url,
       reasonBody: row.reason_body,
       voteBefore: row.vote_before,
-      voteBeforeTimestamp: row.vote_before_timestamp,
+      voteBeforeTimestamp: row.vote_before_timestamp != null ? toSafeNumber(row.vote_before_timestamp) : null,
       votes: votes || [],
-      votesFor: row.votes_for,
-      votesAgainst: row.votes_against,
+      votesFor: toSafeNumber(row.votes_for),
+      votesAgainst: toSafeNumber(row.votes_against),
       trackingCid: row.tracking_cid,
       status: row.status,
     };
@@ -606,6 +610,8 @@ export async function getProposalByContractId(contractId) {
       if (typeof votes === 'string') votes = JSON.parse(votes);
     } catch { /* ignore */ }
 
+    const toSafeNumber = (v) => (typeof v === 'bigint' ? Number(v) : v);
+
     return {
       proposalKey: row.proposal_key,
       latestEventId: row.latest_event_id,
@@ -618,10 +624,10 @@ export async function getProposalByContractId(contractId) {
       reasonUrl: row.reason_url,
       reasonBody: row.reason_body,
       voteBefore: row.vote_before,
-      voteBeforeTimestamp: row.vote_before_timestamp,
+      voteBeforeTimestamp: row.vote_before_timestamp != null ? toSafeNumber(row.vote_before_timestamp) : null,
       votes: votes || [],
-      votesFor: row.votes_for,
-      votesAgainst: row.votes_against,
+      votesFor: toSafeNumber(row.votes_for),
+      votesAgainst: toSafeNumber(row.votes_against),
       trackingCid: row.tracking_cid,
       status: row.status,
     };

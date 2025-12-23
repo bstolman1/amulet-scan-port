@@ -386,6 +386,17 @@ export async function initEngineSchema() {
     )
   `);
 
+  // Backward-compatible schema fixes for existing DuckDB files
+  // (DuckDB CREATE TABLE IF NOT EXISTS does not modify existing tables)
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN last_indexed_file VARCHAR`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN last_indexed_at TIMESTAMP`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN total_indexed BIGINT DEFAULT 0`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN files_scanned BIGINT DEFAULT 0`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN approved_count BIGINT DEFAULT 0`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN rejected_count BIGINT DEFAULT 0`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN pending_count BIGINT DEFAULT 0`); } catch {}
+  try { await query(`ALTER TABLE governance_index_state ADD COLUMN expired_count BIGINT DEFAULT 0`); } catch {}
+
   await query(`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_governance_index_state_id
     ON governance_index_state(id)
