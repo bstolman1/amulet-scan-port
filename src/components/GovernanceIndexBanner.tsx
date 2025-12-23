@@ -51,11 +51,12 @@ export function GovernanceIndexBanner() {
       });
       pollUntilComplete();
     },
-    onError: (err: Error) => {
+    onError: (err: unknown) => {
       setIsBuilding(false);
+      const message = err instanceof Error ? err.message : String(err) || 'Unknown error';
       toast({
         title: "Index Build Failed",
-        description: err.message,
+        description: message,
         variant: "destructive",
       });
     },
@@ -76,11 +77,12 @@ export function GovernanceIndexBanner() {
       });
       pollUntilComplete();
     },
-    onError: (err: Error) => {
+    onError: (err: unknown) => {
       setIsBuilding(false);
+      const message = err instanceof Error ? err.message : String(err) || 'Unknown error';
       toast({
         title: "Purge & Rebuild Failed",
-        description: err.message,
+        description: message,
         variant: "destructive",
       });
     },

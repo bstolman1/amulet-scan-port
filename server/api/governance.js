@@ -224,13 +224,24 @@ router.get('/action-types', async (req, res) => {
  */
 router.post('/index/purge', async (req, res) => {
   try {
-    await query(`DELETE FROM governance_proposals`);
-    await query(`DELETE FROM governance_index_state`);
+    // Use try-catch for each query to handle missing tables gracefully
+    try {
+      await query(`DELETE FROM governance_proposals`);
+    } catch (err) {
+      console.log('governance_proposals table may not exist, skipping:', err.message);
+    }
+    
+    try {
+      await query(`DELETE FROM governance_index_state`);
+    } catch (err) {
+      console.log('governance_index_state table may not exist, skipping:', err.message);
+    }
+    
     console.log('🗑️ Governance index purged');
     res.json({ status: 'ok', message: 'Governance index purged' });
   } catch (err) {
     console.error('Error purging governance index:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Unknown error during purge' });
   }
 });
 
