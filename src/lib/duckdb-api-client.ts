@@ -33,11 +33,25 @@ export async function apiFetch<T>(endpoint: string, options?: RequestInit): Prom
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `API error: ${response.status}`);
+    // Try JSON first, then fall back to text for non-JSON error bodies (e.g. HTML).
+    let errMsg = `API error: ${response.status}`;
+    try {
+      const errorJson = await response.json();
+      errMsg = errorJson?.error || errorJson?.message || errMsg;
+    } catch {
+      try {
+        const text = await response.text();
+        if (text) errMsg = `${errMsg} - ${text.slice(0, 200)}`;
+      } catch {
+        // ignore
+      }
+    }
+    throw new Error(errMsg);
   }
 
-  return response.json();
+  // Some endpoints may return empty body (204/empty 200)
+  const text = await response.text();
+  return (text ? JSON.parse(text) : (null as unknown as T));
 }
 
 /**
