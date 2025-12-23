@@ -1966,10 +1966,10 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
       }
     }
 
-    // Analyze the structure patterns
+    // Analyze the structure patterns based on payload keys
     const structurePatterns = {};
     for (const s of samples) {
-      const key = s.exercise_result_keys.sort().join(',');
+      const key = (s.payload_keys || []).sort().join(',') || '(empty)';
       structurePatterns[key] = (structurePatterns[key] || 0) + 1;
     }
 
