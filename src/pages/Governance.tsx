@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2 } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2, Link2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,7 @@ import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data"
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
+import { useGovernanceProposals } from "@/hooks/use-governance-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -131,6 +132,13 @@ const Governance = () => {
     fromIndex: uniqueFromIndex,
     dataSource: uniqueDataSource,
   } = useUniqueProposals(votingThreshold);
+
+  // Semantic grouped proposals from the new endpoint
+  const {
+    data: semanticProposals,
+    isLoading: semanticLoading,
+    error: semanticError,
+  } = useGovernanceProposals();
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -422,6 +430,15 @@ const Governance = () => {
         <Tabs defaultValue="active" className="space-y-6">
           <TabsList>
             <TabsTrigger value="active">Active Proposals</TabsTrigger>
+            <TabsTrigger value="semantic">
+              <Link2 className="h-4 w-4 mr-1" />
+              Semantic Groups
+              {semanticProposals?.total != null && semanticProposals.total > 0 && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  {semanticProposals.total}
+                </Badge>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="unique">
               Unique Proposals
               {uniqueStats.total > 0 && (
@@ -635,6 +652,239 @@ const Governance = () => {
                 })}
               </div>
             )}
+          </div>
+        </Card>
+      </TabsContent>
+
+      {/* Semantic Groups Tab - Grouped by action_type::subject */}
+      <TabsContent value="semantic">
+        <Card className="glass-card">
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <Link2 className="h-5 w-5" />
+                  Semantic Proposal Groups
+                </h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Proposals grouped by <code className="bg-muted px-1 rounded">action_type::subject</code> to link re-proposals together
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
+                {semanticProposals?.total != null && (
+                  <Badge variant="outline">
+                    {semanticProposals.total} unique groups
+                  </Badge>
+                )}
+                {semanticProposals?.fromIndex && (
+                  <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+                    <Database className="w-3 h-3 mr-1" />
+                    From Index
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {/* Stats Row */}
+            {semanticProposals?.byStatus && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+                <div className="p-3 rounded-lg bg-muted/30 text-center">
+                  <div className="text-2xl font-bold">{semanticProposals.total}</div>
+                  <div className="text-xs text-muted-foreground">Total Groups</div>
+                </div>
+                <div className="p-3 rounded-lg bg-success/10 text-center">
+                  <div className="text-2xl font-bold text-success">{semanticProposals.byStatus.executed}</div>
+                  <div className="text-xs text-muted-foreground">Executed</div>
+                </div>
+                <div className="p-3 rounded-lg bg-destructive/10 text-center">
+                  <div className="text-2xl font-bold text-destructive">{semanticProposals.byStatus.rejected}</div>
+                  <div className="text-xs text-muted-foreground">Rejected</div>
+                </div>
+                <div className="p-3 rounded-lg bg-warning/10 text-center">
+                  <div className="text-2xl font-bold text-warning">{semanticProposals.byStatus.in_progress}</div>
+                  <div className="text-xs text-muted-foreground">In Progress</div>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 text-center">
+                  <div className="text-2xl font-bold text-muted-foreground">{semanticProposals.byStatus.expired}</div>
+                  <div className="text-xs text-muted-foreground">Expired</div>
+                </div>
+              </div>
+            )}
+
+            {semanticLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-24 w-full" />
+                ))}
+              </div>
+            ) : semanticError ? (
+              <div className="text-center py-12">
+                <AlertTriangle className="h-12 w-12 text-destructive mx-auto mb-4" />
+                <p className="text-muted-foreground">Failed to load semantic groups</p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Ensure the VoteRequest index is built: POST /api/events/vote-requests/index/build
+                </p>
+              </div>
+            ) : !semanticProposals?.proposals?.length ? (
+              <div className="text-center py-12">
+                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground">No semantic groups found</p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Build the VoteRequest index first to see grouped proposals
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {semanticProposals.proposals.map((proposal) => {
+                  const statusMap: Record<string, 'approved' | 'rejected' | 'pending' | 'expired'> = {
+                    'executed': 'approved',
+                    'rejected': 'rejected',
+                    'in_progress': 'pending',
+                    'expired': 'expired',
+                  };
+                  const displayStatus = statusMap[proposal.latest_status] || 'pending';
+                  const title = proposal.action_type
+                    .replace(/^(SRARC_|ARC_|CRARC_|ARAC_)/, "")
+                    .replace(/([A-Z])/g, " $1")
+                    .trim();
+
+                  return (
+                    <Collapsible key={proposal.semantic_key}>
+                      <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(displayStatus)}</div>
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-lg">{title}</h4>
+                              <p className="text-sm text-muted-foreground">
+                                <span className="font-mono text-xs">{proposal.action_type}</span>
+                                {proposal.action_subject && (
+                                  <>
+                                    <span className="mx-2">•</span>
+                                    <span className="text-xs text-primary/80 truncate max-w-[200px] inline-block align-bottom" title={proposal.action_subject}>
+                                      {proposal.action_subject.slice(0, 30)}{proposal.action_subject.length > 30 ? '...' : ''}
+                                    </span>
+                                  </>
+                                )}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Requested by: <span className="font-medium text-foreground">{proposal.latest_requester || 'Unknown'}</span>
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1 text-sm">
+                              <span className="text-success font-medium">{proposal.accept_count}</span>
+                              <span className="text-muted-foreground">/</span>
+                              <span className="text-destructive font-medium">{proposal.reject_count}</span>
+                            </div>
+                            {proposal.related_count > 1 && (
+                              <Badge variant="outline" className="text-xs bg-primary/10 border-primary/30">
+                                <Link2 className="w-3 h-3 mr-1" />
+                                {proposal.related_count} related
+                              </Badge>
+                            )}
+                            <Badge className={cn(
+                              "text-xs",
+                              displayStatus === 'approved' && "bg-success/10 text-success border-success/20",
+                              displayStatus === 'rejected' && "bg-destructive/10 text-destructive border-destructive/20",
+                              displayStatus === 'pending' && "bg-warning/10 text-warning border-warning/20",
+                              displayStatus === 'expired' && "bg-muted text-muted-foreground",
+                            )}>
+                              {displayStatus === 'approved' && <CheckCircle className="h-3 w-3 mr-1" />}
+                              {displayStatus === 'rejected' && <XCircle className="h-3 w-3 mr-1" />}
+                              {displayStatus === 'pending' && <Clock className="h-3 w-3 mr-1" />}
+                              {proposal.latest_status}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">
+                              {safeFormatDate(proposal.last_seen, "MMM d, yyyy")}
+                            </span>
+                            <CollapsibleTrigger asChild>
+                              <Button variant="ghost" size="sm">
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                        </div>
+
+                        {/* Reason Section */}
+                        <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                          <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                          {proposal.latest_reason_body && typeof proposal.latest_reason_body === "string" && (
+                            <p className="text-sm mb-2">{proposal.latest_reason_body}</p>
+                          )}
+                          {proposal.latest_reason_url && typeof proposal.latest_reason_url === "string" && (
+                            <a 
+                              href={proposal.latest_reason_url} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-sm text-primary hover:underline break-all"
+                            >
+                              {proposal.latest_reason_url}
+                            </a>
+                          )}
+                          {(!proposal.latest_reason_body || typeof proposal.latest_reason_body !== "string") && 
+                           (!proposal.latest_reason_url || typeof proposal.latest_reason_url !== "string") && (
+                            <p className="text-sm text-muted-foreground italic">No reason provided</p>
+                          )}
+                        </div>
+
+                        {/* Stats Grid */}
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                            <p className="text-lg font-bold text-success">{proposal.accept_count}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                            <p className="text-lg font-bold text-destructive">{proposal.reject_count}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">First Seen</p>
+                            <p className="text-xs font-mono">
+                              {safeFormatDate(proposal.first_seen, "MMM d, yyyy HH:mm")}
+                            </p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
+                            <p className="text-xs font-mono">
+                              {safeFormatDate(proposal.latest_vote_before)}
+                            </p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Related Proposals</p>
+                            <p className="text-lg font-bold">{proposal.related_count}</p>
+                          </div>
+                        </div>
+
+                        <CollapsibleContent className="mt-4">
+                          <div className="space-y-3">
+                            {/* Semantic Key */}
+                            <div className="p-3 rounded-lg bg-background/70 border border-border/50">
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                                Semantic Key: <span className="font-mono text-primary">{proposal.semantic_key}</span>
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Latest Contract ID: <span className="font-mono">{proposal.latest_contract_id}</span>
+                              </p>
+                            </div>
+                          </div>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Info about semantic grouping */}
+            <Alert className="mt-6">
+              <Link2 className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                This view groups proposals by <code className="bg-muted px-1 rounded">action_type::subject</code> to link re-submitted proposals together.
+                The "Related" count shows how many VoteRequests share the same semantic key.
+              </AlertDescription>
+            </Alert>
           </div>
         </Card>
       </TabsContent>
