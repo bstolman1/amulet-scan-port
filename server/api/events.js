@@ -2341,20 +2341,11 @@ router.get('/governance/proposals/stream', async (req, res) => {
       return;
     }
 
-    // Concurrency setting - lower values give more responsive progress updates
-    const concurrency = parseInt(req.query.concurrency) || 20;
-    const maxFiles = req.query.limit ? parseInt(req.query.limit) : null;
-    
-    // Use all files or limit
-    let binFiles = allFiles;
-    if (maxFiles && maxFiles > 0) {
-      binFiles = allFiles.slice(-maxFiles); // Take most recent files (last N)
-    }
+    // Use all files for the stream endpoint
+    const binFiles = allFiles;
     const totalFiles = binFiles.length;
     
-    sendEvent('start', { totalFiles, concurrency, totalAvailable: allFiles.length });
-    console.log(`[Governance Scan] Starting: ${totalFiles} files, concurrency=${concurrency}`);
-    const scanStartTime = Date.now();
+    sendEvent('start', { totalFiles });
     
     // Map to track proposals by unique key
     const proposalMap = new Map();
@@ -2366,78 +2357,41 @@ router.get('/governance/proposals/stream', async (req, res) => {
     
     let filesScanned = 0;
     let totalVoteRequests = 0;
-    let lastProgressUpdate = Date.now();
+    let lastProgressUpdate = 0;
     
-    // Process a single file with timeout
-    const processFile = async (filePath) => {
+    for (const filePath of binFiles) {
       try {
         const result = await binaryReader.readBinaryFile(filePath);
         const events = result.records || [];
-        const voteRequests = [];
+        filesScanned++;
         
         for (const evt of events) {
           const templateId = evt.template_id || '';
           if (!templateId.includes('VoteRequest')) continue;
           if (evt.event_type !== 'created') continue;
           
+          totalVoteRequests++;
           const payload = evt.payload || {};
+          
           let proposal;
           try {
             proposal = parseVoteRequestPayload(payload);
           } catch (parseErr) {
             continue;
           }
+          
           if (!proposal) continue;
           
-          voteRequests.push({ evt, proposal });
-        }
-        
-        return voteRequests;
-      } catch (err) {
-        return [];
-      }
-    };
-    
-    // Helper to send progress update
-    const sendProgress = () => {
-      const now = Date.now();
-      const elapsedSec = (now - scanStartTime) / 1000;
-      const filesPerSec = elapsedSec > 0 ? Math.round((filesScanned / elapsedSec) * 10) / 10 : 0;
-      const percent = Math.round((filesScanned / totalFiles) * 100);
-      const remainingFiles = totalFiles - filesScanned;
-      const etaSeconds = filesPerSec > 0 ? Math.round(remainingFiles / filesPerSec) : null;
-      
-      sendEvent('progress', {
-        filesScanned,
-        totalFiles,
-        percent,
-        uniqueProposals: proposalMap.size,
-        totalVoteRequests,
-        filesPerSec,
-        etaSeconds,
-        concurrency,
-        rawCount: rawMode ? allRawVoteRequests.length : undefined,
-      });
-      lastProgressUpdate = now;
-    };
-    
-    // Process files in smaller batches for more responsive updates
-    for (let i = 0; i < binFiles.length; i += concurrency) {
-      const batch = binFiles.slice(i, i + concurrency);
-      const results = await Promise.all(batch.map(processFile));
-      
-      // Merge results from this batch
-      for (const voteRequests of results) {
-        for (const { evt, proposal } of voteRequests) {
-          totalVoteRequests++;
-          
           // Generate a unique proposal key
+          // Use trackingCid if available (most reliable), otherwise use action-specific details
           let proposalKey;
           let keySource;
           if (proposal.trackingCid) {
+            // trackingCid uniquely identifies the original VoteRequest
             proposalKey = `cid::${proposal.trackingCid}`;
             keySource = 'trackingCid';
           } else {
+            // Fallback: combine actionType + requester + reasonUrl + action-specific details
             const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
             proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
             keySource = 'composite';
@@ -2459,6 +2413,7 @@ router.get('/governance/proposals/stream', async (req, res) => {
           const eventTimestamp = new Date(evt.timestamp).getTime();
           
           if (debug && existing) {
+            // Log deduplication event
             dedupLog.push({
               key: proposalKey.slice(0, 100),
               keySource,
@@ -2484,19 +2439,25 @@ router.get('/governance/proposals/stream', async (req, res) => {
             });
           }
         }
-      }
-      
-      filesScanned += batch.length;
-      
-      // Send progress update every batch (more responsive)
-      const now = Date.now();
-      if (now - lastProgressUpdate > 100) {
-        sendProgress();
+        
+        // Send progress update every 100 files or 500ms
+        const now = Date.now();
+        if (filesScanned % 100 === 0 || now - lastProgressUpdate > 500) {
+          const percent = Math.round((filesScanned / totalFiles) * 100);
+          sendEvent('progress', {
+            filesScanned,
+            totalFiles,
+            percent,
+            uniqueProposals: proposalMap.size,
+            totalVoteRequests,
+            rawCount: rawMode ? allRawVoteRequests.length : undefined,
+          });
+          lastProgressUpdate = now;
+        }
+      } catch (err) {
+        // Skip unreadable files
       }
     }
-    
-    const totalElapsed = ((Date.now() - scanStartTime) / 1000).toFixed(1);
-    console.log(`[Governance Scan] Complete: ${filesScanned} files in ${totalElapsed}s, ${proposalMap.size} unique proposals`);
     
     // Convert to array and sort by latest timestamp (newest first)
     const proposals = Array.from(proposalMap.values())

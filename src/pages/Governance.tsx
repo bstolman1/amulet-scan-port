@@ -56,8 +56,7 @@ const Governance = () => {
     isLoading: fullScanLoading, 
     error: fullScanError,
     refetch: refetchFullScan,
-    stop: stopFullScan,
-  } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode });
+  } = useFullProposalScan(runFullScan, debugMode, rawMode);
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -908,25 +907,24 @@ const Governance = () => {
                   />
                   Raw Mode
                 </label>
-                {fullScanLoading ? (
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    onClick={() => stopFullScan()}
-                  >
-                    <XCircle className="h-4 w-4 mr-2" />
-                    Stop
-                  </Button>
-                ) : (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => refetchFullScan()}
-                  >
-                    <FileSearch className="h-4 w-4 mr-2" />
-                    Re-scan
-                  </Button>
-                )}
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => refetchFullScan()}
+                  disabled={fullScanLoading}
+                >
+                  {fullScanLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Scanning...
+                    </>
+                  ) : (
+                    <>
+                      <FileSearch className="h-4 w-4 mr-2" />
+                      Re-scan
+                    </>
+                  )}
+                </Button>
               </div>
             </div>
 
@@ -965,25 +963,10 @@ const Governance = () => {
               <div className="space-y-6 py-8">
                 <div className="flex flex-col items-center">
                   <Loader2 className="h-12 w-12 text-primary mb-4 animate-spin" />
-                  <p className="text-lg font-semibold mb-2">Scanning ledger files...</p>
-                  <p className="text-muted-foreground text-sm mb-2">
+                  <p className="text-lg font-semibold mb-2">Scanning Ledger Files...</p>
+                  <p className="text-muted-foreground text-sm mb-4">
                     {scanProgress.filesScanned.toLocaleString()} / {scanProgress.totalFiles.toLocaleString()} files
                   </p>
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    {scanProgress.filesPerSec && scanProgress.filesPerSec > 0 && (
-                      <span className="font-medium text-primary">
-                        {scanProgress.filesPerSec} files/sec
-                      </span>
-                    )}
-                    {scanProgress.etaSeconds && scanProgress.etaSeconds > 0 && (
-                      <span>
-                        ETA: {scanProgress.etaSeconds >= 60 
-                          ? `${Math.floor(scanProgress.etaSeconds / 60)}m ${scanProgress.etaSeconds % 60}s`
-                          : `${scanProgress.etaSeconds}s`
-                        }
-                      </span>
-                    )}
-                  </div>
                 </div>
                 
                 {/* Progress Bar */}
@@ -1001,35 +984,15 @@ const Governance = () => {
                 </div>
 
                 {/* Live Stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-lg mx-auto">
-                  <div className="p-3 rounded-lg bg-muted/30 text-center">
-                    <p className="text-xs text-muted-foreground mb-1">Speed</p>
-                    <p className="text-lg font-bold text-primary">{scanProgress.filesPerSec || 0}/s</p>
-                  </div>
-                  <div className="p-3 rounded-lg bg-muted/30 text-center">
-                    <p className="text-xs text-muted-foreground mb-1">Parallel</p>
-                    <p className="text-lg font-bold">{scanProgress.concurrency || 20}</p>
-                  </div>
+                <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
                   <div className="p-3 rounded-lg bg-muted/30 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Unique Proposals</p>
-                    <p className="text-lg font-bold text-primary">{scanProgress.uniqueProposals}</p>
+                    <p className="text-xl font-bold text-primary">{scanProgress.uniqueProposals}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Vote Requests</p>
-                    <p className="text-lg font-bold">{scanProgress.totalVoteRequests}</p>
+                    <p className="text-xl font-bold">{scanProgress.totalVoteRequests}</p>
                   </div>
-                </div>
-                
-                {/* Stop Button */}
-                <div className="flex justify-center">
-                  <Button 
-                    variant="destructive" 
-                    size="sm" 
-                    onClick={() => stopFullScan()}
-                  >
-                    <XCircle className="h-4 w-4 mr-2" />
-                    Stop Scan
-                  </Button>
                 </div>
               </div>
             ) : fullScanLoading ? (

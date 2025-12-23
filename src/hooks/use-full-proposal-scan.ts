@@ -63,34 +63,16 @@ interface ScanProgress {
   percent: number;
   uniqueProposals: number;
   totalVoteRequests: number;
-  filesPerSec?: number;
-  etaSeconds?: number;
-  concurrency?: number;
   rawCount?: number;
 }
 
-interface ScanOptions {
-  debug?: boolean;
-  raw?: boolean;
-  concurrency?: number;
-  limit?: number;
-}
-
-export function useFullProposalScan(enabled: boolean = false, options: ScanOptions = {}) {
+export function useFullProposalScan(enabled: boolean = false, debug: boolean = false, raw: boolean = false) {
   const [data, setData] = useState<FullProposalScanResponse | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const hasStartedRef = useRef(false);
-
-  const stopScan = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-    setIsLoading(false);
-  }, []);
 
   const startScan = useCallback(async () => {
     if (isLoading) return;
@@ -103,9 +85,8 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
     try {
       const backendUrl = getDuckDBApiUrl();
       const params = new URLSearchParams();
-      if (options.debug) params.append('debug', 'true');
-      if (options.raw) params.append('raw', 'true');
-      if (options.limit) params.append('limit', options.limit.toString());
+      if (debug) params.append('debug', 'true');
+      if (raw) params.append('raw', 'true');
       const queryString = params.toString();
       const url = `${backendUrl}/api/events/governance/proposals/stream${queryString ? '?' + queryString : ''}`;
       
@@ -116,22 +97,8 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
 
       const eventSource = new EventSource(url);
       eventSourceRef.current = eventSource;
-      
-      // Timeout if no events received within 30 seconds
-      let lastEventTime = Date.now();
-      const timeoutCheck = setInterval(() => {
-        if (Date.now() - lastEventTime > 30000) {
-          console.error('[SSE] Timeout - no events received for 30 seconds');
-          clearInterval(timeoutCheck);
-          eventSource.close();
-          eventSourceRef.current = null;
-          setError(new Error('Scan timed out - server not responding. The server may be processing files. Try again.'));
-          setIsLoading(false);
-        }
-      }, 5000);
 
       eventSource.addEventListener('start', (e) => {
-        lastEventTime = Date.now();
         const data = JSON.parse(e.data);
         console.log('[SSE] Scan started:', data);
         setProgress({
@@ -140,18 +107,15 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
           percent: 0,
           uniqueProposals: 0,
           totalVoteRequests: 0,
-          concurrency: data.concurrency,
         });
       });
 
       eventSource.addEventListener('progress', (e) => {
-        lastEventTime = Date.now();
         const progressData = JSON.parse(e.data);
         setProgress(progressData);
       });
 
       eventSource.addEventListener('complete', (e) => {
-        clearInterval(timeoutCheck);
         const result = JSON.parse(e.data);
         console.log('[SSE] Scan complete:', result.summary);
         setData(result);
@@ -164,27 +128,22 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
         });
         setIsLoading(false);
         eventSource.close();
-        eventSourceRef.current = null;
       });
 
       eventSource.addEventListener('error', (e) => {
-        clearInterval(timeoutCheck);
-        console.error('[SSE] Error event:', e);
+        console.error('[SSE] Error:', e);
         setError(new Error('SSE connection failed'));
         setIsLoading(false);
         eventSource.close();
-        eventSourceRef.current = null;
       });
 
       eventSource.onerror = () => {
-        clearInterval(timeoutCheck);
         // Only set error if we haven't completed
         if (isLoading && !data) {
           setError(new Error('Connection to scan endpoint failed'));
           setIsLoading(false);
         }
         eventSource.close();
-        eventSourceRef.current = null;
       };
 
     } catch (err) {
@@ -217,6 +176,5 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
     isLoading,
     error,
     refetch: startScan,
-    stop: stopScan,
   };
 }
