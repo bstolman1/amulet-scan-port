@@ -116,8 +116,22 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
 
       const eventSource = new EventSource(url);
       eventSourceRef.current = eventSource;
+      
+      // Timeout if no events received within 30 seconds
+      let lastEventTime = Date.now();
+      const timeoutCheck = setInterval(() => {
+        if (Date.now() - lastEventTime > 30000) {
+          console.error('[SSE] Timeout - no events received for 30 seconds');
+          clearInterval(timeoutCheck);
+          eventSource.close();
+          eventSourceRef.current = null;
+          setError(new Error('Scan timed out - server not responding. The server may be processing files. Try again.'));
+          setIsLoading(false);
+        }
+      }, 5000);
 
       eventSource.addEventListener('start', (e) => {
+        lastEventTime = Date.now();
         const data = JSON.parse(e.data);
         console.log('[SSE] Scan started:', data);
         setProgress({
@@ -131,11 +145,13 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
       });
 
       eventSource.addEventListener('progress', (e) => {
+        lastEventTime = Date.now();
         const progressData = JSON.parse(e.data);
         setProgress(progressData);
       });
 
       eventSource.addEventListener('complete', (e) => {
+        clearInterval(timeoutCheck);
         const result = JSON.parse(e.data);
         console.log('[SSE] Scan complete:', result.summary);
         setData(result);
@@ -152,7 +168,8 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
       });
 
       eventSource.addEventListener('error', (e) => {
-        console.error('[SSE] Error:', e);
+        clearInterval(timeoutCheck);
+        console.error('[SSE] Error event:', e);
         setError(new Error('SSE connection failed'));
         setIsLoading(false);
         eventSource.close();
@@ -160,6 +177,7 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
       });
 
       eventSource.onerror = () => {
+        clearInterval(timeoutCheck);
         // Only set error if we haven't completed
         if (isLoading && !data) {
           setError(new Error('Connection to scan endpoint failed'));
