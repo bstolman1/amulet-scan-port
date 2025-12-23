@@ -2185,6 +2185,96 @@ router.get('/debug/cast-vote', async (req, res) => {
   }
 });
 
+// GET /api/events/governance-proposals - Get governance proposals grouped by semantic key (from index)
+// This is the recommended endpoint for governance UIs - uses the persistent index with proper grouping
+router.get('/governance-proposals', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const status = req.query.status || 'all';
+    
+    // Check if index is populated
+    const indexPopulated = await voteRequestIndexer.isIndexPopulated();
+    if (!indexPopulated) {
+      return res.json({
+        data: [],
+        count: 0,
+        source: 'index-empty',
+        message: 'VoteRequest index not built yet. Trigger a rebuild at /api/events/vote-requests/index/build',
+      });
+    }
+    
+    // Query grouped proposals from the index
+    const proposals = await voteRequestIndexer.queryGovernanceProposals({ limit, status, offset });
+    const stats = await voteRequestIndexer.getVoteRequestStats();
+    const indexState = await voteRequestIndexer.getIndexState();
+    
+    res.json({
+      data: proposals,
+      count: proposals.length,
+      stats,
+      source: 'duckdb-index',
+      indexedAt: indexState.last_indexed_at,
+      totalIndexed: indexState.total_indexed,
+      _meta: {
+        endpoint: '/api/events/governance-proposals',
+        description: 'Governance proposals grouped by semantic_key for deduplication',
+        fields: {
+          semantic_key: 'Unique key combining action_type + subject for linking re-submitted proposals',
+          action_subject: 'The target of the action (provider, sv, validator, etc.)',
+          timeline: {
+            firstSeen: 'When the first proposal for this subject was created',
+            lastSeen: 'When the most recent proposal for this subject was created',
+            relatedCount: 'Number of related proposals (re-submissions)',
+          },
+        },
+      },
+    });
+  } catch (err) {
+    console.error('Error in governance-proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/governance-proposals/:semanticKey/timeline - Get full timeline for a proposal
+router.get('/governance-proposals/:semanticKey/timeline', async (req, res) => {
+  try {
+    const semanticKey = decodeURIComponent(req.params.semanticKey);
+    
+    const timeline = await voteRequestIndexer.queryProposalTimeline(semanticKey);
+    
+    if (timeline.length === 0) {
+      return res.status(404).json({ 
+        error: 'Proposal not found',
+        semanticKey,
+      });
+    }
+    
+    // Compute summary stats
+    const latest = timeline[0];
+    const oldest = timeline[timeline.length - 1];
+    
+    res.json({
+      semanticKey,
+      latestStatus: latest.status,
+      latestContractId: latest.contract_id,
+      timeline,
+      summary: {
+        totalVersions: timeline.length,
+        firstCreated: oldest.effective_at,
+        lastUpdated: latest.effective_at,
+        finalVoteCount: latest.vote_count,
+        actionType: latest.action_tag,
+        subject: latest.action_subject,
+      },
+      source: 'duckdb-index',
+    });
+  } catch (err) {
+    console.error('Error in governance-proposals timeline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/governance/proposals - Get latest state for each unique proposal
 router.get('/governance/proposals', async (req, res) => {
   try {
