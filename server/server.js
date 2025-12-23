@@ -17,6 +17,7 @@ import backfillRouter from './api/backfill.js';
 import acsRouter from './api/acs.js';
 import announcementsRouter from './api/announcements.js';
 import governanceLifecycleRouter, { fetchFreshData, writeCache } from './api/governance-lifecycle.js';
+import governanceRouter from './api/governance.js';
 import kaikoRouter from './api/kaiko.js';
 import rewardsRouter from './api/rewards.js';
 import db, { initializeViews } from './duckdb/connection.js';
@@ -145,6 +146,7 @@ app.use('/api/backfill', backfillRouter);
 app.use('/api/acs', acsRouter);
 app.use('/api/announcements', announcementsRouter);
 app.use('/api/governance-lifecycle', governanceLifecycleRouter);
+app.use('/api/governance', governanceRouter);
 app.use('/api/kaiko', kaikoRouter);
 app.use('/api/rewards', rewardsRouter);
 
