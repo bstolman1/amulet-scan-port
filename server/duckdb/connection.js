@@ -35,7 +35,7 @@ try {
 } catch {}
 
 // Database file path (persistent storage)
-const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
+export const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
 
 // ✅ Per-query connection pattern (Windows safe)
@@ -48,6 +48,11 @@ export function query(sql, params = []) {
       if (dbErr) {
         console.error('❌ DuckDB open error:', dbErr?.message || dbErr);
         console.error('   DB_FILE:', DB_FILE);
+        // Common on Windows: another Node process still holds the file lock
+        if (/being used by another process/i.test(String(dbErr?.message || dbErr))) {
+          console.error('   HINT: Another node.exe is still running and holding a lock on the DuckDB file.');
+          console.error('         Stop the other process (Task Manager) or delete the .lock file if you use one.');
+        }
         reject(dbErr);
         return;
       }
@@ -333,6 +338,6 @@ export async function initializeViews() {
 // It can crash the process on startup (unhandled promise rejection) and should be invoked explicitly by the server.
 // initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
+export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, DB_FILE };
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, DB_FILE };
