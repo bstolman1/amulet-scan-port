@@ -1936,17 +1936,24 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
           
           if (samples.length < maxSamples) {
             const exerciseResult = e.exercise_result || {};
+            const payload = e.payload || {};
+            const raw = e.raw || {};
+            
+            // Choice arguments are typically in payload or raw.choice_argument
+            const choiceArg = raw.choice_argument || payload.choice_argument || payload;
+            
             samples.push({
               contract_id: e.contract_id,
               template_id: e.template_id,
               timestamp: e.timestamp,
-              exercise_result_keys: Object.keys(exerciseResult),
-              exercise_result_preview: JSON.stringify(exerciseResult).slice(0, 2000),
-              // Look for vote-request related data
-              has_action_name: !!exerciseResult.actionName,
-              action_name: exerciseResult.actionName || null,
-              has_vote_request_cid: !!exerciseResult.voteRequestCid,
-              vote_request_cid: exerciseResult.voteRequestCid || null,
+              // Check all possible locations for the confirmation data
+              payload_keys: Object.keys(payload),
+              raw_keys: Object.keys(raw),
+              choice_argument_preview: JSON.stringify(choiceArg).slice(0, 3000),
+              exercise_result_preview: JSON.stringify(exerciseResult).slice(0, 500),
+              // Look for confirmation-related fields
+              has_confirmation_cid: !!(choiceArg.confirmationCid || choiceArg.confirmation),
+              confirmation_cid: choiceArg.confirmationCid || choiceArg.confirmation || null,
             });
           }
         }
