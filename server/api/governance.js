@@ -245,4 +245,68 @@ router.post('/index/purge', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/governance/diagnostics
+ * Get diagnostic info about vote_requests data quality (reason URL distribution)
+ */
+router.get('/diagnostics', async (req, res) => {
+  try {
+    // Count total vote requests
+    const totalResult = await query(`SELECT COUNT(*) as count FROM vote_requests`);
+    const total = Number(totalResult[0]?.count || 0);
+
+    // Count by reason URL presence
+    const urlDistribution = await query(`
+      SELECT 
+        CASE 
+          WHEN reason IS NULL OR reason = '' OR reason = '""' THEN 'empty'
+          WHEN reason LIKE '%"url"%' AND reason NOT LIKE '%"url":""%' AND reason NOT LIKE '%"url": ""%' THEN 'has_url'
+          ELSE 'no_url_field'
+        END as reason_type,
+        COUNT(*) as count
+      FROM vote_requests
+      GROUP BY 1
+      ORDER BY count DESC
+    `);
+
+    // Sample some records to show actual reason shapes
+    const samples = await query(`
+      SELECT 
+        contract_id,
+        action_tag,
+        reason,
+        effective_at
+      FROM vote_requests
+      ORDER BY effective_at DESC
+      LIMIT 10
+    `);
+
+    // Count by action type to show distribution
+    const actionDistribution = await query(`
+      SELECT 
+        action_tag,
+        COUNT(*) as count
+      FROM vote_requests
+      GROUP BY action_tag
+      ORDER BY count DESC
+      LIMIT 20
+    `);
+
+    res.json({
+      total,
+      urlDistribution: urlDistribution.map(r => ({ type: r.reason_type, count: Number(r.count) })),
+      actionDistribution: actionDistribution.map(r => ({ actionTag: r.action_tag, count: Number(r.count) })),
+      samples: samples.map(s => ({
+        contractId: s.contract_id,
+        actionTag: s.action_tag,
+        reason: s.reason,
+        effectiveAt: s.effective_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Error getting governance diagnostics:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

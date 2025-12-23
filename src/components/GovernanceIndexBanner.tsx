@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Vote, RefreshCw, CheckCircle, AlertTriangle, Loader2, Trash2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Vote, RefreshCw, CheckCircle, AlertTriangle, Loader2, Trash2, HelpCircle } from "lucide-react";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { toast } from "@/hooks/use-toast";
 
@@ -144,8 +145,21 @@ export function GovernanceIndexBanner() {
           ) : isPopulated ? (
             <>
               <CheckCircle className="h-4 w-4 text-primary" />
-              <span>
+              <span className="flex items-center gap-1">
                 <strong>Governance Index:</strong> {totalProposals} unique proposals indexed
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      <p className="text-sm">
+                        Proposals are grouped by <strong>action type + reason link</strong>. 
+                        If no link exists, they're grouped by reason text hash or contract ID.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </span>
               <div className="flex gap-1">
                 <Badge variant="outline" className="text-xs border-green-500 text-green-500">
