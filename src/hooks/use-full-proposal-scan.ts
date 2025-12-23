@@ -66,7 +66,14 @@ interface ScanProgress {
   rawCount?: number;
 }
 
-export function useFullProposalScan(enabled: boolean = false, debug: boolean = false, raw: boolean = false) {
+interface ScanOptions {
+  debug?: boolean;
+  raw?: boolean;
+  concurrency?: number;
+  limit?: number;
+}
+
+export function useFullProposalScan(enabled: boolean = false, options: ScanOptions = {}) {
   const [data, setData] = useState<FullProposalScanResponse | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -85,8 +92,10 @@ export function useFullProposalScan(enabled: boolean = false, debug: boolean = f
     try {
       const backendUrl = getDuckDBApiUrl();
       const params = new URLSearchParams();
-      if (debug) params.append('debug', 'true');
-      if (raw) params.append('raw', 'true');
+      if (options.debug) params.append('debug', 'true');
+      if (options.raw) params.append('raw', 'true');
+      if (options.concurrency) params.append('concurrency', options.concurrency.toString());
+      if (options.limit) params.append('limit', options.limit.toString());
       const queryString = params.toString();
       const url = `${backendUrl}/api/events/governance/proposals/stream${queryString ? '?' + queryString : ''}`;
       
