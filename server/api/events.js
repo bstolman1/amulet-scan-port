@@ -2193,7 +2193,10 @@ router.get('/governance/proposals', async (req, res) => {
       return res.status(400).json({ error: 'Binary files required' });
     }
 
-    const maxFiles = Math.min(parseInt(req.query.files) || 2000, 5000);
+    // Allow 'all' or specific count - default to 2000 for quick scans, 'all' for full scan
+    const filesParam = req.query.files;
+    const scanAll = filesParam === 'all';
+    const maxFiles = scanAll ? Infinity : Math.min(parseInt(filesParam) || 2000, 100000);
     
     const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
     
@@ -2201,9 +2204,14 @@ router.get('/governance/proposals', async (req, res) => {
       return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
     }
     
-    // Spread sampling across the dataset
-    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
-    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
+    // If scanning all files, use them directly; otherwise spread sample
+    let binFiles;
+    if (scanAll) {
+      binFiles = allFiles;
+    } else {
+      const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+      binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
+    }
     
     // Map to track proposals by unique key (action type + reason URL)
     const proposalMap = new Map();
