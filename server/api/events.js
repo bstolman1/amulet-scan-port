@@ -2353,6 +2353,8 @@ router.get('/governance/proposals/stream', async (req, res) => {
     const totalFiles = binFiles.length;
     
     sendEvent('start', { totalFiles, concurrency, totalAvailable: allFiles.length });
+    console.log(`[Governance Scan] Starting: ${totalFiles} files, concurrency=${concurrency}`);
+    const scanStartTime = Date.now();
     
     // Map to track proposals by unique key
     const proposalMap = new Map();
@@ -2466,6 +2468,8 @@ router.get('/governance/proposals/stream', async (req, res) => {
       // Send progress update every batch
       const now = Date.now();
       if (now - lastProgressUpdate > 200) {
+        const elapsedSec = (now - scanStartTime) / 1000;
+        const filesPerSec = elapsedSec > 0 ? Math.round(filesScanned / elapsedSec) : 0;
         const percent = Math.round((filesScanned / totalFiles) * 100);
         sendEvent('progress', {
           filesScanned,
@@ -2473,11 +2477,15 @@ router.get('/governance/proposals/stream', async (req, res) => {
           percent,
           uniqueProposals: proposalMap.size,
           totalVoteRequests,
+          filesPerSec,
           rawCount: rawMode ? allRawVoteRequests.length : undefined,
         });
         lastProgressUpdate = now;
       }
     }
+    
+    const totalElapsed = ((Date.now() - scanStartTime) / 1000).toFixed(1);
+    console.log(`[Governance Scan] Complete: ${filesScanned} files in ${totalElapsed}s, ${proposalMap.size} unique proposals`);
     
     // Convert to array and sort by latest timestamp (newest first)
     const proposals = Array.from(proposalMap.values())

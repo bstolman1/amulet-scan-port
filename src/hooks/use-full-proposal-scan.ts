@@ -63,6 +63,7 @@ interface ScanProgress {
   percent: number;
   uniqueProposals: number;
   totalVoteRequests: number;
+  filesPerSec?: number;
   rawCount?: number;
 }
 
