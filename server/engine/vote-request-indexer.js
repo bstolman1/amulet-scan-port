@@ -463,25 +463,27 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
 
       // ============================================================
-      // STATUS DETECTION: Votes Array Majority (Primary Method)
+      // STATUS DETECTION: Votes Array with SV Threshold
       // ============================================================
-      // Since DsoRules_CloseVoteRequest events are not found in backfill data,
-      // we derive status directly from the votes array using majority detection.
-      //
-      // Canton/Splice governance rules (from ACS data observation):
+      // Canton/Splice governance rules:
+      // - 13 SV (Super Validator) nodes total
+      // - Need 9 accept votes (supermajority ~69%) for approval
       // - Votes accumulate in the VoteRequest contract's votes array
       // - Each SV can cast one vote with accept: true/false
-      // - Majority of accept votes = executed
-      // - Any reject vote OR expired with no majority = rejected/expired
       // ============================================================
-
-      // Total votes cast (each entry is [sv_name, vote_data])
+      
+      const TOTAL_SV_NODES = 13;
+      const APPROVAL_THRESHOLD = 9; // Supermajority required
+      
       const totalVotesCast = finalVoteCount;
       
-      // Majority detection: more than half of cast votes are accepts
-      // Note: We don't know total eligible voters, so we use cast votes as denominator
-      const hasMajorityAccept = acceptCount > 0 && acceptCount > rejectCount;
+      // Check if we have enough accept votes to meet threshold
+      const hasApprovalThreshold = acceptCount >= APPROVAL_THRESHOLD;
       const hasAnyReject = rejectCount > 0;
+      
+      // Can approval still be reached? (remaining votes + accepts >= threshold)
+      const remainingVotes = TOTAL_SV_NODES - totalVotesCast;
+      const canStillReachApproval = (acceptCount + remainingVotes) >= APPROVAL_THRESHOLD;
       
       // Archived choice can provide hints (e.g., "Archive", "VoteRequest_Accept")
       const archivedChoice = archivedEvent?.choice || '';
@@ -489,30 +491,30 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const wasAcceptedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
       const wasRejectedByChoice = choiceLower.includes('reject');
 
-      // Determine status based on votes array (primary) and deadline
+      // Determine status based on votes threshold
       if (isClosed) {
         // Contract was archived - determine outcome from votes
-        if (hasAnyReject) {
-          // Any explicit reject = rejected
-          status = 'rejected';
-        } else if (hasMajorityAccept || wasAcceptedByChoice) {
-          // Majority accepts or explicit accept choice = executed
+        if (hasApprovalThreshold || wasAcceptedByChoice) {
+          // Met approval threshold or explicit accept = executed
           status = 'executed';
-        } else if (isExpired || totalVotesCast === 0) {
-          // Expired with no clear majority = expired
+        } else if (hasAnyReject || wasRejectedByChoice) {
+          // Has reject votes = rejected
+          status = 'rejected';
+        } else if (isExpired || !canStillReachApproval) {
+          // Expired or can't reach threshold = expired
           status = 'expired';
         } else {
-          // Closed with only accept votes = executed
+          // Closed but unclear - check if had any accepts
           status = acceptCount > 0 ? 'executed' : 'expired';
         }
       } else if (isExpired) {
-        // Not closed but deadline passed
-        // Check if it would have passed based on current votes
-        if (hasAnyReject) {
-          status = 'rejected';
-        } else if (hasMajorityAccept) {
-          // Has enough votes to pass but not yet closed - pending execution
+        // Deadline passed but not closed
+        if (hasApprovalThreshold) {
+          // Met threshold - should be executed (pending close)
           status = 'executed';
+        } else if (hasAnyReject || !canStillReachApproval) {
+          // Can't reach threshold anymore
+          status = 'rejected';
         } else {
           status = 'expired';
         }
@@ -525,7 +527,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       statusStats[status]++;
       statusStats.totalAcceptVotes += acceptCount;
       statusStats.totalRejectVotes += rejectCount;
-      if (hasMajorityAccept && status === 'executed') statusStats.detectedByMajority++;
+      if (hasApprovalThreshold && status === 'executed') statusStats.detectedByMajority++;
       if (wasAcceptedByChoice && status === 'executed') statusStats.detectedByChoice++;
       if (isExpired && status === 'expired') statusStats.detectedByExpiry++;
 
