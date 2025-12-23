@@ -42,11 +42,7 @@ export function GovernanceIndexBanner() {
   const buildMutation = useMutation({
     mutationFn: async () => {
       setIsBuilding(true);
-      const res = await fetch("http://localhost:3001/api/governance/index/build", {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error("Failed to start governance index build");
-      return res.json();
+      return apiFetch("/api/governance/index/build", { method: "POST" });
     },
     onSuccess: () => {
       toast({

@@ -314,7 +314,7 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
       if (indexingProgress) {
         indexingProgress.current = i + 1;
         indexingProgress.records = i + 1;
-        indexingProgress.proposals = proposalMap.size;
+        // proposals is updated after potential insert below
       }
 
       // Extract the specific inner action type (e.g., SRARC_SetConfig from nested dsoAction)
@@ -368,6 +368,10 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
           votes_against: votesAgainst,
           tracking_cid: row.tracking_cid,
         });
+
+        if (indexingProgress) {
+          indexingProgress.proposals = proposalMap.size;
+        }
       }
     }
 
