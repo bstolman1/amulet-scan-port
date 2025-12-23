@@ -2314,6 +2314,150 @@ router.get('/governance/proposals', async (req, res) => {
   }
 });
 
+// GET /api/events/governance/proposals/stream - SSE endpoint for real-time progress
+router.get('/governance/proposals/stream', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required' });
+    }
+
+    // Set up SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders();
+
+    const sendEvent = (type, data) => {
+      res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    
+    if (allFiles.length === 0) {
+      sendEvent('error', { error: 'No binary event files found' });
+      res.end();
+      return;
+    }
+
+    // Use all files for the stream endpoint
+    const binFiles = allFiles;
+    const totalFiles = binFiles.length;
+    
+    sendEvent('start', { totalFiles });
+    
+    // Map to track proposals by unique key (action type + reason URL)
+    const proposalMap = new Map();
+    let filesScanned = 0;
+    let totalVoteRequests = 0;
+    let lastProgressUpdate = 0;
+    
+    for (const filePath of binFiles) {
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
+        filesScanned++;
+        
+        for (const evt of events) {
+          const templateId = evt.template_id || '';
+          if (!templateId.includes('VoteRequest')) continue;
+          if (evt.event_type !== 'created') continue;
+          
+          totalVoteRequests++;
+          const payload = evt.payload || {};
+          
+          let proposal;
+          try {
+            proposal = parseVoteRequestPayload(payload);
+          } catch (parseErr) {
+            continue;
+          }
+          
+          if (!proposal) continue;
+          
+          const proposalKey = `${proposal.actionType}::${proposal.reasonUrl}`;
+          
+          const existing = proposalMap.get(proposalKey);
+          const eventTimestamp = new Date(evt.timestamp).getTime();
+          
+          if (!existing || eventTimestamp > existing.latestTimestamp) {
+            proposalMap.set(proposalKey, {
+              proposalKey,
+              latestTimestamp: eventTimestamp,
+              latestContractId: evt.contract_id,
+              ...proposal,
+              rawTimestamp: evt.timestamp,
+            });
+          }
+        }
+        
+        // Send progress update every 100 files or 500ms
+        const now = Date.now();
+        if (filesScanned % 100 === 0 || now - lastProgressUpdate > 500) {
+          const percent = Math.round((filesScanned / totalFiles) * 100);
+          sendEvent('progress', {
+            filesScanned,
+            totalFiles,
+            percent,
+            uniqueProposals: proposalMap.size,
+            totalVoteRequests,
+          });
+          lastProgressUpdate = now;
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+    
+    // Convert to array and sort by latest timestamp (newest first)
+    const proposals = Array.from(proposalMap.values())
+      .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+    
+    // Calculate vote statistics
+    const stats = {
+      total: proposals.length,
+      byActionType: {},
+      byStatus: { approved: 0, rejected: 0, pending: 0 },
+    };
+    
+    for (const p of proposals) {
+      stats.byActionType[p.actionType] = (stats.byActionType[p.actionType] || 0) + 1;
+      
+      const now = Date.now();
+      const voteBefore = p.voteBeforeTimestamp || 0;
+      
+      if (voteBefore && voteBefore < now) {
+        if (p.votesFor > p.votesAgainst && p.votesFor > 0) {
+          stats.byStatus.approved++;
+        } else {
+          stats.byStatus.rejected++;
+        }
+      } else {
+        stats.byStatus.pending++;
+      }
+    }
+    
+    // Send final result
+    sendEvent('complete', {
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        totalVoteRequests,
+        uniqueProposals: proposals.length,
+      },
+      stats,
+      proposals,
+    });
+    
+    res.end();
+  } catch (err) {
+    console.error('Error in governance/proposals/stream:', err);
+    res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
 // Helper function to parse VoteRequest payload (handles both old and new formats)
 function parseVoteRequestPayload(payload) {
   // New format with named fields
