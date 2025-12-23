@@ -51,9 +51,8 @@ export function GovernanceIndexBanner() {
     onSuccess: () => {
       toast({
         title: "Governance Index Build Started",
-        description: "Scanning binary files for VoteRequest events. This may take a few minutes.",
+        description: "Building proposals from the persistent VoteRequest index. This should be fast.",
       });
-      // Poll for completion
       const pollInterval = setInterval(async () => {
         try {
           const fresh = await apiFetch<IndexStatus>("/api/governance/index/status");
@@ -101,16 +100,16 @@ export function GovernanceIndexBanner() {
           {inProgress ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span>
-                <strong>Governance Index:</strong>{" "}
-                {progress ? (
-                  <>
-                    {progress.phase} ({progress.current}/{progress.total} files, {progress.proposals} proposals)
-                  </>
-                ) : (
-                  "Building..."
-                )}
-              </span>
+                <span>
+                  <strong>Governance Index:</strong>{" "}
+                  {progress ? (
+                    <>
+                      {progress.phase} ({progress.current}/{progress.total} records, {progress.proposals} proposals)
+                    </>
+                  ) : (
+                    "Building..."
+                  )}
+                </span>
               <Badge variant="outline" className="text-xs border-primary text-primary">
                 In Progress
               </Badge>
