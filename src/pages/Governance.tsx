@@ -42,6 +42,7 @@ const Governance = () => {
   const [runFullScan, setRunFullScan] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [rawMode, setRawMode] = useState(false);
+  const [concurrency, setConcurrency] = useState(20);
   
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -56,7 +57,7 @@ const Governance = () => {
     isLoading: fullScanLoading, 
     error: fullScanError,
     refetch: refetchFullScan,
-  } = useFullProposalScan(runFullScan, debugMode, rawMode);
+  } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode, concurrency });
 
   const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
@@ -953,6 +954,18 @@ const Governance = () => {
                     />
                     Raw Mode (output ALL VoteRequests without deduplication)
                   </label>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span>Parallel files:</span>
+                    <input
+                      type="range"
+                      min="5"
+                      max="50"
+                      value={concurrency}
+                      onChange={(e) => setConcurrency(parseInt(e.target.value))}
+                      className="w-24"
+                    />
+                    <span className="font-mono w-8">{concurrency}</span>
+                  </div>
                 </div>
                 <Button onClick={() => setRunFullScan(true)}>
                   <FileSearch className="h-4 w-4 mr-2" />
