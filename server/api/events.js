@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
@@ -9,6 +10,7 @@ import {
   getFilesForTemplate,
   isTemplateIndexPopulated,
 } from '../engine/template-file-index.js';
+import { getVoteRequestPool } from '../workers/decompress-pool.js';
 
 const router = Router();
 
@@ -2341,8 +2343,9 @@ router.get('/governance/proposals/stream', async (req, res) => {
       return;
     }
 
-    // Parallel processing options
-    const concurrency = parseInt(req.query.concurrency) || 10; // Process N files at once
+    // Worker pool for true parallel decompression
+    const pool = getVoteRequestPool();
+    const workerCount = os.cpus().length - 1;
     const maxFiles = req.query.limit ? parseInt(req.query.limit) : null;
     
     // Use all files or limit
@@ -2352,8 +2355,8 @@ router.get('/governance/proposals/stream', async (req, res) => {
     }
     const totalFiles = binFiles.length;
     
-    sendEvent('start', { totalFiles, concurrency, totalAvailable: allFiles.length });
-    console.log(`[Governance Scan] Starting: ${totalFiles} files, concurrency=${concurrency}`);
+    sendEvent('start', { totalFiles, workerCount, totalAvailable: allFiles.length });
+    console.log(`[Governance Scan] Starting: ${totalFiles} files with ${workerCount} worker threads`);
     const scanStartTime = Date.now();
     
     // Map to track proposals by unique key
@@ -2368,109 +2371,97 @@ router.get('/governance/proposals/stream', async (req, res) => {
     let totalVoteRequests = 0;
     let lastProgressUpdate = 0;
     
-    // Process files in parallel batches
-    const processFile = async (filePath) => {
-      try {
-        const result = await binaryReader.readBinaryFile(filePath);
-        const events = result.records || [];
-        const voteRequests = [];
+    // Initialize worker pool
+    await pool.init();
+    pool.resetStats();
+    
+    // Process events from a single file result
+    const processEvents = (events, filePath) => {
+      for (const evt of events) {
+        // Worker already filters for VoteRequest, but double-check type
+        if (evt.event_type !== 'created') continue;
         
-        for (const evt of events) {
-          const templateId = evt.template_id || '';
-          if (!templateId.includes('VoteRequest')) continue;
-          if (evt.event_type !== 'created') continue;
-          
-          const payload = evt.payload || {};
-          let proposal;
-          try {
-            proposal = parseVoteRequestPayload(payload);
-          } catch (parseErr) {
-            continue;
-          }
-          if (!proposal) continue;
-          
-          voteRequests.push({ evt, proposal });
+        const payload = evt.payload || {};
+        let proposal;
+        try {
+          proposal = parseVoteRequestPayload(payload);
+        } catch (parseErr) {
+          continue;
+        }
+        if (!proposal) continue;
+        
+        totalVoteRequests++;
+        
+        // Generate a unique proposal key
+        let proposalKey;
+        let keySource;
+        if (proposal.trackingCid) {
+          proposalKey = `cid::${proposal.trackingCid}`;
+          keySource = 'trackingCid';
+        } else {
+          const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
+          proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
+          keySource = 'composite';
         }
         
-        return voteRequests;
-      } catch (err) {
-        return [];
+        // In raw mode, collect all events without deduplication
+        if (rawMode) {
+          allRawVoteRequests.push({
+            contractId: evt.contract_id,
+            eventId: evt.event_id,
+            timestamp: evt.timestamp,
+            proposalKey,
+            keySource,
+            ...proposal,
+          });
+        }
+        
+        const existing = proposalMap.get(proposalKey);
+        const eventTimestamp = new Date(evt.timestamp).getTime();
+        
+        if (debug && existing) {
+          dedupLog.push({
+            key: proposalKey.slice(0, 100),
+            keySource,
+            action: 'merged',
+            existingTs: existing.rawTimestamp,
+            newTs: evt.timestamp,
+            kept: eventTimestamp > existing.latestTimestamp ? 'new' : 'existing',
+            actionType: proposal.actionType,
+            requester: proposal.requester,
+            reasonUrl: (proposal.reasonUrl || '').slice(0, 80),
+          });
+        }
+        
+        if (!existing || eventTimestamp > existing.latestTimestamp) {
+          proposalMap.set(proposalKey, {
+            proposalKey,
+            keySource,
+            latestTimestamp: eventTimestamp,
+            latestContractId: evt.contract_id,
+            ...proposal,
+            rawTimestamp: evt.timestamp,
+            mergeCount: existing ? (existing.mergeCount || 1) + 1 : 1,
+          });
+        }
       }
     };
     
-    // Process in batches for parallelism
-    for (let i = 0; i < binFiles.length; i += concurrency) {
-      const batch = binFiles.slice(i, i + concurrency);
-      const results = await Promise.all(batch.map(processFile));
+    // Process all files using worker pool
+    await pool.processFiles(binFiles, (progress) => {
+      // Process events from this file
+      processEvents(progress.events || [], progress.filePath);
+      filesScanned = progress.completed;
       
-      // Merge results from this batch
-      for (const voteRequests of results) {
-        for (const { evt, proposal } of voteRequests) {
-          totalVoteRequests++;
-          
-          // Generate a unique proposal key
-          let proposalKey;
-          let keySource;
-          if (proposal.trackingCid) {
-            proposalKey = `cid::${proposal.trackingCid}`;
-            keySource = 'trackingCid';
-          } else {
-            const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
-            proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
-            keySource = 'composite';
-          }
-          
-          // In raw mode, collect all events without deduplication
-          if (rawMode) {
-            allRawVoteRequests.push({
-              contractId: evt.contract_id,
-              eventId: evt.event_id,
-              timestamp: evt.timestamp,
-              proposalKey,
-              keySource,
-              ...proposal,
-            });
-          }
-          
-          const existing = proposalMap.get(proposalKey);
-          const eventTimestamp = new Date(evt.timestamp).getTime();
-          
-          if (debug && existing) {
-            dedupLog.push({
-              key: proposalKey.slice(0, 100),
-              keySource,
-              action: 'merged',
-              existingTs: existing.rawTimestamp,
-              newTs: evt.timestamp,
-              kept: eventTimestamp > existing.latestTimestamp ? 'new' : 'existing',
-              actionType: proposal.actionType,
-              requester: proposal.requester,
-              reasonUrl: (proposal.reasonUrl || '').slice(0, 80),
-            });
-          }
-          
-          if (!existing || eventTimestamp > existing.latestTimestamp) {
-            proposalMap.set(proposalKey, {
-              proposalKey,
-              keySource,
-              latestTimestamp: eventTimestamp,
-              latestContractId: evt.contract_id,
-              ...proposal,
-              rawTimestamp: evt.timestamp,
-              mergeCount: existing ? (existing.mergeCount || 1) + 1 : 1,
-            });
-          }
-        }
-      }
-      
-      filesScanned += batch.length;
-      
-      // Send progress update every batch
+      // Send progress update (throttled)
       const now = Date.now();
       if (now - lastProgressUpdate > 200) {
         const elapsedSec = (now - scanStartTime) / 1000;
         const filesPerSec = elapsedSec > 0 ? Math.round(filesScanned / elapsedSec) : 0;
         const percent = Math.round((filesScanned / totalFiles) * 100);
+        const remainingFiles = totalFiles - filesScanned;
+        const etaSeconds = filesPerSec > 0 ? Math.round(remainingFiles / filesPerSec) : null;
+        
         sendEvent('progress', {
           filesScanned,
           totalFiles,
@@ -2478,11 +2469,13 @@ router.get('/governance/proposals/stream', async (req, res) => {
           uniqueProposals: proposalMap.size,
           totalVoteRequests,
           filesPerSec,
+          etaSeconds,
+          workerCount,
           rawCount: rawMode ? allRawVoteRequests.length : undefined,
         });
         lastProgressUpdate = now;
       }
-    }
+    });
     
     const totalElapsed = ((Date.now() - scanStartTime) / 1000).toFixed(1);
     console.log(`[Governance Scan] Complete: ${filesScanned} files in ${totalElapsed}s, ${proposalMap.size} unique proposals`);

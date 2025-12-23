@@ -64,13 +64,14 @@ interface ScanProgress {
   uniqueProposals: number;
   totalVoteRequests: number;
   filesPerSec?: number;
+  etaSeconds?: number;
+  workerCount?: number;
   rawCount?: number;
 }
 
 interface ScanOptions {
   debug?: boolean;
   raw?: boolean;
-  concurrency?: number;
   limit?: number;
 }
 
@@ -103,7 +104,6 @@ export function useFullProposalScan(enabled: boolean = false, options: ScanOptio
       const params = new URLSearchParams();
       if (options.debug) params.append('debug', 'true');
       if (options.raw) params.append('raw', 'true');
-      if (options.concurrency) params.append('concurrency', options.concurrency.toString());
       if (options.limit) params.append('limit', options.limit.toString());
       const queryString = params.toString();
       const url = `${backendUrl}/api/events/governance/proposals/stream${queryString ? '?' + queryString : ''}`;
