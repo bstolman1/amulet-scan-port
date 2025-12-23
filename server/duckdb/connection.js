@@ -19,10 +19,21 @@ const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
 // 2) repo-local data/ (if present)
 // 3) Windows default path
 const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+
+// Ensure directories exist (DuckDB will fail to create the DB file if the parent dir is missing)
+try {
+  fs.mkdirSync(BASE_DATA_DIR, { recursive: true });
+} catch {}
+
 // Ledger events/updates live under: <BASE_DATA_DIR>/raw
 const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
+
+try {
+  fs.mkdirSync(DATA_PATH, { recursive: true });
+  fs.mkdirSync(ACS_DATA_PATH, { recursive: true });
+} catch {}
 
 // Database file path (persistent storage)
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
@@ -34,18 +45,35 @@ export function query(sql, params = []) {
   return new Promise((resolve, reject) => {
     const db = new duckdb.Database(DB_FILE);
     const conn = db.connect();
-    
-    conn.all(sql, ...params, (err, rows) => {
+
+    try {
+      conn.all(sql, ...params, (err, rows) => {
+        try {
+          conn.close();
+          db.close();
+        } catch (closeErr) {
+          console.warn('DuckDB close warning:', closeErr?.message || closeErr);
+        }
+
+        if (err) {
+          console.error('❌ DuckDB query error:', err?.message || err);
+          console.error('   DB_FILE:', DB_FILE);
+          console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
+          reject(err);
+          return;
+        }
+        resolve(rows);
+      });
+    } catch (err) {
       try {
         conn.close();
         db.close();
-      } catch (closeErr) {
-        console.warn('DuckDB close warning:', closeErr.message);
-      }
-      
-      if (err) reject(err);
-      else resolve(rows);
-    });
+      } catch {}
+      console.error('❌ DuckDB conn.all threw:', err?.message || err);
+      console.error('   DB_FILE:', DB_FILE);
+      console.error('   SQL (first 200 chars):', String(sql).slice(0, 200));
+      reject(err);
+    }
   });
 }
 
