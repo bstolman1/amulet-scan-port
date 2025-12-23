@@ -40,17 +40,23 @@ function hashString(str) {
 }
 
 /**
- * Generate a unique proposal key from action type and reason URL/body/contract
+ * Generate a unique proposal key
  * 
  * Priority:
- * 1. If reasonUrl exists → use it (same URL = same proposal)
- * 2. Else if reasonBody exists → use hash of body
- * 3. Else → use contract_id as fallback (each contract is unique proposal)
+ * 1. If trackingCid exists → use it (this is THE stable proposal identifier)
+ * 2. Else if reasonUrl exists → use actionType + reasonUrl
+ * 3. Else if reasonBody exists → use actionType + hash of body
+ * 4. Else → use actionType + contract_id as fallback
  */
-function getProposalKey(actionType, reasonUrl, reasonBody, contractId) {
+function getProposalKey(actionType, reasonUrl, reasonBody, contractId, trackingCid) {
+  // tracking_cid is the BEST identifier - it's stable across all updates to the same proposal
+  if (trackingCid && trackingCid.trim() !== '') {
+    return `tracking::${trackingCid}`;
+  }
+  
   const type = actionType || 'unknown';
   
-  // If we have a URL, use it (best case - same URL = same proposal)
+  // If we have a URL, use it (same URL = same proposal)
   if (reasonUrl && reasonUrl.trim() !== '') {
     return `${type}::url::${reasonUrl}`;
   }
@@ -310,7 +316,7 @@ export async function buildGovernanceIndex({ limit = 10000, forceRefresh = false
         }
       }
 
-      const key = getProposalKey(actionType, reasonUrl, reasonBody, row.contract_id);
+      const key = getProposalKey(actionType, reasonUrl, reasonBody, row.contract_id, row.tracking_cid);
       const timestamp = row.effective_at ? new Date(row.effective_at).getTime() : 0;
       const existing = proposalMap.get(key);
 
