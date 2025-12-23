@@ -805,6 +805,10 @@ async function scanFilesForDsoCloseVoteRequests(files) {
   let filesProcessed = 0;
   const startTime = Date.now();
   let lastLogTime = startTime;
+  
+  // DEBUG: Track all unique choice names found
+  const uniqueChoices = new Set();
+  const choiceCounts = {};
 
   const readWithTimeout = async (file, timeoutMs = 30000) => {
     return Promise.race([
@@ -825,6 +829,11 @@ async function scanFilesForDsoCloseVoteRequests(files) {
         if (record.event_type !== 'exercised') continue;
         
         const choice = record.choice || '';
+        
+        // DEBUG: Collect all unique choice names
+        uniqueChoices.add(choice);
+        choiceCounts[choice] = (choiceCounts[choice] || 0) + 1;
+        
         // Only collect DsoRules_CloseVoteRequest - this specifically closes VoteRequests
         // Do NOT include DsoRules_ExecuteConfirmedAction as that's used for many other 
         // governance actions (amulet price updates, validator confirmations, etc.)
@@ -859,6 +868,32 @@ async function scanFilesForDsoCloseVoteRequests(files) {
         console.log(`   🐢 Slow DsoRules file: ${file} (${(tookMs / 1000).toFixed(1)}s)`);
       }
     }
+  }
+
+  // DEBUG: Log all unique choice names found in DsoRules
+  console.log(`\n   🔍 DEBUG: Found ${uniqueChoices.size} unique choice names in DsoRules files:`);
+  const sortedChoices = Object.entries(choiceCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 50); // Top 50 choices
+  for (const [choice, count] of sortedChoices) {
+    console.log(`      - ${choice}: ${count} events`);
+  }
+  
+  // Also log any choices containing "vote" or "close" (case-insensitive)
+  const voteRelated = [...uniqueChoices].filter(c => 
+    c.toLowerCase().includes('vote') || 
+    c.toLowerCase().includes('close') ||
+    c.toLowerCase().includes('expire') ||
+    c.toLowerCase().includes('reject') ||
+    c.toLowerCase().includes('accept')
+  );
+  if (voteRelated.length > 0) {
+    console.log(`\n   🗳️ DEBUG: Vote/Close-related choices found:`);
+    for (const choice of voteRelated) {
+      console.log(`      - ${choice}: ${choiceCounts[choice]} events`);
+    }
+  } else {
+    console.log(`   ⚠️ DEBUG: No vote/close-related choices found in DsoRules!`);
   }
 
   return { records, filesScanned: filesProcessed };
