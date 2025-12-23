@@ -38,30 +38,29 @@ try {
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
 
-// ✅ Per-query connection pattern
-// IMPORTANT: DuckDB's Node binding establishes connections asynchronously.
-// Always use the callback form of db.connect(), otherwise queries can run on a non-established connection.
+// ✅ Per-query connection pattern (Windows safe)
+// - Fresh database + connection for EACH query (no shared state)
+// - Uses callback form of Database constructor for async init
+// - Uses conn.run() for DDL, conn.all() for queries
 export function query(sql, params = []) {
   return new Promise((resolve, reject) => {
-    const db = new duckdb.Database(DB_FILE);
-
-    db.connect((connectErr, conn) => {
-      if (connectErr) {
-        console.error('❌ DuckDB connect error:', connectErr?.message || connectErr);
+    const db = new duckdb.Database(DB_FILE, (dbErr) => {
+      if (dbErr) {
+        console.error('❌ DuckDB open error:', dbErr?.message || dbErr);
         console.error('   DB_FILE:', DB_FILE);
-        try { db.close(); } catch {}
-        reject(connectErr);
+        reject(dbErr);
         return;
       }
 
-      const done = (err, rows) => {
-        try {
-          conn.close();
-          db.close();
-        } catch (closeErr) {
-          console.warn('DuckDB close warning:', closeErr?.message || closeErr);
-        }
+      const conn = db.connect();
 
+      const cleanup = () => {
+        try { conn.close(); } catch {}
+        try { db.close(); } catch {}
+      };
+
+      const done = (err, rows) => {
+        cleanup();
         if (err) {
           console.error('❌ DuckDB query error:', err?.message || err);
           console.error('   DB_FILE:', DB_FILE);
@@ -72,11 +71,21 @@ export function query(sql, params = []) {
         resolve(rows ?? []);
       };
 
-      // DuckDB expects params as a single array argument.
-      if (params && params.length > 0) {
-        conn.all(sql, params, done);
-      } else {
-        conn.all(sql, done);
+      // Use conn.run for DDL (CREATE/DROP/ALTER/INSERT/UPDATE/DELETE) and conn.all for queries
+      const isDDL = /^\s*(CREATE|DROP|ALTER|INSERT|UPDATE|DELETE)/i.test(sql);
+
+      try {
+        if (isDDL) {
+          conn.run(sql, done);
+        } else if (params && params.length > 0) {
+          conn.all(sql, params, done);
+        } else {
+          conn.all(sql, done);
+        }
+      } catch (err) {
+        cleanup();
+        console.error('❌ DuckDB threw:', err?.message || err);
+        reject(err);
       }
     });
   });
