@@ -343,6 +343,6 @@ export async function initializeViews() {
 // It can crash the process on startup (unhandled promise rejection) and should be invoked explicitly by the server.
 // initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, getDB, closeDB }; 
+export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH }; 
 
 export default { query, queryOne, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH, DB_FILE, getDB, closeDB };
