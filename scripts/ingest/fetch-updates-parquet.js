@@ -336,7 +336,43 @@ async function findLatestFromRawData(rawDir) {
         if (dayDirs.length > 0) {
           const latestDay = dayDirs[0];
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(latestDay).padStart(2, '0')}`;
-          const timestamp = `${dateStr}T23:59:59.999999Z`;
+          
+          // Try to find actual latest timestamp from files in this directory
+          const dayPath = path.join(monthPath, `day=${latestDay}`);
+          let timestamp = null;
+          
+          try {
+            const files = fs.readdirSync(dayPath)
+              .filter(f => f.endsWith('.pb.zst'))
+              .sort()
+              .reverse();
+            
+            if (files.length > 0) {
+              // Extract timestamp from filename pattern: prefix_TIMESTAMP.pb.zst
+              // e.g., events_2025-12-24T15-30-00.000000Z.pb.zst
+              const latestFile = files[0];
+              const match = latestFile.match(/(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
+              if (match) {
+                // Convert filename format back to ISO (replace dashes in time with colons)
+                timestamp = match[1].replace(/(\d{2})-(\d{2})-(\d{2})\./, '$1:$2:$3.');
+              }
+            }
+          } catch (err) {
+            // Ignore errors reading directory
+          }
+          
+          // Fallback: use current time if today, otherwise end of that day
+          if (!timestamp) {
+            const today = new Date().toISOString().slice(0, 10);
+            if (dateStr === today) {
+              // For today, use current time minus a small buffer to ensure we get new data
+              const now = new Date();
+              now.setMinutes(now.getMinutes() - 5); // 5 minute buffer
+              timestamp = now.toISOString();
+            } else {
+              timestamp = `${dateStr}T23:59:59.999999Z`;
+            }
+          }
           
           latestResult = {
             migrationId: migDir.id,
@@ -371,7 +407,17 @@ async function findLatestFromRawData(rawDir) {
         
         if (dateDirs.length > 0) {
           const latestDate = dateDirs[0];
-          const timestamp = `${latestDate}T23:59:59.999999Z`;
+          
+          // For today, use current time minus buffer instead of end-of-day
+          let timestamp;
+          const today = new Date().toISOString().slice(0, 10);
+          if (latestDate === today) {
+            const now = new Date();
+            now.setMinutes(now.getMinutes() - 5);
+            timestamp = now.toISOString();
+          } else {
+            timestamp = `${latestDate}T23:59:59.999999Z`;
+          }
           
           if (!latestResult || 
               migDir.id > latestResult.migrationId ||
