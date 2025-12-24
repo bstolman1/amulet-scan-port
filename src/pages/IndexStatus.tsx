@@ -221,7 +221,7 @@ const IndexCard = ({
         )}
 
         {/* Last Updated */}
-        {lastUpdated && (
+        {lastUpdated && !isNaN(new Date(lastUpdated).getTime()) && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Clock className="w-4 h-4" />
             <span>Updated {formatDistanceToNow(new Date(lastUpdated), { addSuffix: true })}</span>
@@ -241,7 +241,7 @@ const IndexCard = ({
                 {lastSuccessfulBuild.build_id.slice(0, 20)}...
               </span>
               <span>Completed:</span>
-              <span>{formatDistanceToNow(new Date(lastSuccessfulBuild.completed_at), { addSuffix: true })}</span>
+              <span>{lastSuccessfulBuild.completed_at && !isNaN(new Date(lastSuccessfulBuild.completed_at).getTime()) ? formatDistanceToNow(new Date(lastSuccessfulBuild.completed_at), { addSuffix: true }) : "—"}</span>
               <span>Duration:</span>
               <span>{lastSuccessfulBuild.duration_seconds?.toFixed(1)}s</span>
               <span>Total Indexed:</span>
