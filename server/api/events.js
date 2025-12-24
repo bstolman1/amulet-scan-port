@@ -1244,6 +1244,103 @@ router.get('/template-scan', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-requests/raw - Raw VoteRequest events directly from binary files via template index
+// No deduplication, no status processing - just raw events
+router.get('/vote-requests/raw', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 500, 10000);
+    const offset = parseInt(req.query.offset) || 0;
+    const eventType = req.query.type || 'all'; // 'created', 'exercised', 'all'
+    
+    console.log(`\n🗳️ VOTE-REQUESTS/RAW: Fetching raw events, limit=${limit}, offset=${offset}, type=${eventType}`);
+    
+    // Check if template index is available
+    const templateIndexReady = await isTemplateIndexPopulated();
+    if (!templateIndexReady) {
+      return res.status(503).json({ 
+        error: 'Template index not populated. Build it first via /api/engine/template-index/build',
+        templateIndexReady: false,
+      });
+    }
+    
+    // Get all files containing VoteRequest events
+    const voteRequestFiles = await getFilesForTemplate('VoteRequest');
+    console.log(`   📋 Found ${voteRequestFiles.length} VoteRequest files in template index`);
+    
+    if (voteRequestFiles.length === 0) {
+      return res.json({ 
+        data: [], 
+        count: 0, 
+        totalFiles: 0,
+        source: 'template-index-binary',
+      });
+    }
+    
+    // Read all VoteRequest events from binary files
+    const allEvents = [];
+    let filesScanned = 0;
+    const startTime = Date.now();
+    
+    for (const file of voteRequestFiles) {
+      try {
+        const result = await binaryReader.readBinaryFile(file);
+        const fileRecords = result.records || [];
+        
+        for (const e of fileRecords) {
+          if (!e.template_id?.includes('VoteRequest')) continue;
+          
+          // Filter by event type if specified
+          if (eventType === 'created' && e.event_type !== 'created') continue;
+          if (eventType === 'exercised' && e.event_type !== 'exercised') continue;
+          
+          allEvents.push({
+            event_id: e.event_id,
+            contract_id: e.contract_id,
+            template_id: e.template_id,
+            event_type: e.event_type,
+            choice: e.choice || null,
+            effective_at: e.effective_at,
+            timestamp: e.timestamp,
+            payload: e.payload,
+          });
+        }
+        
+        filesScanned++;
+      } catch (err) {
+        // Skip unreadable files
+        console.warn(`   ⚠️ Could not read file: ${file}`);
+      }
+    }
+    
+    const scanDuration = Date.now() - startTime;
+    console.log(`   ✅ Scanned ${filesScanned} files in ${scanDuration}ms, found ${allEvents.length} raw VoteRequest events`);
+    
+    // Sort by effective_at descending
+    allEvents.sort((a, b) => {
+      const dateA = new Date(a.effective_at || 0).getTime();
+      const dateB = new Date(b.effective_at || 0).getTime();
+      return dateB - dateA;
+    });
+    
+    // Apply pagination
+    const paginatedEvents = allEvents.slice(offset, offset + limit);
+    
+    res.json(convertBigInts({ 
+      data: paginatedEvents, 
+      count: paginatedEvents.length,
+      totalFound: allEvents.length,
+      totalFiles: voteRequestFiles.length,
+      filesScanned,
+      scanDurationMs: scanDuration,
+      hasMore: offset + limit < allEvents.length,
+      source: 'template-index-binary',
+    }));
+  } catch (err) {
+    console.error('Error fetching raw vote requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/vote-request-index/status - Get index status
 router.get('/vote-request-index/status', async (req, res) => {
   try {
