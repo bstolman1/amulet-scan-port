@@ -1994,6 +1994,112 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
   }
 });
 
+// GET /api/events/debug/confirm-action - Sample DsoRules_ConfirmAction events to see Arc action structure
+router.get('/debug/confirm-action', async (req, res) => {
+  try {
+    const sources = getDataSources();
+    if (sources.primarySource !== 'binary') {
+      return res.status(400).json({ error: 'Binary files required for this diagnostic' });
+    }
+
+    const maxFiles = Math.min(parseInt(req.query.files) || 500, 2000);
+    const maxSamples = Math.min(parseInt(req.query.samples) || 20, 100);
+    let filesScanned = 0;
+    let matchCount = 0;
+    const samples = [];
+    const actionTagCounts = {};
+
+    const allFiles = binaryReader.findBinaryFiles(db.DATA_PATH, 'events');
+    
+    if (allFiles.length === 0) {
+      return res.json({ error: 'No binary event files found', path: db.DATA_PATH });
+    }
+
+    // Spread sampling across the dataset
+    const step = Math.max(1, Math.floor(allFiles.length / maxFiles));
+    const binFiles = allFiles.filter((_, i) => i % step === 0).slice(0, maxFiles);
+
+    for (const filePath of binFiles) {
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || [];
+        filesScanned++;
+
+        for (const e of events) {
+          if (e.event_type !== 'exercised') continue;
+          if (e.choice !== 'DsoRules_ConfirmAction') continue;
+          
+          matchCount++;
+          
+          const payload = e.payload || {};
+          const raw = e.raw || {};
+          const choiceArg = raw.choice_argument || payload.choice_argument || payload;
+          
+          // Extract action tag from the Arc structure
+          // Arc action can be nested: action.value.tag or action.tag
+          const action = choiceArg.action || choiceArg.confirmedAction || {};
+          let actionTag = null;
+          
+          // Try different Arc encoding styles
+          if (action.tag) {
+            actionTag = action.tag;
+          } else if (action.value?.tag) {
+            actionTag = action.value.tag;
+          } else {
+            // Check for variant-as-key encoding: { ARC_DsoRules: { dsoAction: {...} } }
+            const keys = Object.keys(action);
+            if (keys.length > 0 && keys[0].startsWith('ARC_')) {
+              actionTag = keys[0];
+            }
+          }
+          
+          if (actionTag) {
+            actionTagCounts[actionTag] = (actionTagCounts[actionTag] || 0) + 1;
+          }
+          
+          if (samples.length < maxSamples) {
+            samples.push({
+              contract_id: e.contract_id,
+              template_id: e.template_id,
+              timestamp: e.timestamp,
+              action_tag: actionTag,
+              payload_keys: Object.keys(payload),
+              raw_keys: Object.keys(raw),
+              choice_argument_preview: JSON.stringify(choiceArg).slice(0, 4000),
+              action_structure: JSON.stringify(action).slice(0, 2000),
+            });
+          }
+        }
+
+        if (filesScanned % 100 === 0) {
+          console.log(`[confirm-action] ${filesScanned}/${binFiles.length} files | ${matchCount} matches`);
+        }
+      } catch (err) {
+        // Skip unreadable files
+      }
+    }
+
+    // Sort action tags by frequency
+    const sortedActionTags = Object.entries(actionTagCounts)
+      .sort((a, b) => b[1] - a[1]);
+
+    res.json(convertBigInts({
+      summary: {
+        filesScanned,
+        totalFilesInDataset: allFiles.length,
+        confirmActionCount: matchCount,
+        samplesCollected: samples.length,
+        uniqueActionTags: sortedActionTags.length,
+      },
+      actionTagCounts: sortedActionTags,
+      samples,
+    }));
+  } catch (err) {
+    console.error('Error in confirm-action diagnostic:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/debug/vote-request-lifecycle - Diagnostic endpoint to find VoteRequest created/archived events
 router.get('/debug/vote-request-lifecycle', async (req, res) => {
   try {
