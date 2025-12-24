@@ -22,6 +22,7 @@ import {
   Coins,
   Users,
   Download,
+  UserCheck,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -115,6 +116,21 @@ const rebuildPartyIndex = async () => {
     body: JSON.stringify({ forceRebuild: true }),
   });
   if (!res.ok) throw new Error("Failed to rebuild party index");
+  return res.json();
+};
+
+const fetchSvIndexStatus = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/sv-index/status`);
+  if (!res.ok) throw new Error("Failed to fetch SV index status");
+  return res.json();
+};
+
+const rebuildSvIndex = async () => {
+  const res = await fetch(`${getDuckDBApiUrl()}/api/events/sv-index/build?force=true`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) throw new Error("Failed to rebuild SV index");
   return res.json();
 };
 
@@ -394,6 +410,14 @@ const IndexStatus = () => {
     enabled: duckdbEnabled,
   });
 
+  const { data: svIndex, isLoading: svLoading, error: svError } = useQuery({
+    queryKey: ["svIndexStatus"],
+    queryFn: fetchSvIndexStatus,
+    refetchInterval: duckdbEnabled ? 5000 : false,
+    retry: false,
+    enabled: duckdbEnabled,
+  });
+
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
     queryKey: ["indexedTemplates"],
     queryFn: fetchIndexedTemplates,
@@ -520,12 +544,31 @@ const IndexStatus = () => {
     },
   });
 
+  const svRebuildMutation = useMutation({
+    mutationFn: rebuildSvIndex,
+    onSuccess: (data) => {
+      toast({
+        title: "SV membership index build started",
+        description: data.message || "Building in background...",
+      });
+      queryClient.invalidateQueries({ queryKey: ["svIndexStatus"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to build SV index",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRefreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ["templateIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["voteRequestIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["aggregationState"] });
     queryClient.invalidateQueries({ queryKey: ["rewardCouponIndexStatus"] });
     queryClient.invalidateQueries({ queryKey: ["partyIndexStatus"] });
+    queryClient.invalidateQueries({ queryKey: ["svIndexStatus"] });
     toast({ title: "Refreshing status..." });
   };
 
@@ -581,7 +624,17 @@ const IndexStatus = () => {
     return "empty";
   };
 
-  const allStatuses = [getTemplateStatus(), getVoteStatus(), getAggStatus(), getRewardStatus(), getPartyStatus()];
+  // Derive SV membership index status
+  const getSvStatus = (): IndexCardProps["status"] => {
+    if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
+    if (svLoading) return "loading";
+    if (svError) return "error";
+    if (svIndex?.isIndexing) return "building";
+    if (svIndex?.isPopulated) return "ready";
+    return "empty";
+  };
+
+  const allStatuses = [getTemplateStatus(), getVoteStatus(), getAggStatus(), getRewardStatus(), getPartyStatus(), getSvStatus()];
 
   return (
     <DashboardLayout>
@@ -626,7 +679,7 @@ const IndexStatus = () => {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Total Indexes</p>
-                  <p className="text-2xl font-bold">5</p>
+                  <p className="text-2xl font-bold">6</p>
                 </div>
               </div>
             </CardContent>
@@ -810,6 +863,27 @@ const IndexStatus = () => {
                 ? { current: partyIndex.indexing.filesScanned || 0, total: partyIndex.indexing.totalFiles || 1 }
                 : null
             }
+          />
+
+          {/* SV Membership Index */}
+          <IndexCard
+            title="SV Membership Index"
+            description="Tracks Super Validator onboard/offboard for vote thresholds"
+            icon={<UserCheck className="w-5 h-5" />}
+            status={getSvStatus()}
+            stats={
+              svIndex?.isPopulated
+                ? [
+                    { label: "Current SVs", value: svIndex.currentSvCount?.toLocaleString() || 0 },
+                    { label: "Onboard Events", value: svIndex.onboardCount?.toLocaleString() || 0 },
+                    { label: "Offboard Events", value: svIndex.offboardCount?.toLocaleString() || 0 },
+                    { label: "Total Events", value: svIndex.totalEvents?.toLocaleString() || 0 },
+                  ]
+                : []
+            }
+            lastUpdated={svIndex?.lastIndexedAt}
+            onRebuild={() => svRebuildMutation.mutate()}
+            isRebuilding={svRebuildMutation.isPending}
           />
         </div>
 
