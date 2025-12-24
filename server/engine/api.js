@@ -21,6 +21,21 @@ import {
 
 const router = Router();
 
+// Helper to convert BigInt values to numbers for JSON serialization
+function convertBigInts(obj) {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'bigint') return Number(obj);
+  if (Array.isArray(obj)) return obj.map(convertBigInts);
+  if (typeof obj === 'object') {
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = convertBigInts(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
 // GET /api/engine/status - Get engine status
 router.get('/status', async (req, res) => {
   try {
@@ -232,7 +247,7 @@ router.get('/template-index/status', async (req, res) => {
 router.get('/template-index/templates', async (req, res) => {
   try {
     const templates = await getIndexedTemplates();
-    res.json({ templates });
+    res.json(convertBigInts({ templates }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
