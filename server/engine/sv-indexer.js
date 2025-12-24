@@ -279,7 +279,8 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         const filePath = onboardFiles[i];
         
         try {
-          const events = await binaryReader.readBinaryFile(filePath);
+          const result = await binaryReader.readBinaryFile(filePath);
+          const events = result.records || result || [];
           
           for (const event of events) {
             if (event.type !== 'created') continue;
@@ -336,7 +337,8 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         const filePath = dsoRulesFiles[i];
         
         try {
-          const events = await binaryReader.readBinaryFile(filePath);
+          const result = await binaryReader.readBinaryFile(filePath);
+          const events = result.records || result || [];
           
           for (const event of events) {
             if (event.type !== 'exercised') continue;
