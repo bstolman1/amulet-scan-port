@@ -93,11 +93,21 @@ function loadLiveCursor() {
     return null;
   }
   try {
-    const data = JSON.parse(fs.readFileSync(LIVE_CURSOR_FILE, 'utf8'));
+    const content = fs.readFileSync(LIVE_CURSOR_FILE, 'utf8').trim();
+    // Handle empty or corrupted cursor file
+    if (!content || content.length === 0) {
+      console.warn(`⚠️ Live cursor file is empty, ignoring`);
+      return null;
+    }
+    const data = JSON.parse(content);
+    if (!data.migration_id || !data.record_time) {
+      console.warn(`⚠️ Live cursor file is missing required fields, ignoring`);
+      return null;
+    }
     console.log(`📍 Loaded live cursor: migration=${data.migration_id}, record_time=${data.record_time}`);
     return data;
   } catch (err) {
-    console.warn(`⚠️ Failed to read live cursor: ${err.message}`);
+    console.warn(`⚠️ Failed to read live cursor: ${err.message}, ignoring`);
     return null;
   }
 }
