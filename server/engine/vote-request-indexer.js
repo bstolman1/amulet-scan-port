@@ -874,7 +874,41 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       totalRejectVotes: 0
     };
 
+    // ============================================================
+    // DIAGNOSTIC LOGGING: Track payload extraction during build
+    // ============================================================
+    let nullPayloadCount = 0;
+    let validPayloadCount = 0;
+    let emptyPayloadCount = 0;
+    const nullPayloadSamples = [];
+    
     for (const event of createdResult.records) {
+      // Diagnostic: check payload status
+      if (!event.payload) {
+        nullPayloadCount++;
+        if (nullPayloadSamples.length < 5) {
+          nullPayloadSamples.push({
+            event_id: event.event_id,
+            contract_id: event.contract_id,
+            hasPayloadField: 'payload' in event,
+            payloadType: typeof event.payload,
+            rawKeys: event.raw ? Object.keys(event.raw).slice(0, 10) : [],
+          });
+        }
+      } else if (Object.keys(event.payload).length === 0) {
+        emptyPayloadCount++;
+        if (nullPayloadSamples.length < 5) {
+          nullPayloadSamples.push({
+            event_id: event.event_id,
+            contract_id: event.contract_id,
+            payloadType: 'empty_object',
+            rawKeys: event.raw ? Object.keys(event.raw).slice(0, 10) : [],
+          });
+        }
+      } else {
+        validPayloadCount++;
+      }
+
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
 
       // Use archived event data for final vote counts if available
@@ -1170,6 +1204,24 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         const current = inserted + updated;
         indexingProgress = { ...indexingProgress, current, records: current };
       }
+    }
+
+    // ============================================================
+    // DIAGNOSTIC SUMMARY: Log payload extraction results
+    // ============================================================
+    console.log(`\n   📊 PAYLOAD DIAGNOSTIC SUMMARY:`);
+    console.log(`      - Valid payloads: ${validPayloadCount}`);
+    console.log(`      - Null payloads: ${nullPayloadCount}`);
+    console.log(`      - Empty payloads ({}): ${emptyPayloadCount}`);
+    console.log(`      - Total processed: ${validPayloadCount + nullPayloadCount + emptyPayloadCount}`);
+    if (nullPayloadSamples.length > 0) {
+      console.log(`      - Sample problematic events:`);
+      nullPayloadSamples.forEach((sample, i) => {
+        console.log(`        ${i + 1}. event_id: ${sample.event_id}`);
+        console.log(`           contract_id: ${sample.contract_id}`);
+        console.log(`           payloadType: ${sample.payloadType}`);
+        console.log(`           rawKeys: ${sample.rawKeys?.join(', ') || 'none'}`);
+      });
     }
 
     // Update index state
