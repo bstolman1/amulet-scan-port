@@ -702,11 +702,30 @@ const IndexStatus = () => {
             stats={
               voteRequestIndex?.stats?.total > 0
                 ? [
-                    { label: "Total Requests", value: voteRequestIndex.stats.total?.toLocaleString() || 0 },
-                    { label: "In Progress", value: voteRequestIndex.stats.inProgress?.toLocaleString() || voteRequestIndex.stats.active?.toLocaleString() || 0 },
-                    { label: "Executed", value: voteRequestIndex.stats.executed?.toLocaleString() || 0 },
-                    { label: "Rejected", value: voteRequestIndex.stats.rejected?.toLocaleString() || 0 },
-                    { label: "Expired", value: voteRequestIndex.stats.expired?.toLocaleString() || 0 },
+                    { 
+                      label: "Human Proposals", 
+                      value: voteRequestIndex.humanStats?.total?.toLocaleString() || voteRequestIndex.layers?.humanProposals?.toLocaleString() || 0 
+                    },
+                    { 
+                      label: "In Progress", 
+                      value: voteRequestIndex.humanStats?.inProgress?.toLocaleString() || 0 
+                    },
+                    { 
+                      label: "Executed", 
+                      value: voteRequestIndex.humanStats?.executed?.toLocaleString() || 0 
+                    },
+                    { 
+                      label: "Rejected", 
+                      value: voteRequestIndex.humanStats?.rejected?.toLocaleString() || 0 
+                    },
+                    { 
+                      label: "Expired", 
+                      value: voteRequestIndex.humanStats?.expired?.toLocaleString() || 0 
+                    },
+                    { 
+                      label: "Raw Events", 
+                      value: voteRequestIndex.layers?.rawEvents?.toLocaleString() || voteRequestIndex.stats.total?.toLocaleString() || 0 
+                    },
                   ]
                 : []
             }
