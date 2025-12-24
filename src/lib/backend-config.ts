@@ -22,7 +22,7 @@ interface BackendConfig {
 const DEFAULT_DUCKDB_PORT = 3001;
 
 // Cloudflare tunnel URL for remote access (set to empty string to use default localhost behavior)
-const CLOUDFLARE_TUNNEL_URL = 'https://petite-background-now-walks.trycloudflare.com';
+const CLOUDFLARE_TUNNEL_URL = 'https://pressed-pushed-thrown-demands.trycloudflare.com';
 
 function computeDuckDbApiUrl(): string {
   // If Cloudflare tunnel is configured, always use it (works from any environment)
