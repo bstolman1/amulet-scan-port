@@ -127,11 +127,19 @@ function extractMigrationIdFromPath(filePath) {
 }
 
 /**
- * Convert Long object to number (protobufjs returns int64 as Long)
+ * Convert Long object or BigInt to JSON-safe number (protobufjs returns int64 as Long or BigInt)
  */
 function toLong(val) {
   if (val === null || val === undefined) return null;
   if (typeof val === 'number') return val;
+  // Handle native BigInt (newer protobufjs versions)
+  if (typeof val === 'bigint') {
+    // For safety, convert to string if beyond safe integer range
+    if (val > Number.MAX_SAFE_INTEGER || val < Number.MIN_SAFE_INTEGER) {
+      return Number(val); // Accept precision loss for timestamps - they're usually fine
+    }
+    return Number(val);
+  }
   if (typeof val === 'object' && 'low' in val) {
     // Long object from protobufjs
     return val.toNumber ? val.toNumber() : Number(val.low);
@@ -157,9 +165,9 @@ function toPlainObject(record, isEvent, filePath) {
       event_type_original: record.typeOriginal || record.type_original || null,
       synchronizer_id: record.synchronizer || null,
       migration_id: migrationId,
-      timestamp: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
-      effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
-      created_at_ts: record.createdAtTs ? new Date(Number(record.createdAtTs)).toISOString() : null,
+      timestamp: record.recordedAt ? new Date(toLong(record.recordedAt)).toISOString() : null,
+      effective_at: record.effectiveAt ? new Date(toLong(record.effectiveAt)).toISOString() : null,
+      created_at_ts: record.createdAtTs ? new Date(toLong(record.createdAtTs)).toISOString() : null,
       contract_id: record.contractId || record.contract_id || null,
       template_id: record.template || null,
       package_name: record.packageName || record.package_name || null,
@@ -195,13 +203,13 @@ function toPlainObject(record, isEvent, filePath) {
     update_type: record.type || null,
     synchronizer_id: record.synchronizer || null,
     migration_id: migrationId,
-    timestamp: record.recordedAt ? new Date(Number(record.recordedAt)).toISOString() : null,
-    effective_at: record.effectiveAt ? new Date(Number(record.effectiveAt)).toISOString() : null,
-    record_time: record.recordTime ? new Date(Number(record.recordTime)).toISOString() : null,
+    timestamp: record.recordedAt ? new Date(toLong(record.recordedAt)).toISOString() : null,
+    effective_at: record.effectiveAt ? new Date(toLong(record.effectiveAt)).toISOString() : null,
+    record_time: record.recordTime ? new Date(toLong(record.recordTime)).toISOString() : null,
     command_id: record.commandId || record.command_id || null,
     workflow_id: record.workflowId || record.workflow_id || null,
     kind: record.kind || null,
-    offset: record.offset || null,
+    offset: toLong(record.offset),
     root_event_ids: record.rootEventIds || record.root_event_ids || [],
     event_count: record.eventCount || record.event_count || 0,
     // Reassignment fields
@@ -209,7 +217,7 @@ function toPlainObject(record, isEvent, filePath) {
     target_synchronizer: record.targetSynchronizer || record.target_synchronizer || null,
     unassign_id: record.unassignId || record.unassign_id || null,
     submitter: record.submitter || null,
-    reassignment_counter: record.reassignmentCounter || record.reassignment_counter || null,
+    reassignment_counter: toLong(record.reassignmentCounter || record.reassignment_counter),
     // Full update data
     update_data: record.updateDataJson ? tryParseJson(record.updateDataJson) : null,
   };

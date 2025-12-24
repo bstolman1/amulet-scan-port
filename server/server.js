@@ -38,6 +38,11 @@ const ENGINE_ENABLED = process.env.ENGINE_ENABLED === 'true';
 app.use(cors());
 app.use(express.json());
 
+// Global BigInt serialization safety net - prevents "Do not know how to serialize a BigInt" errors
+app.set('json replacer', (key, value) => 
+  typeof value === 'bigint' ? Number(value) : value
+);
+
 // Root route - API info
 app.get('/', async (req, res) => {
   let engineStatus = null;
