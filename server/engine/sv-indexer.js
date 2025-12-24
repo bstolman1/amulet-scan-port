@@ -93,10 +93,11 @@ export async function getSvIndexStats() {
       currentSvCount: Number(state?.total_svs || 0),
       isPopulated: Number(totalEvents?.count || 0) > 0,
       isIndexing: indexingInProgress,
+      indexing: indexingInProgress ? indexingProgress : null,
     };
   } catch (err) {
     console.error('Error getting SV index stats:', err);
-    return { totalEvents: 0, onboardCount: 0, offboardCount: 0, isPopulated: false, isIndexing: indexingInProgress };
+    return { totalEvents: 0, onboardCount: 0, offboardCount: 0, isPopulated: false, isIndexing: indexingInProgress, indexing: null };
   }
 }
 
@@ -270,10 +271,11 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
       const onboardFiles = await getFilesForTemplate('SvOnboardingConfirmed');
       console.log(`   📂 Found ${onboardFiles.length} files with SvOnboardingConfirmed events`);
       
-      indexingProgress = { phase: 'scan:onboard', current: 0, total: onboardFiles.length };
+      indexingProgress = { phase: 'scan:onboard', current: 0, total: onboardFiles.length, filesScanned: 0, totalFiles: onboardFiles.length + (await getFilesForTemplate('DsoRules')).length };
       
       for (let i = 0; i < onboardFiles.length; i++) {
         indexingProgress.current = i + 1;
+        indexingProgress.filesScanned = i + 1;
         const filePath = onboardFiles[i];
         
         try {
@@ -325,10 +327,12 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
       const dsoRulesFiles = await getFilesForTemplate('DsoRules');
       console.log(`   📂 Found ${dsoRulesFiles.length} files with DsoRules events`);
       
-      indexingProgress = { phase: 'scan:offboard', current: 0, total: dsoRulesFiles.length };
+      const onboardFilesCount = onboardFiles.length;
+      indexingProgress = { phase: 'scan:offboard', current: 0, total: dsoRulesFiles.length, filesScanned: onboardFilesCount, totalFiles: onboardFilesCount + dsoRulesFiles.length };
       
       for (let i = 0; i < dsoRulesFiles.length; i++) {
         indexingProgress.current = i + 1;
+        indexingProgress.filesScanned = onboardFilesCount + i + 1;
         const filePath = dsoRulesFiles[i];
         
         try {
