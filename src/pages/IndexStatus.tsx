@@ -872,18 +872,24 @@ const IndexStatus = () => {
             icon={<UserCheck className="w-5 h-5" />}
             status={getSvStatus()}
             stats={
-              svIndex?.isPopulated
+              svIndex?.isPopulated || svIndex?.isIndexing
                 ? [
                     { label: "Current SVs", value: svIndex.currentSvCount?.toLocaleString() || 0 },
                     { label: "Onboard Events", value: svIndex.onboardCount?.toLocaleString() || 0 },
                     { label: "Offboard Events", value: svIndex.offboardCount?.toLocaleString() || 0 },
                     { label: "Total Events", value: svIndex.totalEvents?.toLocaleString() || 0 },
+                    ...(svIndex?.indexing?.phase ? [{ label: "Phase", value: svIndex.indexing.phase }] : []),
                   ]
                 : []
             }
             lastUpdated={svIndex?.lastIndexedAt}
             onRebuild={() => svRebuildMutation.mutate()}
             isRebuilding={svRebuildMutation.isPending}
+            buildProgress={
+              svIndex?.indexing
+                ? { current: svIndex.indexing.filesScanned || 0, total: svIndex.indexing.totalFiles || 1 }
+                : null
+            }
           />
         </div>
 
