@@ -73,8 +73,10 @@ export function useGovernanceEvents() {
       // verbose=true to get debug info about data source
       // If index is populated, use it. Otherwise, fall back to binary scan (slower).
       // We do NOT set ensureFresh=true to avoid triggering repeated index rebuilds.
+      // Use status=all to include both active and historical vote requests
+      // The template index contains all VoteRequest events from binary files
       const response = await apiFetch<EventsResponse<VoteRequestRow>>(
-        "/api/events/vote-requests?status=historical&limit=5000&verbose=true",
+        "/api/events/vote-requests?status=all&limit=5000&verbose=true",
       );
 
       const seen = new Set<string>();
