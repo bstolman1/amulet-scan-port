@@ -76,12 +76,15 @@ export function getDuckDBApiUrl(): string {
 export async function checkDuckDBConnection(): Promise<boolean> {
   try {
     const baseUrl = computeDuckDbApiUrl();
+    console.log('[DuckDB] Checking connection to:', baseUrl);
     const response = await fetch(`${baseUrl}/health`, {
       method: 'GET',
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(5000), // Increased timeout
     });
+    console.log('[DuckDB] Health check response:', response.ok);
     return response.ok;
-  } catch {
+  } catch (err) {
+    console.warn('[DuckDB] Health check failed:', err);
     return false;
   }
 }
