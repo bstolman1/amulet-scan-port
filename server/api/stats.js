@@ -903,6 +903,47 @@ router.get('/aggregation-state', async (req, res) => {
   }
 });
 
+// POST /api/stats/aggregation-state/reset - Reset aggregation state to reprocess all data
+router.post('/aggregation-state/reset', async (req, res) => {
+  try {
+    // Check if table exists
+    const tableCheck = await query(`
+      SELECT COUNT(*) as cnt 
+      FROM information_schema.tables 
+      WHERE table_name = 'aggregation_state'
+    `);
+    
+    if (!tableCheck?.[0]?.cnt || Number(tableCheck[0].cnt) === 0) {
+      return res.status(400).json({ error: 'Aggregation state table does not exist' });
+    }
+    
+    // Reset all aggregation states to file 0
+    await query(`UPDATE aggregation_state SET last_file_id = 0, last_updated = NOW()`);
+    
+    // Fetch updated state
+    const rows = await query(`
+      SELECT agg_name, last_file_id, last_updated
+      FROM aggregation_state
+      ORDER BY last_updated DESC
+    `);
+    
+    console.log('🔄 Reset aggregation state - all aggregations will reprocess from start');
+    
+    res.json({
+      success: true,
+      message: 'Aggregation state reset. All aggregations will reprocess from the beginning.',
+      states: rows.map(r => ({
+        agg_name: r.agg_name,
+        last_file_id: Number(r.last_file_id || 0),
+        last_updated: r.last_updated,
+      }))
+    });
+  } catch (err) {
+    console.error('Error resetting aggregation state:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/stats/live-cursor - Purge live cursor to stop live ingestion tracking
 router.delete('/live-cursor', async (req, res) => {
   try {
