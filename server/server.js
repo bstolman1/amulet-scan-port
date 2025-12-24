@@ -78,8 +78,16 @@ app.get('/', async (req, res) => {
   });
 });
 
-// Health check with timeout to prevent hanging
-app.get('/health', async (req, res) => {
+// Quick health check (no engine status - fast response)
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Detailed health check with engine status
+app.get('/health/detailed', async (req, res) => {
   const cacheStats = getCacheStats();
   let engineStatus = null;
   
