@@ -3296,6 +3296,15 @@ function simpleHash(str) {
 
 // ============ SV MEMBERSHIP INDEX ROUTES ============
 
+// GET /api/events/sv-index/test - Simple test endpoint
+router.get('/sv-index/test', async (req, res) => {
+  res.json({ 
+    ok: true, 
+    message: 'SV membership index endpoint is working',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // GET /api/events/sv-index/status - Get SV index status
 router.get('/sv-index/status', async (req, res) => {
   try {
