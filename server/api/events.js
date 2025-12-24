@@ -1197,6 +1197,22 @@ router.get('/vote-requests/debug-table', async (req, res) => {
       LIMIT 20
     `);
     
+    // CRITICAL: Sample records with NULL action_tag to see what's in their payload
+    const nullActionTagSample = await db.safeQuery(`
+      SELECT 
+        event_id,
+        contract_id,
+        status,
+        vote_count,
+        is_human,
+        LENGTH(payload) as payload_length,
+        SUBSTRING(payload, 1, 500) as payload_preview
+      FROM vote_requests
+      WHERE action_tag IS NULL
+      ORDER BY effective_at DESC
+      LIMIT 5
+    `);
+    
     const stats = statsRows[0] || {};
     console.log(`   Total records: ${stats.total}`);
     console.log(`   With action_tag: ${stats.with_action_tag}`);
@@ -1211,6 +1227,7 @@ router.get('/vote-requests/debug-table', async (req, res) => {
       statusBreakdown: statusRows,
       actionTagBreakdown: actionTagRows,
       sample: sampleRows,
+      nullActionTagSample,
       message: 'Debug data from vote_requests DuckDB table'
     }));
   } catch (err) {
