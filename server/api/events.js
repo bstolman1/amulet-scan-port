@@ -1345,6 +1345,7 @@ router.get('/vote-requests/raw', async (req, res) => {
 router.get('/vote-request-index/status', async (req, res) => {
   try {
     const stats = await voteRequestIndexer.getVoteRequestStats();
+    const canonicalStats = await voteRequestIndexer.getCanonicalProposalStats();
     const state = await voteRequestIndexer.getIndexState();
     const isIndexing = voteRequestIndexer.isIndexingInProgress();
     const progress = voteRequestIndexer.getIndexingProgress?.();
@@ -1366,7 +1367,22 @@ router.get('/vote-request-index/status', async (req, res) => {
       populated: stats.total > 0,
       isIndexing,
       lockExists,
+      // Raw stats (all records including config maintenance)
       stats,
+      // Human-readable stats (explorer-matching: excludes SetConfig, requires narrative or votes)
+      humanStats: {
+        total: canonicalStats.humanProposals,
+        inProgress: canonicalStats.byStatus.in_progress,
+        executed: canonicalStats.byStatus.executed,
+        rejected: canonicalStats.byStatus.rejected,
+        expired: canonicalStats.byStatus.expired,
+      },
+      // Summary counts for understanding the data layers
+      layers: {
+        rawEvents: canonicalStats.rawEvents,
+        lifecycleProposals: canonicalStats.lifecycleProposals,
+        humanProposals: canonicalStats.humanProposals,
+      },
       lastIndexedAt: state.last_indexed_at,
       totalIndexed: state.total_indexed,
       progress: isIndexing ? progress : null,
