@@ -1,17 +1,19 @@
 /**
  * Vote Outcome Analyzer
  * 
- * Analyzes proposal outcomes by:
- * 1. Getting SV count at the time of voting
- * 2. Calculating if quorum was reached
- * 3. Determining pass/fail based on vote counts and thresholds
+ * Analyzes proposal outcomes using 2/3 majority threshold:
+ * 
+ * - IN PROGRESS: Has NOT met 2/3 accept OR 2/3 reject threshold AND has NOT expired
+ * - EXECUTED: Met 2/3 accept threshold before expiration  
+ * - REJECTED: Met 2/3 reject threshold before expiration
+ * - EXPIRED: Did NOT meet either 2/3 threshold AND vote_before time has passed
  */
 
 import { query, queryOne } from '../duckdb/connection.js';
 import { getSvCountAt, getActiveSvsAt, calculateVotingThreshold } from './sv-indexer.js';
 
 /**
- * Analyze a single proposal's outcome
+ * Analyze a single proposal's outcome using 2/3 threshold
  */
 export async function analyzeProposalOutcome(proposalId) {
   try {
@@ -51,29 +53,33 @@ export async function analyzeProposalOutcome(proposalId) {
     const rejectCount = Number(proposal.reject_count || 0);
     const totalVotes = Number(proposal.vote_count || 0);
     
-    // Determine outcome
-    const meetsAcceptThreshold = acceptCount >= thresholds.fixedThreshold;
-    const meetsRejectThreshold = rejectCount >= thresholds.fixedThreshold;
-    const meetsTwoThirdsMajority = acceptCount >= thresholds.twoThirdsMajority;
+    // 2/3 threshold for both accept and reject
+    const threshold = thresholds.twoThirdsThreshold;
     
-    let calculatedOutcome = 'unknown';
+    // Check if thresholds are met
+    const meetsAcceptThreshold = acceptCount >= threshold;
+    const meetsRejectThreshold = rejectCount >= threshold;
+    
+    // Check if expired (vote_before has passed)
+    const now = new Date();
+    const voteBefore = proposal.vote_before ? new Date(proposal.vote_before) : null;
+    const isExpired = voteBefore && voteBefore < now;
+    
+    let calculatedOutcome = 'in_progress';
     let outcomeReason = '';
     
     if (meetsAcceptThreshold) {
-      calculatedOutcome = 'passed';
-      outcomeReason = `${acceptCount} accepts >= ${thresholds.fixedThreshold} threshold`;
+      calculatedOutcome = 'executed';
+      outcomeReason = `Met 2/3 accept threshold: ${acceptCount} accepts >= ${threshold} (${svCount} SVs × 2/3)`;
     } else if (meetsRejectThreshold) {
       calculatedOutcome = 'rejected';
-      outcomeReason = `${rejectCount} rejects >= ${thresholds.fixedThreshold} threshold`;
-    } else if (proposal.is_closed && proposal.status === 'expired') {
+      outcomeReason = `Met 2/3 reject threshold: ${rejectCount} rejects >= ${threshold} (${svCount} SVs × 2/3)`;
+    } else if (isExpired || proposal.is_closed) {
       calculatedOutcome = 'expired';
-      outcomeReason = `Vote closed without meeting thresholds (${acceptCount} accepts, ${rejectCount} rejects)`;
-    } else if (!proposal.is_closed) {
-      calculatedOutcome = 'pending';
-      outcomeReason = `Voting still open (${acceptCount}/${thresholds.fixedThreshold} accepts needed)`;
+      outcomeReason = `Did not meet 2/3 threshold before expiration: ${acceptCount} accepts, ${rejectCount} rejects (needed ${threshold})`;
     } else {
-      calculatedOutcome = 'indeterminate';
-      outcomeReason = `Closed but outcome unclear (${acceptCount} accepts, ${rejectCount} rejects, threshold: ${thresholds.fixedThreshold})`;
+      calculatedOutcome = 'in_progress';
+      outcomeReason = `Voting ongoing: ${acceptCount}/${threshold} accepts or ${rejectCount}/${threshold} rejects needed`;
     }
     
     return {
@@ -92,27 +98,30 @@ export async function analyzeProposalOutcome(proposalId) {
       svCountAtVote: svCount,
       activeSvsAtVote: activeSvs.length,
       
-      // Thresholds
-      thresholds: {
-        fixed: thresholds.fixedThreshold,
-        twoThirds: thresholds.twoThirdsMajority,
-        simpleMajority: thresholds.simpleMajority,
-      },
+      // Thresholds (2/3 majority)
+      threshold,
+      thresholdFormula: `ceil(${svCount} × 2/3) = ${threshold}`,
       
       // Outcome analysis
       recordedStatus: proposal.status,
       calculatedOutcome,
       outcomeReason,
       
-      // Checks
+      // Threshold checks
       meetsAcceptThreshold,
       meetsRejectThreshold,
-      meetsTwoThirdsMajority,
+      acceptProgress: `${acceptCount}/${threshold}`,
+      rejectProgress: `${rejectCount}/${threshold}`,
       
       // Timing
       effectiveAt: proposal.effective_at,
       voteBefore: proposal.vote_before,
+      isExpired,
       isClosed: proposal.is_closed,
+      
+      // Mismatch detection
+      statusMismatch: calculatedOutcome !== proposal.status && 
+                      !(calculatedOutcome === 'in_progress' && proposal.status === 'active'),
     };
   } catch (err) {
     console.error('Error analyzing proposal outcome:', err);
@@ -148,26 +157,32 @@ export async function analyzeAllProposalOutcomes({ limit = 100, offset = 0 } = {
     `);
     
     const results = [];
+    const now = new Date();
     
     for (const proposal of proposals) {
       const voteTime = proposal.vote_before || proposal.effective_at;
       const svCount = await getSvCountAt(voteTime);
       const thresholds = calculateVotingThreshold(svCount);
+      const threshold = thresholds.twoThirdsThreshold;
       
       const acceptCount = Number(proposal.accept_count || 0);
       const rejectCount = Number(proposal.reject_count || 0);
       
-      const meetsAcceptThreshold = acceptCount >= thresholds.fixedThreshold;
-      const meetsRejectThreshold = rejectCount >= thresholds.fixedThreshold;
+      const meetsAcceptThreshold = acceptCount >= threshold;
+      const meetsRejectThreshold = rejectCount >= threshold;
       
-      let calculatedOutcome = 'pending';
+      const voteBefore = proposal.vote_before ? new Date(proposal.vote_before) : null;
+      const isExpired = voteBefore && voteBefore < now;
+      const isClosed = proposal.is_closed === 1 || proposal.is_closed === true;
+      
+      let calculatedOutcome = 'in_progress';
       if (meetsAcceptThreshold) calculatedOutcome = 'executed';
       else if (meetsRejectThreshold) calculatedOutcome = 'rejected';
-      else if (proposal.is_closed) calculatedOutcome = 'expired';
+      else if (isExpired || isClosed) calculatedOutcome = 'expired';
       
       const recordedStatus = proposal.status;
       const mismatch = calculatedOutcome !== recordedStatus && 
-                       !(calculatedOutcome === 'pending' && recordedStatus === 'in_progress');
+                       !(calculatedOutcome === 'in_progress' && recordedStatus === 'active');
       
       results.push({
         proposalId: proposal.proposal_id,
@@ -175,19 +190,33 @@ export async function analyzeAllProposalOutcomes({ limit = 100, offset = 0 } = {
         acceptCount,
         rejectCount,
         svCountAtVote: svCount,
-        threshold: thresholds.fixedThreshold,
+        threshold,
+        thresholdFormula: `ceil(${svCount} × 2/3)`,
+        acceptProgress: `${acceptCount}/${threshold}`,
+        rejectProgress: `${rejectCount}/${threshold}`,
         recordedStatus,
         calculatedOutcome,
         mismatch,
         effectiveAt: proposal.effective_at,
+        voteBefore: proposal.vote_before,
+        isExpired,
       });
     }
     
     const mismatches = results.filter(r => r.mismatch);
     
+    // Summary by outcome
+    const summary = {
+      in_progress: results.filter(r => r.calculatedOutcome === 'in_progress').length,
+      executed: results.filter(r => r.calculatedOutcome === 'executed').length,
+      rejected: results.filter(r => r.calculatedOutcome === 'rejected').length,
+      expired: results.filter(r => r.calculatedOutcome === 'expired').length,
+    };
+    
     return {
       total: results.length,
       mismatchCount: mismatches.length,
+      summary,
       results,
       mismatches,
     };
@@ -220,6 +249,7 @@ export async function getRawProposalsGrouped({ limit = 200, offset = 0 } = {}) {
           MAX(is_human) as current_is_human,
           MIN(effective_at) as first_seen,
           MAX(effective_at) as last_seen,
+          MAX(vote_before) as vote_before,
           MAX(votes) as votes
         FROM vote_requests
         GROUP BY COALESCE(tracking_cid, contract_id)
@@ -253,6 +283,7 @@ export async function getRawProposalsGrouped({ limit = 200, offset = 0 } = {}) {
         currentIsHuman: p.current_is_human === 1 || p.current_is_human === true,
         firstSeen: p.first_seen,
         lastSeen: p.last_seen,
+        voteBefore: p.vote_before,
         votes: p.votes,
         // Suggestion for human-readability based on heuristics
         suggestedHuman: !!(p.reason || p.reason_url || Number(p.vote_count || 0) > 0),

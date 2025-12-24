@@ -211,20 +211,17 @@ export async function getSvMembershipTimeline(limit = 100) {
 
 /**
  * Calculate voting threshold based on SV count
- * Standard rule: majority = floor(svCount/2) + 1, but Canton uses specific thresholds
+ * Canton governance requires 2/3 majority (rounded up) for pass/reject
  */
 export function calculateVotingThreshold(svCount) {
-  // Canton governance typically requires 2/3 majority rounded up
-  // Or a fixed threshold of 9 for certain actions
-  const twoThirdsMajority = Math.ceil((svCount * 2) / 3);
-  const simpleMajority = Math.floor(svCount / 2) + 1;
+  // 2/3 majority rounded up - this is the threshold for both accept AND reject
+  const twoThirdsThreshold = Math.ceil((svCount * 2) / 3);
   
   return {
     svCount,
-    simpleMajority,
-    twoThirdsMajority,
-    // Canton often uses 9 as acceptance threshold regardless of SV count
-    fixedThreshold: 9,
+    twoThirdsThreshold,  // Votes needed to pass OR reject
+    // Simple majority for reference
+    simpleMajority: Math.floor(svCount / 2) + 1,
   };
 }
 
