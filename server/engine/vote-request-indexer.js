@@ -874,6 +874,108 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       totalRejectVotes: 0
     };
 
+    // =============================================================================
+    // PAYLOAD NORMALIZATION: Handle both DAML record format and normalized format
+    // =============================================================================
+    // Raw DAML format: { record: { fields: [ { value: {...} }, ... ] } }
+    // Normalized format: { requester: "...", action: { tag: "...", value: {...} }, reason: {...}, ... }
+    // =============================================================================
+    const normalizePayload = (payload) => {
+      if (!payload) return {};
+      
+      // Already normalized format - has direct properties like 'requester', 'action', etc.
+      if (payload.requester || payload.action || payload.reason) {
+        return payload;
+      }
+      
+      // Raw DAML record format: { record: { fields: [...] } }
+      if (payload.record?.fields && Array.isArray(payload.record.fields)) {
+        const fields = payload.record.fields;
+        const normalized = {};
+        
+        // VoteRequest field order (from DAML schema):
+        // 0: dso (party)
+        // 1: requester (text)
+        // 2: action (variant - ARC_DsoRules, ARC_AmuletRules, etc.)
+        // 3: reason (record with url and body)
+        // 4: voteBefore (timestamp)
+        // 5: votes (genMap)
+        // 6: trackingCid (optional contractId)
+        
+        // Extract dso (field 0)
+        const dsoField = fields[0]?.value;
+        if (dsoField?.party) normalized.dso = dsoField.party;
+        else if (dsoField?.text) normalized.dso = dsoField.text;
+        
+        // Extract requester (field 1)
+        const requesterField = fields[1]?.value;
+        if (requesterField?.text) normalized.requester = requesterField.text;
+        else if (typeof requesterField === 'string') normalized.requester = requesterField;
+        
+        // Extract action (field 2) - this is the critical one for action_tag
+        const actionField = fields[2]?.value;
+        if (actionField?.variant) {
+          // { variant: { constructor: "ARC_DsoRules", value: { record: { fields: [...] } } } }
+          normalized.action = {
+            tag: actionField.variant.constructor,
+            value: actionField.variant.value
+          };
+        } else if (actionField?.constructor) {
+          // Alternative format: { constructor: "ARC_DsoRules", value: {...} }
+          normalized.action = {
+            tag: actionField.constructor,
+            value: actionField.value
+          };
+        }
+        
+        // Extract reason (field 3) - record with url and body
+        const reasonField = fields[3]?.value;
+        if (reasonField?.record?.fields && Array.isArray(reasonField.record.fields)) {
+          const reasonFields = reasonField.record.fields;
+          const urlField = reasonFields[0]?.value;
+          const bodyField = reasonFields[1]?.value;
+          normalized.reason = {
+            url: urlField?.text || urlField || null,
+            body: bodyField?.text || bodyField || null
+          };
+        } else if (typeof reasonField === 'object') {
+          normalized.reason = reasonField;
+        }
+        
+        // Extract voteBefore (field 4)
+        const voteBeforeField = fields[4]?.value;
+        if (voteBeforeField?.timestamp) {
+          // Convert microseconds to ISO string
+          const microTs = parseInt(voteBeforeField.timestamp, 10);
+          if (!isNaN(microTs)) {
+            normalized.voteBefore = new Date(microTs / 1000).toISOString();
+          }
+        } else if (typeof voteBeforeField === 'string') {
+          normalized.voteBefore = voteBeforeField;
+        }
+        
+        // Extract votes (field 5) - genMap
+        const votesField = fields[5]?.value;
+        if (votesField?.genMap?.entries) {
+          normalized.votes = votesField.genMap.entries;
+        } else if (Array.isArray(votesField)) {
+          normalized.votes = votesField;
+        }
+        
+        // Extract trackingCid (field 6, optional)
+        if (fields[6]) {
+          const trackingField = fields[6]?.value;
+          if (trackingField?.contractId) normalized.trackingCid = trackingField.contractId;
+          else if (trackingField?.Some?.contractId) normalized.trackingCid = trackingField.Some.contractId;
+        }
+        
+        return normalized;
+      }
+      
+      // Unknown format - return as-is
+      return payload;
+    };
+
     // ============================================================
     // DIAGNOSTIC LOGGING: Track payload extraction during build
     // ============================================================
@@ -883,6 +985,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const nullPayloadSamples = [];
     
     for (const event of createdResult.records) {
+      // NORMALIZE PAYLOAD EARLY - handle both DAML record format and normalized format
+      const normalizedPayload = normalizePayload(event.payload);
+      
       // Diagnostic: check payload status
       if (!event.payload) {
         nullPayloadCount++;
@@ -913,10 +1018,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
       // Use archived event data for final vote counts if available
       const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
-      const finalVotes = archivedEvent?.payload?.votes || event.payload?.votes;
+      const archivedNormalized = archivedEvent ? normalizePayload(archivedEvent.payload) : null;
+      const finalVotes = archivedNormalized?.votes || normalizedPayload.votes || archivedEvent?.payload?.votes || event.payload?.votes;
       const finalVoteCount = finalVotes?.length || 0;
 
-      const voteBefore = event.payload?.voteBefore;
+      const voteBefore = normalizedPayload.voteBefore || event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
       const isExpired = voteBeforeDate && voteBeforeDate < now;
 
@@ -1051,7 +1157,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       statusStats.totalRejectVotes += rejectCount;
 
       // Normalize reason - can be string or object with body and url
-      const rawReason = event.payload?.reason;
+      const rawReason = normalizedPayload.reason || event.payload?.reason;
       let reasonStr = null;
       let reasonUrl = null;
       if (rawReason) {
@@ -1064,16 +1170,20 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
 
       // Build semantic key for proposal grouping
-      const actionTag = event.payload?.action?.tag || null;
-      const actionDetails = event.payload?.action || null;
-      const requester = event.payload?.requester || null;
+      // Use normalized payload for extraction, fallback to raw payload
+      const actionTag = normalizedPayload.action?.tag || event.payload?.action?.tag || null;
+      const actionDetails = normalizedPayload.action || event.payload?.action || null;
+      const requester = normalizedPayload.requester || event.payload?.requester || null;
       const semanticKey = buildSemanticKey(actionTag, actionDetails, requester);
       const actionSubject = extractActionSubject(actionDetails);
       
       // CANONICAL MODEL: proposal_id = COALESCE(trackingCid, contract_id)
       // This is the authoritative proposal identity that survives migrations/re-submissions
-      const trackingCid = event.payload?.trackingCid || null;
+      const trackingCid = normalizedPayload.trackingCid || event.payload?.trackingCid || null;
       const proposalId = trackingCid || event.contract_id || null;
+      
+      // Extract dso from normalized payload
+      const dso = normalizedPayload.dso || event.payload?.dso || null;
       
       // CANONICAL MODEL: is_human classification
       // Explorers only show human-readable governance proposals, excluding:
@@ -1112,10 +1222,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         vote_count: finalVoteCount,
         accept_count: acceptCount,
         reject_count: rejectCount,
-        vote_before: voteBefore || null,
-        target_effective_at: event.payload?.targetEffectiveAt || null,
+        vote_before: normalizedPayload.voteBefore || voteBefore || null,
+        target_effective_at: normalizedPayload.targetEffectiveAt || event.payload?.targetEffectiveAt || null,
         tracking_cid: trackingCid,
-        dso: event.payload?.dso || null,
+        dso: dso,
         payload: event.payload ? JSON.stringify(event.payload) : null,
         semantic_key: semanticKey,
         action_subject: actionSubject,
