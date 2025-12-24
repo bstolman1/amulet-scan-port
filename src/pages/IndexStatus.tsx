@@ -508,6 +508,29 @@ const IndexStatus = () => {
     },
   });
 
+  // Mutation to reset aggregation state
+  const resetAggregationMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`${getDuckDBApiUrl()}/api/stats/aggregation-state/reset`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to reset aggregation state");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Aggregation state reset",
+        description: "All aggregations will reprocess from the beginning",
+      });
+      queryClient.invalidateQueries({ queryKey: ["aggregationState"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to reset aggregation state",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const rewardRebuildMutation = useMutation({
     mutationFn: rebuildRewardCouponIndex,
     onSuccess: (data) => {
@@ -838,6 +861,8 @@ const IndexStatus = () => {
             lastUpdated={aggregationState?.states?.[0]?.last_updated}
             onCreateTable={aggregationState?.tableExists === false ? () => initSchemaMutation.mutate() : undefined}
             isCreatingTable={initSchemaMutation.isPending}
+            onRebuild={aggregationState?.tableExists ? () => resetAggregationMutation.mutate() : undefined}
+            isRebuilding={resetAggregationMutation.isPending}
           />
 
           {/* Party Index */}
