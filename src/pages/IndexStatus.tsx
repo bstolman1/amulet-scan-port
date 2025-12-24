@@ -595,6 +595,61 @@ const IndexStatus = () => {
     toast({ title: "Refreshing status..." });
   };
 
+  // Rebuild all indexes in sequence
+  const rebuildAllMutation = useMutation({
+    mutationFn: async () => {
+      const steps = [
+        { name: "Template File Index", fn: rebuildTemplateIndex },
+        { name: "Vote Request Index", fn: rebuildVoteRequestIndex },
+        { name: "Reward Coupon Index", fn: rebuildRewardCouponIndex },
+        { name: "Party Index", fn: rebuildPartyIndex },
+        { name: "SV Membership Index", fn: rebuildSvIndex },
+      ];
+      
+      const results: { name: string; success: boolean; error?: string }[] = [];
+      
+      for (const step of steps) {
+        try {
+          await step.fn();
+          results.push({ name: step.name, success: true });
+        } catch (err: any) {
+          results.push({ name: step.name, success: false, error: err.message });
+        }
+      }
+      
+      return results;
+    },
+    onSuccess: (results) => {
+      const successCount = results.filter(r => r.success).length;
+      const failedCount = results.filter(r => !r.success).length;
+      
+      toast({
+        title: "Rebuild All Complete",
+        description: `${successCount} indexes started${failedCount > 0 ? `, ${failedCount} failed` : ""}`,
+        variant: failedCount > 0 ? "destructive" : "default",
+      });
+      
+      // Refresh all statuses
+      handleRefreshAll();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Rebuild All Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const isAnyRebuilding = 
+    templateRebuildMutation.isPending || 
+    voteRebuildMutation.isPending || 
+    rewardRebuildMutation.isPending || 
+    partyRebuildMutation.isPending || 
+    svRebuildMutation.isPending ||
+    resetAggregationMutation.isPending ||
+    rebuildAllMutation.isPending;
+
   // Derive template index status
   const getTemplateStatus = (): IndexCardProps["status"] => {
     if (!duckdbEnabled) return duckdbChecking ? "loading" : "error";
@@ -663,17 +718,31 @@ const IndexStatus = () => {
     <DashboardLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="text-3xl font-bold mb-2">DuckDB Index Status</h1>
             <p className="text-muted-foreground">
               Monitor and manage persistent indexes for fast queries
             </p>
           </div>
-          <Button variant="outline" onClick={handleRefreshAll} disabled={!duckdbEnabled}>
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Refresh All
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              variant="default" 
+              onClick={() => rebuildAllMutation.mutate()} 
+              disabled={!duckdbEnabled || isAnyRebuilding}
+            >
+              {rebuildAllMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4 mr-2" />
+              )}
+              Rebuild All Indexes
+            </Button>
+            <Button variant="outline" onClick={handleRefreshAll} disabled={!duckdbEnabled}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh All
+            </Button>
+          </div>
         </div>
 
         {!duckdbEnabled && (
