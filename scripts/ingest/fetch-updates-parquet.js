@@ -104,6 +104,15 @@ function loadLiveCursor() {
       console.warn(`⚠️ Live cursor file is missing required fields, ignoring`);
       return null;
     }
+    
+    // Reject timestamps in the future (likely corrupted from old T23:59:59 bug)
+    const cursorTime = new Date(data.record_time).getTime();
+    const now = Date.now();
+    if (cursorTime > now) {
+      console.warn(`⚠️ Live cursor has future timestamp (${data.record_time}), ignoring`);
+      return null;
+    }
+    
     console.log(`📍 Loaded live cursor: migration=${data.migration_id}, record_time=${data.record_time}`);
     return data;
   } catch (err) {
