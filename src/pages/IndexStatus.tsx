@@ -21,6 +21,7 @@ import {
   ChevronUp,
   Coins,
   Users,
+  Download,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -805,23 +806,48 @@ const IndexStatus = () => {
                   </CardTitle>
                   <CardDescription>All unique templates found across binary files</CardDescription>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowAllTemplates(!showAllTemplates)}
-                >
-                  {showAllTemplates ? (
-                    <>
-                      <ChevronUp className="w-4 h-4 mr-1" />
-                      Show Less
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown className="w-4 h-4 mr-1" />
-                      Show All
-                    </>
-                  )}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const csv = [
+                        ["template_name", "total_events", "file_count"].join(","),
+                        ...templates.map(t => 
+                          [t.template_name, t.total_events, t.file_count].join(",")
+                        )
+                      ].join("\n");
+                      const blob = new Blob([csv], { type: "text/csv" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "template-index.csv";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    disabled={templates.length === 0}
+                  >
+                    <Download className="w-4 h-4 mr-1" />
+                    CSV
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAllTemplates(!showAllTemplates)}
+                  >
+                    {showAllTemplates ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 mr-1" />
+                        Show Less
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 mr-1" />
+                        Show All
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
