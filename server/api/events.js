@@ -1134,6 +1134,91 @@ router.get('/vote-requests', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-requests/debug-table - Debug endpoint to inspect vote_requests DuckDB table
+router.get('/vote-requests/debug-table', async (req, res) => {
+  try {
+    console.log('\n🔍 DEBUG: Inspecting vote_requests DuckDB table...');
+    
+    // Get overall stats
+    const statsRows = await db.safeQuery(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN action_tag IS NOT NULL THEN 1 END) as with_action_tag,
+        COUNT(CASE WHEN requester IS NOT NULL THEN 1 END) as with_requester,
+        COUNT(CASE WHEN reason IS NOT NULL THEN 1 END) as with_reason,
+        COUNT(CASE WHEN vote_count > 0 THEN 1 END) as with_votes,
+        COUNT(CASE WHEN is_human = true THEN 1 END) as human_proposals,
+        COUNT(CASE WHEN payload IS NOT NULL THEN 1 END) as with_payload
+      FROM vote_requests
+    `);
+    
+    // Get sample records with key fields
+    const sampleRows = await db.safeQuery(`
+      SELECT 
+        event_id,
+        contract_id,
+        action_tag,
+        requester,
+        reason,
+        vote_count,
+        is_human,
+        status,
+        effective_at,
+        CASE WHEN payload IS NULL THEN 'NULL' 
+             WHEN payload = '' THEN 'EMPTY_STRING'
+             WHEN payload = '{}' THEN 'EMPTY_OBJECT'
+             WHEN payload = 'null' THEN 'NULL_STRING'
+             ELSE 'HAS_DATA' END as payload_status,
+        LENGTH(payload) as payload_length
+      FROM vote_requests
+      ORDER BY effective_at DESC
+      LIMIT 20
+    `);
+    
+    // Get status breakdown
+    const statusRows = await db.safeQuery(`
+      SELECT 
+        status,
+        COUNT(*) as count,
+        COUNT(CASE WHEN is_human = true THEN 1 END) as human_count
+      FROM vote_requests
+      GROUP BY status
+      ORDER BY count DESC
+    `);
+    
+    // Get action_tag breakdown
+    const actionTagRows = await db.safeQuery(`
+      SELECT 
+        COALESCE(action_tag, 'NULL') as action_tag,
+        COUNT(*) as count
+      FROM vote_requests
+      GROUP BY action_tag
+      ORDER BY count DESC
+      LIMIT 20
+    `);
+    
+    const stats = statsRows[0] || {};
+    console.log(`   Total records: ${stats.total}`);
+    console.log(`   With action_tag: ${stats.with_action_tag}`);
+    console.log(`   With requester: ${stats.with_requester}`);
+    console.log(`   With reason: ${stats.with_reason}`);
+    console.log(`   With votes: ${stats.with_votes}`);
+    console.log(`   Human proposals: ${stats.human_proposals}`);
+    console.log(`   With payload: ${stats.with_payload}`);
+    
+    res.json(convertBigInts({
+      stats,
+      statusBreakdown: statusRows,
+      actionTagBreakdown: actionTagRows,
+      sample: sampleRows,
+      message: 'Debug data from vote_requests DuckDB table'
+    }));
+  } catch (err) {
+    console.error('Error in vote-requests debug-table:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/template-scan - Scan all binary files to find unique templates (for debugging)
 router.get('/template-scan', async (req, res) => {
   try {
