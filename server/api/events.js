@@ -2036,24 +2036,56 @@ router.get('/debug/confirm-action', async (req, res) => {
           const choiceArg = raw.choice_argument || payload.choice_argument || payload;
           
           // Extract action tag from the Arc structure
-          // Arc action can be nested: action.value.tag or action.tag
-          const action = choiceArg.action || choiceArg.confirmedAction || {};
-          let actionTag = null;
+          // Handle multiple encoding styles:
+          // 1. Protobuf-style: record.fields[0].value.variant.constructor
+          // 2. JSON-style: action.tag or action.value.tag
+          // 3. Variant-as-key: { ARC_DsoRules: {...} }
           
-          // Try different Arc encoding styles
-          if (action.tag) {
-            actionTag = action.tag;
-          } else if (action.value?.tag) {
-            actionTag = action.value.tag;
-          } else {
-            // Check for variant-as-key encoding: { ARC_DsoRules: { dsoAction: {...} } }
-            const keys = Object.keys(action);
-            if (keys.length > 0 && keys[0].startsWith('ARC_')) {
-              actionTag = keys[0];
+          let actionTag = null;
+          let innerActionTag = null;
+          let actionStructure = null;
+          
+          // Try protobuf-style first (record.fields)
+          const recordFields = choiceArg?.record?.fields;
+          if (Array.isArray(recordFields) && recordFields.length > 0) {
+            const firstField = recordFields[0]?.value?.variant;
+            if (firstField?.constructor) {
+              actionTag = firstField.constructor;
+              actionStructure = firstField.value;
+              
+              // Try to get inner action tag (e.g., CRARC_MiningRound_Archive inside ARC_AmuletRules)
+              const innerFields = firstField.value?.record?.fields;
+              if (Array.isArray(innerFields) && innerFields.length > 0) {
+                const innerVariant = innerFields[0]?.value?.variant;
+                if (innerVariant?.constructor) {
+                  innerActionTag = innerVariant.constructor;
+                }
+              }
             }
           }
           
-          if (actionTag) {
+          // Fallback: try JSON-style encoding
+          if (!actionTag) {
+            const action = choiceArg.action || choiceArg.confirmedAction || {};
+            if (action.tag) {
+              actionTag = action.tag;
+            } else if (action.value?.tag) {
+              actionTag = action.value.tag;
+            } else {
+              // Check for variant-as-key encoding
+              const keys = Object.keys(action);
+              if (keys.length > 0 && keys[0].startsWith('ARC_')) {
+                actionTag = keys[0];
+              }
+            }
+          }
+          
+          // Count both outer and inner action tags
+          const fullTag = innerActionTag ? `${actionTag}::${innerActionTag}` : actionTag;
+          if (fullTag) {
+            actionTagCounts[fullTag] = (actionTagCounts[fullTag] || 0) + 1;
+          }
+          if (actionTag && !innerActionTag) {
             actionTagCounts[actionTag] = (actionTagCounts[actionTag] || 0) + 1;
           }
           
@@ -2063,10 +2095,12 @@ router.get('/debug/confirm-action', async (req, res) => {
               template_id: e.template_id,
               timestamp: e.timestamp,
               action_tag: actionTag,
+              inner_action_tag: innerActionTag,
+              full_tag: innerActionTag ? `${actionTag}::${innerActionTag}` : actionTag,
               payload_keys: Object.keys(payload),
               raw_keys: Object.keys(raw),
-              choice_argument_preview: JSON.stringify(choiceArg).slice(0, 4000),
-              action_structure: JSON.stringify(action).slice(0, 2000),
+              choice_argument_preview: JSON.stringify(choiceArg).slice(0, 5000),
+              action_structure_preview: actionStructure ? JSON.stringify(actionStructure).slice(0, 2000) : null,
             });
           }
         }
