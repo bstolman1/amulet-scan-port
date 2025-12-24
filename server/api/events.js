@@ -5,6 +5,8 @@ import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
 import * as rewardIndexer from '../engine/reward-indexer.js';
+import * as svIndexer from '../engine/sv-indexer.js';
+import * as voteOutcomeAnalyzer from '../engine/vote-outcome-analyzer.js';
 import {
   getFilesForTemplate,
   isTemplateIndexPopulated,
@@ -3291,5 +3293,128 @@ function simpleHash(str) {
   }
   return Math.abs(hash).toString(36);
 }
+
+// ============ SV MEMBERSHIP INDEX ROUTES ============
+
+// GET /api/events/sv-index/status - Get SV index status
+router.get('/sv-index/status', async (req, res) => {
+  try {
+    const stats = await svIndexer.getSvIndexStats();
+    res.json(convertBigInts(stats));
+  } catch (err) {
+    console.error('Error getting SV index status:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/events/sv-index/build - Build SV membership index
+router.post('/sv-index/build', async (req, res) => {
+  try {
+    const force = req.body?.force === true || req.query.force === 'true';
+    
+    if (svIndexer.isIndexingInProgress()) {
+      return res.json({ status: 'in_progress', message: 'SV indexing already in progress' });
+    }
+    
+    // Start indexing in background
+    res.json({ status: 'started', message: 'SV membership index build started' });
+    
+    svIndexer.buildSvMembershipIndex({ force }).catch(err => {
+      console.error('Background SV index build failed:', err);
+    });
+  } catch (err) {
+    console.error('Error starting SV index build:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/sv-index/count-at - Get SV count at a specific date
+router.get('/sv-index/count-at', async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ error: 'date query parameter required (ISO format)' });
+    }
+    
+    const count = await svIndexer.getSvCountAt(date);
+    const activeSvs = await svIndexer.getActiveSvsAt(date);
+    const thresholds = svIndexer.calculateVotingThreshold(count);
+    
+    res.json({
+      date,
+      svCount: count,
+      thresholds,
+      activeSvs,
+    });
+  } catch (err) {
+    console.error('Error getting SV count at date:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/sv-index/timeline - Get SV membership timeline
+router.get('/sv-index/timeline', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const events = await svIndexer.getSvMembershipTimeline(limit);
+    res.json({ events, count: events.length });
+  } catch (err) {
+    console.error('Error getting SV timeline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ VOTE OUTCOME ANALYZER ROUTES ============
+
+// GET /api/events/proposals/raw-grouped - Get raw proposals grouped by tracking_cid/contract_id
+router.get('/proposals/raw-grouped', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    
+    const result = await voteOutcomeAnalyzer.getRawProposalsGrouped({ limit, offset });
+    res.json(convertBigInts(result));
+  } catch (err) {
+    console.error('Error getting raw proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/proposals/raw-stats - Get raw proposal statistics
+router.get('/proposals/raw-stats', async (req, res) => {
+  try {
+    const stats = await voteOutcomeAnalyzer.getRawProposalStats();
+    res.json(stats);
+  } catch (err) {
+    console.error('Error getting raw proposal stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/proposals/analyze/:id - Analyze a single proposal's outcome
+router.get('/proposals/analyze/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await voteOutcomeAnalyzer.analyzeProposalOutcome(id);
+    res.json(convertBigInts(result));
+  } catch (err) {
+    console.error('Error analyzing proposal:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/proposals/analyze-all - Analyze all proposals and find mismatches
+router.get('/proposals/analyze-all', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const offset = parseInt(req.query.offset) || 0;
+    
+    const result = await voteOutcomeAnalyzer.analyzeAllProposalOutcomes({ limit, offset });
+    res.json(convertBigInts(result));
+  } catch (err) {
+    console.error('Error analyzing all proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;
