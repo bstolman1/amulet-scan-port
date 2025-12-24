@@ -297,8 +297,192 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
 }
 
 /**
- * Query governance proposals grouped by semantic_key.
+ * CANONICAL MODEL: Query governance proposals collapsed by proposal_id.
+ * proposal_id = COALESCE(tracking_cid, contract_id)
+ * 
+ * Returns the latest VoteRequest for each unique proposal_id, with:
+ * - is_human: true for explorer-visible proposals
+ * - accept_count, reject_count: final vote tallies
+ * - related_count: number of contract_ids for this proposal (migrations/re-submissions)
+ * 
+ * @param {Object} options
+ * @param {number} options.limit - Max results (default 100)
+ * @param {number} options.offset - Pagination offset (default 0)
+ * @param {string} options.status - Filter: 'all', 'active', 'executed', 'rejected', 'expired'
+ * @param {boolean} options.humanOnly - If true, only return is_human=true proposals (default true)
+ */
+export async function queryCanonicalProposals({ limit = 100, status = 'all', offset = 0, humanOnly = true } = {}) {
+  let whereConditions = [];
+  
+  // Status filter
+  if (status === 'active' || status === 'in_progress') {
+    whereConditions.push("status IN ('active', 'in_progress')");
+  } else if (status === 'executed' || status === 'approved') {
+    whereConditions.push("status = 'executed'");
+  } else if (status === 'rejected') {
+    whereConditions.push("status = 'rejected'");
+  } else if (status === 'expired') {
+    whereConditions.push("status = 'expired'");
+  } else if (status === 'historical' || status === 'completed') {
+    whereConditions.push("status IN ('executed', 'rejected', 'expired', 'historical')");
+  }
+  
+  // Human filter - this is the key canonical filter
+  if (humanOnly) {
+    whereConditions.push("is_human = true");
+  }
+  
+  const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+  // Group by proposal_id to collapse lifecycle duplicates (migrations, re-submissions)
+  const results = await query(`
+    WITH base AS (
+      SELECT * FROM vote_requests ${whereClause}
+    ),
+    ranked AS (
+      SELECT 
+        *,
+        ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn,
+        COUNT(*) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as related_count,
+        MIN(effective_at) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as first_seen,
+        MAX(effective_at) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as last_seen,
+        MAX(accept_count) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as max_accept_count,
+        MAX(reject_count) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as max_reject_count
+      FROM base
+    )
+    SELECT 
+      proposal_id,
+      event_id,
+      stable_id,
+      contract_id,
+      template_id,
+      effective_at,
+      status,
+      is_closed,
+      action_tag,
+      action_value,
+      requester,
+      reason,
+      reason_url,
+      votes,
+      vote_count,
+      max_accept_count as accept_count,
+      max_reject_count as reject_count,
+      vote_before,
+      target_effective_at,
+      tracking_cid,
+      dso,
+      semantic_key,
+      action_subject,
+      is_human,
+      related_count,
+      first_seen,
+      last_seen
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY effective_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const safeJsonParse = (val) => {
+    if (val === null || val === undefined) return null;
+    if (typeof val !== 'string') return val;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  };
+
+  return results.map(r => ({
+    ...r,
+    action_value: safeJsonParse(r.action_value),
+    votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
+    accept_count: Number(r.accept_count) || 0,
+    reject_count: Number(r.reject_count) || 0,
+    related_count: Number(r.related_count) || 1,
+    first_seen: r.first_seen,
+    last_seen: r.last_seen,
+    is_human: r.is_human === true || r.is_human === 1,
+  }));
+}
+
+/**
+ * Get canonical proposal counts matching explorer semantics
+ * Returns counts at each layer of the model
+ */
+export async function getCanonicalProposalStats() {
+  try {
+    // Raw events (all VoteRequest records in index)
+    const rawTotal = await queryOne(`SELECT COUNT(*) as count FROM vote_requests`);
+    
+    // Lifecycle proposals (unique proposal_id)
+    const lifecycleTotal = await queryOne(`
+      SELECT COUNT(DISTINCT COALESCE(proposal_id, contract_id)) as count FROM vote_requests
+    `);
+    
+    // Human proposals (explorer-visible)
+    const humanTotal = await queryOne(`
+      SELECT COUNT(DISTINCT COALESCE(proposal_id, contract_id)) as count 
+      FROM vote_requests 
+      WHERE is_human = true
+    `);
+    
+    // Status breakdown for human proposals
+    const humanByStatus = await query(`
+      WITH latest AS (
+        SELECT 
+          COALESCE(proposal_id, contract_id) as pid,
+          status,
+          ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn
+        FROM vote_requests
+        WHERE is_human = true
+      )
+      SELECT status, COUNT(*) as count
+      FROM latest
+      WHERE rn = 1
+      GROUP BY status
+    `);
+    
+    const byStatus = {
+      in_progress: 0,
+      executed: 0,
+      rejected: 0,
+      expired: 0,
+    };
+    for (const row of humanByStatus) {
+      if (row.status === 'in_progress' || row.status === 'active') {
+        byStatus.in_progress += Number(row.count);
+      } else if (row.status === 'executed') {
+        byStatus.executed = Number(row.count);
+      } else if (row.status === 'rejected') {
+        byStatus.rejected = Number(row.count);
+      } else if (row.status === 'expired') {
+        byStatus.expired = Number(row.count);
+      }
+    }
+    
+    return {
+      rawEvents: Number(rawTotal?.count || 0),
+      lifecycleProposals: Number(lifecycleTotal?.count || 0),
+      humanProposals: Number(humanTotal?.count || 0),
+      byStatus,
+    };
+  } catch (err) {
+    console.error('Error getting canonical proposal stats:', err);
+    return {
+      rawEvents: 0,
+      lifecycleProposals: 0,
+      humanProposals: 0,
+      byStatus: { in_progress: 0, executed: 0, rejected: 0, expired: 0 },
+    };
+  }
+}
+
+/**
+ * Query governance proposals grouped by semantic_key (legacy).
  * Returns the latest VoteRequest for each unique semantic_key, with timeline info.
+ * @deprecated Use queryCanonicalProposals instead for explorer-matching semantics
  */
 export async function queryGovernanceProposals({ limit = 100, status = 'all', offset = 0 } = {}) {
   let statusFilter = '';
@@ -339,8 +523,11 @@ export async function queryGovernanceProposals({ limit = 100, status = 'all', of
       action_value,
       requester,
       reason,
+      reason_url,
       votes,
       vote_count,
+      accept_count,
+      reject_count,
       vote_before,
       target_effective_at,
       tracking_cid,
@@ -348,6 +535,8 @@ export async function queryGovernanceProposals({ limit = 100, status = 'all', of
       payload,
       semantic_key,
       action_subject,
+      proposal_id,
+      is_human,
       related_count,
       first_seen,
       last_seen
@@ -372,6 +561,9 @@ export async function queryGovernanceProposals({ limit = 100, status = 'all', of
     action_value: safeJsonParse(r.action_value),
     votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
     payload: safeJsonParse(r.payload),
+    accept_count: Number(r.accept_count) || 0,
+    reject_count: Number(r.reject_count) || 0,
+    is_human: r.is_human === true || r.is_human === 1,
     // Timeline info
     timeline: {
       firstSeen: r.first_seen,
@@ -398,15 +590,20 @@ export async function queryProposalTimeline(semanticKey) {
       action_value,
       requester,
       reason,
+      reason_url,
       votes,
       vote_count,
+      accept_count,
+      reject_count,
       vote_before,
       target_effective_at,
       tracking_cid,
       dso,
       payload,
       semantic_key,
-      action_subject
+      action_subject,
+      proposal_id,
+      is_human
     FROM vote_requests
     WHERE semantic_key = '${semanticKey.replace(/'/g, "''")}'
     ORDER BY effective_at DESC
@@ -427,6 +624,9 @@ export async function queryProposalTimeline(semanticKey) {
     action_value: safeJsonParse(r.action_value),
     votes: Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []),
     payload: safeJsonParse(r.payload),
+    accept_count: Number(r.accept_count) || 0,
+    reject_count: Number(r.reject_count) || 0,
+    is_human: r.is_human === true || r.is_human === 1,
   }));
 }
 
@@ -816,11 +1016,18 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       statusStats.totalAcceptVotes += acceptCount;
       statusStats.totalRejectVotes += rejectCount;
 
-      // Normalize reason - can be string or object
+      // Normalize reason - can be string or object with body and url
       const rawReason = event.payload?.reason;
-      const reasonStr = rawReason
-        ? (typeof rawReason === 'string' ? rawReason : JSON.stringify(rawReason))
-        : null;
+      let reasonStr = null;
+      let reasonUrl = null;
+      if (rawReason) {
+        if (typeof rawReason === 'string') {
+          reasonStr = rawReason;
+        } else if (typeof rawReason === 'object') {
+          reasonStr = rawReason.body || null;
+          reasonUrl = rawReason.url || null;
+        }
+      }
 
       // Build semantic key for proposal grouping
       const actionTag = event.payload?.action?.tag || null;
@@ -828,6 +1035,29 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const requester = event.payload?.requester || null;
       const semanticKey = buildSemanticKey(actionTag, actionDetails, requester);
       const actionSubject = extractActionSubject(actionDetails);
+      
+      // CANONICAL MODEL: proposal_id = COALESCE(trackingCid, contract_id)
+      // This is the authoritative proposal identity that survives migrations/re-submissions
+      const trackingCid = event.payload?.trackingCid || null;
+      const proposalId = trackingCid || event.contract_id || null;
+      
+      // CANONICAL MODEL: is_human classification
+      // Explorers only show human-readable governance proposals, excluding:
+      // 1. Config maintenance: SRARC_SetConfig, CRARC_SetConfig
+      // 2. No narrative AND no votes: (reason IS NULL) AND (vote_count = 0)
+      // 3. No mailing list link AND no meaningful participation
+      const isConfigMaintenance = actionTag && (
+        actionTag === 'SRARC_SetConfig' || 
+        actionTag === 'CRARC_SetConfig' ||
+        actionTag.includes('SetConfig')
+      );
+      const hasReason = reasonStr && reasonStr.trim().length > 0;
+      const hasMailingListLink = reasonUrl && reasonUrl.includes('lists.sync.global');
+      const hasVotes = finalVoteCount > 0;
+      const hasNarrative = hasReason || hasMailingListLink;
+      
+      // is_human = NOT config maintenance AND (has narrative OR has votes)
+      const isHuman = !isConfigMaintenance && (hasNarrative || hasVotes);
 
       const voteRequest = {
         event_id: event.event_id,
@@ -842,16 +1072,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         action_value: actionDetails?.value ? JSON.stringify(actionDetails.value) : null,
         requester: requester,
         reason: reasonStr,
+        reason_url: reasonUrl,
         // Use final votes from archived event if available, otherwise use created event votes
         votes: finalVotes ? JSON.stringify(finalVotes) : '[]',
         vote_count: finalVoteCount,
+        accept_count: acceptCount,
+        reject_count: rejectCount,
         vote_before: voteBefore || null,
         target_effective_at: event.payload?.targetEffectiveAt || null,
-        tracking_cid: event.payload?.trackingCid || null,
+        tracking_cid: trackingCid,
         dso: event.payload?.dso || null,
         payload: event.payload ? JSON.stringify(event.payload) : null,
         semantic_key: semanticKey,
         action_subject: actionSubject,
+        proposal_id: proposalId,
+        is_human: isHuman,
       };
 
       try {
@@ -866,9 +1101,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           INSERT INTO vote_requests (
             event_id, stable_id, contract_id, template_id, effective_at,
             status, is_closed, action_tag, action_value,
-            requester, reason, votes, vote_count,
+            requester, reason, reason_url, votes, vote_count, accept_count, reject_count,
             vote_before, target_effective_at, tracking_cid, dso,
-            payload, semantic_key, action_subject, updated_at
+            payload, semantic_key, action_subject, proposal_id, is_human, updated_at
           ) VALUES (
             '${escapeStr(voteRequest.event_id)}',
             ${stableIdSql},
@@ -881,8 +1116,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.action_value ? `'${escapeStr(voteRequest.action_value)}'` : 'NULL'},
             ${voteRequest.requester ? `'${escapeStr(voteRequest.requester)}'` : 'NULL'},
             ${voteRequest.reason ? `'${escapeStr(voteRequest.reason)}'` : 'NULL'},
+            ${voteRequest.reason_url ? `'${escapeStr(voteRequest.reason_url)}'` : 'NULL'},
             '${escapeStr(voteRequest.votes)}',
             ${voteRequest.vote_count},
+            ${voteRequest.accept_count},
+            ${voteRequest.reject_count},
             ${voteRequest.vote_before ? `'${escapeStr(voteRequest.vote_before)}'` : 'NULL'},
             ${voteRequest.target_effective_at ? `'${escapeStr(voteRequest.target_effective_at)}'` : 'NULL'},
             ${voteRequest.tracking_cid ? `'${escapeStr(voteRequest.tracking_cid)}'` : 'NULL'},
@@ -890,6 +1128,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${payloadStr ? `'${payloadStr}'` : 'NULL'},
             ${voteRequest.semantic_key ? `'${escapeStr(voteRequest.semantic_key)}'` : 'NULL'},
             ${voteRequest.action_subject ? `'${escapeStr(voteRequest.action_subject)}'` : 'NULL'},
+            ${voteRequest.proposal_id ? `'${escapeStr(voteRequest.proposal_id)}'` : 'NULL'},
+            ${voteRequest.is_human},
             now()
           )
           ON CONFLICT (event_id) DO UPDATE SET
@@ -903,8 +1143,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             action_value = EXCLUDED.action_value,
             requester = EXCLUDED.requester,
             reason = EXCLUDED.reason,
+            reason_url = EXCLUDED.reason_url,
             votes = EXCLUDED.votes,
             vote_count = EXCLUDED.vote_count,
+            accept_count = EXCLUDED.accept_count,
+            reject_count = EXCLUDED.reject_count,
             vote_before = EXCLUDED.vote_before,
             target_effective_at = EXCLUDED.target_effective_at,
             tracking_cid = EXCLUDED.tracking_cid,
@@ -912,6 +1155,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             payload = EXCLUDED.payload,
             semantic_key = EXCLUDED.semantic_key,
             action_subject = EXCLUDED.action_subject,
+            proposal_id = EXCLUDED.proposal_id,
+            is_human = EXCLUDED.is_human,
             updated_at = now()
         `);
         inserted++;

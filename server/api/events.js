@@ -2427,8 +2427,114 @@ router.get('/debug/cast-vote', async (req, res) => {
   }
 });
 
+// ============================================================================
+// CANONICAL GOVERNANCE PROPOSAL ENDPOINTS
+// ============================================================================
+// These endpoints implement the canonical governance proposal model that
+// matches major explorer semantics:
+// - proposal_id = COALESCE(tracking_cid, contract_id) for lifecycle identity
+// - is_human = true for explorer-visible proposals (excludes config maintenance)
+// - Yields ~200-250 human-readable proposals matching explorers
+// ============================================================================
+
+// GET /api/events/canonical-proposals - Canonical governance proposals (explorer semantics)
+// This is the PRIMARY endpoint for governance UIs matching explorer counts
+router.get('/canonical-proposals', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const status = req.query.status || 'all';
+    const humanOnly = req.query.human !== 'false'; // Default to human-only
+    
+    // Check if index is populated
+    const indexPopulated = await voteRequestIndexer.isIndexPopulated();
+    if (!indexPopulated) {
+      return res.json({
+        proposals: [],
+        total: 0,
+        source: 'index-empty',
+        message: 'VoteRequest index not built yet. Trigger a rebuild at /api/events/vote-request-index/build',
+      });
+    }
+    
+    // Query canonical proposals from the index
+    const proposals = await voteRequestIndexer.queryCanonicalProposals({ 
+      limit, 
+      status, 
+      offset, 
+      humanOnly 
+    });
+    const stats = await voteRequestIndexer.getCanonicalProposalStats();
+    const indexState = await voteRequestIndexer.getIndexState();
+    
+    res.json(convertBigInts({
+      proposals,
+      total: humanOnly ? stats.humanProposals : stats.lifecycleProposals,
+      stats: {
+        rawEvents: stats.rawEvents,
+        lifecycleProposals: stats.lifecycleProposals,
+        humanProposals: stats.humanProposals,
+        byStatus: stats.byStatus,
+      },
+      source: 'duckdb-index-canonical',
+      indexedAt: indexState.last_indexed_at,
+      _meta: {
+        endpoint: '/api/events/canonical-proposals',
+        description: 'Canonical governance proposals matching explorer semantics',
+        model: {
+          proposal_id: 'COALESCE(tracking_cid, contract_id) - lifecycle identity',
+          is_human: 'true for explorer-visible proposals (excludes config maintenance)',
+          accept_count: 'Number of accept votes',
+          reject_count: 'Number of reject votes',
+          related_count: 'Number of contract_ids for this proposal (migrations)',
+        },
+        counts: {
+          rawEvents: 'All VoteRequest events (4500+)',
+          lifecycleProposals: 'Unique proposal_ids (~400)',
+          humanProposals: 'Explorer-visible proposals (~200-250)',
+        },
+      },
+    }));
+  } catch (err) {
+    console.error('Error in canonical-proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/canonical-proposals/stats - Get canonical proposal statistics
+router.get('/canonical-proposals/stats', async (req, res) => {
+  try {
+    const indexPopulated = await voteRequestIndexer.isIndexPopulated();
+    if (!indexPopulated) {
+      return res.json({
+        rawEvents: 0,
+        lifecycleProposals: 0,
+        humanProposals: 0,
+        byStatus: { in_progress: 0, executed: 0, rejected: 0, expired: 0 },
+        source: 'index-empty',
+      });
+    }
+    
+    const stats = await voteRequestIndexer.getCanonicalProposalStats();
+    const indexState = await voteRequestIndexer.getIndexState();
+    
+    res.json(convertBigInts({
+      ...stats,
+      source: 'duckdb-index-canonical',
+      indexedAt: indexState.last_indexed_at,
+    }));
+  } catch (err) {
+    console.error('Error in canonical-proposals/stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// LEGACY GOVERNANCE PROPOSAL ENDPOINTS (semantic_key based)
+// ============================================================================
+
 // GET /api/events/governance-proposals - Get governance proposals grouped by semantic key (from index)
-// This is the recommended endpoint for governance UIs - uses the persistent index with proper grouping
+// @deprecated Use /api/events/canonical-proposals for explorer-matching semantics
 router.get('/governance-proposals', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
@@ -2450,20 +2556,25 @@ router.get('/governance-proposals', async (req, res) => {
     const proposals = await voteRequestIndexer.queryGovernanceProposals({ limit, status, offset });
     const stats = await voteRequestIndexer.getVoteRequestStats();
     const indexState = await voteRequestIndexer.getIndexState();
+    const canonicalStats = await voteRequestIndexer.getCanonicalProposalStats();
     
     res.json(convertBigInts({
       data: proposals,
       count: proposals.length,
       stats,
+      canonicalStats, // Include canonical stats for migration
       source: 'duckdb-index',
       indexedAt: indexState.last_indexed_at,
       totalIndexed: indexState.total_indexed,
       _meta: {
         endpoint: '/api/events/governance-proposals',
         description: 'Governance proposals grouped by semantic_key for deduplication',
+        deprecated: 'Use /api/events/canonical-proposals for explorer-matching semantics',
         fields: {
           semantic_key: 'Unique key combining action_type + subject for linking re-submitted proposals',
           action_subject: 'The target of the action (provider, sv, validator, etc.)',
+          proposal_id: 'COALESCE(tracking_cid, contract_id) - canonical identity',
+          is_human: 'true for explorer-visible proposals',
           timeline: {
             firstSeen: 'When the first proposal for this subject was created',
             lastSeen: 'When the most recent proposal for this subject was created',

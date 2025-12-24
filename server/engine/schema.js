@@ -98,6 +98,8 @@ export async function initEngineSchema() {
   `);
 
   // VoteRequest persistent index table
+  // Canonical model: proposal_id = COALESCE(tracking_cid, contract_id)
+  // is_human = explorer-visible proposals (excludes config maintenance, no-reason/no-votes)
   await query(`
     CREATE TABLE IF NOT EXISTS vote_requests (
       event_id            VARCHAR PRIMARY KEY,
@@ -111,8 +113,11 @@ export async function initEngineSchema() {
       action_value        VARCHAR,
       requester           VARCHAR,
       reason              VARCHAR,
+      reason_url          VARCHAR,
       votes               VARCHAR,
       vote_count          INTEGER DEFAULT 0,
+      accept_count        INTEGER DEFAULT 0,
+      reject_count        INTEGER DEFAULT 0,
       vote_before         VARCHAR,
       target_effective_at VARCHAR,
       tracking_cid        VARCHAR,
@@ -120,21 +125,30 @@ export async function initEngineSchema() {
       payload             VARCHAR,
       semantic_key        VARCHAR,
       action_subject      VARCHAR,
+      proposal_id         VARCHAR,
+      is_human            BOOLEAN DEFAULT TRUE,
       created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  // Add semantic_key and action_subject columns to existing tables
-  try {
-    await query(`ALTER TABLE vote_requests ADD COLUMN semantic_key VARCHAR`);
-  } catch {
-    // Column may already exist
-  }
-  try {
-    await query(`ALTER TABLE vote_requests ADD COLUMN action_subject VARCHAR`);
-  } catch {
-    // Column may already exist
+  // Add new columns to existing tables (migration for existing DBs)
+  const newColumns = [
+    'semantic_key VARCHAR',
+    'action_subject VARCHAR', 
+    'stable_id VARCHAR',
+    'proposal_id VARCHAR',
+    'is_human BOOLEAN DEFAULT TRUE',
+    'accept_count INTEGER DEFAULT 0',
+    'reject_count INTEGER DEFAULT 0',
+    'reason_url VARCHAR',
+  ];
+  for (const colDef of newColumns) {
+    try {
+      await query(`ALTER TABLE vote_requests ADD COLUMN ${colDef}`);
+    } catch {
+      // Column may already exist
+    }
   }
 
   // Backward-compatible schema fixes for existing DuckDB files
@@ -142,11 +156,6 @@ export async function initEngineSchema() {
   // Some older DuckDB files may have stable_id defined as NOT NULL; DuckDB
   // doesn't reliably support DROP NOT NULL across versions, so we do a safe
   // table rebuild when needed.
-  try {
-    await query(`ALTER TABLE vote_requests ADD COLUMN stable_id VARCHAR`);
-  } catch {
-    // Column may already exist
-  }
 
   try {
     const cols = await query(`PRAGMA table_info('vote_requests')`);
@@ -256,6 +265,12 @@ export async function initEngineSchema() {
   `);
   await query(`
     CREATE INDEX IF NOT EXISTS idx_vote_requests_action_subject ON vote_requests(action_subject)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vote_requests_proposal_id ON vote_requests(proposal_id)
+  `);
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vote_requests_is_human ON vote_requests(is_human)
   `);
 
   // Track indexing progress for vote_requests
