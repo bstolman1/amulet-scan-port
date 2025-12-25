@@ -81,17 +81,12 @@ export function VoteRequestIndexBanner() {
     <Alert className={isPopulated ? "bg-success/10 border-success/30" : "bg-warning/10 border-warning/30"}>
       <Database className="h-4 w-4" />
       <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-3">
           {isPopulated ? (
             <>
               <CheckCircle className="h-4 w-4 text-success" />
               <span>
                 <strong>VoteRequest Index:</strong> {historicalCount} completed votes indexed
-                {status?.lastIndexedAt && (
-                  <span className="text-muted-foreground ml-2 text-xs">
-                    (Last built: {new Date(status.lastIndexedAt).toLocaleString()})
-                  </span>
-                )}
               </span>
               <Badge variant="outline" className="text-xs">
                 Ready
