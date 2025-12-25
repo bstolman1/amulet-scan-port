@@ -755,18 +755,23 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
     console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised/closed events total`);
 
-    // Build map of closed contract IDs -> archived event data (with final vote counts and status)
+    // Build map of proposal root contract_id -> consuming exercised event
+    // This is keyed by the proposal root contract_id, not by any other identifier.
+    // The exercised event scanner already filters for consuming === true.
     const archivedEventsMap = new Map();
     let closedViaDsoRules = 0;
     let closedViaDirectArchive = 0;
     
     for (const record of exercisedResult.records) {
+      // IMPORTANT: The scanner already guarantees consuming === true for all these records.
+      // We just need to determine the proposal root contract_id.
+      
       const choice = String(record.choice || '');
       
-      // For DsoRules_CloseVoteRequest, extract the VoteRequest contract_id from the exercise arguments
-      // The voteRequestCid field contains the contract being closed
+      // For DsoRules_CloseVoteRequest, the exercised event is on the DsoRules contract,
+      // but it targets a specific VoteRequest contract_id via exercise arguments.
       if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
-        // Extract VoteRequest contract ID from exercise arguments
+        // Extract the VoteRequest contract_id being closed from exercise arguments
         const voteRequestCid = 
           record.exercise_argument?.voteRequestCid || 
           record.payload?.voteRequestCid ||
@@ -774,24 +779,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           record.payload?.voteRequest;
         
         if (voteRequestCid) {
-          // DsoRules_CloseVoteRequestResult contains the authoritative outcome
-          // The result is in exercise_result and contains:
-          // - request: VoteRequest (the original vote request)
-          // - completedAt: Time
-          // - offboardedVoters: [Text]
-          // - abstainingSvs: [Text]  
-          // - outcome: VoteRequestOutcome (the AUTHORITATIVE final result)
+          // Extract authoritative outcome from DsoRules_CloseVoteRequestResult
           const exerciseResult = record.exercise_result || record.payload?.exercise_result || {};
           const outcome = 
             exerciseResult.outcome ||
             record.exercise_argument?.outcome ||
             record.payload?.outcome;
           
-          // Extract outcome tag (e.g., "VRO_Accepted", "VRO_Rejected", "VRO_Expired")
-          // Outcome can be:
-          // - { tag: 'VRO_Accepted' } or { VRO_Accepted: {...} }
-          // - { tag: 'VRO_Rejected' } or { VRO_Rejected: {...} }
-          // - { tag: 'VRO_Expired' } or { VRO_Expired: {...} }
           let outcomeTag = null;
           if (outcome) {
             if (typeof outcome === 'string') {
@@ -799,7 +793,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             } else if (outcome.tag) {
               outcomeTag = outcome.tag;
             } else {
-              // Check for variant-as-key encoding: { VRO_Accepted: {...} }
               const keys = Object.keys(outcome);
               if (keys.length > 0 && keys[0].startsWith('VRO_')) {
                 outcomeTag = keys[0];
@@ -807,21 +800,23 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             }
           }
           
+          // Key by the proposal root contract_id (voteRequestCid)
           archivedEventsMap.set(voteRequestCid, {
             ...record,
-            contract_id: voteRequestCid,
+            contract_id: voteRequestCid, // Normalize to proposal root
             dso_close_outcome: outcome,
-            dso_close_outcome_tag: outcomeTag, // Parsed outcome tag for easy status detection
+            dso_close_outcome_tag: outcomeTag,
             completedAt: exerciseResult.completedAt,
             abstainingSvs: exerciseResult.abstainingSvs,
             offboardedVoters: exerciseResult.offboardedVoters,
-            choice: choice, // Preserve the choice for status detection
+            choice: choice,
             close_source: 'dso_rules',
           });
           closedViaDsoRules++;
         }
       } else if (record.contract_id) {
-        // Direct archive on VoteRequest template
+        // Direct consuming exercised event on the VoteRequest contract itself.
+        // The contract_id IS the proposal root.
         archivedEventsMap.set(record.contract_id, {
           ...record,
           close_source: 'direct_archive',
