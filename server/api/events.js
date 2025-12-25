@@ -5,7 +5,7 @@ import db from '../duckdb/connection.js';
 import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
 import * as rewardIndexer from '../engine/reward-indexer.js';
-import * as svIndexer from '../engine/sv-indexer.js';
+// SV indexer functions are now exported from vote-request-indexer.js
 import * as voteOutcomeAnalyzer from '../engine/vote-outcome-analyzer.js';
 import {
   getFilesForTemplate,
@@ -3415,7 +3415,7 @@ router.get('/sv-index/test', async (req, res) => {
 // GET /api/events/sv-index/status - Get SV index status
 router.get('/sv-index/status', async (req, res) => {
   try {
-    const stats = await svIndexer.getSvIndexStats();
+    const stats = await voteRequestIndexer.getSvIndexStats();
     res.json(convertBigInts(stats));
   } catch (err) {
     console.error('Error getting SV index status:', err);
@@ -3428,14 +3428,14 @@ router.post('/sv-index/build', async (req, res) => {
   try {
     const force = req.body?.force === true || req.query.force === 'true';
     
-    if (svIndexer.isIndexingInProgress()) {
+    if (voteRequestIndexer.isSvIndexingInProgress()) {
       return res.json({ status: 'in_progress', message: 'SV indexing already in progress' });
     }
     
     // Start indexing in background
     res.json({ status: 'started', message: 'SV membership index build started' });
     
-    svIndexer.buildSvMembershipIndex({ force }).catch(err => {
+    voteRequestIndexer.buildSvMembershipIndex({ force }).catch(err => {
       console.error('Background SV index build failed:', err);
     });
   } catch (err) {
@@ -3452,9 +3452,9 @@ router.get('/sv-index/count-at', async (req, res) => {
       return res.status(400).json({ error: 'date query parameter required (ISO format)' });
     }
     
-    const count = await svIndexer.getSvCountAt(date);
-    const activeSvs = await svIndexer.getActiveSvsAt(date);
-    const thresholds = svIndexer.calculateVotingThreshold(count);
+    const count = await voteRequestIndexer.getSvCountAt(date);
+    const activeSvs = await voteRequestIndexer.getActiveSvsAt(date);
+    const thresholds = voteRequestIndexer.calculateVotingThreshold(count);
     
     res.json({
       date,
@@ -3472,7 +3472,7 @@ router.get('/sv-index/count-at', async (req, res) => {
 router.get('/sv-index/timeline', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-    const events = await svIndexer.getSvMembershipTimeline(limit);
+    const events = await voteRequestIndexer.getSvMembershipTimeline(limit);
     res.json({ events, count: events.length });
   } catch (err) {
     console.error('Error getting SV timeline:', err);
