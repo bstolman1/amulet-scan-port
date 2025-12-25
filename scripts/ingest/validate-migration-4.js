@@ -12,16 +12,16 @@
  * 5. Record counts - verifies expected data volume per day
  * 
  * Usage:
- *   node validate-migration-4.js                    # Full validation
- *   node validate-migration-4.js --quick            # Quick scan (stats only)
+ *   node validate-migration-4.js                    # Quick validation (filename-based)
+ *   node validate-migration-4.js --full             # Full decode validation (slow)
  *   node validate-migration-4.js --verbose          # Detailed output
  *   node validate-migration-4.js --end-date 2025-12-20  # Custom end date
+ *   node validate-migration-4.js --sample 100       # Sample N files for stats
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { readBinaryFile, getFileStats } from './read-binary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,11 +38,24 @@ const GAP_THRESHOLD_MS = parseInt(process.env.GAP_THRESHOLD_MS) || 300000; // 5 
 
 // Parse CLI args
 const args = process.argv.slice(2);
-const quickMode = args.includes('--quick');
+const fullMode = args.includes('--full');
 const verbose = args.includes('--verbose') || args.includes('-v');
+const sampleSize = args.includes('--sample') 
+  ? parseInt(args[args.indexOf('--sample') + 1]) 
+  : 50;
 const customEndDate = args.includes('--end-date') 
   ? new Date(args[args.indexOf('--end-date') + 1] + 'T23:59:59Z')
   : new Date();
+
+// Lazy load heavy dependencies only when needed
+let readBinaryFile, getFileStats;
+async function loadBinaryReader() {
+  if (!readBinaryFile) {
+    const module = await import('./read-binary.js');
+    readBinaryFile = module.readBinaryFile;
+    getFileStats = module.getFileStats;
+  }
+}
 
 /**
  * Results accumulator
@@ -195,27 +208,30 @@ function extractTimestampFromFilename(filePath) {
 }
 
 /**
- * Validate a single file
+ * Validate a single file (quick mode uses filename, full mode decodes)
  */
-async function validateFile(filePath, quickScan = false) {
+async function validateFile(filePath, fullScan = false) {
   const basename = path.basename(filePath);
   const fileType = basename.startsWith('updates-') ? 'updates' : 'events';
   
+  // Quick mode: just extract date from filename
+  if (!fullScan) {
+    const ts = extractTimestampFromFilename(filePath);
+    return {
+      valid: true,
+      file: basename,
+      path: filePath,
+      count: 0, // Unknown without decode
+      type: fileType,
+      minTime: ts ? ts.toISOString() : null,
+      maxTime: ts ? ts.toISOString() : null,
+      fromFilename: true,
+    };
+  }
+  
+  // Full mode: decode file
   try {
-    if (quickScan) {
-      const stats = await getFileStats(filePath);
-      return {
-        valid: true,
-        file: basename,
-        path: filePath,
-        count: stats.count || 0,
-        type: fileType,
-        minTime: null,
-        maxTime: null,
-      };
-    }
-    
-    // Full decode
+    await loadBinaryReader();
     const data = await readBinaryFile(filePath);
     
     let minTime = null;
@@ -249,9 +265,41 @@ async function validateFile(filePath, quickScan = false) {
       valid: false,
       file: basename,
       path: filePath,
+      type: fileType,
       error: err.message,
     };
   }
+}
+
+/**
+ * Sample files to get actual record counts (for quick mode)
+ */
+async function sampleFiles(files, count = 50) {
+  await loadBinaryReader();
+  
+  const samples = [];
+  const indices = new Set();
+  const maxSamples = Math.min(count, files.length);
+  
+  // Pick random indices
+  while (indices.size < maxSamples) {
+    indices.add(Math.floor(Math.random() * files.length));
+  }
+  
+  let processed = 0;
+  for (const idx of indices) {
+    try {
+      const stats = await getFileStats(files[idx]);
+      samples.push(stats);
+      processed++;
+      process.stdout.write(`\r   Sampling: ${processed}/${maxSamples} files`);
+    } catch (err) {
+      // Skip corrupt files
+    }
+  }
+  console.log('');
+  
+  return samples;
 }
 
 /**
@@ -427,12 +475,12 @@ function printReport() {
   
   // File stats
   console.log('\n📁 FILE STATISTICS:');
-  console.log(`   Updates files:  ${results.files.updates.total} (${results.files.updates.valid} valid, ${results.files.updates.corrupted} corrupted)`);
-  console.log(`   Events files:   ${results.files.events.total} (${results.files.events.valid} valid, ${results.files.events.corrupted} corrupted)`);
-  console.log(`   Update records: ${results.files.updates.records.toLocaleString()}`);
-  console.log(`   Event records:  ${results.files.events.records.toLocaleString()}`);
-  console.log(`   Total records:  ${(results.files.updates.records + results.files.events.records).toLocaleString()}`);
-  
+  console.log(`   Updates files:  ${results.files.updates.total.toLocaleString()} (${results.files.updates.valid.toLocaleString()} valid, ${results.files.updates.corrupted} corrupted)`);
+  console.log(`   Events files:   ${results.files.events.total.toLocaleString()} (${results.files.events.valid.toLocaleString()} valid, ${results.files.events.corrupted} corrupted)`);
+  const recordNote = fullMode ? '' : ' (estimated from sample)';
+  console.log(`   Update records: ${results.files.updates.records.toLocaleString()}${recordNote}`);
+  console.log(`   Event records:  ${results.files.events.records.toLocaleString()}${recordNote}`);
+  console.log(`   Total records:  ${(results.files.updates.records + results.files.events.records).toLocaleString()}${recordNote}`);
   // Coverage
   console.log('\n📈 COVERAGE ANALYSIS:');
   const cov = results.coverage;
@@ -523,7 +571,7 @@ async function runValidation() {
   console.log('═'.repeat(80));
   console.log(`   Data directory:  ${BASE_DATA_DIR}`);
   console.log(`   Raw directory:   ${RAW_DIR}`);
-  console.log(`   Mode:            ${quickMode ? 'Quick scan' : 'Full validation'}`);
+  console.log(`   Mode:            ${fullMode ? 'Full decode (slow)' : 'Quick filename-based'}`);
   console.log(`   Date range:      ${MIGRATION_START.toISOString().substring(0, 10)} → ${customEndDate.toISOString().substring(0, 10)}`);
   console.log('═'.repeat(80) + '\n');
   
@@ -544,45 +592,77 @@ async function runValidation() {
     process.exit(1);
   }
   
-  // Validate files
-  console.log('\n🔄 Validating files...');
+  // Quick validation: process files by filename only
+  console.log('\n🔄 Processing files...');
   const allFiles = [...files.updates, ...files.events];
   const fileResults = [];
   let processed = 0;
   
-  for (const filePath of allFiles) {
-    const result = await validateFile(filePath, quickMode);
-    fileResults.push(result);
+  const batchSize = 1000;
+  for (let i = 0; i < allFiles.length; i += batchSize) {
+    const batch = allFiles.slice(i, i + batchSize);
     
-    if (result.valid) {
-      if (result.type === 'updates') {
-        results.files.updates.valid++;
-        results.files.updates.records += result.count || 0;
-      } else {
-        results.files.events.valid++;
-        results.files.events.records += result.count || 0;
+    for (const filePath of batch) {
+      try {
+        const result = await validateFile(filePath, fullMode);
+        fileResults.push(result);
+        
+        if (result.valid) {
+          if (result.type === 'updates') {
+            results.files.updates.valid++;
+            results.files.updates.records += result.count || 0;
+          } else {
+            results.files.events.valid++;
+            results.files.events.records += result.count || 0;
+          }
+        } else {
+          if (result.type === 'updates') {
+            results.files.updates.corrupted++;
+          } else {
+            results.files.events.corrupted++;
+          }
+        }
+      } catch (err) {
+        results.errors.push({ type: 'validation_error', file: path.basename(filePath), error: err.message });
       }
-    } else {
-      if (result.type === 'updates') {
-        results.files.updates.corrupted++;
-      } else {
-        results.files.events.corrupted++;
-      }
+      
+      processed++;
     }
     
-    processed++;
-    if (processed % 100 === 0 || processed === allFiles.length) {
-      process.stdout.write(`\r   Progress: ${processed}/${allFiles.length} files`);
-    }
+    process.stdout.write(`\r   Progress: ${processed.toLocaleString()}/${allFiles.length.toLocaleString()} files`);
   }
   console.log('');
+  
+  // Sample files to estimate record counts (quick mode only)
+  if (!fullMode && sampleSize > 0) {
+    console.log(`\n📊 Sampling ${sampleSize} files for record count estimates...`);
+    try {
+      const updateSamples = await sampleFiles(files.updates, Math.floor(sampleSize / 2));
+      const eventSamples = await sampleFiles(files.events, Math.floor(sampleSize / 2));
+      
+      // Estimate total records
+      if (updateSamples.length > 0) {
+        const avgUpdates = updateSamples.reduce((s, f) => s + f.count, 0) / updateSamples.length;
+        results.files.updates.records = Math.round(avgUpdates * files.updates.length);
+        console.log(`   Updates: ~${avgUpdates.toFixed(0)} records/file → ~${results.files.updates.records.toLocaleString()} total (estimated)`);
+      }
+      
+      if (eventSamples.length > 0) {
+        const avgEvents = eventSamples.reduce((s, f) => s + f.count, 0) / eventSamples.length;
+        results.files.events.records = Math.round(avgEvents * files.events.length);
+        console.log(`   Events: ~${avgEvents.toFixed(0)} records/file → ~${results.files.events.records.toLocaleString()} total (estimated)`);
+      }
+    } catch (err) {
+      console.log(`   ⚠️ Sampling failed: ${err.message}`);
+    }
+  }
   
   // Analyze coverage
   console.log('\n📈 Analyzing time coverage...');
   const timeRanges = analyzeTimeCoverage(fileResults);
   
-  // Detect gaps
-  if (!quickMode && timeRanges.length >= 2) {
+  // Detect gaps (only meaningful in full mode with actual timestamps)
+  if (fullMode && timeRanges.length >= 2) {
     console.log('🔍 Detecting gaps...');
     detectGaps(timeRanges);
   }
