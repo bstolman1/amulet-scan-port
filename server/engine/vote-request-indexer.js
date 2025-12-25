@@ -996,6 +996,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let emptyPayloadCount = 0;
     const nullPayloadSamples = [];
     
+    console.log(`\n   🔬 Starting payload shape probe for ${createdResult.records.length} created events...`);
+    
     for (const event of createdResult.records) {
       // ============================================================
       // PAYLOAD SHAPE PROBE: Detect and track shape before normalization
