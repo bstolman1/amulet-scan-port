@@ -1531,29 +1531,14 @@ async function scanFilesForVoteRequests(files, eventType) {
           records.push(record);
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
           // CONSUMING EXERCISED EVENT MODEL:
-          // Any consuming exercised event on the VoteRequest contract means the proposal is finalized.
-          // The outcome is determined by the (template_id, choice) pair.
-          //
-          // If consuming flag is available, use it. Otherwise, fall back to choice-based heuristics.
-          const choice = String(record.choice || '');
+          // Finality is determined ONLY by consuming === true.
+          // If consuming flag is missing/undefined, treat as non-terminal.
           const consuming = record.consuming === true || record.consuming === 'true';
           
-          // Primary: Use consuming flag if available
           if (consuming) {
             records.push(record);
-          } else if (record.consuming === undefined || record.consuming === null) {
-            // Fallback: If consuming flag not available, use choice-based heuristics
-            // These are the known closing choices:
-            const isClosingChoice =
-              choice === 'Archive' ||
-              /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
-              choice === 'VoteRequest_ExpireVoteRequest';
-
-            if (isClosingChoice) {
-              records.push(record);
-            }
           }
-          // Note: consuming=false means non-consuming exercise (e.g., CastVote) - skip
+          // Note: consuming=false or consuming=undefined/null means non-consuming - skip
         }
       }
     } catch (err) {
@@ -1603,22 +1588,10 @@ async function scanAllFilesForVoteRequests(eventType) {
         if (e.event_type !== 'exercised') return false;
         if (!e.template_id?.endsWith(':VoteRequest')) return false;
 
-        const choice = String(e.choice || '');
+        // CONSUMING EXERCISED EVENT MODEL:
+        // Finality is determined ONLY by consuming === true.
         const consuming = e.consuming === true || e.consuming === 'true';
-        
-        // Primary: Use consuming flag if available
-        if (consuming) return true;
-        
-        // Fallback: If consuming flag not available, use choice-based heuristics
-        if (e.consuming === undefined || e.consuming === null) {
-          return (
-            choice === 'Archive' ||
-            /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
-            choice === 'VoteRequest_ExpireVoteRequest'
-          );
-        }
-        
-        return false;
+        return consuming;
       };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
