@@ -1,8 +1,12 @@
 /**
  * VoteRequest Indexer - Builds persistent DuckDB index for VoteRequest events
  * 
- * Scans binary files for VoteRequest created/exercised events and maintains
- * a persistent table for instant historical queries.
+ * STATUS DETERMINATION MODEL:
+ * - A proposal's outcome is determined by a CONSUMING Exercised event on the 
+ *   proposal's root contract (VoteRequest) — nothing else.
+ * - Status is derived from (template_id, choice) on the consuming exercise.
+ * - Vote counts are stored for DISPLAY ONLY, not for status determination.
+ * - If no consuming exercise exists: in_progress (if before deadline) or expired.
  * 
  * Uses template-to-file index when available to dramatically reduce scan time.
  * 
@@ -849,17 +853,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let inserted = 0;
     let updated = 0;
     
-    // Track vote-based status detection stats
+    // Track status detection stats (based on consuming exercised events)
     const statusStats = {
       executed: 0,
       rejected: 0,
       expired: 0,
       in_progress: 0,
-      detectedByMajority: 0,
-      detectedByChoice: 0,
-      detectedByExpiry: 0,
-      totalAcceptVotes: 0,
-      totalRejectVotes: 0
+      detectedByOutcome: 0,  // From DsoRules_CloseVoteRequestResult outcome tag
+      detectedByChoice: 0,   // From exercise choice name
+      detectedByExpiry: 0,   // From deadline without consuming exercise
+      totalAcceptVotes: 0,   // For display only
+      totalRejectVotes: 0    // For display only
     };
 
     // =============================================================================
@@ -1083,41 +1087,40 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
       const isExpired = voteBeforeDate && voteBeforeDate < now;
 
-      // Determine proper status matching the target UI:
-      // - in_progress: not closed, vote deadline not passed
-      // - executed: closed AND reached voting threshold (we use votesFor >= threshold, but since we don't have threshold here, use choice == 'VoteRequest_Accept' or high vote count)
-      // - rejected: closed AND did not reach threshold
-      // - expired: vote deadline passed AND not closed (or closed with 0 votes)
+      // ============================================================
+      // STATUS DETERMINATION: Consuming Exercised Event Model
+      // ============================================================
+      // The ONLY authoritative source of proposal status is:
+      // 1. If a consuming Exercised event exists on the proposal root contract:
+      //    - Status is FINALIZED
+      //    - Outcome is determined by (template_id, choice) on that exercise
+      // 2. If no consuming Exercised exists:
+      //    - If now < vote_before deadline → IN_PROGRESS
+      //    - If now >= vote_before deadline → EXPIRED
+      //
+      // Vote counts are stored for DISPLAY ONLY, not status determination.
+      // ============================================================
+      
       let status = 'in_progress';
       
-      // Count accept vs reject votes (support multiple JSON encodings)
+      // Count votes for display purposes only (not for status determination)
       const votesArray = Array.isArray(finalVotes) ? finalVotes : [];
       let acceptCount = 0;
       let rejectCount = 0;
 
       const normalizeVote = (voteData) => {
         if (!voteData || typeof voteData !== 'object') return null;
-
-        // Common shapes observed in DAML/ledger JSON:
-        // - { accept: true } / { Accept: true }
-        // - { reject: true } / { Reject: true }
-        // - { tag: 'Accept' } / { tag: 'Reject' }
-        // - { vote: { tag: 'Accept' } }
         if (voteData.accept === true || voteData.Accept === true) return 'accept';
         if (voteData.reject === true || voteData.Reject === true) return 'reject';
         if (voteData.accept === false) return 'reject';
-
         const tag = voteData.tag || voteData.Tag || voteData.vote?.tag || voteData.vote?.Tag;
         if (typeof tag === 'string') {
           const t = tag.toLowerCase();
           if (t === 'accept') return 'accept';
           if (t === 'reject') return 'reject';
         }
-
-        // Variant-as-key style: { Accept: {...} } or { Reject: {...} }
         if (Object.prototype.hasOwnProperty.call(voteData, 'Accept')) return 'accept';
         if (Object.prototype.hasOwnProperty.call(voteData, 'Reject')) return 'reject';
-
         return null;
       };
 
@@ -1128,41 +1131,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         else if (normalized === 'reject') rejectCount++;
       }
 
-      // ============================================================
-      // STATUS DETECTION: Votes Array with SV Threshold
-      // ============================================================
-      // Canton/Splice governance rules:
-      // - 13 SV (Super Validator) nodes total
-      // - Need 9 votes (supermajority ~69%) for approval OR rejection
-      // - Executed: ≥9 accept votes
-      // - Rejected: ≥9 reject votes
-      // - Expired: Deadline passed without reaching either threshold
-      // ============================================================
+      // Get the archived/exercised event for this contract (if it exists)
+      const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
       
-      const TOTAL_SV_NODES = 13;
-      const THRESHOLD = 9; // Supermajority required for both approve and reject
-      
-      const totalVotesCast = finalVoteCount;
-      
-      // Check if thresholds are met
-      const hasApprovalThreshold = acceptCount >= THRESHOLD;
-      const hasRejectionThreshold = rejectCount >= THRESHOLD;
-      
-      // Archived choice can provide hints
-      const archivedChoice = archivedEvent?.choice || '';
-      const choiceLower = String(archivedChoice).toLowerCase();
-      const wasAcceptedByChoice = choiceLower.includes('accept') && !choiceLower.includes('reject');
-      const wasRejectedByChoice = choiceLower.includes('reject');
-      
-      // Get authoritative outcome from DsoRules_CloseVoteRequestResult if available
-      const outcomeTag = archivedEvent?.dso_close_outcome_tag || null;
-
-      // Determine status based on:
-      // 1. AUTHORITATIVE: outcomeTag from DsoRules_CloseVoteRequestResult (VRO_Accepted, VRO_Rejected, VRO_Expired)
-      // 2. FALLBACK: Vote thresholds (≥9 accepts = executed, ≥9 rejects = rejected)
-      // 3. LEGACY: Choice name hints
-      if (isClosed) {
-        // PRIORITY 1: Use authoritative outcome from DsoRules_CloseVoteRequestResult
+      // STATUS DETERMINATION: Based on consuming exercised events
+      if (archivedEvent) {
+        // A consuming exercised event exists - proposal is FINALIZED
+        // Determine outcome from (template_id, choice)
+        const choice = String(archivedEvent.choice || '').toLowerCase();
+        
+        // Check for authoritative outcome from DsoRules_CloseVoteRequestResult first
+        const outcomeTag = archivedEvent.dso_close_outcome_tag;
         if (outcomeTag) {
           const tagLower = outcomeTag.toLowerCase();
           if (tagLower.includes('accepted') || tagLower === 'vro_accepted') {
@@ -1174,38 +1153,44 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           } else if (tagLower.includes('expired') || tagLower === 'vro_expired') {
             status = 'expired';
             statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
-          } else {
-            // Unknown outcome tag - fall through to vote threshold logic
-            console.warn(`   ⚠️ Unknown outcome tag: ${outcomeTag}`);
           }
         }
         
-        // PRIORITY 2: Fall back to vote threshold if outcome didn't set status
+        // If outcome tag didn't resolve status, use the choice name
         if (status === 'in_progress') {
-          if (hasApprovalThreshold || wasAcceptedByChoice) {
+          if (choice.includes('accept') && !choice.includes('reject')) {
             status = 'executed';
-            statusStats.detectedByMajority = (statusStats.detectedByMajority || 0) + 1;
-          } else if (hasRejectionThreshold || wasRejectedByChoice) {
+            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
+          } else if (choice.includes('reject')) {
             status = 'rejected';
-            statusStats.detectedByMajority = (statusStats.detectedByMajority || 0) + 1;
-          } else {
-            // Closed without reaching either threshold = expired
+            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
+          } else if (choice.includes('expire')) {
             status = 'expired';
+            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
+          } else if (choice === 'archive') {
+            // Generic archive - check if deadline passed to distinguish
+            if (isExpired) {
+              status = 'expired';
+            } else {
+              // Archived before deadline = likely executed (successful action)
+              status = 'executed';
+            }
+            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
+          } else {
+            // Unknown consuming choice - mark as finalized with unknown outcome
+            // Default to expired if past deadline, otherwise executed
+            status = isExpired ? 'expired' : 'executed';
+            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
           }
         }
-      } else if (isExpired) {
-        // Deadline passed but not closed yet
-        if (hasApprovalThreshold) {
-          status = 'executed'; // Met threshold, pending close
-        } else if (hasRejectionThreshold) {
-          status = 'rejected';
-        } else {
-          status = 'expired';
-        }
-        statusStats.detectedByExpiry = (statusStats.detectedByExpiry || 0) + 1;
       } else {
-        // Still open and deadline not passed
-        status = 'in_progress';
+        // No consuming exercised event - proposal may still be active or expired by time
+        if (isExpired) {
+          status = 'expired';
+          statusStats.detectedByExpiry = (statusStats.detectedByExpiry || 0) + 1;
+        } else {
+          status = 'in_progress';
+        }
       }
 
       // Track detection statistics
@@ -1430,13 +1415,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
     
-    // Log status detection statistics
-    console.log(`   📊 Status detection breakdown:`);
-    console.log(`      - Executed: ${statusStats.executed} (${statusStats.detectedByOutcome || 0} by outcome, ${statusStats.detectedByMajority || 0} by vote threshold)`);
+    // Log status detection statistics (based on consuming exercised events)
+    console.log(`   📊 Status detection breakdown (consuming exercised event model):`);
+    console.log(`      - Executed: ${statusStats.executed} (${statusStats.detectedByOutcome || 0} by outcome tag, ${statusStats.detectedByChoice || 0} by choice)`);
     console.log(`      - Rejected: ${statusStats.rejected}`);
     console.log(`      - Expired: ${statusStats.expired} (${statusStats.detectedByExpiry || 0} by deadline)`);
     console.log(`      - In Progress: ${statusStats.in_progress}`);
-    console.log(`      - Total votes analyzed: ${statusStats.totalAcceptVotes} accepts, ${statusStats.totalRejectVotes} rejects`);
+    console.log(`      - Votes (display only): ${statusStats.totalAcceptVotes} accepts, ${statusStats.totalRejectVotes} rejects`);
 
     // Persist successful build summary for audit trail
     const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1545,20 +1530,30 @@ async function scanFilesForVoteRequests(files, eventType) {
         if (eventType === 'created' && record.event_type === 'created') {
           records.push(record);
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
-          // Capture all exercise choices that close VoteRequests:
-          // - Archive (explicit archive)
-          // - VoteRequest_Accept, VoteRequest_Reject, VoteRequest_Expire (direct choices)
-          // Only keep exercised events that actually CLOSE the VoteRequest contract.
-          // IMPORTANT: Do NOT include CastVote; that would mark every proposal as closed.
+          // CONSUMING EXERCISED EVENT MODEL:
+          // Any consuming exercised event on the VoteRequest contract means the proposal is finalized.
+          // The outcome is determined by the (template_id, choice) pair.
+          //
+          // If consuming flag is available, use it. Otherwise, fall back to choice-based heuristics.
           const choice = String(record.choice || '');
-          const isClosingChoice =
-            choice === 'Archive' ||
-            /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
-            choice === 'VoteRequest_ExpireVoteRequest';
-
-          if (isClosingChoice) {
+          const consuming = record.consuming === true || record.consuming === 'true';
+          
+          // Primary: Use consuming flag if available
+          if (consuming) {
             records.push(record);
+          } else if (record.consuming === undefined || record.consuming === null) {
+            // Fallback: If consuming flag not available, use choice-based heuristics
+            // These are the known closing choices:
+            const isClosingChoice =
+              choice === 'Archive' ||
+              /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
+              choice === 'VoteRequest_ExpireVoteRequest';
+
+            if (isClosingChoice) {
+              records.push(record);
+            }
           }
+          // Note: consuming=false means non-consuming exercise (e.g., CastVote) - skip
         }
       }
     } catch (err) {
@@ -1609,11 +1604,21 @@ async function scanAllFilesForVoteRequests(eventType) {
         if (!e.template_id?.endsWith(':VoteRequest')) return false;
 
         const choice = String(e.choice || '');
-        return (
-          choice === 'Archive' ||
-          /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
-          choice === 'VoteRequest_ExpireVoteRequest'
-        );
+        const consuming = e.consuming === true || e.consuming === 'true';
+        
+        // Primary: Use consuming flag if available
+        if (consuming) return true;
+        
+        // Fallback: If consuming flag not available, use choice-based heuristics
+        if (e.consuming === undefined || e.consuming === null) {
+          return (
+            choice === 'Archive' ||
+            /(^|_)VoteRequest_(Accept|Reject|Expire)/.test(choice) ||
+            choice === 'VoteRequest_ExpireVoteRequest'
+          );
+        }
+        
+        return false;
       };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
