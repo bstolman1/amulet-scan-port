@@ -1241,8 +1241,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         actionTag === 'CRARC_SetConfig' ||
         actionTag.includes('SetConfig')
       );
-      const hasReason = reasonStr && reasonStr.trim().length > 0;
-      const hasMailingListLink = reasonUrl && reasonUrl.includes('lists.sync.global');
+      const hasReason = reasonStr && typeof reasonStr === 'string' && reasonStr.trim().length > 0;
+      const hasMailingListLink = reasonUrl && typeof reasonUrl === 'string' && reasonUrl.includes('lists.sync.global');
       const hasVotes = finalVoteCount > 0;
       const hasNarrative = hasReason || hasMailingListLink;
       
