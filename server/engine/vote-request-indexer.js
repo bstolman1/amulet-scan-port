@@ -851,10 +851,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
     }
 
-    // Insert vote requests
+    // Upsert vote requests (ON CONFLICT doesn't throw, so we just count upserts)
     indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: createdResult.records.length, records: 0 };
-    let inserted = 0;
-    let updated = 0;
+    let upserted = 0;
     
     // Track status counts (facts only, no heuristics)
     const statusStats = {
@@ -1139,7 +1138,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
 
       // STATUS DETERMINATION: Based on consuming exercised events only
-      // STATUS DETERMINATION: Based on consuming exercised events only
       if (archivedEvent) {
         // A consuming exercised event exists on this proposal root - proposal is FINAL
         statusStats.final++;
@@ -1355,16 +1353,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             is_human = EXCLUDED.is_human,
             updated_at = now()
         `);
-        inserted++;
+        upserted++;
       } catch (err) {
         if (!err.message?.includes('duplicate')) {
-          console.error(`   Error inserting vote request ${voteRequest.event_id}:`, err.message);
-        } else {
-          updated++;
+          console.error(`   Error upserting vote request ${voteRequest.event_id}:`, err.message);
         }
+        // ON CONFLICT handles duplicates silently, so this path is rarely hit
       } finally {
-        const current = inserted + updated;
-        indexingProgress = { ...indexingProgress, current, records: current };
+        indexingProgress = { ...indexingProgress, current: upserted, records: upserted };
       }
     }
 
@@ -1416,14 +1412,14 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // Update index state
     await query(`
       INSERT INTO vote_request_index_state (id, last_indexed_at, total_indexed)
-      VALUES (1, now(), ${inserted})
+      VALUES (1, now(), ${upserted})
       ON CONFLICT (id) DO UPDATE SET
         last_indexed_at = now(),
-        total_indexed = ${inserted}
+        total_indexed = ${upserted}
     `);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`\n✅ [VoteRequestIndexer] Index built in ${elapsed}s`);
+    console.log(`\n✅ [VoteRequestIndexer] Index built: ${upserted} proposals indexed in ${elapsed}s`);
     
     // 4️⃣ STATUS CLASSIFICATION SUMMARY (facts only)
     console.log(`   [VoteRequestIndexer] Proposal status summary:`, {
@@ -1459,9 +1455,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           '${indexingProgress?.startedAt || new Date().toISOString()}',
           now(),
           ${parseFloat(elapsed)},
-          ${inserted},
-          ${inserted},
-          ${updated},
+          ${upserted},
+          ${upserted},
+          0,
           ${closedContractIds.size},
           ${finalStats.inProgress},
           ${finalStats.executed},
@@ -1486,11 +1482,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     return {
       status: 'complete',
       buildId,
-      inserted,
-      updated,
+      upserted,
       closedCount: closedContractIds.size,
       elapsedSeconds: parseFloat(elapsed),
-      totalIndexed: inserted,
+      totalIndexed: upserted,
       stats: finalStats,
     };
 
