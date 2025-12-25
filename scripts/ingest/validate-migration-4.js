@@ -182,11 +182,22 @@ function findMigration4Files() {
     scanAllFiles(RAW_DIR);
   }
   
+  // Debug: show sample filenames
+  if (verbose || (files.updates.length > 0 || files.events.length > 0)) {
+    console.log('   Sample filenames:');
+    for (const f of files.updates.slice(0, 3)) {
+      console.log(`      ${path.basename(f)}`);
+    }
+    for (const f of files.events.slice(0, 3)) {
+      console.log(`      ${path.basename(f)}`);
+    }
+  }
+  
   return files;
 }
 
 /**
- * Extract timestamp from filename
+ * Extract timestamp from filename - supports multiple formats
  */
 function extractTimestampFromFilename(filePath) {
   const basename = path.basename(filePath);
@@ -202,6 +213,35 @@ function extractTimestampFromFilename(filePath) {
   const dateMatch = basename.match(/(\d{4}-\d{2}-\d{2})/);
   if (dateMatch) {
     return new Date(dateMatch[1] + 'T00:00:00Z');
+  }
+  
+  // Try Unix timestamp: updates-1733875200000.pb.zst or updates-mig-4-1733875200000.pb.zst
+  const unixMatch = basename.match(/(\d{13})/);
+  if (unixMatch) {
+    const ts = parseInt(unixMatch[1], 10);
+    if (ts > 1700000000000 && ts < 1800000000000) { // Reasonable range 2023-2027
+      return new Date(ts);
+    }
+  }
+  
+  // Try Unix seconds: updates-1733875200.pb.zst
+  const unixSecsMatch = basename.match(/-(\d{10})\./);
+  if (unixSecsMatch) {
+    const ts = parseInt(unixSecsMatch[1], 10) * 1000;
+    if (ts > 1700000000000 && ts < 1800000000000) {
+      return new Date(ts);
+    }
+  }
+  
+  // Try path-based date: .../year=2025/month=12/day=10/...
+  const yearMatch = filePath.match(/year=(\d{4})/);
+  const monthMatch = filePath.match(/month=(\d{1,2})/);
+  const dayMatch = filePath.match(/day=(\d{1,2})/);
+  if (yearMatch && monthMatch && dayMatch) {
+    const y = yearMatch[1];
+    const m = monthMatch[1].padStart(2, '0');
+    const d = dayMatch[1].padStart(2, '0');
+    return new Date(`${y}-${m}-${d}T00:00:00Z`);
   }
   
   return null;
