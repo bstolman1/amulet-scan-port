@@ -828,8 +828,10 @@ export async function queryCanonicalProposals({ limit = 100, status = 'all', off
 /**
  * Get canonical proposal counts matching explorer semantics
  * Returns counts at each layer of the model
+ * @param {Object} options
+ * @param {boolean} options.humanOnly - If true, byStatus reflects human proposals only (default true)
  */
-export async function getCanonicalProposalStats() {
+export async function getCanonicalProposalStats({ humanOnly = true } = {}) {
   try {
     // Raw events (all VoteRequest records in index)
     const rawTotal = await queryOne(`SELECT COUNT(*) as count FROM vote_requests`);
@@ -846,15 +848,16 @@ export async function getCanonicalProposalStats() {
       WHERE is_human = true
     `);
     
-    // Status breakdown for human proposals
-    const humanByStatus = await query(`
+    // Status breakdown - respects humanOnly parameter
+    const humanFilter = humanOnly ? 'WHERE is_human = true' : '';
+    const statusBreakdown = await query(`
       WITH latest AS (
         SELECT 
           COALESCE(proposal_id, contract_id) as pid,
           status,
           ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn
         FROM vote_requests
-        WHERE is_human = true
+        ${humanFilter}
       )
       SELECT status, COUNT(*) as count
       FROM latest
@@ -868,7 +871,7 @@ export async function getCanonicalProposalStats() {
       rejected: 0,
       expired: 0,
     };
-    for (const row of humanByStatus) {
+    for (const row of statusBreakdown) {
       if (row.status === 'in_progress' || row.status === 'active') {
         byStatus.in_progress += Number(row.count);
       } else if (row.status === 'executed') {
@@ -885,6 +888,7 @@ export async function getCanonicalProposalStats() {
       lifecycleProposals: Number(lifecycleTotal?.count || 0),
       humanProposals: Number(humanTotal?.count || 0),
       byStatus,
+      byStatusScope: humanOnly ? 'human' : 'all',
     };
   } catch (err) {
     console.error('Error getting canonical proposal stats:', err);
@@ -893,6 +897,7 @@ export async function getCanonicalProposalStats() {
       lifecycleProposals: 0,
       humanProposals: 0,
       byStatus: { in_progress: 0, executed: 0, rejected: 0, expired: 0 },
+      byStatusScope: humanOnly ? 'human' : 'all',
     };
   }
 }

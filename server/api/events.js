@@ -2589,7 +2589,7 @@ router.get('/canonical-proposals', async (req, res) => {
       offset, 
       humanOnly 
     });
-    const stats = await voteRequestIndexer.getCanonicalProposalStats();
+    const stats = await voteRequestIndexer.getCanonicalProposalStats({ humanOnly });
     const indexState = await voteRequestIndexer.getIndexState();
     
     res.json(convertBigInts({
