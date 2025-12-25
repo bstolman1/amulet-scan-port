@@ -3533,4 +3533,182 @@ router.get('/proposals/analyze-all', async (req, res) => {
   }
 });
 
+// ============ DEBUG: EXERCISED EVENTS INSPECTION ============
+
+// GET /api/events/debug/exercised - Read-only query of all Exercised events from binary files
+// Returns raw event data to inspect available fields (contract_id, choice, consuming, result, etc.)
+router.get('/debug/exercised', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const templateFilter = req.query.template || null; // Optional: filter by template (e.g., "VoteRequest")
+    const maxDays = parseInt(req.query.days) || 30;
+    const maxFiles = parseInt(req.query.files) || 200;
+    
+    console.log(`\n🔍 DEBUG: Querying Exercised events - limit=${limit}, offset=${offset}, template=${templateFilter || 'any'}, days=${maxDays}`);
+    
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit,
+      offset,
+      maxDays,
+      maxFilesToScan: maxFiles,
+      sortBy: 'effective_at',
+      filter: (e) => {
+        const isExercised = e.event_type === 'exercised';
+        if (!isExercised) return false;
+        if (templateFilter && !e.template_id?.includes(templateFilter)) return false;
+        return true;
+      }
+    });
+    
+    // Extract key fields for inspection
+    const events = result.records.map((e, idx) => ({
+      _index: offset + idx,
+      event_id: e.event_id,
+      event_type: e.event_type,
+      contract_id: e.contract_id,
+      template_id: e.template_id,
+      effective_at: e.effective_at,
+      // Key fields to inspect
+      choice: e.choice || e.payload?.choice || null,
+      consuming: e.consuming ?? e.payload?.consuming ?? null,
+      argument: e.argument || e.payload?.argument || null,
+      result: e.result || e.payload?.result || null,
+      // Show all top-level keys for structure inspection
+      _topLevelKeys: Object.keys(e),
+      _payloadKeys: e.payload ? Object.keys(e.payload) : [],
+      // Raw payload for full inspection
+      _rawPayload: e.payload,
+    }));
+    
+    // Summary stats
+    const uniqueTemplates = [...new Set(events.map(e => e.template_id?.split(':').pop() || 'unknown'))];
+    const uniqueChoices = [...new Set(events.map(e => e.choice).filter(Boolean))];
+    
+    res.json(convertBigInts({
+      summary: {
+        returned: events.length,
+        offset,
+        hasMore: result.hasMore,
+        maxDays,
+        maxFiles,
+        templateFilter,
+        uniqueTemplates: uniqueTemplates.slice(0, 20),
+        uniqueChoices: uniqueChoices.slice(0, 30),
+      },
+      events,
+    }));
+  } catch (err) {
+    console.error('Error fetching exercised events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/debug/exercised/sample - Get a single sample Exercised event with full structure
+router.get('/debug/exercised/sample', async (req, res) => {
+  try {
+    const templateFilter = req.query.template || null;
+    
+    console.log(`\n🔍 DEBUG: Getting sample Exercised event - template=${templateFilter || 'any'}`);
+    
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: 1,
+      offset: 0,
+      maxDays: 90,
+      maxFilesToScan: 500,
+      sortBy: 'effective_at',
+      filter: (e) => {
+        const isExercised = e.event_type === 'exercised';
+        if (!isExercised) return false;
+        if (templateFilter && !e.template_id?.includes(templateFilter)) return false;
+        return true;
+      }
+    });
+    
+    if (result.records.length === 0) {
+      return res.json({ found: false, message: 'No Exercised events found matching criteria' });
+    }
+    
+    const sample = result.records[0];
+    
+    res.json(convertBigInts({
+      found: true,
+      templateFilter,
+      event: sample,
+      structure: {
+        topLevelKeys: Object.keys(sample),
+        payloadType: typeof sample.payload,
+        payloadKeys: sample.payload ? Object.keys(sample.payload) : [],
+        hasChoice: 'choice' in sample || (sample.payload && 'choice' in sample.payload),
+        hasConsuming: 'consuming' in sample || (sample.payload && 'consuming' in sample.payload),
+        hasArgument: 'argument' in sample || (sample.payload && 'argument' in sample.payload),
+        hasResult: 'result' in sample || (sample.payload && 'result' in sample.payload),
+      }
+    }));
+  } catch (err) {
+    console.error('Error fetching sample exercised event:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/debug/exercised/voterequest - Get all VoteRequest Exercised events specifically
+router.get('/debug/exercised/voterequest', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const offset = parseInt(req.query.offset) || 0;
+    const maxDays = parseInt(req.query.days) || 365; // Governance spans long periods
+    const maxFiles = parseInt(req.query.files) || 1000;
+    
+    console.log(`\n🔍 DEBUG: Querying VoteRequest Exercised events - limit=${limit}, offset=${offset}, days=${maxDays}`);
+    
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit,
+      offset,
+      maxDays,
+      maxFilesToScan: maxFiles,
+      sortBy: 'effective_at',
+      filter: (e) => {
+        return e.event_type === 'exercised' && e.template_id?.includes('VoteRequest');
+      }
+    });
+    
+    // Extract and categorize by choice
+    const events = result.records.map((e, idx) => {
+      const choice = e.choice || e.payload?.choice || 'unknown';
+      return {
+        _index: offset + idx,
+        event_id: e.event_id,
+        contract_id: e.contract_id,
+        template_id: e.template_id?.split(':').pop(),
+        effective_at: e.effective_at,
+        choice,
+        consuming: e.consuming ?? e.payload?.consuming ?? null,
+        // Show argument/result structure
+        argumentKeys: e.argument ? Object.keys(e.argument) : (e.payload?.argument ? Object.keys(e.payload.argument) : []),
+        resultKeys: e.result ? Object.keys(e.result) : (e.payload?.result ? Object.keys(e.payload.result) : []),
+      };
+    });
+    
+    // Group by choice
+    const byChoice = {};
+    for (const e of events) {
+      byChoice[e.choice] = (byChoice[e.choice] || 0) + 1;
+    }
+    
+    res.json(convertBigInts({
+      summary: {
+        returned: events.length,
+        offset,
+        hasMore: result.hasMore,
+        maxDays,
+        byChoice,
+      },
+      events,
+    }));
+  } catch (err) {
+    console.error('Error fetching VoteRequest exercised events:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
