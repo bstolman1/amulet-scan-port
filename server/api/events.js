@@ -3533,4 +3533,253 @@ router.get('/proposals/analyze-all', async (req, res) => {
   }
 });
 
+// ============================================================================
+// SV MEMBERSHIP CHANGES - Query onboard/offboard votes from VoteRequest index
+// ============================================================================
+
+/**
+ * GET /api/events/sv-membership - Get SV membership changes from VoteRequest index
+ * 
+ * Queries the VoteRequest index for SV-related governance actions:
+ * - ARC_DsoRules_OnboardSv
+ * - ARC_DsoRules_OffboardSv  
+ * - SRARC_AddSv (older format)
+ * - SRARC_RemoveSv (older format)
+ * 
+ * Returns proposals with their status (executed, rejected, expired, in_progress)
+ * to support 2/3 threshold vote tracking.
+ */
+router.get('/sv-membership', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const offset = parseInt(req.query.offset) || 0;
+    const status = req.query.status || 'all'; // all, executed, rejected, expired, in_progress
+    
+    // SV-related action tags
+    const svActionTags = [
+      'ARC_DsoRules_OnboardSv',
+      'ARC_DsoRules_OffboardSv',
+      'SRARC_AddSv',
+      'SRARC_RemoveSv',
+      'ARC_DsoRules_SetSvWeight',
+      'ARC_DsoRules_UpdateSvRewardWeight',
+    ];
+    
+    // Build status filter
+    let statusFilter = '';
+    if (status === 'executed' || status === 'approved') {
+      statusFilter = "AND status = 'executed'";
+    } else if (status === 'rejected') {
+      statusFilter = "AND status = 'rejected'";
+    } else if (status === 'expired') {
+      statusFilter = "AND status = 'expired'";
+    } else if (status === 'in_progress' || status === 'active') {
+      statusFilter = "AND status IN ('in_progress', 'active')";
+    }
+    
+    // Query the vote_requests table
+    const actionFilter = svActionTags.map(t => `action_tag = '${t}'`).join(' OR ');
+    
+    const results = await db.query(`
+      SELECT 
+        proposal_id,
+        contract_id,
+        event_id,
+        effective_at,
+        status,
+        action_tag,
+        action_value,
+        action_subject,
+        requester,
+        reason,
+        reason_url,
+        votes,
+        vote_count,
+        accept_count,
+        reject_count,
+        vote_before,
+        is_closed,
+        is_human
+      FROM vote_requests
+      WHERE (${actionFilter})
+      ${statusFilter}
+      ORDER BY effective_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+    
+    // Get stats for SV membership votes
+    const statsResults = await db.query(`
+      SELECT 
+        status,
+        COUNT(*) as count
+      FROM vote_requests
+      WHERE (${actionFilter})
+      GROUP BY status
+    `);
+    
+    const stats = {
+      total: 0,
+      executed: 0,
+      rejected: 0,
+      expired: 0,
+      in_progress: 0,
+    };
+    
+    for (const row of statsResults) {
+      const count = Number(row.count);
+      stats.total += count;
+      if (row.status === 'executed') stats.executed = count;
+      else if (row.status === 'rejected') stats.rejected = count;
+      else if (row.status === 'expired') stats.expired = count;
+      else if (row.status === 'in_progress' || row.status === 'active') stats.in_progress += count;
+    }
+    
+    // Parse JSON fields and extract SV party info
+    const safeJsonParse = (val) => {
+      if (val === null || val === undefined) return null;
+      if (typeof val !== 'string') return val;
+      try {
+        return JSON.parse(val);
+      } catch {
+        return val;
+      }
+    };
+    
+    const data = results.map(r => {
+      const actionValue = safeJsonParse(r.action_value);
+      const votes = Array.isArray(r.votes) ? r.votes : (safeJsonParse(r.votes) || []);
+      
+      // Extract SV party from action_subject (format: "sv:party_id")
+      let svParty = null;
+      if (r.action_subject?.startsWith('sv:')) {
+        svParty = r.action_subject.slice(3);
+      }
+      
+      // Also try to get from action_value
+      if (!svParty && actionValue) {
+        svParty = actionValue.svParty || actionValue.sv || actionValue.newSv || null;
+      }
+      
+      return {
+        ...r,
+        action_value: actionValue,
+        votes,
+        accept_count: Number(r.accept_count) || 0,
+        reject_count: Number(r.reject_count) || 0,
+        vote_count: Number(r.vote_count) || 0,
+        sv_party: svParty,
+        action_type: r.action_tag?.includes('Onboard') || r.action_tag?.includes('Add') ? 'onboard' : 'offboard',
+      };
+    });
+    
+    res.json(convertBigInts({
+      data,
+      stats,
+      actionTags: svActionTags,
+      count: data.length,
+    }));
+  } catch (err) {
+    console.error('Error fetching SV membership changes:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/sv-membership/timeline - Get SV membership changes as a timeline
+router.get('/sv-membership/timeline', async (req, res) => {
+  try {
+    // SV-related action tags for executed votes only
+    const svActionTags = [
+      'ARC_DsoRules_OnboardSv',
+      'ARC_DsoRules_OffboardSv',
+      'SRARC_AddSv',
+      'SRARC_RemoveSv',
+    ];
+    
+    const actionFilter = svActionTags.map(t => `action_tag = '${t}'`).join(' OR ');
+    
+    // Get all executed SV membership changes ordered by time
+    const results = await db.query(`
+      SELECT 
+        proposal_id,
+        contract_id,
+        effective_at,
+        action_tag,
+        action_subject,
+        action_value,
+        requester,
+        reason,
+        accept_count,
+        reject_count,
+        vote_count
+      FROM vote_requests
+      WHERE (${actionFilter})
+        AND status = 'executed'
+      ORDER BY effective_at ASC
+    `);
+    
+    const safeJsonParse = (val) => {
+      if (val === null || val === undefined) return null;
+      if (typeof val !== 'string') return val;
+      try {
+        return JSON.parse(val);
+      } catch {
+        return val;
+      }
+    };
+    
+    // Build timeline with running SV count
+    let svCount = 0;
+    const timeline = results.map(r => {
+      const actionValue = safeJsonParse(r.action_value);
+      
+      // Extract SV party
+      let svParty = null;
+      if (r.action_subject?.startsWith('sv:')) {
+        svParty = r.action_subject.slice(3);
+      }
+      if (!svParty && actionValue) {
+        svParty = actionValue.svParty || actionValue.sv || actionValue.newSv || null;
+      }
+      
+      // Determine if onboard or offboard
+      const isOnboard = r.action_tag?.includes('Onboard') || r.action_tag?.includes('Add');
+      
+      // Update running count
+      if (isOnboard) {
+        svCount++;
+      } else {
+        svCount = Math.max(0, svCount - 1);
+      }
+      
+      // Calculate 2/3 threshold at this point
+      const threshold = Math.ceil((svCount * 2) / 3);
+      
+      return {
+        effective_at: r.effective_at,
+        action_type: isOnboard ? 'onboard' : 'offboard',
+        action_tag: r.action_tag,
+        sv_party: svParty,
+        requester: r.requester,
+        reason: r.reason,
+        accept_count: Number(r.accept_count) || 0,
+        reject_count: Number(r.reject_count) || 0,
+        sv_count_after: svCount,
+        threshold_after: threshold,
+      };
+    });
+    
+    res.json(convertBigInts({
+      timeline,
+      current_sv_count: svCount,
+      current_threshold: Math.ceil((svCount * 2) / 3),
+      total_changes: timeline.length,
+      onboards: timeline.filter(t => t.action_type === 'onboard').length,
+      offboards: timeline.filter(t => t.action_type === 'offboard').length,
+    }));
+  } catch (err) {
+    console.error('Error fetching SV membership timeline:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
