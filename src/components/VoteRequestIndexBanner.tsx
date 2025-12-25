@@ -15,6 +15,10 @@ interface IndexStatus {
     active: number;
     historical: number;
     closed: number;
+    inProgress: number;
+    executed: number;
+    rejected: number;
+    expired: number;
   };
   lastIndexedAt: string | null;
   totalIndexed: number;
@@ -53,9 +57,10 @@ export function VoteRequestIndexBanner() {
         if (!fresh.isIndexing) {
           clearInterval(pollInterval);
           setIsBuilding(false);
+          const s = fresh.stats;
           toast({
             title: "Index Build Complete",
-            description: `Indexed ${fresh.stats?.total ?? 0} VoteRequest events (${fresh.stats?.historical ?? 0} historical).`,
+            description: `Indexed ${s?.total ?? 0} votes: ${s?.executed ?? 0} executed, ${s?.rejected ?? 0} rejected, ${s?.expired ?? 0} expired, ${s?.inProgress ?? 0} in progress.`,
           });
         }
       }, 3000);
@@ -85,17 +90,26 @@ export function VoteRequestIndexBanner() {
           {isPopulated ? (
             <>
               <CheckCircle className="h-4 w-4 text-success" />
-              <span>
-                <strong>VoteRequest Index:</strong> {historicalCount} completed votes indexed
+              <span className="flex flex-wrap items-center gap-1.5">
+                <strong>VoteRequest Index:</strong>
+                <Badge variant="outline" className="text-xs border-success/50 text-success">
+                  {status?.stats?.executed ?? 0} executed
+                </Badge>
+                <Badge variant="outline" className="text-xs border-destructive/50 text-destructive">
+                  {status?.stats?.rejected ?? 0} rejected
+                </Badge>
+                <Badge variant="outline" className="text-xs border-muted-foreground/50 text-muted-foreground">
+                  {status?.stats?.expired ?? 0} expired
+                </Badge>
+                <Badge variant="outline" className="text-xs border-blue-500/50 text-blue-500">
+                  {status?.stats?.inProgress ?? 0} in progress
+                </Badge>
                 {status?.lastIndexedAt && (
-                  <span className="text-muted-foreground ml-2 text-xs">
-                    (Last built: {new Date(status.lastIndexedAt).toLocaleString()})
+                  <span className="text-muted-foreground ml-1 text-xs">
+                    (Built: {new Date(status.lastIndexedAt).toLocaleString()})
                   </span>
                 )}
               </span>
-              <Badge variant="outline" className="text-xs">
-                Ready
-              </Badge>
             </>
           ) : (
             <>
