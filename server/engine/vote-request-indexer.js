@@ -996,9 +996,20 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let emptyPayloadCount = 0;
     const nullPayloadSamples = [];
     
-    console.log(`\n   🔬 Starting payload shape probe for ${createdResult.records.length} created events...`);
+    const totalEvents = createdResult.records.length;
+    console.log(`\n   🔬 Starting payload shape probe for ${totalEvents} created events...`);
+    
+    let processedCount = 0;
+    const PROBE_LOG_INTERVAL = 100; // Log every 100 events
     
     for (const event of createdResult.records) {
+      processedCount++;
+      
+      // Progress logging
+      if (processedCount % PROBE_LOG_INTERVAL === 0 || processedCount === totalEvents) {
+        const pct = Math.round((processedCount / totalEvents) * 100);
+        console.log(`   🔬 [${pct}%] Processed ${processedCount}/${totalEvents} events | valid: ${validPayloadCount} | null: ${nullPayloadCount} | empty: ${emptyPayloadCount}`);
+      }
       // ============================================================
       // PAYLOAD SHAPE PROBE: Detect and track shape before normalization
       // ============================================================
