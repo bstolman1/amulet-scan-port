@@ -232,7 +232,12 @@ const Governance = () => {
       const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
       const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
 
-      // Determine status based on votes and threshold
+      // STATUS DERIVATION FOR ACS ACTIVE PROPOSALS
+      // ⚠️ Client-side derivation is ACCEPTABLE here because:
+      // - ACS data represents CURRENT active contract state (live data)
+      // - There are no exercised events in ACS - only created contracts exist
+      // - For indexed/historical data, status MUST come from backend (ledger model)
+      // - This threshold-based logic approximates what an active proposal looks like
       const threshold = votingThreshold || svCount || 1;
       let status: "approved" | "rejected" | "pending" = "pending";
       
@@ -1289,22 +1294,26 @@ const Governance = () => {
             ) : fullScanData?.proposals?.length ? (
               <div className="space-y-4">
                 {/* Stats Summary */}
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+                <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-6">
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-xs text-muted-foreground mb-1">Total Proposals</p>
                     <p className="text-2xl font-bold">{fullScanData.stats.total}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-success/10">
-                    <p className="text-xs text-muted-foreground mb-1">Approved</p>
-                    <p className="text-2xl font-bold text-success">{fullScanData.stats.byStatus.approved}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Executed</p>
+                    <p className="text-2xl font-bold text-success">{fullScanData.stats.byStatus.executed}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-destructive/10">
                     <p className="text-xs text-muted-foreground mb-1">Rejected</p>
                     <p className="text-2xl font-bold text-destructive">{fullScanData.stats.byStatus.rejected}</p>
                   </div>
+                  <div className="p-3 rounded-lg bg-muted">
+                    <p className="text-xs text-muted-foreground mb-1">Expired</p>
+                    <p className="text-2xl font-bold text-muted-foreground">{fullScanData.stats.byStatus.expired}</p>
+                  </div>
                   <div className="p-3 rounded-lg bg-warning/10">
-                    <p className="text-xs text-muted-foreground mb-1">Pending</p>
-                    <p className="text-2xl font-bold text-warning">{fullScanData.stats.byStatus.pending}</p>
+                    <p className="text-xs text-muted-foreground mb-1">In Progress</p>
+                    <p className="text-2xl font-bold text-warning">{fullScanData.stats.byStatus.in_progress}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-xs text-muted-foreground mb-1">Files Scanned</p>
@@ -1409,13 +1418,16 @@ const Governance = () => {
                     </TableHeader>
                     <TableBody>
                       {fullScanData.proposals.map((proposal, idx) => {
-                        const now = Date.now();
-                        const isExpired = proposal.voteBeforeTimestamp && proposal.voteBeforeTimestamp < now;
-                        const status = proposal.votesFor > proposal.votesAgainst && proposal.votesFor > 0 && isExpired 
-                          ? "approved" 
-                          : isExpired 
-                            ? "rejected" 
-                            : "pending";
+                        // Use backend-provided status (ledger model) - DO NOT recompute
+                        const backendStatus = (proposal as any).status || 'in_progress';
+                        // Map backend status to display status
+                        const statusMap: Record<string, 'executed' | 'rejected' | 'expired' | 'in_progress'> = {
+                          'executed': 'executed',
+                          'rejected': 'rejected',
+                          'expired': 'expired',
+                          'in_progress': 'in_progress',
+                        };
+                        const status = statusMap[backendStatus] || 'in_progress';
                         
                         return (
                           <TableRow key={idx}>
@@ -1423,13 +1435,14 @@ const Governance = () => {
                               <div className="flex items-center gap-2">
                                 <Badge className={cn(
                                   "text-xs",
-                                  status === "approved" && "bg-success/10 text-success border-success/20",
+                                  status === "executed" && "bg-success/10 text-success border-success/20",
                                   status === "rejected" && "bg-destructive/10 text-destructive border-destructive/20",
-                                  status === "pending" && "bg-warning/10 text-warning border-warning/20",
+                                  status === "in_progress" && "bg-warning/10 text-warning border-warning/20",
+                                  status === "expired" && "bg-muted text-muted-foreground",
                                 )}>
-                                  {status === "approved" && <CheckCircle className="h-3 w-3 mr-1" />}
+                                  {status === "executed" && <CheckCircle className="h-3 w-3 mr-1" />}
                                   {status === "rejected" && <XCircle className="h-3 w-3 mr-1" />}
-                                  {status === "pending" && <Clock className="h-3 w-3 mr-1" />}
+                                  {status === "in_progress" && <Clock className="h-3 w-3 mr-1" />}
                                   {status}
                                 </Badge>
                               </div>

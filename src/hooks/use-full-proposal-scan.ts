@@ -26,15 +26,17 @@ interface Proposal {
   votesAgainst: number;
   trackingCid: string | null;
   rawTimestamp: string;
+  status: 'executed' | 'rejected' | 'expired' | 'in_progress'; // Ledger-derived status
 }
 
 interface Stats {
   total: number;
   byActionType: Record<string, number>;
   byStatus: {
-    approved: number;
+    executed: number;
     rejected: number;
-    pending: number;
+    expired: number;
+    in_progress: number;
   };
 }
 

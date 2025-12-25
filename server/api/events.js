@@ -2950,6 +2950,9 @@ router.get('/governance/proposals/stream', async (req, res) => {
     let totalParseTime = 0;
     let filesWithErrors = 0;
     
+    // Track exercised events for ledger-based status determination
+    const exercisedEventsMap = new Map(); // contract_id -> { choice, template_id, timestamp }
+    
     // Process files in parallel batches
     const processFile = async (filePath) => {
       const fileStart = Date.now();
@@ -2960,28 +2963,38 @@ router.get('/governance/proposals/stream', async (req, res) => {
         const parseStart = Date.now();
         const events = result.records || [];
         const voteRequests = [];
+        const exercisedEvents = []; // Collect exercised VoteRequest events
         
         for (const evt of events) {
           const templateId = evt.template_id || '';
           if (!templateId.includes('VoteRequest')) continue;
-          if (evt.event_type !== 'created') continue;
           
-          const payload = evt.payload || {};
-          let proposal;
-          try {
-            proposal = parseVoteRequestPayload(payload);
-          } catch (parseErr) {
-            continue;
+          if (evt.event_type === 'created') {
+            const payload = evt.payload || {};
+            let proposal;
+            try {
+              proposal = parseVoteRequestPayload(payload);
+            } catch (parseErr) {
+              continue;
+            }
+            if (!proposal) continue;
+            
+            voteRequests.push({ evt, proposal });
+          } else if (evt.event_type === 'exercised' && evt.consuming === true) {
+            // Collect consuming exercised events for status determination
+            exercisedEvents.push({
+              contract_id: evt.contract_id,
+              choice: evt.choice || '',
+              template_id: templateId,
+              timestamp: evt.timestamp,
+            });
           }
-          if (!proposal) continue;
-          
-          voteRequests.push({ evt, proposal });
         }
         
-        return { voteRequests, fileReadTime, parseTime: Date.now() - parseStart, events: events.length, error: null };
+        return { voteRequests, exercisedEvents, fileReadTime, parseTime: Date.now() - parseStart, events: events.length, error: null };
       } catch (err) {
         console.log(`[SCAN] ERROR reading file ${filePath}: ${err.message}`);
-        return { voteRequests: [], fileReadTime: Date.now() - fileStart, parseTime: 0, events: 0, error: err.message };
+        return { voteRequests: [], exercisedEvents: [], fileReadTime: Date.now() - fileStart, parseTime: 0, events: 0, error: err.message };
       }
     };
     
@@ -3011,6 +3024,15 @@ router.get('/governance/proposals/stream', async (req, res) => {
         batchParseTime += result.parseTime || 0;
         totalFileReadTime += result.fileReadTime || 0;
         totalParseTime += result.parseTime || 0;
+        
+        // Collect exercised events for status determination (ledger model)
+        for (const exercised of (result.exercisedEvents || [])) {
+          // Keep the latest exercised event per contract_id
+          const existing = exercisedEventsMap.get(exercised.contract_id);
+          if (!existing || new Date(exercised.timestamp) > new Date(existing.timestamp)) {
+            exercisedEventsMap.set(exercised.contract_id, exercised);
+          }
+        }
         
         const voteRequests = result.voteRequests || [];
         batchVoteRequests += voteRequests.length;
@@ -3102,33 +3124,58 @@ router.get('/governance/proposals/stream', async (req, res) => {
     console.log(`[SCAN] Performance: ${(filesScanned/(totalScanTime/1000)).toFixed(1)} files/sec`);
     console.log(`[SCAN] Cumulative file read time: ${totalFileReadTime}ms, parse time: ${totalParseTime}ms`);
     console.log(`[SCAN] Results: ${totalVoteRequests} VoteRequests -> ${proposalMap.size} unique proposals`);
+    console.log(`[SCAN] Exercised events collected: ${exercisedEventsMap.size} for status determination`);
     
     // Convert to array and sort by latest timestamp (newest first)
     const proposals = Array.from(proposalMap.values())
       .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
     
-    // Calculate vote statistics
+    // Calculate vote statistics using LEDGER MODEL (not vote thresholds)
+    // Status is determined by:
+    // - finalized (executed/rejected/expired): Has consuming exercised event
+    // - in_progress: No consuming exercise, before deadline  
+    // - expired_unfinalized: No consuming exercise, after deadline
     const stats = {
       total: proposals.length,
       byActionType: {},
-      byStatus: { approved: 0, rejected: 0, pending: 0 },
+      byStatus: { executed: 0, rejected: 0, expired: 0, in_progress: 0 },
     };
     
+    const nowMs = Date.now();
     for (const p of proposals) {
       stats.byActionType[p.actionType] = (stats.byActionType[p.actionType] || 0) + 1;
       
-      const now = Date.now();
+      // Check if this proposal has a consuming exercised event (ledger model)
+      const exercisedEvent = exercisedEventsMap.get(p.latestContractId);
       const voteBefore = p.voteBeforeTimestamp || 0;
+      const isExpired = voteBefore && voteBefore < nowMs;
       
-      if (voteBefore && voteBefore < now) {
-        if (p.votesFor > p.votesAgainst && p.votesFor > 0) {
-          stats.byStatus.approved++;
+      let status;
+      if (exercisedEvent) {
+        // Finalized - determine outcome from choice
+        const choice = String(exercisedEvent.choice || '').toLowerCase();
+        if (choice.includes('accept') && !choice.includes('reject')) {
+          status = 'executed';
+        } else if (choice.includes('reject')) {
+          status = 'rejected';
+        } else if (choice.includes('expire')) {
+          status = 'expired';
         } else {
-          stats.byStatus.rejected++;
+          // Unknown choice - default to executed (it was finalized)
+          status = 'executed';
         }
       } else {
-        stats.byStatus.pending++;
+        // Not finalized - check deadline
+        if (isExpired) {
+          status = 'expired';
+        } else {
+          status = 'in_progress';
+        }
       }
+      
+      // Add status to proposal object for UI
+      p.status = status;
+      stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
     }
     
     // Analyze merge patterns
