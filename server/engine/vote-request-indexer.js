@@ -1081,9 +1081,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         validPayloadCount++;
       }
 
+      // is_closed indicates ledger consumption (consuming exercised event exists), not semantic completion
       const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
 
-      // Use archived event data for final vote counts if available
+      // Get archived/exercised event for this contract (single declaration, used for votes and status)
       const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
       const archivedNormalized = archivedEvent ? normalizePayload(archivedEvent.payload) : null;
       const finalVotes = archivedNormalized?.votes || normalizedPayload.votes || archivedEvent?.payload?.votes || event.payload?.votes;
@@ -1137,9 +1138,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         else if (normalized === 'reject') rejectCount++;
       }
 
-      // Get the archived/exercised event for this contract (if it exists)
-      const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
-      
+      // STATUS DETERMINATION: Based on consuming exercised events only
       // STATUS DETERMINATION: Based on consuming exercised events only
       if (archivedEvent) {
         // A consuming exercised event exists on this proposal root - proposal is FINAL
@@ -1205,8 +1204,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         }
       }
 
-      // Track detection statistics
-      statusStats[status]++;
+      // Track vote totals for display purposes
       statusStats.totalAcceptVotes += acceptCount;
       statusStats.totalRejectVotes += rejectCount;
 
@@ -1638,149 +1636,6 @@ async function scanAllFilesForVoteRequests(eventType) {
     filter
   });
 }
-
-/**
- * Scan DsoRules files specifically for CloseVoteRequest exercises
- * These events close VoteRequests and determine their final status
- */
-async function scanFilesForDsoCloseVoteRequests(files) {
-  const records = [];
-  let filesProcessed = 0;
-  const startTime = Date.now();
-  let lastLogTime = startTime;
-  
-  // DEBUG: Track all unique choice names found
-  const uniqueChoices = new Set();
-  const choiceCounts = {};
-
-  const readWithTimeout = async (file, timeoutMs = 30000) => {
-    return Promise.race([
-      binaryReader.readBinaryFile(file),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Read timeout')), timeoutMs)
-      )
-    ]);
-  };
-
-  for (const file of files) {
-    const fileStart = Date.now();
-    try {
-      const result = await readWithTimeout(file, 30000);
-      const fileRecords = result.records || [];
-
-      for (const record of fileRecords) {
-        if (record.event_type !== 'exercised') continue;
-        
-        const choice = record.choice || '';
-        
-        // DEBUG: Collect all unique choice names
-        uniqueChoices.add(choice);
-        choiceCounts[choice] = (choiceCounts[choice] || 0) + 1;
-        
-        // Only collect DsoRules_CloseVoteRequest - this specifically closes VoteRequests
-        // Do NOT include DsoRules_ExecuteConfirmedAction as that's used for many other 
-        // governance actions (amulet price updates, validator confirmations, etc.)
-        if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
-          records.push(record);
-          
-          // DEBUG: Log first few events with full structure to verify exercise_result/outcome
-          if (records.length <= 3) {
-            console.log(`\n   🔍 DEBUG: DsoRules_CloseVoteRequest event #${records.length}:`);
-            console.log(`      - choice: ${record.choice}`);
-            console.log(`      - contract_id: ${record.contract_id}`);
-            console.log(`      - Top-level keys: ${Object.keys(record).join(', ')}`);
-            console.log(`      - Has exercise_result: ${!!record.exercise_result}`);
-            console.log(`      - Has exercise_argument: ${!!record.exercise_argument}`);
-            console.log(`      - Has payload: ${!!record.payload}`);
-            if (record.exercise_result) {
-              console.log(`      - exercise_result keys: ${Object.keys(record.exercise_result).join(', ')}`);
-              console.log(`      - exercise_result.outcome: ${JSON.stringify(record.exercise_result.outcome)}`);
-            }
-            if (record.exercise_argument) {
-              console.log(`      - exercise_argument keys: ${Object.keys(record.exercise_argument).join(', ')}`);
-            }
-            if (record.payload) {
-              console.log(`      - payload keys: ${Object.keys(record.payload).join(', ')}`);
-              if (record.payload.exercise_result) {
-                console.log(`      - payload.exercise_result keys: ${Object.keys(record.payload.exercise_result).join(', ')}`);
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`   ⚠️ Skipping DsoRules file due to read error: ${file} (${err?.message || err})`);
-    } finally {
-      filesProcessed++;
-
-      if (indexingProgress) {
-        indexingProgress = {
-          ...indexingProgress,
-          current: filesProcessed,
-          total: files.length,
-          records: records.length,
-        };
-      }
-
-      const now = Date.now();
-      if (filesProcessed % 100 === 0 || (now - lastLogTime > 5000)) {
-        const elapsed = (now - startTime) / 1000;
-        const pct = ((filesProcessed / files.length) * 100).toFixed(0);
-
-        // Surface "are we even seeing vote/close-ish choices" early (not only at the very end)
-        const voteRelatedSoFar = [...uniqueChoices].filter((c) => {
-          const cl = String(c || '').toLowerCase();
-          return (
-            cl.includes('vote') ||
-            cl.includes('close') ||
-            cl.includes('expire') ||
-            cl.includes('reject') ||
-            cl.includes('accept')
-          );
-        });
-
-        console.log(
-          `   📂 [${pct}%] ${filesProcessed}/${files.length} DsoRules files | ${records.length} close events | ${elapsed.toFixed(1)}s | ${voteRelatedSoFar.length} vote/close-ish choices seen`
-        );
-        if (voteRelatedSoFar.length === 0) {
-          console.log('      (none yet — likely different choice naming, or closes are not in DsoRules for this migration)');
-        }
-
-        lastLogTime = now;
-      }
-
-      const tookMs = Date.now() - fileStart;
-      if (tookMs > 15000) {
-        console.log(`   🐢 Slow DsoRules file: ${file} (${(tookMs / 1000).toFixed(1)}s)`);
-      }
-    }
-  }
-
-  // DEBUG: Log all unique choice names found in DsoRules
-  console.log(`\n   🔍 DEBUG: Found ${uniqueChoices.size} unique choice names in DsoRules files:`);
-  const sortedChoices = Object.entries(choiceCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 50); // Top 50 choices
-  for (const [choice, count] of sortedChoices) {
-    console.log(`      - ${choice}: ${count} events`);
-  }
-  
-  // Also log any choices containing "vote" or "close" (case-insensitive)
-  const voteRelated = [...uniqueChoices].filter(c => 
-    c.toLowerCase().includes('vote') || 
-    c.toLowerCase().includes('close') ||
-    c.toLowerCase().includes('expire') ||
-    c.toLowerCase().includes('reject') ||
-    c.toLowerCase().includes('accept')
-  );
-  if (voteRelated.length > 0) {
-    console.log(`\n   🗳️ DEBUG: Vote/Close-related choices found:`);
-    for (const choice of voteRelated) {
-      console.log(`      - ${choice}: ${choiceCounts[choice]} events`);
-    }
-  } else {
-    console.log(`   ⚠️ DEBUG: No vote/close-related choices found in DsoRules!`);
-  }
-
-  return { records, filesScanned: filesProcessed };
-}
+// NOTE: scanFilesForDsoCloseVoteRequests removed - no longer needed.
+// DsoRules_CloseVoteRequest events are now detected within the main exercised scan
+// via consuming === true filtering on VoteRequest template.
