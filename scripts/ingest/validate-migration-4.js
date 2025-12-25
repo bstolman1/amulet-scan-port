@@ -182,14 +182,28 @@ function findMigration4Files() {
     scanAllFiles(RAW_DIR);
   }
   
-  // Debug: show sample filenames
-  if (verbose || (files.updates.length > 0 || files.events.length > 0)) {
-    console.log('   Sample filenames:');
-    for (const f of files.updates.slice(0, 3)) {
-      console.log(`      ${path.basename(f)}`);
+  // Debug: show sample paths and extracted dates
+  console.log('   Sample files with extracted dates:');
+  for (const f of files.updates.slice(0, 5)) {
+    const extracted = extractTimestampFromFilename(f);
+    const dateStr = extracted ? extracted.toISOString().substring(0, 10) : 'FAILED';
+    console.log(`      ${dateStr} ← ${f.replace(RAW_DIR, '...')}`);
+  }
+  
+  // Count files per day directory
+  const dayDirs = {};
+  for (const f of [...files.updates, ...files.events]) {
+    const dayMatch = f.match(/day=(\d{1,2})/);
+    const monthMatch = f.match(/month=(\d{1,2})/);
+    if (dayMatch && monthMatch) {
+      const key = `12-${dayMatch[1].padStart(2, '0')}`;
+      dayDirs[key] = (dayDirs[key] || 0) + 1;
     }
-    for (const f of files.events.slice(0, 3)) {
-      console.log(`      ${path.basename(f)}`);
+  }
+  if (Object.keys(dayDirs).length > 0) {
+    console.log('   Files per day directory:');
+    for (const [day, count] of Object.entries(dayDirs).sort()) {
+      console.log(`      day=${day}: ${count.toLocaleString()} files`);
     }
   }
   
@@ -198,42 +212,11 @@ function findMigration4Files() {
 
 /**
  * Extract timestamp from filename - supports multiple formats
+ * Priority: path-based (most reliable) > ISO date > Unix timestamp
  */
 function extractTimestampFromFilename(filePath) {
-  const basename = path.basename(filePath);
-  
-  // Try ISO timestamp: updates-2025-12-10T12-30-00Z.pb.zst
-  const isoMatch = basename.match(/(\d{4}-\d{2}-\d{2}T[\d-]+Z)/);
-  if (isoMatch) {
-    const ts = isoMatch[1].replace(/-(\d{2})-(\d{2})-(\d{2})Z/, ':$1:$2:$3Z');
-    return new Date(ts);
-  }
-  
-  // Try date only: updates-2025-12-10.pb.zst
-  const dateMatch = basename.match(/(\d{4}-\d{2}-\d{2})/);
-  if (dateMatch) {
-    return new Date(dateMatch[1] + 'T00:00:00Z');
-  }
-  
-  // Try Unix timestamp: updates-1733875200000.pb.zst or updates-mig-4-1733875200000.pb.zst
-  const unixMatch = basename.match(/(\d{13})/);
-  if (unixMatch) {
-    const ts = parseInt(unixMatch[1], 10);
-    if (ts > 1700000000000 && ts < 1800000000000) { // Reasonable range 2023-2027
-      return new Date(ts);
-    }
-  }
-  
-  // Try Unix seconds: updates-1733875200.pb.zst
-  const unixSecsMatch = basename.match(/-(\d{10})\./);
-  if (unixSecsMatch) {
-    const ts = parseInt(unixSecsMatch[1], 10) * 1000;
-    if (ts > 1700000000000 && ts < 1800000000000) {
-      return new Date(ts);
-    }
-  }
-  
-  // Try path-based date: .../year=2025/month=12/day=10/...
+  // PRIORITY 1: Path-based date (most reliable for Hive-style partitioning)
+  // Matches: .../year=2025/month=12/day=10/...
   const yearMatch = filePath.match(/year=(\d{4})/);
   const monthMatch = filePath.match(/month=(\d{1,2})/);
   const dayMatch = filePath.match(/day=(\d{1,2})/);
@@ -242,6 +225,43 @@ function extractTimestampFromFilename(filePath) {
     const m = monthMatch[1].padStart(2, '0');
     const d = dayMatch[1].padStart(2, '0');
     return new Date(`${y}-${m}-${d}T00:00:00Z`);
+  }
+  
+  const basename = path.basename(filePath);
+  
+  // PRIORITY 2: ISO timestamp in filename
+  // Matches: updates-2025-12-10T12-30-00Z.pb.zst
+  const isoMatch = basename.match(/(\d{4}-\d{2}-\d{2}T[\d-]+Z)/);
+  if (isoMatch) {
+    const ts = isoMatch[1].replace(/-(\d{2})-(\d{2})-(\d{2})Z/, ':$1:$2:$3Z');
+    return new Date(ts);
+  }
+  
+  // PRIORITY 3: Date only in filename
+  // Matches: updates-2025-12-10.pb.zst
+  const dateMatch = basename.match(/(\d{4}-\d{2}-\d{2})/);
+  if (dateMatch) {
+    return new Date(dateMatch[1] + 'T00:00:00Z');
+  }
+  
+  // PRIORITY 4: Unix timestamp (milliseconds)
+  // Matches: updates-1733875200000.pb.zst
+  const unixMatch = basename.match(/(\d{13})/);
+  if (unixMatch) {
+    const ts = parseInt(unixMatch[1], 10);
+    if (ts > 1700000000000 && ts < 1800000000000) {
+      return new Date(ts);
+    }
+  }
+  
+  // PRIORITY 5: Unix timestamp (seconds)
+  // Matches: updates-1733875200.pb.zst
+  const unixSecsMatch = basename.match(/-(\d{10})\./);
+  if (unixSecsMatch) {
+    const ts = parseInt(unixSecsMatch[1], 10) * 1000;
+    if (ts > 1700000000000 && ts < 1800000000000) {
+      return new Date(ts);
+    }
   }
   
   return null;
