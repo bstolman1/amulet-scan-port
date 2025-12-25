@@ -733,21 +733,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         indexingProgress = { ...indexingProgress, phase: 'scan:archived', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
 
-        // CRITICAL: Also scan DsoRules files for DsoRules_CloseVoteRequest events
-        // VoteRequests are typically closed via DsoRules_CloseVoteRequest, not directly on VoteRequest
-        const dsoRulesFiles = await getFilesForTemplate('DsoRules');
-        if (dsoRulesFiles.length > 0) {
-          console.log(`   📂 Found ${dsoRulesFiles.length} files containing DsoRules events`);
-          console.log('   Scanning DsoRules files for CloseVoteRequest events...');
-          indexingProgress = { ...indexingProgress, phase: 'scan:dso_close', current: 0, total: dsoRulesFiles.length, records: 0 };
-          const dsoCloseResult = await scanFilesForDsoCloseVoteRequests(dsoRulesFiles);
-          console.log(`   Found ${dsoCloseResult.records.length} DsoRules_CloseVoteRequest events`);
-          
-          // Merge DsoRules close events into exercisedResult
-          // These events contain the VoteRequest contract_id being closed and the outcome
-          exercisedResult.records.push(...dsoCloseResult.records);
-          exercisedResult.filesScanned += dsoCloseResult.filesScanned;
-        }
+        // NOTE: DsoRules_CloseVoteRequest scanning removed - status is derived from
+        // vote counts in the VoteRequest payload (9-of-13 SV supermajority threshold).
+        // DsoRules closing events were found absent/unreliable in backfill data.
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
