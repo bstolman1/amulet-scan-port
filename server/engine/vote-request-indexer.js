@@ -1538,19 +1538,24 @@ async function scanFilesForVoteRequests(files, eventType) {
       const fileRecords = result.records || [];
 
       for (const record of fileRecords) {
-        // Match only the actual VoteRequest template, not VoteRequestResult, VoteRequestTrackingCid, etc.
-        // Template IDs look like: "Splice.DsoRules:VoteRequest"
-        if (!record.template_id?.endsWith(':VoteRequest')) continue;
-
         if (eventType === 'created' && record.event_type === 'created') {
-          records.push(record);
+          // Match only the actual VoteRequest template, not VoteRequestResult, VoteRequestTrackingCid, etc.
+          // Template IDs look like: "Splice.DsoRules:VoteRequest"
+          if (record.template_id?.endsWith(':VoteRequest')) {
+            records.push(record);
+          }
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
           // GOVERNANCE CLOSE EVENT MODEL:
-          // A proposal is finalized IFF there exists a consuming exercised event 
+          // A proposal is finalized IFF there exists a consuming exercised event on DsoRules
           // that represents a governance close, specifically:
           // - DsoRules_CloseVoteRequest
           // - DsoRules_CloseVoteRequestResult
+          // These events come from :DsoRules template, NOT :VoteRequest template!
           // All other consuming exercises are lifecycle/migration events and MUST be ignored.
+          
+          // Only check DsoRules template for governance close events
+          if (!record.template_id?.endsWith(':DsoRules')) continue;
+          
           const consuming = record.consuming === true || record.consuming === 'true';
           const choice = String(record.choice || '');
           const isGovernanceClose = 
@@ -1620,20 +1625,21 @@ async function scanFilesForVoteRequests(files, eventType) {
 async function scanAllFilesForVoteRequests(eventType) {
   const filter = eventType === 'created'
     ? (e) => e.template_id?.endsWith(':VoteRequest') && e.event_type === 'created'
-      : (e) => {
-          if (e.event_type !== 'exercised') return false;
-          if (!e.template_id?.endsWith(':VoteRequest')) return false;
-
-          // GOVERNANCE CLOSE EVENT MODEL:
-          // Only DsoRules_CloseVoteRequest and DsoRules_CloseVoteRequestResult
-          // represent governance finality. All other consuming exercises are lifecycle events.
-          const consuming = e.consuming === true || e.consuming === 'true';
-          const choice = String(e.choice || '');
-          const isGovernanceClose = 
-            choice === 'DsoRules_CloseVoteRequest' || 
-            choice === 'DsoRules_CloseVoteRequestResult';
-          return consuming && isGovernanceClose;
-        };
+    : (e) => {
+        if (e.event_type !== 'exercised') return false;
+        // GOVERNANCE CLOSE EVENT MODEL:
+        // Close events come from :DsoRules template, NOT :VoteRequest template!
+        // Only DsoRules_CloseVoteRequest and DsoRules_CloseVoteRequestResult
+        // represent governance finality. All other consuming exercises are lifecycle events.
+        if (!e.template_id?.endsWith(':DsoRules')) return false;
+        
+        const consuming = e.consuming === true || e.consuming === 'true';
+        const choice = String(e.choice || '');
+        const isGovernanceClose = 
+          choice === 'DsoRules_CloseVoteRequest' || 
+          choice === 'DsoRules_CloseVoteRequestResult';
+        return consuming && isGovernanceClose;
+      };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
   return binaryReader.streamRecords(DATA_PATH, 'events', {
