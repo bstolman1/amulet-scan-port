@@ -977,6 +977,30 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     };
 
     // ============================================================
+    // PAYLOAD SHAPE PROBE: Detect payload structure before normalization
+    // ============================================================
+    const detectPayloadShape = (payload) => {
+      if (!payload) return 'null';
+      if (payload.action && payload.requester) return 'normalized';
+      if (payload.record?.fields && Array.isArray(payload.record.fields)) return 'daml_record';
+      return 'unknown';
+    };
+    
+    const shapeStats = {
+      normalized: 0,
+      daml_record: 0,
+      unknown: 0,
+      null: 0,
+    };
+    const shapeSamples = {
+      normalized: [],
+      daml_record: [],
+      unknown: [],
+      null: [],
+    };
+    const MAX_SAMPLES = 5;
+
+    // ============================================================
     // DIAGNOSTIC LOGGING: Track payload extraction during build
     // ============================================================
     let nullPayloadCount = 0;
@@ -985,6 +1009,38 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const nullPayloadSamples = [];
     
     for (const event of createdResult.records) {
+      // ============================================================
+      // PAYLOAD SHAPE PROBE: Detect and track shape before normalization
+      // ============================================================
+      const shape = detectPayloadShape(event.payload);
+      shapeStats[shape]++;
+      
+      // Collect samples for each shape (max 5 each)
+      if (shapeSamples[shape].length < MAX_SAMPLES) {
+        const sample = {
+          event_id: event.event_id,
+          contract_id: event.contract_id,
+          trackingCid: event.payload?.trackingCid || event.payload?.record?.fields?.[6]?.value?.contractId || null,
+          shape,
+        };
+        
+        // Add shape-specific structure info
+        if (shape === 'normalized') {
+          sample.topLevelKeys = Object.keys(event.payload || {}).slice(0, 10);
+        } else if (shape === 'daml_record') {
+          // Extract field labels from DAML record structure
+          sample.fieldLabels = (event.payload?.record?.fields || [])
+            .map((f, i) => f.label || `field_${i}`)
+            .slice(0, 10);
+          sample.fieldCount = event.payload?.record?.fields?.length || 0;
+        } else if (shape === 'unknown' && event.payload) {
+          sample.topLevelKeys = Object.keys(event.payload).slice(0, 10);
+          sample.payloadType = typeof event.payload;
+        }
+        
+        shapeSamples[shape].push(sample);
+      }
+      
       // NORMALIZE PAYLOAD EARLY - handle both DAML record format and normalized format
       const normalizedPayload = normalizePayload(event.payload);
       
@@ -1313,6 +1369,33 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       } finally {
         const current = inserted + updated;
         indexingProgress = { ...indexingProgress, current, records: current };
+      }
+    }
+
+    // ============================================================
+    // PAYLOAD SHAPE PROBE SUMMARY
+    // ============================================================
+    const shapeTotal = shapeStats.normalized + shapeStats.daml_record + shapeStats.unknown + shapeStats.null;
+    console.log(`\n   🔬 PAYLOAD SHAPE PROBE SUMMARY:`);
+    console.log(`      Total VoteRequest CREATED events: ${shapeTotal}`);
+    console.log(`      - normalized:   ${shapeStats.normalized} (${(shapeStats.normalized / shapeTotal * 100).toFixed(1)}%)`);
+    console.log(`      - daml_record:  ${shapeStats.daml_record} (${(shapeStats.daml_record / shapeTotal * 100).toFixed(1)}%)`);
+    console.log(`      - unknown:      ${shapeStats.unknown} (${(shapeStats.unknown / shapeTotal * 100).toFixed(1)}%)`);
+    console.log(`      - null:         ${shapeStats.null} (${(shapeStats.null / shapeTotal * 100).toFixed(1)}%)`);
+    
+    // Log samples for each shape
+    for (const shapeType of ['normalized', 'daml_record', 'unknown', 'null']) {
+      if (shapeSamples[shapeType].length > 0) {
+        console.log(`\n      📋 ${shapeType.toUpperCase()} samples (${shapeSamples[shapeType].length}):`);
+        shapeSamples[shapeType].forEach((sample, i) => {
+          console.log(`         ${i + 1}. event_id: ${sample.event_id}`);
+          console.log(`            contract_id: ${sample.contract_id}`);
+          if (sample.trackingCid) console.log(`            trackingCid: ${sample.trackingCid}`);
+          if (sample.topLevelKeys) console.log(`            topLevelKeys: [${sample.topLevelKeys.join(', ')}]`);
+          if (sample.fieldLabels) console.log(`            fieldLabels: [${sample.fieldLabels.join(', ')}]`);
+          if (sample.fieldCount !== undefined) console.log(`            fieldCount: ${sample.fieldCount}`);
+          if (sample.payloadType) console.log(`            payloadType: ${sample.payloadType}`);
+        });
       }
     }
 
