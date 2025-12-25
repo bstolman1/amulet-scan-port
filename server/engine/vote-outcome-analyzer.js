@@ -10,7 +10,7 @@
  */
 
 import { query, queryOne } from '../duckdb/connection.js';
-import { getSvCountAt, getActiveSvsAt, calculateVotingThreshold } from './vote-request-indexer.js';
+import { getSvCountAt, getActiveSvsAt, calculateVotingThreshold } from './sv-indexer.js';
 
 /**
  * Analyze a single proposal's outcome using 2/3 threshold
