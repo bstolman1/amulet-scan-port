@@ -1506,6 +1506,7 @@ export function getIndexingProgress() {
 async function scanFilesForVoteRequests(files, eventType) {
   const records = [];
   let filesProcessed = 0;
+  let missingConsumingCount = 0; // Track exercised events lacking consuming flag
   const startTime = Date.now();
   let lastLogTime = startTime;
 
@@ -1532,13 +1533,19 @@ async function scanFilesForVoteRequests(files, eventType) {
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
           // CONSUMING EXERCISED EVENT MODEL:
           // Finality is determined ONLY by consuming === true.
-          // If consuming flag is missing/undefined, treat as non-terminal.
+          // If consuming flag is missing/undefined, treat as non-terminal and log.
           const consuming = record.consuming === true || record.consuming === 'true';
           
           if (consuming) {
             records.push(record);
+          } else if (record.consuming === undefined || record.consuming === null) {
+            // GUARDRAIL: Log exercised events lacking consuming flag for visibility
+            missingConsumingCount++;
+            if (missingConsumingCount <= 5) {
+              console.warn(`   ⚠️ Exercised event lacks 'consuming' flag (treated as non-terminal): ${record.contract_id} choice=${record.choice}`);
+            }
           }
-          // Note: consuming=false or consuming=undefined/null means non-consuming - skip
+          // Note: consuming=false means non-consuming exercise - skip silently
         }
       }
     } catch (err) {
@@ -1573,8 +1580,12 @@ async function scanFilesForVoteRequests(files, eventType) {
       }
     }
   }
+  // Log summary of missing consuming flags
+  if (missingConsumingCount > 0) {
+    console.warn(`   ⚠️ Total exercised events lacking 'consuming' flag: ${missingConsumingCount} (treated as non-terminal)`);
+  }
 
-  return { records, filesScanned: filesProcessed };
+  return { records, filesScanned: filesProcessed, missingConsumingCount };
 }
 
 /**
