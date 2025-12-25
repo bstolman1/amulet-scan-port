@@ -766,7 +766,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // The exercised event scanner already filters for consuming === true.
     const archivedEventsMap = new Map();
     let closedViaDsoRules = 0;
-    let closedViaDirectArchive = 0;
     
     for (const record of exercisedResult.records) {
       // IMPORTANT: The scanner already guarantees consuming === true for all these records.
@@ -820,23 +819,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           });
           closedViaDsoRules++;
         }
-      } else if (record.contract_id) {
-        // Direct consuming exercised event on the VoteRequest contract itself.
-        // The contract_id IS the proposal root.
-        archivedEventsMap.set(record.contract_id, {
-          ...record,
-          close_source: 'direct_archive',
-        });
-        closedViaDirectArchive++;
       }
+      // NOTE: No else branch - we ONLY accept DsoRules governance close events.
+      // Direct consuming exercised events on VoteRequest contracts are lifecycle/migration
+      // events and should NOT be treated as governance finality.
     }
     const closedContractIds = new Set(archivedEventsMap.keys());
     
-    // 3️⃣ TERMINAL MAP SUMMARY
+    // 3️⃣ TERMINAL MAP SUMMARY (governance close events only)
     console.log(`   [VoteRequestIndexer] Terminal exercised map built:`, {
       terminalContracts: closedContractIds.size,
-      viaDsoRules: closedViaDsoRules,
-      viaDirect: closedViaDirectArchive
+      viaDsoRules: closedViaDsoRules
     });
 
     const now = new Date();
@@ -1552,18 +1545,29 @@ async function scanFilesForVoteRequests(files, eventType) {
         if (eventType === 'created' && record.event_type === 'created') {
           records.push(record);
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
-          // CONSUMING EXERCISED EVENT MODEL:
-          // Finality is determined ONLY by consuming === true.
-          // If consuming flag is missing/undefined, treat as non-terminal and log.
+          // GOVERNANCE CLOSE EVENT MODEL:
+          // A proposal is finalized IFF there exists a consuming exercised event 
+          // that represents a governance close, specifically:
+          // - DsoRules_CloseVoteRequest
+          // - DsoRules_CloseVoteRequestResult
+          // All other consuming exercises are lifecycle/migration events and MUST be ignored.
           const consuming = record.consuming === true || record.consuming === 'true';
+          const choice = String(record.choice || '');
+          const isGovernanceClose = 
+            choice === 'DsoRules_CloseVoteRequest' || 
+            choice === 'DsoRules_CloseVoteRequestResult';
           
-          if (consuming) {
+          if (consuming && isGovernanceClose) {
+            // This is a governance close event - include it
             records.push(record);
+          } else if (consuming && !isGovernanceClose) {
+            // GUARDRAIL: Log non-governance consuming exercises (lifecycle/migration)
+            console.debug(`   [VoteRequestIndexer] Ignoring consuming exercised event (non-governance close): contract_id=${record.contract_id}, choice=${choice}`);
           } else if (record.consuming === undefined || record.consuming === null) {
-            // GUARDRAIL: Log exercised events lacking consuming flag for visibility
+            // Log exercised events lacking consuming flag
             missingConsumingCount++;
             if (missingConsumingCount <= 5) {
-              console.warn(`   ⚠️ Exercised event lacks 'consuming' flag (treated as non-terminal): ${record.contract_id} choice=${record.choice}`);
+              console.warn(`   ⚠️ Exercised event lacks 'consuming' flag: ${record.contract_id} choice=${choice}`);
             }
           }
           // Note: consuming=false means non-consuming exercise - skip silently
@@ -1616,15 +1620,20 @@ async function scanFilesForVoteRequests(files, eventType) {
 async function scanAllFilesForVoteRequests(eventType) {
   const filter = eventType === 'created'
     ? (e) => e.template_id?.endsWith(':VoteRequest') && e.event_type === 'created'
-    : (e) => {
-        if (e.event_type !== 'exercised') return false;
-        if (!e.template_id?.endsWith(':VoteRequest')) return false;
+      : (e) => {
+          if (e.event_type !== 'exercised') return false;
+          if (!e.template_id?.endsWith(':VoteRequest')) return false;
 
-        // CONSUMING EXERCISED EVENT MODEL:
-        // Finality is determined ONLY by consuming === true.
-        const consuming = e.consuming === true || e.consuming === 'true';
-        return consuming;
-      };
+          // GOVERNANCE CLOSE EVENT MODEL:
+          // Only DsoRules_CloseVoteRequest and DsoRules_CloseVoteRequestResult
+          // represent governance finality. All other consuming exercises are lifecycle events.
+          const consuming = e.consuming === true || e.consuming === 'true';
+          const choice = String(e.choice || '');
+          const isGovernanceClose = 
+            choice === 'DsoRules_CloseVoteRequest' || 
+            choice === 'DsoRules_CloseVoteRequestResult';
+          return consuming && isGovernanceClose;
+        };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
   return binaryReader.streamRecords(DATA_PATH, 'events', {
