@@ -19,6 +19,7 @@ import {
   isTemplateIndexPopulated,
   getTemplateIndexStats
 } from './template-file-index.js';
+import { getSvCountAt } from './sv-indexer.js';
 
 let indexingInProgress = false;
 let indexingProgress = null;
@@ -1061,18 +1062,22 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
 
       // ============================================================
-      // STATUS DETECTION: Votes Array with SV Threshold
+      // STATUS DETECTION: Votes Array with DYNAMIC SV Threshold
       // ============================================================
       // Canton/Splice governance rules:
-      // - 13 SV (Super Validator) nodes total
-      // - Need 9 votes (supermajority ~69%) for approval OR rejection
-      // - Executed: ≥9 accept votes
-      // - Rejected: ≥9 reject votes
+      // - SV (Super Validator) count changes over time via onboard/offboard
+      // - Need 2/3 supermajority (ceil(svCount * 2/3)) for approval OR rejection
+      // - Executed: ≥ threshold accept votes
+      // - Rejected: ≥ threshold reject votes
       // - Expired: Deadline passed without reaching either threshold
       // ============================================================
       
-      const TOTAL_SV_NODES = 13;
-      const THRESHOLD = 9; // Supermajority required for both approve and reject
+      // Get dynamic SV count at the time of voting
+      const voteTime = voteBeforeDate || (event.effective_at ? new Date(event.effective_at) : now);
+      const svCountAtVote = await getSvCountAt(voteTime);
+      
+      // Use 2/3 majority threshold - fallback to 9/13 if SV index not populated
+      const THRESHOLD = svCountAtVote > 0 ? Math.ceil((svCountAtVote * 2) / 3) : 9;
       
       const totalVotesCast = finalVoteCount;
       
