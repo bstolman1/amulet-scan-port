@@ -855,17 +855,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: createdResult.records.length, records: 0 };
     let upserted = 0;
     
-    // Track status counts (facts only, no heuristics)
+    // Track status counts (ledger-pure model)
+    // - finalized: has consuming exercised event (outcome determined by choice)
+    // - in_progress: no consuming exercise, before deadline
+    // - expired_unfinalized: no consuming exercise, after deadline (timed out)
     const statusStats = {
-      final: 0,        // Has consuming exercised event
-      in_progress: 0,  // No consuming exercise, before deadline
-      expired: 0,      // No consuming exercise, after deadline
-      // Breakdown of final outcomes
-      executed: 0,
-      rejected: 0,
-      expiredFinal: 0, // Final via consuming exercise with expire choice
-      totalAcceptVotes: 0,   // For display only
-      totalRejectVotes: 0    // For display only
+      finalized: 0,           // Has consuming exercised event
+      in_progress: 0,         // No consuming exercise, before deadline
+      expired_unfinalized: 0, // No consuming exercise, after deadline
+      // Breakdown of finalized outcomes (mutually exclusive)
+      executed: 0,            // Finalized with accept choice
+      rejected: 0,            // Finalized with reject choice
+      expired_final: 0,       // Finalized with expire choice
+      // Vote totals (for display only)
+      totalAcceptVotes: 0,
+      totalRejectVotes: 0
     };
     
     // 5️⃣ SAMPLE FINALIZED PROPOSALS (first 3)
@@ -1139,8 +1143,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
       // STATUS DETERMINATION: Based on consuming exercised events only
       if (archivedEvent) {
-        // A consuming exercised event exists on this proposal root - proposal is FINAL
-        statusStats.final++;
+        // A consuming exercised event exists on this proposal root - proposal is FINALIZED
+        statusStats.finalized++;
         
         // Determine outcome from (template_id, choice)
         const choice = String(archivedEvent.choice || '').toLowerCase();
@@ -1157,7 +1161,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             statusStats.rejected++;
           } else if (tagLower.includes('expired') || tagLower === 'vro_expired') {
             status = 'expired';
-            statusStats.expiredFinal++;
+            statusStats.expired_final++;
           } else {
             // Unknown outcome tag - use choice
             status = 'executed'; // Default for unknown final
@@ -1173,7 +1177,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             statusStats.rejected++;
           } else if (choice.includes('expire')) {
             status = 'expired';
-            statusStats.expiredFinal++;
+            statusStats.expired_final++;
           } else {
             // Unknown choice - default to executed (it was finalized)
             status = 'executed';
@@ -1192,10 +1196,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           });
         }
       } else {
-        // No consuming exercised event - not final
+        // No consuming exercised event - not finalized
         if (isExpired) {
           status = 'expired';
-          statusStats.expired++;
+          statusStats.expired_unfinalized++;
         } else {
           status = 'in_progress';
           statusStats.in_progress++;
@@ -1421,16 +1425,16 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n✅ [VoteRequestIndexer] Index built: ${upserted} proposals indexed in ${elapsed}s`);
     
-    // 4️⃣ STATUS CLASSIFICATION SUMMARY (facts only)
+    // 4️⃣ STATUS CLASSIFICATION SUMMARY (ledger-pure model)
     console.log(`   [VoteRequestIndexer] Proposal status summary:`, {
-      final: statusStats.final,
+      finalized: statusStats.finalized,
       inProgress: statusStats.in_progress,
-      expired: statusStats.expired
+      expiredUnfinalized: statusStats.expired_unfinalized
     });
-    console.log(`   [VoteRequestIndexer] Final outcome breakdown:`, {
+    console.log(`   [VoteRequestIndexer] Finalized outcome breakdown:`, {
       executed: statusStats.executed,
       rejected: statusStats.rejected,
-      expiredFinal: statusStats.expiredFinal
+      expiredFinal: statusStats.expired_final
     });
     
     // 5️⃣ SAMPLE FINALIZED PROPOSALS (debug level)
