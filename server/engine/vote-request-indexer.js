@@ -688,7 +688,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
   indexingInProgress = true;
   indexingProgress = { phase: 'starting', current: 0, total: 0, records: 0, startedAt: new Date().toISOString() };
-  console.log('\n🗳️ Starting VoteRequest index build...');
+  
+  // 1️⃣ MODEL BANNER - confirms the binary and model in use
+  console.log('\n🗳️ [VoteRequestIndexer] Starting index build...');
+  console.log('   Status model: FINAL iff consuming Exercised event exists on proposal root contract');
 
   try {
     const startTime = Date.now();
@@ -737,9 +740,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         indexingProgress = { ...indexingProgress, phase: 'scan:archived', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
 
-        // NOTE: DsoRules_CloseVoteRequest scanning removed - status is derived from
-        // vote counts in the VoteRequest payload (9-of-13 SV supermajority threshold).
-        // DsoRules closing events were found absent/unreliable in backfill data.
+        // Status determined by consuming exercised events only
       }
     } else {
       // SLOW PATH: Full scan (template index not built yet)
@@ -752,8 +753,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       exercisedResult = await scanAllFilesForVoteRequests('exercised');
     }
 
-    console.log(`   Found ${createdResult.records.length} VoteRequest created events`);
-    console.log(`   Found ${exercisedResult.records.length} VoteRequest exercised/closed events total`);
+    // 2️⃣ EXERCISED SCAN SUMMARY
+    const missingCount = exercisedResult.missingConsumingCount || 0;
+    console.log(`   [VoteRequestIndexer] Exercised scan summary:`, {
+      totalCreated: createdResult.records.length,
+      consumingExercised: exercisedResult.records.length,
+      missingConsumingFlag: missingCount
+    });
 
     // Build map of proposal root contract_id -> consuming exercised event
     // This is keyed by the proposal root contract_id, not by any other identifier.
@@ -826,10 +832,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     }
     const closedContractIds = new Set(archivedEventsMap.keys());
     
-    console.log(`   📊 Close source breakdown:`);
-    console.log(`      - DsoRules_CloseVoteRequest: ${closedViaDsoRules}`);
-    console.log(`      - Direct VoteRequest archive: ${closedViaDirectArchive}`);
-    console.log(`      - Unique closed contracts: ${closedContractIds.size}`);
+    // 3️⃣ TERMINAL MAP SUMMARY
+    console.log(`   [VoteRequestIndexer] Terminal exercised map built:`, {
+      terminalContracts: closedContractIds.size,
+      viaDsoRules: closedViaDsoRules,
+      viaDirect: closedViaDirectArchive
+    });
 
     const now = new Date();
 
@@ -848,18 +856,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let inserted = 0;
     let updated = 0;
     
-    // Track status detection stats (based on consuming exercised events)
+    // Track status counts (facts only, no heuristics)
     const statusStats = {
+      final: 0,        // Has consuming exercised event
+      in_progress: 0,  // No consuming exercise, before deadline
+      expired: 0,      // No consuming exercise, after deadline
+      // Breakdown of final outcomes
       executed: 0,
       rejected: 0,
-      expired: 0,
-      in_progress: 0,
-      detectedByOutcome: 0,  // From DsoRules_CloseVoteRequestResult outcome tag
-      detectedByChoice: 0,   // From exercise choice name
-      detectedByExpiry: 0,   // From deadline without consuming exercise
+      expiredFinal: 0, // Final via consuming exercise with expire choice
       totalAcceptVotes: 0,   // For display only
       totalRejectVotes: 0    // For display only
     };
+    
+    // 5️⃣ SAMPLE FINALIZED PROPOSALS (first 3)
+    const sampleFinalized = [];
 
     // =============================================================================
     // PAYLOAD NORMALIZATION: Handle both DAML record format and normalized format
@@ -1129,62 +1140,68 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       // Get the archived/exercised event for this contract (if it exists)
       const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
       
-      // STATUS DETERMINATION: Based on consuming exercised events
+      // STATUS DETERMINATION: Based on consuming exercised events only
       if (archivedEvent) {
-        // A consuming exercised event exists - proposal is FINALIZED
+        // A consuming exercised event exists on this proposal root - proposal is FINAL
+        statusStats.final++;
+        
         // Determine outcome from (template_id, choice)
         const choice = String(archivedEvent.choice || '').toLowerCase();
-        
-        // Check for authoritative outcome from DsoRules_CloseVoteRequestResult first
         const outcomeTag = archivedEvent.dso_close_outcome_tag;
+        
+        // Map (template_id, choice) to outcome
         if (outcomeTag) {
           const tagLower = outcomeTag.toLowerCase();
           if (tagLower.includes('accepted') || tagLower === 'vro_accepted') {
             status = 'executed';
-            statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
+            statusStats.executed++;
           } else if (tagLower.includes('rejected') || tagLower === 'vro_rejected') {
             status = 'rejected';
-            statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
+            statusStats.rejected++;
           } else if (tagLower.includes('expired') || tagLower === 'vro_expired') {
             status = 'expired';
-            statusStats.detectedByOutcome = (statusStats.detectedByOutcome || 0) + 1;
+            statusStats.expiredFinal++;
+          } else {
+            // Unknown outcome tag - use choice
+            status = 'executed'; // Default for unknown final
+            statusStats.executed++;
+          }
+        } else {
+          // No outcome tag - use choice name
+          if (choice.includes('accept') && !choice.includes('reject')) {
+            status = 'executed';
+            statusStats.executed++;
+          } else if (choice.includes('reject')) {
+            status = 'rejected';
+            statusStats.rejected++;
+          } else if (choice.includes('expire')) {
+            status = 'expired';
+            statusStats.expiredFinal++;
+          } else {
+            // Unknown choice - default to executed (it was finalized)
+            status = 'executed';
+            statusStats.executed++;
           }
         }
         
-        // If outcome tag didn't resolve status, use the choice name
-        if (status === 'in_progress') {
-          if (choice.includes('accept') && !choice.includes('reject')) {
-            status = 'executed';
-            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
-          } else if (choice.includes('reject')) {
-            status = 'rejected';
-            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
-          } else if (choice.includes('expire')) {
-            status = 'expired';
-            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
-          } else if (choice === 'archive') {
-            // Generic archive - check if deadline passed to distinguish
-            if (isExpired) {
-              status = 'expired';
-            } else {
-              // Archived before deadline = likely executed (successful action)
-              status = 'executed';
-            }
-            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
-          } else {
-            // Unknown consuming choice - mark as finalized with unknown outcome
-            // Default to expired if past deadline, otherwise executed
-            status = isExpired ? 'expired' : 'executed';
-            statusStats.detectedByChoice = (statusStats.detectedByChoice || 0) + 1;
-          }
+        // Collect sample for debug logging
+        if (sampleFinalized.length < 3) {
+          sampleFinalized.push({
+            contract_id: event.contract_id,
+            choice: archivedEvent.choice,
+            template_id: archivedEvent.template_id || event.template_id,
+            effective_at: archivedEvent.effective_at || event.effective_at,
+            status
+          });
         }
       } else {
-        // No consuming exercised event - proposal may still be active or expired by time
+        // No consuming exercised event - not final
         if (isExpired) {
           status = 'expired';
-          statusStats.detectedByExpiry = (statusStats.detectedByExpiry || 0) + 1;
+          statusStats.expired++;
         } else {
           status = 'in_progress';
+          statusStats.in_progress++;
         }
       }
 
@@ -1408,15 +1425,27 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     `);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`✅ VoteRequest index built: ${inserted} inserted, ${updated} updated in ${elapsed}s`);
+    console.log(`\n✅ [VoteRequestIndexer] Index built in ${elapsed}s`);
     
-    // Log status detection statistics (based on consuming exercised events)
-    console.log(`   📊 Status detection breakdown (consuming exercised event model):`);
-    console.log(`      - Executed: ${statusStats.executed} (${statusStats.detectedByOutcome || 0} by outcome tag, ${statusStats.detectedByChoice || 0} by choice)`);
-    console.log(`      - Rejected: ${statusStats.rejected}`);
-    console.log(`      - Expired: ${statusStats.expired} (${statusStats.detectedByExpiry || 0} by deadline)`);
-    console.log(`      - In Progress: ${statusStats.in_progress}`);
-    console.log(`      - Votes (display only): ${statusStats.totalAcceptVotes} accepts, ${statusStats.totalRejectVotes} rejects`);
+    // 4️⃣ STATUS CLASSIFICATION SUMMARY (facts only)
+    console.log(`   [VoteRequestIndexer] Proposal status summary:`, {
+      final: statusStats.final,
+      inProgress: statusStats.in_progress,
+      expired: statusStats.expired
+    });
+    console.log(`   [VoteRequestIndexer] Final outcome breakdown:`, {
+      executed: statusStats.executed,
+      rejected: statusStats.rejected,
+      expiredFinal: statusStats.expiredFinal
+    });
+    
+    // 5️⃣ SAMPLE FINALIZED PROPOSALS (debug level)
+    if (sampleFinalized.length > 0) {
+      console.log(`   [VoteRequestIndexer] Sample finalized proposals:`);
+      sampleFinalized.forEach((p, i) => {
+        console.log(`      ${i + 1}. contract_id=${p.contract_id}, choice=${p.choice}, status=${p.status}`);
+      });
+    }
 
     // Persist successful build summary for audit trail
     const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
