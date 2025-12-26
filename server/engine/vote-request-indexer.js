@@ -229,9 +229,9 @@ export async function getVoteRequestStats() {
     // NEW: Executed is a separate flag tracking whether accepted proposals were executed via DsoRules
     const executed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE is_executed = true`);
     
-    // Legacy fields for backwards compatibility - map 'accepted' to 'executed' for old UI
-    const active = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'active' OR status = 'in_progress'`);
-    const historical = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status IN ('accepted', 'rejected', 'expired', 'historical')`);
+    // Legacy fields for backwards compatibility
+    const active = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status IN ('in_progress', 'pending')`);
+    const historical = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status IN ('accepted', 'rejected', 'expired')`);
     const closed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE is_closed = true`);
     
     return {
@@ -288,10 +288,13 @@ export async function getCombinedGovernanceStats() {
   return {
     voteRequestBacked: {
       total: voteRequestStats.total,
-      executed: voteRequestStats.executed,
+      // NEW: Use 'accepted' as primary status
+      accepted: voteRequestStats.accepted,
       rejected: voteRequestStats.rejected,
       expired: voteRequestStats.expired,
       inProgress: voteRequestStats.inProgress,
+      // Legacy: executed now means "accepted AND executed via DsoRules"
+      executed: voteRequestStats.executed,
     },
     directDsoRules: {
       total: directStats.total,
@@ -299,7 +302,8 @@ export async function getCombinedGovernanceStats() {
     },
     combined: {
       total: voteRequestStats.total + directStats.total,
-      finalized: voteRequestStats.executed + voteRequestStats.rejected + voteRequestStats.expired + directStats.total,
+      // Finalized = accepted + rejected + expired (vote deadline passed)
+      finalized: voteRequestStats.accepted + voteRequestStats.rejected + voteRequestStats.expired + directStats.total,
     }
   };
 }
@@ -331,11 +335,18 @@ export async function getLastSuccessfulBuild() {
  */
 export async function queryVoteRequests({ limit = 100, status = 'all', offset = 0 } = {}) {
   let whereClause = '';
-  if (status === 'active') {
-    whereClause = "WHERE status IN ('active', 'in_progress')";
-  } else if (status === 'historical') {
-    // Historical = completed votes
-    whereClause = "WHERE status IN ('executed', 'rejected', 'expired', 'historical')";
+  if (status === 'active' || status === 'in_progress' || status === 'pending') {
+    // Active/pending = vote deadline not yet passed
+    whereClause = "WHERE status IN ('in_progress', 'pending')";
+  } else if (status === 'historical' || status === 'completed') {
+    // Historical/completed = vote deadline passed (accepted, rejected, expired)
+    whereClause = "WHERE status IN ('accepted', 'rejected', 'expired')";
+  } else if (status === 'accepted') {
+    whereClause = "WHERE status = 'accepted'";
+  } else if (status === 'rejected') {
+    whereClause = "WHERE status = 'rejected'";
+  } else if (status === 'expired') {
+    whereClause = "WHERE status = 'expired'";
   }
 
   const results = await query(`
@@ -388,17 +399,19 @@ export async function queryVoteRequests({ limit = 100, status = 'all', offset = 
 export async function queryCanonicalProposals({ limit = 100, status = 'all', offset = 0, humanOnly = true } = {}) {
   let whereConditions = [];
   
-  // Status filter
-  if (status === 'active' || status === 'in_progress') {
-    whereConditions.push("status IN ('active', 'in_progress')");
-  } else if (status === 'executed' || status === 'approved') {
-    whereConditions.push("status = 'executed'");
+  // Status filter - using NEW model: in_progress, accepted, rejected, expired
+  if (status === 'active' || status === 'in_progress' || status === 'pending') {
+    whereConditions.push("status IN ('in_progress', 'pending')");
+  } else if (status === 'accepted' || status === 'executed' || status === 'approved') {
+    // Map legacy 'executed' to new 'accepted'
+    whereConditions.push("status = 'accepted'");
   } else if (status === 'rejected') {
     whereConditions.push("status = 'rejected'");
   } else if (status === 'expired') {
     whereConditions.push("status = 'expired'");
   } else if (status === 'historical' || status === 'completed') {
-    whereConditions.push("status IN ('executed', 'rejected', 'expired', 'historical')");
+    // Historical = vote deadline passed (accepted, rejected, expired)
+    whereConditions.push("status IN ('accepted', 'rejected', 'expired')");
   }
   
   // Human filter - this is the key canonical filter

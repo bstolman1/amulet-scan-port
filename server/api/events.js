@@ -1490,17 +1490,21 @@ router.get('/vote-request-index/status', async (req, res) => {
       humanStats: {
         total: canonicalStats.humanProposals,
         inProgress: canonicalStats.byStatus.in_progress,
-        executed: canonicalStats.byStatus.executed,
+        // NEW: Use 'accepted' as primary status name
+        accepted: canonicalStats.byStatus.accepted,
         rejected: canonicalStats.byStatus.rejected,
         expired: canonicalStats.byStatus.expired,
+        // Legacy alias for backwards compatibility
+        executed: canonicalStats.byStatus.executed || canonicalStats.byStatus.accepted,
       },
       // Direct DsoRules governance (Path B - no VoteRequest contract)
       directGovernance: directGovernanceStats,
       // Combined governance totals (matches other explorer counts ~220)
       combinedGovernance: {
-        voteRequestBacked: stats.executed + stats.rejected + stats.expired,
+        // Use 'accepted' for vote-backed finalized count
+        voteRequestBacked: stats.accepted + stats.rejected + stats.expired,
         directDsoRules: directGovernanceStats.total,
-        total: stats.executed + stats.rejected + stats.expired + directGovernanceStats.total,
+        total: stats.accepted + stats.rejected + stats.expired + directGovernanceStats.total,
       },
       // Summary counts for understanding the data layers
       layers: {
@@ -1557,8 +1561,8 @@ router.get('/vote-request-index/validate', async (req, res) => {
   try {
     const sampleSize = Math.min(parseInt(req.query.size) || 5, 20);
     
-    // Query samples from each status category
-    const sampleStatuses = ['executed', 'rejected', 'expired', 'in_progress'];
+    // Query samples from each status category - NEW status model
+    const sampleStatuses = ['accepted', 'rejected', 'expired', 'in_progress'];
     const samples = {};
     
     for (const status of sampleStatuses) {
