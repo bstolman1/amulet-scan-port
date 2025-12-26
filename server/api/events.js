@@ -3600,6 +3600,103 @@ router.get('/sv-index/timeline', async (req, res) => {
   }
 });
 
+// GET /api/events/sv-index/debug - Debug endpoint: sample raw SvOnboardingConfirmed records
+router.get('/sv-index/debug', async (req, res) => {
+  try {
+    const { getFilesForTemplate, isTemplateIndexPopulated } = await import('../engine/template-file-index.js');
+    const binaryReader = (await import('../duckdb/binary-reader.js')).default;
+
+    const templateIndexPopulated = await isTemplateIndexPopulated();
+    if (!templateIndexPopulated) {
+      return res.status(400).json({ error: 'Template index not populated. Build template index first.' });
+    }
+
+    const svFiles = await getFilesForTemplate('SvOnboardingConfirmed');
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+    const isSvOnboardingConfirmed = (templateId) => templateId?.includes('SvOnboardingConfirmed');
+
+    const samples = [];
+    let filesScanned = 0;
+
+    for (const filePath of svFiles) {
+      if (samples.length >= limit) break;
+      filesScanned++;
+
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || result || [];
+
+        const svEvents = events.filter((r) => isSvOnboardingConfirmed(r.template_id || r.templateId));
+
+        for (const record of svEvents) {
+          if (samples.length >= limit) break;
+
+          const evtType = String(record.event_type || record.event_type_original || '').toLowerCase();
+          const templateId = record.template_id || record.templateId;
+
+          // Helper: extract args from create_arguments OR payload.record.fields
+          const getArg = (label) => {
+            const ca = record.create_arguments;
+            if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
+              if (ca[label] != null) return ca[label];
+              const snake = label.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+              if (ca[snake] != null) return ca[snake];
+            }
+
+            const fields = record.payload?.record?.fields;
+            if (!Array.isArray(fields)) return null;
+            const field = fields.find((f) => f.label === label);
+            if (!field) return null;
+
+            const v = field.value;
+            return v?.party ?? v?.text ?? v?.int64 ?? v?.numeric ?? v ?? null;
+          };
+
+          const startTimeForCreate =
+            record.effective_at ?? record.created_at_ts ?? record.record_time ?? record.timestamp ?? null;
+          const endTimeForConsume =
+            record.effective_at ?? record.record_time ?? record.timestamp ?? record.created_at_ts ?? null;
+
+          samples.push({
+            file: filePath.split(/[/\\]/).pop(),
+            contract_id: record.contract_id,
+            event_type: evtType,
+            event_type_raw: record.event_type,
+            event_type_original: record.event_type_original,
+            consuming: record.consuming,
+            choice: record.choice,
+            template_id: templateId,
+            keys: Object.keys(record),
+            hasCreateArgs: !!record.create_arguments,
+            createArgsKeys: record.create_arguments ? Object.keys(record.create_arguments) : null,
+            hasPayloadRecordFields: Array.isArray(record.payload?.record?.fields),
+            payloadFieldLabels: record.payload?.record?.fields?.map((f) => f.label) || null,
+            extracted: {
+              svParty: getArg('svParty') || getArg('sv_party'),
+              svName: getArg('svName') || getArg('sv_name'),
+              startTime: evtType === 'created' ? startTimeForCreate : null,
+              endTime: evtType === 'exercised' ? endTimeForConsume : null,
+            },
+          });
+        }
+      } catch (fileErr) {
+        samples.push({ file: filePath.split(/[/\\]/).pop(), error: fileErr.message });
+      }
+    }
+
+    res.json({
+      filesFound: svFiles.length,
+      filesScanned,
+      samplesReturned: samples.length,
+      samples,
+    });
+  } catch (err) {
+    console.error('Error in SV index debug:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============ VOTE OUTCOME ANALYZER ROUTES ============
 
 // GET /api/events/proposals/raw-grouped - Get raw proposals grouped by tracking_cid/contract_id
