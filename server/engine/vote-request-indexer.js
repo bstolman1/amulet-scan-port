@@ -1223,6 +1223,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     
     // Cache SV counts by vote time to avoid repeated lookups
     const svCountCache = new Map();
+    let usedFallbackSvCount = false; // Track if we used fallback (SV index not populated)
 
     // =============================================================================
     // PAYLOAD NORMALIZATION: Handle both DAML record format and normalized format
@@ -1471,6 +1472,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         svCountAtVoteTime = await svIndexer.getSvCountAt(voteTime);
         if (svCountAtVoteTime === 0) {
           svCountAtVoteTime = DEFAULT_SV_COUNT; // Fallback if SV index not populated
+          usedFallbackSvCount = true;
         }
         svCountCache.set(voteTime, svCountAtVoteTime);
       }
@@ -1885,6 +1887,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     console.log(`expired: voteBefore passed and neither threshold met`);
     console.log(`in_progress: voting still open (now < voteBefore)`);
     console.log(`DsoRules execution is tracked separately (is_executed flag) but does not affect status.`);
+    
+    if (usedFallbackSvCount) {
+      console.log(`\n⚠️ WARNING: SV membership index was empty - used fallback SV count (${DEFAULT_SV_COUNT}).`);
+      console.log(`   For accurate thresholds, rebuild SV index first, then rebuild VoteRequest index.`);
+    }
 
     // Persist successful build summary for audit trail
     const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

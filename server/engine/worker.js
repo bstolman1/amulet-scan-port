@@ -19,6 +19,7 @@ import {
   isTemplateIndexPopulated,
   getTemplateIndexStats,
 } from './template-file-index.js';
+import * as svIndexer from './sv-indexer.js';
 
 const WORKER_INTERVAL_MS = parseInt(process.env.ENGINE_INTERVAL_MS || '30000', 10);
 const FILES_PER_CYCLE = parseInt(process.env.ENGINE_FILES_PER_CYCLE || '3', 10);
@@ -26,12 +27,14 @@ const GAP_CHECK_INTERVAL = parseInt(process.env.GAP_CHECK_INTERVAL || '10', 10);
 const AUTO_RECOVER_GAPS = process.env.AUTO_RECOVER_GAPS !== 'false'; // Enable by default
 const VOTE_INDEX_BUILD_ON_STARTUP = process.env.VOTE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 const TEMPLATE_INDEX_BUILD_ON_STARTUP = process.env.TEMPLATE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
+const SV_INDEX_BUILD_ON_STARTUP = process.env.SV_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 
 let running = false;
 let workerInterval = null;
 let lastStats = null;
 let cycleCount = 0;
 let templateIndexBuildPromise = null; // Track background template index build
+let svIndexBuildPromise = null; // Track background SV index build
 let voteIndexBuildPromise = null; // Track background vote index build
 
 const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '600000', 10); // 10 min default (increased from 5)
@@ -152,7 +155,11 @@ export async function startEngineWorker() {
 
 /**
  * Start template index build as a background task
- * Once complete, starts vote index build if configured
+ * Once complete, starts SV index build (which then starts vote index)
+ * 
+ * Dependency chain: Template Index → SV Index → VoteRequest Index
+ * SV index must be populated before VoteRequest index so that dynamic
+ * threshold calculation can use accurate historical SV counts.
  */
 async function startTemplateIndexBuild() {
   if (templateIndexBuildPromise || isTemplateIndexingInProgress()) {
@@ -163,6 +170,52 @@ async function startTemplateIndexBuild() {
   const populated = await isTemplateIndexPopulated();
   if (populated) {
     console.log('✅ Template index already populated, skipping build');
+    // Start SV index build (which will then start vote index)
+    if (SV_INDEX_BUILD_ON_STARTUP) {
+      startSvIndexBuild();
+    } else if (VOTE_INDEX_BUILD_ON_STARTUP) {
+      startVoteIndexBuild();
+    }
+    return;
+  }
+  
+  console.log('📑 Starting background template index build...');
+  console.log('   This will dramatically speed up SV and VoteRequest index builds');
+  
+  templateIndexBuildPromise = buildTemplateFileIndex({ force: false, incremental: true })
+    .then(result => {
+      console.log(`✅ Template index complete: ${result.filesIndexed} files, ${result.templatesFound} mappings in ${result.elapsedSeconds}s`);
+      templateIndexBuildPromise = null;
+      
+      // Now start SV index build (which will then start vote index)
+      if (SV_INDEX_BUILD_ON_STARTUP) {
+        startSvIndexBuild();
+      } else if (VOTE_INDEX_BUILD_ON_STARTUP) {
+        startVoteIndexBuild();
+      }
+    })
+    .catch(err => {
+      console.error('❌ Template index build failed:', err.message);
+      templateIndexBuildPromise = null;
+    });
+}
+
+/**
+ * Start SV membership index build as a background task
+ * Once complete, starts vote index build if configured
+ * 
+ * This must run BEFORE VoteRequest index so that dynamic threshold
+ * calculation can use accurate historical SV counts at each vote time.
+ */
+async function startSvIndexBuild() {
+  if (svIndexBuildPromise || svIndexer.isIndexingInProgress()) {
+    console.log('⏭️ SV membership index build already in progress');
+    return;
+  }
+  
+  const stats = await svIndexer.getSvIndexStats();
+  if (stats.isPopulated) {
+    console.log(`✅ SV membership index already populated (${stats.totalEvents} events), skipping build`);
     // Start vote index build if configured
     if (VOTE_INDEX_BUILD_ON_STARTUP) {
       startVoteIndexBuild();
@@ -170,13 +223,13 @@ async function startTemplateIndexBuild() {
     return;
   }
   
-  console.log('📑 Starting background template index build...');
-  console.log('   This will dramatically speed up VoteRequest index builds');
+  console.log('👥 Starting background SV membership index build...');
+  console.log('   This is required for accurate vote threshold calculation');
   
-  templateIndexBuildPromise = buildTemplateFileIndex({ force: false, incremental: true })
+  svIndexBuildPromise = svIndexer.buildSvMembershipIndex({ force: false })
     .then(result => {
-      console.log(`✅ Template index complete: ${result.filesIndexed} files, ${result.templatesFound} mappings in ${result.elapsedSeconds}s`);
-      templateIndexBuildPromise = null;
+      console.log(`✅ SV membership index complete: ${result.onboardEvents} onboard, ${result.offboardEvents} offboard, current count: ${result.currentSvCount}`);
+      svIndexBuildPromise = null;
       
       // Now start vote index build if configured
       if (VOTE_INDEX_BUILD_ON_STARTUP) {
@@ -184,8 +237,14 @@ async function startTemplateIndexBuild() {
       }
     })
     .catch(err => {
-      console.error('❌ Template index build failed:', err.message);
-      templateIndexBuildPromise = null;
+      console.error('❌ SV membership index build failed:', err.message);
+      svIndexBuildPromise = null;
+      
+      // Still start vote index (will use fallback DEFAULT_SV_COUNT)
+      if (VOTE_INDEX_BUILD_ON_STARTUP) {
+        console.log('⚠️ Vote index will use fallback SV count (13) for thresholds');
+        startVoteIndexBuild();
+      }
     });
 }
 
