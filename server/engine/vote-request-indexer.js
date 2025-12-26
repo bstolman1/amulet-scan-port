@@ -230,8 +230,58 @@ export async function getVoteRequestStats() {
     };
   } catch (err) {
     console.error('Error getting vote request stats:', err);
-    return { total: 0, inProgress: 0, executed: 0, rejected: 0, expired: 0, active: 0, historical: 0, closed: 0 };
+    return { total: 0, inProgress: 0, executed: 0, rejected: 0, expired: 0, active: 0, historical: 0, closed: 0, directGovernance: 0 };
   }
+}
+
+/**
+ * Get direct governance action stats (Path B - no VoteRequest)
+ */
+export async function getDirectGovernanceStats() {
+  try {
+    const total = await queryOne(`SELECT COUNT(*) as count FROM direct_governance_actions`);
+    const byChoice = await query(`
+      SELECT choice, COUNT(*) as count 
+      FROM direct_governance_actions 
+      GROUP BY choice 
+      ORDER BY count DESC 
+      LIMIT 10
+    `);
+    
+    return {
+      total: Number(total?.count || 0),
+      byChoice: byChoice || [],
+    };
+  } catch (err) {
+    console.error('Error getting direct governance stats:', err);
+    return { total: 0, byChoice: [] };
+  }
+}
+
+/**
+ * Get combined governance stats (VoteRequests + Direct DsoRules)
+ */
+export async function getCombinedGovernanceStats() {
+  const voteRequestStats = await getVoteRequestStats();
+  const directStats = await getDirectGovernanceStats();
+  
+  return {
+    voteRequestBacked: {
+      total: voteRequestStats.total,
+      executed: voteRequestStats.executed,
+      rejected: voteRequestStats.rejected,
+      expired: voteRequestStats.expired,
+      inProgress: voteRequestStats.inProgress,
+    },
+    directDsoRules: {
+      total: directStats.total,
+      byChoice: directStats.byChoice,
+    },
+    combined: {
+      total: voteRequestStats.total + directStats.total,
+      finalized: voteRequestStats.executed + voteRequestStats.rejected + voteRequestStats.expired + directStats.total,
+    }
+  };
 }
 
 /**
@@ -635,6 +685,109 @@ export async function queryProposalTimeline(semanticKey) {
 }
 
 /**
+ * Query direct governance actions (Path B - no VoteRequest contract)
+ */
+export async function queryDirectGovernanceActions({ limit = 100, offset = 0 } = {}) {
+  const results = await query(`
+    SELECT 
+      event_id,
+      contract_id,
+      template_id,
+      effective_at,
+      choice,
+      status,
+      action_subject,
+      exercise_argument,
+      exercise_result,
+      dso,
+      source
+    FROM direct_governance_actions
+    ORDER BY effective_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const safeJsonParse = (val) => {
+    if (val === null || val === undefined) return null;
+    if (typeof val !== 'string') return val;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  };
+
+  return results.map(r => ({
+    ...r,
+    exercise_argument: safeJsonParse(r.exercise_argument),
+    exercise_result: safeJsonParse(r.exercise_result),
+    governance_type: 'direct_dso_rules', // Mark as Path B
+  }));
+}
+
+/**
+ * Query combined governance history (VoteRequests + Direct DsoRules)
+ * Returns a unified view merging both governance paths
+ */
+export async function queryCombinedGovernance({ limit = 100, offset = 0, status = 'all' } = {}) {
+  let statusFilter = '';
+  if (status === 'executed') {
+    statusFilter = "WHERE status = 'executed'";
+  } else if (status === 'rejected') {
+    statusFilter = "WHERE status = 'rejected'";
+  } else if (status === 'expired') {
+    statusFilter = "WHERE status = 'expired'";
+  } else if (status === 'in_progress') {
+    statusFilter = "WHERE status = 'in_progress'";
+  } else if (status === 'historical' || status === 'completed') {
+    statusFilter = "WHERE status IN ('executed', 'rejected', 'expired')";
+  }
+
+  // Use UNION ALL to combine both tables
+  const results = await query(`
+    WITH combined AS (
+      SELECT 
+        event_id,
+        contract_id,
+        template_id,
+        effective_at,
+        status,
+        action_tag as action_subject,
+        reason,
+        requester,
+        vote_count,
+        accept_count,
+        reject_count,
+        'vote_request' as governance_type
+      FROM vote_requests
+      ${statusFilter}
+      
+      UNION ALL
+      
+      SELECT 
+        event_id,
+        contract_id,
+        template_id,
+        effective_at,
+        status,
+        action_subject,
+        NULL as reason,
+        NULL as requester,
+        0 as vote_count,
+        0 as accept_count,
+        0 as reject_count,
+        'direct_dso_rules' as governance_type
+      FROM direct_governance_actions
+      ${statusFilter ? statusFilter.replace('WHERE', 'WHERE') : ''}
+    )
+    SELECT * FROM combined
+    ORDER BY effective_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return results;
+}
+
+/**
  * Check if index is populated
  */
 export async function isIndexPopulated() {
@@ -767,6 +920,18 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const archivedEventsMap = new Map();
     let closedViaDsoRules = 0;
     
+    // PATH B: Direct DsoRules governance actions (no VoteRequest contract)
+    const directGovernanceActions = [];
+    
+    // Helper: Extract action subject from DsoRules choice name
+    function extractActionSubjectFromChoice(choice) {
+      if (!choice) return null;
+      // Common patterns: DsoRules_UpdateSvRewardWeight, DsoRules_RevokeFeaturedAppRight, etc.
+      const match = choice.match(/DsoRules_(\w+)/);
+      if (match) return match[1];
+      return choice;
+    }
+    
     // =============================================================================
     // GENERIC DAML RECORD WALKER
     // Recursively extracts all contractId values from nested DAML structures
@@ -893,37 +1058,61 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         });
         closedViaDsoRules++;
       } else {
+        // ============================================================
+        // PATH B: DIRECT DSORULES GOVERNANCE (no VoteRequest contract)
+        // These are standalone governance actions without a formal vote request
+        // ============================================================
         unmatchedCount++;
-        // Defensive logging: DsoRules consuming event missing voteRequestCid
+        
+        // Collect unmatched events for insertion into direct_governance_actions
+        directGovernanceActions.push({
+          event_id: record.event_id,
+          contract_id: record.contract_id,
+          template_id: record.template_id,
+          effective_at: record.effective_at,
+          choice: choice,
+          status: 'executed', // Direct DsoRules executions are always executed
+          action_subject: extractActionSubjectFromChoice(choice), 
+          exercise_argument: record.exercise_argument ? JSON.stringify(record.exercise_argument) : null,
+          exercise_result: record.exercise_result ? JSON.stringify(record.exercise_result) : null,
+          dso: record.payload?.dso || null,
+          source: 'dso_rules_direct',
+        });
+        
+        // Defensive logging for first few
         if (unmatchedCount <= 5) {
-          console.warn(`   ⚠️ DsoRules consuming event could not find VoteRequest ID: choice=${choice}, extractedIds=${allContractIds.length}, sampleIds=${allContractIds.slice(0, 3).join(', ')}`);
+          console.log(`   📋 Direct DsoRules governance: choice=${choice}`);
         }
       }
     }
     
     if (unmatchedCount > 5) {
-      console.warn(`   ⚠️ ... and ${unmatchedCount - 5} more unmatched DsoRules events`);
+      console.log(`   📋 ... and ${unmatchedCount - 5} more direct DsoRules governance actions`);
     }
     
     const closedContractIds = new Set(archivedEventsMap.keys());
     
-    // 3️⃣ TERMINAL MAP SUMMARY (governance close events only)
-    console.log(`   [VoteRequestIndexer] Terminal exercised map built:`, {
-      terminalContracts: closedContractIds.size,
-      viaDsoRules: closedViaDsoRules,
-      unmatched: unmatchedCount
+    // 3️⃣ TERMINAL MAP SUMMARY
+    console.log(`   [VoteRequestIndexer] Governance summary:`, {
+      voteRequestBacked: closedViaDsoRules,
+      directDsoRules: directGovernanceActions.length,
+      totalGovernance: closedViaDsoRules + directGovernanceActions.length
     });
     
     // 4️⃣ FINAL INVARIANTS (sanity check)
     console.log(`   [VoteRequestIndexer] Final invariants:`, {
       created: createdResult.records.length,
       finalized: closedContractIds.size,
-      consumingExercised: exercisedResult.records.length
+      consumingExercised: exercisedResult.records.length,
+      directGovernance: directGovernanceActions.length
     });
     
-    // INVARIANT CHECK: terminalContracts should equal consumingExercised (ideally)
-    if (closedContractIds.size !== exercisedResult.records.length) {
-      console.warn(`   ⚠️ INVARIANT VIOLATION: terminalContracts (${closedContractIds.size}) !== consumingExercised (${exercisedResult.records.length}). Unmatched: ${unmatchedCount}`);
+    // INVARIANT: voteRequestBacked + directDsoRules should equal consumingExercised
+    const totalAccounted = closedViaDsoRules + directGovernanceActions.length;
+    if (totalAccounted !== exercisedResult.records.length) {
+      console.warn(`   ⚠️ ACCOUNTING MISMATCH: accounted (${totalAccounted}) !== consumingExercised (${exercisedResult.records.length})`);
+    } else {
+      console.log(`   ✅ INVARIANT VERIFIED: voteRequestBacked + directDsoRules = consumingExercised`);
     }
 
     const now = new Date();
@@ -932,9 +1121,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     if (force) {
       try {
         await query('DELETE FROM vote_requests');
-        console.log('   Cleared existing index');
+        await query('DELETE FROM direct_governance_actions');
+        console.log('   Cleared existing indices (vote_requests + direct_governance_actions)');
       } catch (err) {
-        // Table might not exist yet, ignore
+        // Tables might not exist yet, ignore
       }
     }
 
@@ -1500,6 +1690,59 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       });
     }
 
+    // ============================================================
+    // INSERT DIRECT GOVERNANCE ACTIONS (Path B)
+    // ============================================================
+    let directUpserted = 0;
+    if (directGovernanceActions.length > 0) {
+      console.log(`\n   📋 Inserting ${directGovernanceActions.length} direct governance actions...`);
+      
+      for (const action of directGovernanceActions) {
+        try {
+          const escapeStr = (val) => (val === null || val === undefined) ? null : String(val).replace(/'/g, "''");
+          
+          await query(`
+            INSERT INTO direct_governance_actions (
+              event_id, contract_id, template_id, effective_at,
+              choice, status, action_subject,
+              exercise_argument, exercise_result, dso, source, updated_at
+            ) VALUES (
+              '${escapeStr(action.event_id)}',
+              ${action.contract_id ? `'${escapeStr(action.contract_id)}'` : 'NULL'},
+              ${action.template_id ? `'${escapeStr(action.template_id)}'` : 'NULL'},
+              ${action.effective_at ? `'${escapeStr(action.effective_at)}'` : 'NULL'},
+              ${action.choice ? `'${escapeStr(action.choice)}'` : 'NULL'},
+              '${escapeStr(action.status)}',
+              ${action.action_subject ? `'${escapeStr(action.action_subject)}'` : 'NULL'},
+              ${action.exercise_argument ? `'${escapeStr(action.exercise_argument)}'` : 'NULL'},
+              ${action.exercise_result ? `'${escapeStr(action.exercise_result)}'` : 'NULL'},
+              ${action.dso ? `'${escapeStr(action.dso)}'` : 'NULL'},
+              '${escapeStr(action.source)}',
+              now()
+            )
+            ON CONFLICT (event_id) DO UPDATE SET
+              contract_id = EXCLUDED.contract_id,
+              template_id = EXCLUDED.template_id,
+              effective_at = EXCLUDED.effective_at,
+              choice = EXCLUDED.choice,
+              status = EXCLUDED.status,
+              action_subject = EXCLUDED.action_subject,
+              exercise_argument = EXCLUDED.exercise_argument,
+              exercise_result = EXCLUDED.exercise_result,
+              dso = EXCLUDED.dso,
+              source = EXCLUDED.source,
+              updated_at = now()
+          `);
+          directUpserted++;
+        } catch (err) {
+          if (!err.message?.includes('duplicate')) {
+            console.error(`   Error upserting direct governance action ${action.event_id}:`, err.message);
+          }
+        }
+      }
+      console.log(`   ✅ Direct governance actions indexed: ${directUpserted}`);
+    }
+
     // Update index state
     await query(`
       INSERT INTO vote_request_index_state (id, last_indexed_at, total_indexed)
@@ -1570,10 +1813,18 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       lockRelease = null;
     }
 
+    // 6️⃣ COMBINED GOVERNANCE SUMMARY
+    console.log(`   [VoteRequestIndexer] 📊 COMBINED GOVERNANCE SUMMARY:`);
+    console.log(`      - VoteRequest-backed proposals: ${upserted} (finalized via VoteRequest: ${closedViaDsoRules})`);
+    console.log(`      - Direct DsoRules governance: ${directUpserted}`);
+    console.log(`      - TOTAL GOVERNANCE ACTIONS: ${upserted + directUpserted}`);
+
     return {
       status: 'complete',
       buildId,
       upserted,
+      directGovernanceUpserted: directUpserted,
+      totalGovernance: upserted + directUpserted,
       closedCount: closedContractIds.size,
       elapsedSeconds: parseFloat(elapsed),
       totalIndexed: upserted,

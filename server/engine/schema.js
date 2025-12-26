@@ -366,6 +366,44 @@ export async function initEngineSchema() {
     ON reward_coupon_index_state(id)
   `);
 
+  // ============================================================
+  // DIRECT GOVERNANCE ACTIONS TABLE
+  // Path B governance: DsoRules consuming exercises with NO VoteRequest contract
+  // These are direct governance executions without a formal vote request
+  // ============================================================
+  await query(`
+    CREATE TABLE IF NOT EXISTS direct_governance_actions (
+      event_id            VARCHAR PRIMARY KEY,
+      contract_id         VARCHAR,
+      template_id         VARCHAR,
+      effective_at        TIMESTAMP,
+      choice              VARCHAR,
+      status              VARCHAR DEFAULT 'executed',
+      action_subject      VARCHAR,
+      exercise_argument   VARCHAR,
+      exercise_result     VARCHAR,
+      dso                 VARCHAR,
+      source              VARCHAR DEFAULT 'dso_rules_direct',
+      created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_direct_governance_event_id
+    ON direct_governance_actions(event_id)
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_direct_governance_effective_at 
+    ON direct_governance_actions(effective_at)
+  `);
+  
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_direct_governance_choice 
+    ON direct_governance_actions(choice)
+  `);
+
   schemaInitialized = true;
   console.log('✅ Engine schema initialized');
 }
@@ -380,6 +418,8 @@ export async function resetEngineSchema() {
   await query('DROP TABLE IF EXISTS aggregation_state');
   await query('DROP TABLE IF EXISTS vote_requests');
   await query('DROP TABLE IF EXISTS vote_request_index_state');
+  await query('DROP TABLE IF EXISTS vote_request_build_history');
+  await query('DROP TABLE IF EXISTS direct_governance_actions');
   await query('DROP TABLE IF EXISTS reward_coupons');
   await query('DROP TABLE IF EXISTS reward_coupon_index_state');
   await query('DROP SEQUENCE IF EXISTS raw_files_seq');
