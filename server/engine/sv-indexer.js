@@ -320,7 +320,7 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         const events = result.records || result || [];
         
         // Filter to only SvOnboardingConfirmed events first
-        const svEvents = events.filter((r) => isSvOnboardingConfirmed(r.template_id));
+        const svEvents = events.filter((r) => isSvOnboardingConfirmed(r.template_id || r.templateId));
 
         // Debug: log first file's SvOnboardingConfirmed event shape (once)
         if (i === 0) {
@@ -342,59 +342,94 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           const contractId = record.contract_id;
           if (!contractId) continue;
 
-          // Helper to extract field from payload.record.fields by label
-          const getField = (label) => {
+          // Normalize event type (some files use event_type_original)
+          const evtType = String(record.event_type || record.event_type_original || '').toLowerCase();
+
+          // Template check (handle writers that use templateId)
+          const templateId = record.template_id || record.templateId;
+          const isThisTemplate = isSvOnboardingConfirmed(templateId);
+
+          // Helper: pull args either from create_arguments object OR from payload.record.fields
+          const getArg = (label) => {
+            const ca = record.create_arguments;
+            if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
+              if (ca[label] != null) return ca[label];
+              const snake = label.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+              if (ca[snake] != null) return ca[snake];
+            }
+
             const fields = record.payload?.record?.fields;
             if (!Array.isArray(fields)) return null;
             const field = fields.find((f) => f.label === label);
             if (!field) return null;
-            // Value can be nested: field.value.party, field.value.text, field.value.int64, etc.
+
             const v = field.value;
             return v?.party ?? v?.text ?? v?.int64 ?? v?.numeric ?? v ?? null;
           };
 
-          // CREATE detection: event_type === 'created' on SvOnboardingConfirmed
-          const isCreate = record.event_type === 'created' && isSvOnboardingConfirmed(record.template_id);
+          // CREATE detection
+          const isCreate = isThisTemplate && evtType === 'created';
 
           // CONSUME detection: exercised + consuming + Archive or Expire choice
           const isConsume =
-            record.event_type === 'exercised' &&
+            isThisTemplate &&
+            evtType === 'exercised' &&
             record.consuming === true &&
-            isSvOnboardingConfirmed(record.template_id) &&
-            (record.choice === 'Archive' || record.choice?.includes('Expire'));
+            (record.choice === 'Archive' || String(record.choice || '').includes('Expire'));
+
+          // Time helpers
+          const startTimeForCreate =
+            record.effective_at ??
+            record.created_at_ts ??
+            record.record_time ??
+            record.timestamp ??
+            null;
+
+          const endTimeForConsume =
+            record.effective_at ??
+            record.record_time ??
+            record.timestamp ??
+            record.created_at_ts ??
+            null;
 
           if (isCreate) {
-            const svParty = getField('svParty') || getField('sv_party');
-            const svName = getField('svName') || getField('sv_name');
+            const svParty = getArg('svParty') || getArg('sv_party');
+            const svName = getArg('svName') || getArg('sv_name');
 
-            if (!svParty) continue;
-
-            // Start time: effective_at > created_at_ts > timestamp > record_time
-            const startTime =
-              record.effective_at ??
-              record.created_at_ts ??
-              record.timestamp ??
-              record.record_time ??
-              new Date().toISOString();
+            if (!svParty || !startTimeForCreate) {
+              console.warn('DROP CREATE: missing svParty or startTime', {
+                contractId,
+                svParty,
+                startTimeForCreate,
+                evtType,
+                hasCreateArgs: !!record.create_arguments,
+                hasPayloadFields: Array.isArray(record.payload?.record?.fields),
+              });
+              continue;
+            }
 
             const existing = svIntervals.get(contractId);
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: Number(getField('svRewardWeight') || getField('sv_reward_weight')) || 1,
-              sv_participant_id: getField('svParticipantId') || getField('sv_participant_id') || null,
+              sv_reward_weight: Number(getArg('svRewardWeight') || getArg('sv_reward_weight')) || 1,
+              sv_participant_id: getArg('svParticipantId') || getArg('sv_participant_id') || null,
               contract_id: contractId,
-              active_from: startTime,
+              active_from: startTimeForCreate,
               // If we saw consume before create, keep its end time
               active_until: existing?.active_until ?? null,
-              dso: getField('dso') || null,
+              dso: getArg('dso') || null,
               reason: null,
             });
           }
 
           if (isConsume) {
-            // End time: effective_at > timestamp > record_time
-            const endTime = record.effective_at ?? record.timestamp ?? record.record_time ?? null;
+            const endTime = endTimeForConsume;
+            if (!endTime) {
+              console.warn('DROP CONSUME: missing endTime', { contractId, evtType, choice: record.choice });
+              continue;
+            }
+
             const existing = svIntervals.get(contractId);
             if (existing) {
               existing.active_until = endTime;
@@ -423,10 +458,31 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
 
     // Insert all intervals into the database
     let insertedCount = 0;
+    let dropMissingParty = 0;
+    let dropMissingStart = 0;
+    let dropInverted = 0;
+    let dropIncomplete = 0;
+
     for (const interval of svIntervals.values()) {
-      // Skip intervals without sv_party (incomplete data)
-      if (!interval.sv_party || !interval.active_from) continue;
-      
+      // Don’t silently drop — count it
+      if (!interval.sv_party) {
+        dropMissingParty++;
+        dropIncomplete++;
+        continue;
+      }
+      if (!interval.active_from) {
+        dropMissingStart++;
+        dropIncomplete++;
+        continue;
+      }
+
+      // Guard against inverted times
+      if (interval.active_until && new Date(interval.active_from) > new Date(interval.active_until)) {
+        dropInverted++;
+        dropIncomplete++;
+        continue;
+      }
+
       try {
         await query(`
           INSERT INTO sv_active_intervals 
@@ -451,6 +507,11 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         console.warn(`   ⚠️ Insert error for ${interval.contract_id}:`, insertErr.message);
       }
     }
+
+    console.log(`   🧾 Interval drop summary:`);
+    console.log(
+      `      dropped_incomplete=${dropIncomplete} (missingParty=${dropMissingParty}, missingStart=${dropMissingStart}, inverted=${dropInverted})`
+    );
 
     // Calculate current SV count
     const currentSvCount = await getActiveSvCountAt(new Date());
