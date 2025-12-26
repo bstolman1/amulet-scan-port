@@ -768,61 +768,62 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     let closedViaDsoRules = 0;
     
     for (const record of exercisedResult.records) {
-      // IMPORTANT: The scanner already guarantees consuming === true for all these records.
-      // We just need to determine the proposal root contract_id.
+      // CANTON GOVERNANCE MODEL:
+      // The winning rule execution IS the vote outcome.
+      // ANY consuming exercised event on :DsoRules template = finalized proposal.
+      // The scanner already guarantees consuming === true AND template_id.endsWith(':DsoRules').
       
       const choice = String(record.choice || '');
       
-      // For DsoRules_CloseVoteRequest, the exercised event is on the DsoRules contract,
-      // but it targets a specific VoteRequest contract_id via exercise arguments.
-      if (choice === 'DsoRules_CloseVoteRequest' || choice === 'DsoRules_CloseVoteRequestResult') {
-        // Extract the VoteRequest contract_id being closed from exercise arguments
-        const voteRequestCid = 
-          record.exercise_argument?.voteRequestCid || 
-          record.payload?.voteRequestCid ||
-          record.exercise_argument?.voteRequest ||
-          record.payload?.voteRequest;
+      // Extract the VoteRequest contract_id from choice argument
+      // The voteRequestCid field links this DsoRules execution to its proposal
+      const voteRequestCid = 
+        record.exercise_argument?.voteRequestCid || 
+        record.payload?.voteRequestCid ||
+        record.raw?.choice_argument?.voteRequestCid ||
+        record.exercise_argument?.voteRequest ||
+        record.payload?.voteRequest ||
+        record.raw?.choice_argument?.voteRequest;
+      
+      if (voteRequestCid) {
+        // Extract outcome from exercise result if available
+        const exerciseResult = record.exercise_result || record.payload?.exercise_result || {};
+        const outcome = 
+          exerciseResult.outcome ||
+          record.exercise_argument?.outcome ||
+          record.payload?.outcome;
         
-        if (voteRequestCid) {
-          // Extract authoritative outcome from DsoRules_CloseVoteRequestResult
-          const exerciseResult = record.exercise_result || record.payload?.exercise_result || {};
-          const outcome = 
-            exerciseResult.outcome ||
-            record.exercise_argument?.outcome ||
-            record.payload?.outcome;
-          
-          let outcomeTag = null;
-          if (outcome) {
-            if (typeof outcome === 'string') {
-              outcomeTag = outcome;
-            } else if (outcome.tag) {
-              outcomeTag = outcome.tag;
-            } else {
-              const keys = Object.keys(outcome);
-              if (keys.length > 0 && keys[0].startsWith('VRO_')) {
-                outcomeTag = keys[0];
-              }
+        let outcomeTag = null;
+        if (outcome) {
+          if (typeof outcome === 'string') {
+            outcomeTag = outcome;
+          } else if (outcome.tag) {
+            outcomeTag = outcome.tag;
+          } else {
+            const keys = Object.keys(outcome);
+            if (keys.length > 0 && keys[0].startsWith('VRO_')) {
+              outcomeTag = keys[0];
             }
           }
-          
-          // Key by the proposal root contract_id (voteRequestCid)
-          archivedEventsMap.set(voteRequestCid, {
-            ...record,
-            contract_id: voteRequestCid, // Normalize to proposal root
-            dso_close_outcome: outcome,
-            dso_close_outcome_tag: outcomeTag,
-            completedAt: exerciseResult.completedAt,
-            abstainingSvs: exerciseResult.abstainingSvs,
-            offboardedVoters: exerciseResult.offboardedVoters,
-            choice: choice,
-            close_source: 'dso_rules',
-          });
-          closedViaDsoRules++;
         }
+        
+        // Key by the proposal root contract_id (voteRequestCid)
+        archivedEventsMap.set(voteRequestCid, {
+          ...record,
+          contract_id: voteRequestCid, // Normalize to proposal root
+          dso_close_outcome: outcome,
+          dso_close_outcome_tag: outcomeTag,
+          completedAt: exerciseResult.completedAt,
+          abstainingSvs: exerciseResult.abstainingSvs,
+          offboardedVoters: exerciseResult.offboardedVoters,
+          choice: choice,
+          close_source: 'dso_rules',
+        });
+        closedViaDsoRules++;
+      } else {
+        // Defensive logging: DsoRules consuming event missing voteRequestCid
+        console.warn(`   ⚠️ DsoRules consuming event missing voteRequestCid: choice=${choice}, keys=${Object.keys(record.exercise_argument || record.payload || {}).join(',')}`);
       }
-      // NOTE: No else branch - we ONLY accept DsoRules governance close events.
-      // Direct consuming exercised events on VoteRequest contracts are lifecycle/migration
-      // events and should NOT be treated as governance finality.
     }
     const closedContractIds = new Set(archivedEventsMap.keys());
     
