@@ -5,13 +5,16 @@
  * ============================================
  * Governance outcomes are derived from VoteRequest state + time, NOT from execution events.
  * 
+ * Threshold calculation (DYNAMIC):
+ *   threshold = ceil(2/3 × number_of_active_SVs_at_vote_time)
+ *   Same threshold applies to both acceptance AND rejection.
+ * 
  * For each VoteRequest:
  *   1. If now < voteBefore → status = "in_progress" (voting still open)
  *   2. If now >= voteBefore (voting closed), compute status from vote tallies:
- *      - Calculate acceptedVotes, rejectedVotes from votes array
- *      - Apply 2/3 supermajority threshold (configurable, default 9/13 SVs)
+ *      - Count acceptedVotes, rejectedVotes from votes array
  *      - If acceptedVotes >= threshold → status = "accepted"
- *      - Else if rejectedVotes >= rejectionThreshold → status = "rejected"  
+ *      - If rejectedVotes >= threshold → status = "rejected"
  *      - Else → status = "expired" (deadline passed without threshold met)
  * 
  * Execution tracking (OPTIONAL, SEPARATE):
@@ -37,6 +40,10 @@ import {
   isTemplateIndexPopulated,
   getTemplateIndexStats
 } from './template-file-index.js';
+import * as svIndexer from './sv-indexer.js';
+
+// Default SV count if SV index is not populated (fallback)
+const DEFAULT_SV_COUNT = 13;
 
 let indexingInProgress = false;
 let indexingProgress = null;
@@ -1213,6 +1220,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     
     // 5️⃣ SAMPLE FINALIZED PROPOSALS (first 3)
     const sampleFinalized = [];
+    
+    // Cache SV counts by vote time to avoid repeated lookups
+    const svCountCache = new Map();
 
     // =============================================================================
     // PAYLOAD NORMALIZATION: Handle both DAML record format and normalized format
@@ -1452,10 +1462,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       // Execution tracking is SEPARATE: if consuming DsoRules event exists → executed=true
       // ============================================================
       
-      // 2/3 supermajority threshold (default: 9 out of 13 SVs)
-      // This is configurable but we use a reasonable default
-      const SUPERMAJORITY_THRESHOLD = 9;
-      const REJECTION_THRESHOLD = 5; // More than 1/3 = rejection
+      // DYNAMIC THRESHOLD: Calculate 2/3 supermajority based on SV count at vote time
+      // threshold = ceil(2/3 × number_of_active_SVs_at_vote_time)
+      // Same threshold applies to both acceptance AND rejection
+      const voteTime = voteBefore || event.effective_at;
+      let svCountAtVoteTime = svCountCache.get(voteTime);
+      if (svCountAtVoteTime === undefined) {
+        svCountAtVoteTime = await svIndexer.getSvCountAt(voteTime);
+        if (svCountAtVoteTime === 0) {
+          svCountAtVoteTime = DEFAULT_SV_COUNT; // Fallback if SV index not populated
+        }
+        svCountCache.set(voteTime, svCountAtVoteTime);
+      }
+      const SUPERMAJORITY_THRESHOLD = Math.ceil((svCountAtVoteTime * 2) / 3);
+      // Rejection uses the SAME threshold as acceptance (per user requirement)
+      const REJECTION_THRESHOLD = SUPERMAJORITY_THRESHOLD;
       
       let status = 'in_progress';
       let hasBeenExecuted = false;
@@ -1527,6 +1548,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             contract_id: event.contract_id,
             acceptCount,
             rejectCount,
+            svCount: svCountAtVoteTime,
             threshold: SUPERMAJORITY_THRESHOLD,
             hasBeenExecuted,
             status
@@ -1857,8 +1879,12 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // 4️⃣ MODEL EXPLANATION LOG (ONCE PER RUN)
     // ============================================================
     console.log(`\n[GovernanceIndexer] Model note:`);
-    console.log(`VoteRequest status is finalized at voteBefore.`);
-    console.log(`DsoRules execution is optional and does not determine accepted/rejected/expired.`);
+    console.log(`Threshold = ceil(2/3 × SV count at vote time). Same threshold for accept AND reject.`);
+    console.log(`accepted: acceptVotes >= threshold`);
+    console.log(`rejected: rejectVotes >= threshold`);
+    console.log(`expired: voteBefore passed and neither threshold met`);
+    console.log(`in_progress: voting still open (now < voteBefore)`);
+    console.log(`DsoRules execution is tracked separately (is_executed flag) but does not affect status.`);
 
     // Persist successful build summary for audit trail
     const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
