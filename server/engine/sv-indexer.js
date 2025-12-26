@@ -340,21 +340,23 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           const contractId = record.contract_id;
           if (!contractId) continue;
 
-          // Created event detection (no record.type in these exports)
-          const isCreate = Boolean(record.create_arguments) && isSvOnboardingConfirmed(record.template_id);
+          // Created event detection: has create_arguments OR payload.record (not both required!)
+          const hasCreateData = Boolean(record.create_arguments) || Boolean(record.payload?.record);
+          const isCreate = hasCreateData && isSvOnboardingConfirmed(record.template_id) && !record.choice;
 
           // Consume detection: consuming exercise on SvOnboardingConfirmed (Expire or other terminal choice)
           const isConsume = Boolean(record.choice) && record.consuming === true && isSvOnboardingConfirmed(record.template_id);
 
           if (isCreate) {
-            // Extract fields (Splice exports often nest DAML fields under payload.record)
-            const args = record.create_arguments || record.payload?.record || {};
+            // Extract fields - try create_arguments first, then payload.record
+            const args = record.create_arguments ?? record.payload?.record ?? {};
             const svParty = args.svParty ?? args.sv_party ?? null;
             const svName = args.svName ?? args.sv_name ?? null;
 
             if (!svParty) continue;
 
-            const startTime = record.created_at || record.record_time || record.effective_at || new Date().toISOString();
+            // Start time priority: created_at > record_time > effective_at
+            const startTime = record.created_at ?? record.record_time ?? record.effective_at ?? new Date().toISOString();
 
             const existing = svIntervals.get(contractId);
             svIntervals.set(contractId, {
@@ -372,7 +374,8 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           }
 
           if (isConsume) {
-            const endTime = record.effective_at || record.record_time || new Date().toISOString();
+            // End time priority: effective_at > record_time > null (never use created_at for end time)
+            const endTime = record.effective_at ?? record.record_time ?? null;
             const existing = svIntervals.get(contractId);
             if (existing) {
               existing.active_until = endTime;
