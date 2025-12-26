@@ -3951,4 +3951,15 @@ router.get('/debug/exercised/voterequest', async (req, res) => {
   }
 });
 
+// GET /api/events/sv-index/test - Verify SV index historical counts work correctly
+router.get('/sv-index/test', async (req, res) => {
+  try {
+    const result = await svIndexer.testHistoricalSvCounts();
+    res.json(result);
+  } catch (err) {
+    console.error('Error testing SV index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
