@@ -322,21 +322,61 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         // Filter to only SvOnboardingConfirmed events first
         const svEvents = events.filter((r) => isSvOnboardingConfirmed(r.template_id || r.templateId));
 
-        // Debug: log first file's SvOnboardingConfirmed event shape (once)
+        // Debug: log first CREATED event shape (not exercised)
         if (i === 0) {
           console.log(`   🔍 Debug - File has ${events.length} total events, ${svEvents.length} SvOnboardingConfirmed`);
-          if (svEvents.length > 0) {
-            const r = svEvents[0];
-            console.log(`      Keys: ${Object.keys(r).join(', ')}`);
-            console.log(`      event_type=${r.event_type}, consuming=${r.consuming}, choice=${r.choice || 'N/A'}`);
-            const fields = r.payload?.record?.fields;
-            if (fields) {
-              console.log(`      payload.record.fields labels: ${fields.map(f => f.label).join(', ')}`);
-            }
+          const firstCreated = svEvents.find(r => (r.event_type || r.event_type_original) === 'created');
+          if (firstCreated) {
+            console.log('   🔍 Debug - first CREATED SvOnboardingConfirmed payload labels:');
+            const topLabels = (firstCreated.payload?.record?.fields || []).map(f => f.label);
+            console.log(`      top: [${topLabels.join(', ')}]`);
+            const nested = firstCreated.payload?.record?.fields?.find(f => f?.value?.record?.fields)?.value?.record?.fields;
+            console.log(`      nested: [${(nested || []).map(f => f.label).join(', ')}]`);
+          } else {
+            console.log('   🔍 Debug - no CREATED events in first file');
           }
         }
 
         svOnboardingEventsFound += svEvents.length;
+
+        // Drop-in DAML value converter: handles nested Party structures
+        const damlValueToJs = (v) => {
+          if (v == null) return null;
+
+          // Party sometimes appears as { party: "Alice" } or { party: { party: "Alice" } }
+          if (typeof v.party === 'string') return v.party;
+          if (v.party && typeof v.party.party === 'string') return v.party.party;
+
+          if (typeof v.text === 'string') return v.text;
+
+          if (v.int64 != null) return Number(v.int64);
+          if (v.numeric != null) return Number(v.numeric);
+
+          // Fallback
+          return v;
+        };
+
+        // Recursively search any record.fields tree for a label
+        const extractLabelDeep = (payloadRecord, label) => {
+          const visitFields = (fields) => {
+            if (!Array.isArray(fields)) return null;
+
+            for (const f of fields) {
+              // direct match
+              if (f?.label === label) return damlValueToJs(f.value);
+
+              // nested record wrapper
+              const nestedFields = f?.value?.record?.fields;
+              if (nestedFields) {
+                const hit = visitFields(nestedFields);
+                if (hit != null) return hit;
+              }
+            }
+            return null;
+          };
+
+          return visitFields(payloadRecord?.fields);
+        };
 
         for (const record of svEvents) {
           const contractId = record.contract_id;
@@ -348,48 +388,6 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           // Template check (handle writers that use templateId)
           const templateId = record.template_id || record.templateId;
           const isThisTemplate = isSvOnboardingConfirmed(templateId);
-
-          // Recursive DAML field extractor - handles nested records
-          const extractField = (label) => {
-            // First try create_arguments (flat object)
-            const ca = record.create_arguments;
-            if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
-              if (ca[label] != null) return ca[label];
-              const snake = label.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
-              if (ca[snake] != null) return ca[snake];
-            }
-
-            // Recursive search through payload.record.fields (handles nested records)
-            const tryFields = (fields) => {
-              if (!Array.isArray(fields)) return null;
-
-              for (const f of fields) {
-                // Check if this field matches
-                if (f.label === label) {
-                  const v = f.value;
-
-                  // Party is often nested: field.value.party.party
-                  if (v?.party?.party) return v.party.party;
-                  if (typeof v?.party === 'string') return v.party;
-
-                  if (v?.text) return v.text;
-                  if (v?.int64 != null) return Number(v.int64);
-                  if (v?.numeric != null) return Number(v.numeric);
-
-                  return v ?? null;
-                }
-
-                // 🔑 RECURSE INTO NESTED RECORDS
-                if (f.value?.record?.fields) {
-                  const nested = tryFields(f.value.record.fields);
-                  if (nested != null) return nested;
-                }
-              }
-              return null;
-            };
-
-            return tryFields(record.payload?.record?.fields);
-          };
 
           // CREATE detection
           const isCreate = isThisTemplate && evtType === 'created';
@@ -417,18 +415,44 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
             null;
 
           if (isCreate) {
-            const svParty = extractField('svParty') || extractField('sv_party');
-            const svName = extractField('svName') || extractField('sv_name');
+            const payloadRecord = record.payload?.record;
 
-            if (!svParty || !startTimeForCreate) {
+            // Try create_arguments first (flat object), then deep extract from payload
+            const tryFlat = (label) => {
+              const ca = record.create_arguments;
+              if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
+                if (ca[label] != null) return ca[label];
+                const snake = label.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+                if (ca[snake] != null) return ca[snake];
+              }
+              return null;
+            };
+
+            const svParty = tryFlat('svParty') || tryFlat('sv_party')
+                         || extractLabelDeep(payloadRecord, 'svParty')
+                         || extractLabelDeep(payloadRecord, 'sv_party');
+
+            const svName = tryFlat('svName') || tryFlat('sv_name')
+                        || extractLabelDeep(payloadRecord, 'svName')
+                        || extractLabelDeep(payloadRecord, 'sv_name');
+
+            if (!svParty) {
               console.warn('DROP CREATE: missing svParty or startTime', {
                 contractId,
-                svParty,
+                svParty: null,
                 startTimeForCreate,
                 evtType,
                 hasCreateArgs: !!record.create_arguments,
-                hasPayloadFields: Array.isArray(record.payload?.record?.fields),
+                hasPayloadFields: !!payloadRecord?.fields,
+                // 🔥 Debug: show real nesting
+                topLevelFieldLabels: (payloadRecord?.fields || []).map(f => f.label),
+                firstNestedLabels: (payloadRecord?.fields?.find(f => f?.value?.record?.fields)?.value?.record?.fields || []).map(f => f.label),
               });
+              continue;
+            }
+
+            if (!startTimeForCreate) {
+              console.warn('DROP CREATE: missing startTime', { contractId, svParty, startTimeForCreate });
               continue;
             }
 
@@ -436,13 +460,13 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: Number(extractField('svRewardWeight') || extractField('sv_reward_weight')) || 1,
-              sv_participant_id: extractField('svParticipantId') || extractField('sv_participant_id') || null,
+              sv_reward_weight: Number(tryFlat('svRewardWeight') || extractLabelDeep(payloadRecord, 'svRewardWeight')) || 1,
+              sv_participant_id: tryFlat('svParticipantId') || extractLabelDeep(payloadRecord, 'svParticipantId') || null,
               contract_id: contractId,
               active_from: startTimeForCreate,
               // If we saw consume before create, keep its end time
               active_until: existing?.active_until ?? null,
-              dso: extractField('dso') || null,
+              dso: tryFlat('dso') || extractLabelDeep(payloadRecord, 'dso') || null,
               reason: null,
             });
           }
