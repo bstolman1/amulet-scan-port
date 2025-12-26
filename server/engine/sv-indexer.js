@@ -328,9 +328,11 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           if (svEvents.length > 0) {
             const r = svEvents[0];
             console.log(`      Keys: ${Object.keys(r).join(', ')}`);
-            console.log(`      has create_arguments=${Boolean(r.create_arguments)}, has payload.record=${Boolean(r.payload?.record)}`);
-            console.log(`      consuming=${r.consuming}, choice=${r.choice || 'N/A'}`);
-            console.log(`      template_id=${r.template_id}`);
+            console.log(`      event_type=${r.event_type}, consuming=${r.consuming}, choice=${r.choice || 'N/A'}`);
+            const fields = r.payload?.record?.fields;
+            if (fields) {
+              console.log(`      payload.record.fields labels: ${fields.map(f => f.label).join(', ')}`);
+            }
           }
         }
 
@@ -340,42 +342,59 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           const contractId = record.contract_id;
           if (!contractId) continue;
 
-          // Created event detection: has create_arguments OR payload.record (not both required!)
-          const hasCreateData = Boolean(record.create_arguments) || Boolean(record.payload?.record);
-          const isCreate = hasCreateData && isSvOnboardingConfirmed(record.template_id) && !record.choice;
+          // Helper to extract field from payload.record.fields by label
+          const getField = (label) => {
+            const fields = record.payload?.record?.fields;
+            if (!Array.isArray(fields)) return null;
+            const field = fields.find((f) => f.label === label);
+            if (!field) return null;
+            // Value can be nested: field.value.party, field.value.text, field.value.int64, etc.
+            const v = field.value;
+            return v?.party ?? v?.text ?? v?.int64 ?? v?.numeric ?? v ?? null;
+          };
 
-          // Consume detection: consuming exercise on SvOnboardingConfirmed (Expire or other terminal choice)
-          const isConsume = Boolean(record.choice) && record.consuming === true && isSvOnboardingConfirmed(record.template_id);
+          // CREATE detection: event_type === 'created' on SvOnboardingConfirmed
+          const isCreate = record.event_type === 'created' && isSvOnboardingConfirmed(record.template_id);
+
+          // CONSUME detection: exercised + consuming + Archive or Expire choice
+          const isConsume =
+            record.event_type === 'exercised' &&
+            record.consuming === true &&
+            isSvOnboardingConfirmed(record.template_id) &&
+            (record.choice === 'Archive' || record.choice?.includes('Expire'));
 
           if (isCreate) {
-            // Extract fields - try create_arguments first, then payload.record
-            const args = record.create_arguments ?? record.payload?.record ?? {};
-            const svParty = args.svParty ?? args.sv_party ?? null;
-            const svName = args.svName ?? args.sv_name ?? null;
+            const svParty = getField('svParty') || getField('sv_party');
+            const svName = getField('svName') || getField('sv_name');
 
             if (!svParty) continue;
 
-            // Start time priority: created_at > record_time > effective_at
-            const startTime = record.created_at ?? record.record_time ?? record.effective_at ?? new Date().toISOString();
+            // Start time: effective_at > created_at_ts > timestamp > record_time
+            const startTime =
+              record.effective_at ??
+              record.created_at_ts ??
+              record.timestamp ??
+              record.record_time ??
+              new Date().toISOString();
 
             const existing = svIntervals.get(contractId);
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: args.svRewardWeight ?? args.sv_reward_weight ?? 1,
-              sv_participant_id: args.svParticipantId ?? args.sv_participant_id ?? null,
+              sv_reward_weight: Number(getField('svRewardWeight') || getField('sv_reward_weight')) || 1,
+              sv_participant_id: getField('svParticipantId') || getField('sv_participant_id') || null,
               contract_id: contractId,
               active_from: startTime,
               // If we saw consume before create, keep its end time
               active_until: existing?.active_until ?? null,
-              dso: args.dso ?? null,
-              reason: args.reason ? String(args.reason).slice(0, 500) : null,
+              dso: getField('dso') || null,
+              reason: null,
             });
           }
 
           if (isConsume) {
-            // End time priority: effective_at > record_time > null (never use created_at for end time)
-            const endTime = record.effective_at ?? record.record_time ?? null;
+            // End time: effective_at > timestamp > record_time
+            const endTime = record.effective_at ?? record.timestamp ?? record.record_time ?? null;
             const existing = svIntervals.get(contractId);
             if (existing) {
               existing.active_until = endTime;
