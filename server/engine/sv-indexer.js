@@ -339,120 +339,81 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
 
         svOnboardingEventsFound += svEvents.length;
 
-        // Drop-in DAML value converter: handles nested Party structures
-        const damlValueToJs = (v) => {
+        // ========================================
+        // STRICT INDEX-BASED EXTRACTION
+        // SvOnboardingConfirmed template field order:
+        //   index 0: svParty (Party)
+        //   index 1: svName (Text)
+        //   index 2: svRewardWeight (Int)
+        //   index 3: svParticipantId (Text)
+        //   index 4: reason (Text)
+        //   index 5: dso (Party)
+        //   index 6: expiresAt (Time)
+        // ========================================
+        
+        const extractParty = (v) => {
           if (v == null) return null;
-
-          // Party sometimes appears as { party: "Alice" } or { party: { party: "Alice" } }
+          if (typeof v === 'string') return v;
           if (typeof v.party === 'string') return v.party;
           if (v.party && typeof v.party.party === 'string') return v.party.party;
-
+          return null;
+        };
+        
+        const extractText = (v) => {
+          if (v == null) return null;
+          if (typeof v === 'string') return v;
           if (typeof v.text === 'string') return v.text;
-
+          return null;
+        };
+        
+        const extractInt = (v) => {
+          if (v == null) return 1;
+          if (typeof v === 'number') return v;
           if (v.int64 != null) return Number(v.int64);
           if (v.numeric != null) return Number(v.numeric);
-
-          // Fallback
-          return v;
-        };
-
-        // Recursively search any record.fields tree for a label
-        const extractLabelDeep = (payloadRecord, label) => {
-          const visitFields = (fields) => {
-            if (!Array.isArray(fields)) return null;
-
-            for (const f of fields) {
-              // direct match
-              if (f?.label === label) return damlValueToJs(f.value);
-
-              // nested record wrapper
-              const nestedFields = f?.value?.record?.fields;
-              if (nestedFields) {
-                const hit = visitFields(nestedFields);
-                if (hit != null) return hit;
-              }
-            }
-            return null;
-          };
-
-          return visitFields(payloadRecord?.fields);
+          return 1;
         };
 
         for (const record of svEvents) {
           const contractId = record.contract_id;
           if (!contractId) continue;
 
-          // Normalize event type (some files use event_type_original)
           const evtType = String(record.event_type || record.event_type_original || '').toLowerCase();
-
-          // Template check (handle writers that use templateId)
           const templateId = record.template_id || record.templateId;
           const isThisTemplate = isSvOnboardingConfirmed(templateId);
 
-          // CREATE detection
           const isCreate = isThisTemplate && evtType === 'created';
-
-          // CONSUME detection: exercised + consuming + Archive or Expire choice
-          const isConsume =
-            isThisTemplate &&
-            evtType === 'exercised' &&
-            record.consuming === true &&
-            (record.choice === 'Archive' || String(record.choice || '').includes('Expire'));
-
-          // Time helpers
-          const startTimeForCreate =
-            record.effective_at ??
-            record.created_at_ts ??
-            record.record_time ??
-            record.timestamp ??
-            null;
-
-          const endTimeForConsume =
-            record.effective_at ??
-            record.record_time ??
-            record.timestamp ??
-            record.created_at_ts ??
-            null;
+          const isConsume = isThisTemplate && evtType === 'exercised' && record.consuming === true;
 
           if (isCreate) {
-            const payloadRecord = record.payload?.record;
-
-            // Try create_arguments first (flat object), then deep extract from payload
-            const tryFlat = (label) => {
-              const ca = record.create_arguments;
-              if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
-                if (ca[label] != null) return ca[label];
-                const snake = label.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
-                if (ca[snake] != null) return ca[snake];
-              }
-              return null;
-            };
-
-            const svParty = tryFlat('svParty') || tryFlat('sv_party')
-                         || extractLabelDeep(payloadRecord, 'svParty')
-                         || extractLabelDeep(payloadRecord, 'sv_party');
-
-            const svName = tryFlat('svName') || tryFlat('sv_name')
-                        || extractLabelDeep(payloadRecord, 'svName')
-                        || extractLabelDeep(payloadRecord, 'sv_name');
+            const fields = record.payload?.record?.fields;
+            
+            if (!Array.isArray(fields) || fields.length < 2) {
+              console.warn('DROP CREATE: no payload.record.fields array', { contractId });
+              continue;
+            }
+            
+            // STRICT INDEX-BASED EXTRACTION - no label lookups
+            const svParty = extractParty(fields[0]?.value);
+            const svName = extractText(fields[1]?.value);
+            const svRewardWeight = extractInt(fields[2]?.value);
+            const svParticipantId = extractText(fields[3]?.value);
+            const reason = extractText(fields[4]?.value);
+            const dso = extractParty(fields[5]?.value);
+            
+            const startTime = record.created_at_ts || record.effective_at || record.timestamp || record.record_time || null;
 
             if (!svParty) {
-              console.warn('DROP CREATE: missing svParty or startTime', {
+              console.warn('DROP CREATE: svParty is null after index extraction', {
                 contractId,
-                svParty: null,
-                startTimeForCreate,
-                evtType,
-                hasCreateArgs: !!record.create_arguments,
-                hasPayloadFields: !!payloadRecord?.fields,
-                // 🔥 Debug: show real nesting
-                topLevelFieldLabels: (payloadRecord?.fields || []).map(f => f.label),
-                firstNestedLabels: (payloadRecord?.fields?.find(f => f?.value?.record?.fields)?.value?.record?.fields || []).map(f => f.label),
+                field0: JSON.stringify(fields[0]?.value).slice(0, 200),
+                startTime,
               });
               continue;
             }
 
-            if (!startTimeForCreate) {
-              console.warn('DROP CREATE: missing startTime', { contractId, svParty, startTimeForCreate });
+            if (!startTime) {
+              console.warn('DROP CREATE: missing startTime', { contractId, svParty });
               continue;
             }
 
@@ -460,21 +421,20 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: Number(tryFlat('svRewardWeight') || extractLabelDeep(payloadRecord, 'svRewardWeight')) || 1,
-              sv_participant_id: tryFlat('svParticipantId') || extractLabelDeep(payloadRecord, 'svParticipantId') || null,
+              sv_reward_weight: svRewardWeight,
+              sv_participant_id: svParticipantId,
               contract_id: contractId,
-              active_from: startTimeForCreate,
-              // If we saw consume before create, keep its end time
+              active_from: startTime,
               active_until: existing?.active_until ?? null,
-              dso: tryFlat('dso') || extractLabelDeep(payloadRecord, 'dso') || null,
-              reason: null,
+              dso: dso,
+              reason: reason,
             });
           }
 
           if (isConsume) {
-            const endTime = endTimeForConsume;
+            const endTime = record.effective_at || record.timestamp || record.record_time || record.created_at_ts || null;
             if (!endTime) {
-              console.warn('DROP CONSUME: missing endTime', { contractId, evtType, choice: record.choice });
+              console.warn('DROP CONSUME: missing endTime', { contractId });
               continue;
             }
 
@@ -503,6 +463,12 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
     }
 
     console.log(`   📊 Found ${svOnboardingEventsFound} SvOnboardingConfirmed events → ${svIntervals.size} SV intervals`);
+
+    // INVARIANT CHECK: if we found events but zero intervals, extraction is broken
+    if (svOnboardingEventsFound > 0 && svIntervals.size === 0) {
+      indexingInProgress = false;
+      throw new Error('SV INDEX EMPTY — EXTRACTION BROKEN: found events but could not extract any intervals');
+    }
 
     // Insert all intervals into the database
     let insertedCount = 0;
