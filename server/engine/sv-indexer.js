@@ -320,60 +320,64 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         const events = result.records || result || [];
         
         // Filter to only SvOnboardingConfirmed events first
-        const svEvents = events.filter(e => isSvOnboardingConfirmed(e.template_id));
-        
-        // Debug: log first file's SvOnboardingConfirmed events with full structure
+        const svEvents = events.filter((r) => isSvOnboardingConfirmed(r.template_id));
+
+        // Debug: log first file's SvOnboardingConfirmed event shape (once)
         if (i === 0) {
           console.log(`   🔍 Debug - File has ${events.length} total events, ${svEvents.length} SvOnboardingConfirmed`);
           if (svEvents.length > 0) {
-            const e = svEvents[0];
-            console.log(`      Keys: ${Object.keys(e).join(', ')}`);
-            console.log(`      event_type=${e.event_type}, type=${e.type}`);
-            console.log(`      payload keys: ${e.payload ? Object.keys(e.payload).join(', ') : 'N/A'}`);
-            if (e.payload) {
-              console.log(`      payload.svParty=${e.payload.svParty || 'N/A'}`);
-              console.log(`      payload.sv_party=${e.payload.sv_party || 'N/A'}`);
-            }
+            const r = svEvents[0];
+            console.log(`      Keys: ${Object.keys(r).join(', ')}`);
+            console.log(`      has create_arguments=${Boolean(r.create_arguments)}, has payload.record=${Boolean(r.payload?.record)}`);
+            console.log(`      consuming=${r.consuming}, choice=${r.choice || 'N/A'}`);
+            console.log(`      template_id=${r.template_id}`);
           }
         }
-        
+
         svOnboardingEventsFound += svEvents.length;
-        
-        for (const event of svEvents) {
-          const contractId = event.contract_id;
+
+        for (const record of svEvents) {
+          const contractId = record.contract_id;
           if (!contractId) continue;
-          
-          // Handle both 'type' and 'event_type' field names
-          const eventType = event.type || event.event_type;
-          
-          if (eventType === 'created') {
-            // SV onboarding - set active_from
-            const payload = event.payload || {};
-            // Handle both camelCase and snake_case field names
-            const svParty = payload.svParty || payload.sv_party || null;
-            const svName = payload.svName || payload.sv_name || null;
-            
+
+          // Created event detection (no record.type in these exports)
+          const isCreate = Boolean(record.create_arguments) && isSvOnboardingConfirmed(record.template_id);
+
+          // Consume detection: consuming exercise on SvOnboardingConfirmed (Expire or other terminal choice)
+          const isConsume = Boolean(record.choice) && record.consuming === true && isSvOnboardingConfirmed(record.template_id);
+
+          if (isCreate) {
+            // Extract fields (Splice exports often nest DAML fields under payload.record)
+            const args = record.create_arguments || record.payload?.record || {};
+            const svParty = args.svParty ?? args.sv_party ?? null;
+            const svName = args.svName ?? args.sv_name ?? null;
+
             if (!svParty) continue;
-            
+
+            const startTime = record.created_at || record.record_time || record.effective_at || new Date().toISOString();
+
+            const existing = svIntervals.get(contractId);
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: payload.svRewardWeight || payload.sv_reward_weight || 1,
-              sv_participant_id: payload.svParticipantId || payload.sv_participant_id || null,
+              sv_reward_weight: args.svRewardWeight ?? args.sv_reward_weight ?? 1,
+              sv_participant_id: args.svParticipantId ?? args.sv_participant_id ?? null,
               contract_id: contractId,
-              active_from: event.effective_at || event.ledger_time || new Date().toISOString(),
-              active_until: null, // Active until archived/expired
-              dso: payload.dso || null,
-              reason: payload.reason ? String(payload.reason).slice(0, 500) : null,
+              active_from: startTime,
+              // If we saw consume before create, keep its end time
+              active_until: existing?.active_until ?? null,
+              dso: args.dso ?? null,
+              reason: args.reason ? String(args.reason).slice(0, 500) : null,
             });
-          } else if (eventType === 'archived' || (eventType === 'exercised' && event.consuming === true)) {
-            // SV offboarding or expiry - set active_until
-            // Only consuming exercised events terminate the contract
+          }
+
+          if (isConsume) {
+            const endTime = record.effective_at || record.record_time || new Date().toISOString();
             const existing = svIntervals.get(contractId);
             if (existing) {
-              existing.active_until = event.effective_at || event.ledger_time || new Date().toISOString();
+              existing.active_until = endTime;
             } else {
-              // We saw archive before create - will be merged later if create appears
+              // Consume before create: store end time; will be merged if create is found later
               svIntervals.set(contractId, {
                 sv_party: null,
                 sv_name: null,
@@ -381,7 +385,7 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
                 sv_participant_id: null,
                 contract_id: contractId,
                 active_from: null,
-                active_until: event.effective_at || event.ledger_time || new Date().toISOString(),
+                active_until: endTime,
                 dso: null,
                 reason: null,
               });
