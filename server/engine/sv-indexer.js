@@ -322,13 +322,17 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         // Filter to only SvOnboardingConfirmed events first
         const svEvents = events.filter(e => isSvOnboardingConfirmed(e.template_id));
         
-        // Debug: log first file's SvOnboardingConfirmed events
+        // Debug: log first file's SvOnboardingConfirmed events with full structure
         if (i === 0) {
           console.log(`   🔍 Debug - File has ${events.length} total events, ${svEvents.length} SvOnboardingConfirmed`);
           if (svEvents.length > 0) {
-            const sample = svEvents.slice(0, 3);
-            for (const e of sample) {
-              console.log(`      type=${e.type}, template=${e.template_id?.split(':').pop()}, svParty=${e.payload?.svParty?.slice(0,20) || 'N/A'}`);
+            const e = svEvents[0];
+            console.log(`      Keys: ${Object.keys(e).join(', ')}`);
+            console.log(`      event_type=${e.event_type}, type=${e.type}`);
+            console.log(`      payload keys: ${e.payload ? Object.keys(e.payload).join(', ') : 'N/A'}`);
+            if (e.payload) {
+              console.log(`      payload.svParty=${e.payload.svParty || 'N/A'}`);
+              console.log(`      payload.sv_party=${e.payload.sv_party || 'N/A'}`);
             }
           }
         }
@@ -339,26 +343,30 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           const contractId = event.contract_id;
           if (!contractId) continue;
           
-          if (event.type === 'created') {
+          // Handle both 'type' and 'event_type' field names
+          const eventType = event.type || event.event_type;
+          
+          if (eventType === 'created') {
             // SV onboarding - set active_from
             const payload = event.payload || {};
-            const svParty = payload.svParty || null;
-            const svName = payload.svName || null;
+            // Handle both camelCase and snake_case field names
+            const svParty = payload.svParty || payload.sv_party || null;
+            const svName = payload.svName || payload.sv_name || null;
             
             if (!svParty) continue;
             
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: payload.svRewardWeight || 1,
-              sv_participant_id: payload.svParticipantId || null,
+              sv_reward_weight: payload.svRewardWeight || payload.sv_reward_weight || 1,
+              sv_participant_id: payload.svParticipantId || payload.sv_participant_id || null,
               contract_id: contractId,
               active_from: event.effective_at || event.ledger_time || new Date().toISOString(),
               active_until: null, // Active until archived/expired
               dso: payload.dso || null,
               reason: payload.reason ? String(payload.reason).slice(0, 500) : null,
             });
-          } else if (event.type === 'archived' || (event.type === 'exercised' && event.consuming === true)) {
+          } else if (eventType === 'archived' || (eventType === 'exercised' && event.consuming === true)) {
             // SV offboarding or expiry - set active_until
             // Only consuming exercised events terminate the contract
             const existing = svIntervals.get(contractId);
