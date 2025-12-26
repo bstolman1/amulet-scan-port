@@ -6,6 +6,7 @@ import binaryReader from '../duckdb/binary-reader.js';
 import * as voteRequestIndexer from '../engine/vote-request-indexer.js';
 import * as rewardIndexer from '../engine/reward-indexer.js';
 import * as svIndexer from '../engine/sv-indexer.js';
+import * as dsoRulesIndexer from '../engine/dso-rules-indexer.js';
 import * as voteOutcomeAnalyzer from '../engine/vote-outcome-analyzer.js';
 import {
   getFilesForTemplate,
@@ -3958,6 +3959,70 @@ router.get('/sv-index/test', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error testing SV index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ DSO RULES INDEX ENDPOINTS ============
+
+// GET /api/events/dso-rules-index/stats - Get DSO Rules index statistics
+router.get('/dso-rules-index/stats', async (req, res) => {
+  try {
+    const stats = await dsoRulesIndexer.getDsoIndexStats();
+    res.json(stats);
+  } catch (err) {
+    console.error('Error getting DSO Rules index stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/events/dso-rules-index/build - Build DSO Rules SV membership index
+router.post('/dso-rules-index/build', async (req, res) => {
+  try {
+    const force = req.query.force === 'true';
+    const result = await dsoRulesIndexer.buildDsoRulesIndex({ force });
+    res.json(result);
+  } catch (err) {
+    console.error('Error building DSO Rules index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/dso-rules-index/build - Alternative GET endpoint for build
+router.get('/dso-rules-index/build', async (req, res) => {
+  try {
+    const force = req.query.force === 'true';
+    const result = await dsoRulesIndexer.buildDsoRulesIndex({ force });
+    res.json(result);
+  } catch (err) {
+    console.error('Error building DSO Rules index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/dso-rules-index/test - Test DSO Rules historical counts
+router.get('/dso-rules-index/test', async (req, res) => {
+  try {
+    const result = await dsoRulesIndexer.testDsoHistoricalCounts();
+    res.json(result);
+  } catch (err) {
+    console.error('Error testing DSO Rules index:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/dso-rules-index/sv-count-at - Get SV count at specific timestamp
+router.get('/dso-rules-index/sv-count-at', async (req, res) => {
+  try {
+    const timestamp = req.query.timestamp || req.query.at;
+    if (!timestamp) {
+      return res.status(400).json({ error: 'timestamp parameter required' });
+    }
+    const count = await dsoRulesIndexer.getDsoSvCountAt(timestamp);
+    const details = await dsoRulesIndexer.getDsoSvsAt(timestamp);
+    res.json({ timestamp, svCount: count, ...details });
+  } catch (err) {
+    console.error('Error getting DSO SV count:', err);
     res.status(500).json({ error: err.message });
   }
 });
