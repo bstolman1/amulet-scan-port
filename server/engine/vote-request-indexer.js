@@ -767,6 +767,66 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const archivedEventsMap = new Map();
     let closedViaDsoRules = 0;
     
+    // =============================================================================
+    // GENERIC DAML RECORD WALKER
+    // Recursively extracts all contractId values from nested DAML structures
+    // =============================================================================
+    function extractContractIds(node, depth = 0) {
+      if (!node || depth > 20) return []; // Prevent infinite recursion
+      
+      const ids = [];
+      
+      // Direct contractId field
+      if (node.contractId) {
+        ids.push(node.contractId);
+      }
+      
+      // DAML record: { record: { fields: [ { value: {...} }, ... ] } }
+      if (node.record?.fields && Array.isArray(node.record.fields)) {
+        for (const field of node.record.fields) {
+          if (field.value) {
+            ids.push(...extractContractIds(field.value, depth + 1));
+          }
+        }
+      }
+      
+      // DAML variant: { variant: { value: {...} } }
+      if (node.variant?.value) {
+        ids.push(...extractContractIds(node.variant.value, depth + 1));
+      }
+      
+      // DAML optional: { optional: { value: {...} } }
+      if (node.optional?.value) {
+        ids.push(...extractContractIds(node.optional.value, depth + 1));
+      }
+      
+      // DAML list: { list: [ {...}, ... ] }
+      if (node.list && Array.isArray(node.list)) {
+        for (const item of node.list) {
+          ids.push(...extractContractIds(item, depth + 1));
+        }
+      }
+      
+      // Generic object traversal (for non-DAML structures)
+      if (typeof node === 'object' && !Array.isArray(node)) {
+        for (const key of Object.keys(node)) {
+          if (key !== 'record' && key !== 'variant' && key !== 'optional' && key !== 'list') {
+            const val = node[key];
+            if (typeof val === 'object' && val !== null) {
+              ids.push(...extractContractIds(val, depth + 1));
+            }
+          }
+        }
+      }
+      
+      return ids;
+    }
+    
+    // Build set of known VoteRequest contract IDs for matching
+    const knownVoteRequestIds = new Set(createdResult.records.map(r => r.contract_id));
+    
+    let unmatchedCount = 0;
+    
     for (const record of exercisedResult.records) {
       // CANTON GOVERNANCE MODEL:
       // The winning rule execution IS the vote outcome.
@@ -775,15 +835,27 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       const choice = String(record.choice || '');
       
-      // Extract the VoteRequest contract_id from choice argument
-      // The voteRequestCid field links this DsoRules execution to its proposal
-      const voteRequestCid = 
-        record.exercise_argument?.voteRequestCid || 
-        record.payload?.voteRequestCid ||
-        record.raw?.choice_argument?.voteRequestCid ||
-        record.exercise_argument?.voteRequest ||
-        record.payload?.voteRequest ||
-        record.raw?.choice_argument?.voteRequest;
+      // Extract ALL contractIds from the exercise_argument using generic walker
+      const exerciseArg = record.exercise_argument || record.payload || record.raw?.choice_argument || {};
+      const allContractIds = extractContractIds(exerciseArg);
+      
+      // Find the VoteRequest contract ID by matching against known created VoteRequests
+      let voteRequestCid = null;
+      for (const cid of allContractIds) {
+        if (knownVoteRequestIds.has(cid)) {
+          voteRequestCid = cid;
+          break;
+        }
+      }
+      
+      // Fallback: try direct field access patterns (legacy support)
+      if (!voteRequestCid) {
+        voteRequestCid = 
+          exerciseArg.voteRequestCid || 
+          exerciseArg.voteRequest ||
+          record.raw?.choice_argument?.voteRequestCid ||
+          record.raw?.choice_argument?.voteRequest;
+      }
       
       if (voteRequestCid) {
         // Extract outcome from exercise result if available
@@ -821,16 +893,25 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         });
         closedViaDsoRules++;
       } else {
+        unmatchedCount++;
         // Defensive logging: DsoRules consuming event missing voteRequestCid
-        console.warn(`   ⚠️ DsoRules consuming event missing voteRequestCid: choice=${choice}, keys=${Object.keys(record.exercise_argument || record.payload || {}).join(',')}`);
+        if (unmatchedCount <= 5) {
+          console.warn(`   ⚠️ DsoRules consuming event could not find VoteRequest ID: choice=${choice}, extractedIds=${allContractIds.length}, sampleIds=${allContractIds.slice(0, 3).join(', ')}`);
+        }
       }
     }
+    
+    if (unmatchedCount > 5) {
+      console.warn(`   ⚠️ ... and ${unmatchedCount - 5} more unmatched DsoRules events`);
+    }
+    
     const closedContractIds = new Set(archivedEventsMap.keys());
     
     // 3️⃣ TERMINAL MAP SUMMARY (governance close events only)
     console.log(`   [VoteRequestIndexer] Terminal exercised map built:`, {
       terminalContracts: closedContractIds.size,
-      viaDsoRules: closedViaDsoRules
+      viaDsoRules: closedViaDsoRules,
+      unmatched: unmatchedCount
     });
     
     // 4️⃣ FINAL INVARIANTS (sanity check)
@@ -839,6 +920,11 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       finalized: closedContractIds.size,
       consumingExercised: exercisedResult.records.length
     });
+    
+    // INVARIANT CHECK: terminalContracts should equal consumingExercised (ideally)
+    if (closedContractIds.size !== exercisedResult.records.length) {
+      console.warn(`   ⚠️ INVARIANT VIOLATION: terminalContracts (${closedContractIds.size}) !== consumingExercised (${exercisedResult.records.length}). Unmatched: ${unmatchedCount}`);
+    }
 
     const now = new Date();
 
