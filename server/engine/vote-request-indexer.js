@@ -1545,37 +1545,23 @@ async function scanFilesForVoteRequests(files, eventType) {
             records.push(record);
           }
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
-          // GOVERNANCE CLOSE EVENT MODEL:
-          // A proposal is finalized IFF there exists a consuming exercised event on DsoRules
-          // that represents a governance close, specifically:
-          // - DsoRules_CloseVoteRequest
-          // - DsoRules_CloseVoteRequestResult
-          // These events come from :DsoRules template, NOT :VoteRequest template!
-          // All other consuming exercises are lifecycle/migration events and MUST be ignored.
+          // CANTON GOVERNANCE MODEL:
+          // There is NO explicit "vote closed" event on Canton.
+          // The winning rule execution IS the vote outcome.
+          // ANY consuming exercised event on :DsoRules template = finalized proposal.
+          // Examples: DsoRules_UpdateSvRewardWeight, DsoRules_RevokeFeaturedAppRight, etc.
           
-          // Only check DsoRules template for governance close events
           if (!record.template_id?.endsWith(':DsoRules')) continue;
           
           const consuming = record.consuming === true || record.consuming === 'true';
-          const choice = String(record.choice || '');
-          const isGovernanceClose = 
-            choice === 'DsoRules_CloseVoteRequest' || 
-            choice === 'DsoRules_CloseVoteRequestResult';
-          
-          if (consuming && isGovernanceClose) {
-            // This is a governance close event - include it
+          if (consuming) {
             records.push(record);
-          } else if (consuming && !isGovernanceClose) {
-            // GUARDRAIL: Log non-governance consuming exercises (lifecycle/migration)
-            console.debug(`   [VoteRequestIndexer] Ignoring consuming exercised event (non-governance close): contract_id=${record.contract_id}, choice=${choice}`);
           } else if (record.consuming === undefined || record.consuming === null) {
-            // Log exercised events lacking consuming flag
             missingConsumingCount++;
             if (missingConsumingCount <= 5) {
-              console.warn(`   ⚠️ Exercised event lacks 'consuming' flag: ${record.contract_id} choice=${choice}`);
+              console.warn(`   ⚠️ Exercised event lacks 'consuming' flag: ${record.contract_id} choice=${record.choice}`);
             }
           }
-          // Note: consuming=false means non-consuming exercise - skip silently
         }
       }
     } catch (err) {
@@ -1626,19 +1612,14 @@ async function scanAllFilesForVoteRequests(eventType) {
   const filter = eventType === 'created'
     ? (e) => e.template_id?.endsWith(':VoteRequest') && e.event_type === 'created'
     : (e) => {
+        // CANTON GOVERNANCE MODEL:
+        // There is NO explicit "vote closed" event on Canton.
+        // The winning rule execution IS the vote outcome.
+        // ANY consuming exercised event on :DsoRules template = finalized proposal.
         if (e.event_type !== 'exercised') return false;
-        // GOVERNANCE CLOSE EVENT MODEL:
-        // Close events come from :DsoRules template, NOT :VoteRequest template!
-        // Only DsoRules_CloseVoteRequest and DsoRules_CloseVoteRequestResult
-        // represent governance finality. All other consuming exercises are lifecycle events.
         if (!e.template_id?.endsWith(':DsoRules')) return false;
-        
         const consuming = e.consuming === true || e.consuming === 'true';
-        const choice = String(e.choice || '');
-        const isGovernanceClose = 
-          choice === 'DsoRules_CloseVoteRequest' || 
-          choice === 'DsoRules_CloseVoteRequestResult';
-        return consuming && isGovernanceClose;
+        return consuming;
       };
   
   console.log(`   Scanning for VoteRequest ${eventType} events (full scan)...`);
