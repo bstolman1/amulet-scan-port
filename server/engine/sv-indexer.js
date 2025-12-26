@@ -66,7 +66,18 @@ export async function ensureSvTables() {
     ON sv_active_intervals(active_from, active_until)
   `);
 
-  // Index state
+  // Drop old sv_index_state table if it has wrong schema and recreate
+  try {
+    // Check if files_scanned column exists
+    await query(`SELECT files_scanned FROM sv_index_state LIMIT 1`);
+  } catch (err) {
+    if (err.message?.includes('files_scanned')) {
+      console.log('   Migrating sv_index_state table to new schema...');
+      await query(`DROP TABLE IF EXISTS sv_index_state`);
+    }
+  }
+
+  // Index state with correct schema
   await query(`
     CREATE TABLE IF NOT EXISTS sv_index_state (
       id INTEGER PRIMARY KEY DEFAULT 1,
@@ -289,6 +300,16 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
     // Map to track SV intervals by contract_id
     const svIntervals = new Map();
     
+    // Helper to check if template_id matches SvOnboardingConfirmed (handles @hash suffixes)
+    const isSvOnboardingConfirmed = (templateId) => {
+      if (!templateId) return false;
+      // Match "SvOnboardingConfirmed" anywhere, handling @hash suffixes like @123abc
+      // Template format: "Splice.SvOnboarding:SvOnboardingConfirmed@abc123"
+      return templateId.includes('SvOnboardingConfirmed');
+    };
+    
+    let debugLoggedFirstFile = false;
+    
     // Scan all SvOnboardingConfirmed files
     for (let i = 0; i < svOnboardingFiles.length; i++) {
       indexingProgress.current = i + 1;
@@ -298,9 +319,19 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         const result = await binaryReader.readBinaryFile(filePath);
         const events = result.records || result || [];
         
+        // Debug: log first file's event shapes
+        if (!debugLoggedFirstFile && events.length > 0) {
+          debugLoggedFirstFile = true;
+          const sample = events.slice(0, 3);
+          console.log(`   🔍 Debug - First file event shapes:`);
+          for (const e of sample) {
+            console.log(`      type=${e.type}, template_id=${e.template_id?.slice(-60)}, choice=${e.choice || 'N/A'}`);
+          }
+        }
+        
         for (const event of events) {
-          // Only process SvOnboardingConfirmed template
-          if (!event.template_id?.includes('SvOnboardingConfirmed')) continue;
+          // Only process SvOnboardingConfirmed template (handles @hash suffixes)
+          if (!isSvOnboardingConfirmed(event.template_id)) continue;
           
           const contractId = event.contract_id;
           if (!contractId) continue;
@@ -324,17 +355,14 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
               dso: payload.dso || null,
               reason: payload.reason ? String(payload.reason).slice(0, 500) : null,
             });
-          } else if (event.type === 'archived' || event.type === 'exercised') {
+          } else if (event.type === 'archived' || (event.type === 'exercised' && event.consuming === true)) {
             // SV offboarding or expiry - set active_until
+            // Only consuming exercised events terminate the contract
             const existing = svIntervals.get(contractId);
             if (existing) {
-              // Check for expire choice
-              const choice = event.choice || '';
-              const isExpire = choice.toLowerCase().includes('expire');
-              
               existing.active_until = event.effective_at || event.ledger_time || new Date().toISOString();
             } else {
-              // We saw archive before create - create a placeholder
+              // We saw archive before create - will be merged later if create appears
               svIntervals.set(contractId, {
                 sv_party: null,
                 sv_name: null,
@@ -353,6 +381,8 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         console.warn(`   ⚠️ Error reading ${filePath}:`, fileErr.message);
       }
     }
+
+    console.log(`   📊 Found ${svIntervals.size} SV intervals across ${svOnboardingFiles.length} files`);
 
     // Insert all intervals into the database
     let insertedCount = 0;
