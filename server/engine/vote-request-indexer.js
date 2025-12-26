@@ -832,6 +832,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       terminalContracts: closedContractIds.size,
       viaDsoRules: closedViaDsoRules
     });
+    
+    // 4️⃣ FINAL INVARIANTS (sanity check)
+    console.log(`   [VoteRequestIndexer] Final invariants:`, {
+      created: createdResult.records.length,
+      finalized: closedContractIds.size,
+      consumingExercised: exercisedResult.records.length
+    });
 
     const now = new Date();
 
