@@ -1139,41 +1139,25 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           source: 'dso_rules_direct',
         });
         
-        // Defensive logging for first few
-        if (unmatchedCount <= 5) {
+        // Reduced logging - first 3 only
+        if (unmatchedCount <= 3) {
           console.log(`   📋 Direct DsoRules governance: choice=${choice}`);
         }
       }
     }
     
-    if (unmatchedCount > 5) {
-      console.log(`   📋 ... and ${unmatchedCount - 5} more direct DsoRules governance actions`);
+    if (unmatchedCount > 3) {
+      console.log(`   📋 ... and ${unmatchedCount - 3} more direct DsoRules governance actions`);
     }
     
     const closedContractIds = new Set(archivedEventsMap.keys());
     
-    // 3️⃣ TERMINAL MAP SUMMARY
-    console.log(`   [VoteRequestIndexer] Governance summary:`, {
-      voteRequestBacked: closedViaDsoRules,
-      directDsoRules: directGovernanceActions.length,
-      totalGovernance: closedViaDsoRules + directGovernanceActions.length
-    });
-    
-    // 4️⃣ FINAL INVARIANTS (sanity check)
-    console.log(`   [VoteRequestIndexer] Final invariants:`, {
-      created: createdResult.records.length,
-      finalized: closedContractIds.size,
-      consumingExercised: exercisedResult.records.length,
+    // INFORMATIONAL: DsoRules execution summary (does NOT affect VoteRequest status)
+    console.log(`   [GovernanceIndexer] DsoRules execution scan complete:`, {
+      consumingDsoRulesEvents: exercisedResult.records.length,
+      executionsLinkedToVoteRequests: closedViaDsoRules,
       directGovernance: directGovernanceActions.length
     });
-    
-    // INVARIANT: voteRequestBacked + directDsoRules should equal consumingExercised
-    const totalAccounted = closedViaDsoRules + directGovernanceActions.length;
-    if (totalAccounted !== exercisedResult.records.length) {
-      console.warn(`   ⚠️ ACCOUNTING MISMATCH: accounted (${totalAccounted}) !== consumingExercised (${exercisedResult.records.length})`);
-    } else {
-      console.log(`   ✅ INVARIANT VERIFIED: voteRequestBacked + directDsoRules = consumingExercised`);
-    }
 
     const now = new Date();
 
@@ -1813,37 +1797,55 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n✅ [VoteRequestIndexer] Index built: ${upserted} proposals indexed in ${elapsed}s`);
     
-    // 4️⃣ STATUS CLASSIFICATION SUMMARY (VoteRequest state + time model)
-    console.log(`   [VoteRequestIndexer] Proposal status summary:`, {
+    // ============================================================
+    // 1️⃣ AUTHORITATIVE GOVERNANCE SUMMARY LOG
+    // ============================================================
+    const acceptedNotExecuted = statusStats.accepted - statusStats.executed;
+    console.log(`\n[GovernanceIndexer] VoteRequest lifecycle summary:`);
+    console.log(JSON.stringify({
+      totalVoteRequests: upserted,
+      pending: statusStats.in_progress,
       accepted: statusStats.accepted,
       rejected: statusStats.rejected,
       expired: statusStats.expired,
-      inProgress: statusStats.in_progress,
-      executed: statusStats.executed, // Subset of accepted that have DsoRules execution
-    });
+      acceptedExecuted: statusStats.executed,
+      acceptedNotExecuted: acceptedNotExecuted
+    }, null, 2));
     
-    // 5️⃣ SANITY INVARIANT CHECK
-    // VoteRequests where now >= voteBefore = accepted + rejected + expired
-    const votingClosedCount = statusStats.accepted + statusStats.rejected + statusStats.expired;
-    console.log(`   [VoteRequestIndexer] 📊 GOVERNANCE TOTALS:`);
-    console.log(`      - Voting closed (past voteBefore): ${votingClosedCount}`);
-    console.log(`      - Voting open (in_progress): ${statusStats.in_progress}`);
-    console.log(`      - Total proposals: ${votingClosedCount + statusStats.in_progress}`);
-    console.log(`      - Target range (ccview): 220-235 completed`);
+    // ============================================================
+    // 2️⃣ SANITY-CHECK COMPARISON VS EXPLORERS
+    // ============================================================
+    const totalCompleted = statusStats.accepted + statusStats.rejected + statusStats.expired;
+    const explorerExpectedMidpoint = 227;
+    const explorerExpectedRange = { min: 220, max: 235 };
+    const delta = totalCompleted - explorerExpectedMidpoint;
     
-    if (votingClosedCount >= 200 && votingClosedCount <= 250) {
-      console.log(`   ✅ INVARIANT VERIFIED: Voting closed count (${votingClosedCount}) is in expected range 200-250`);
-    } else if (votingClosedCount < 200) {
-      console.warn(`   ⚠️ INVARIANT WARNING: Voting closed count (${votingClosedCount}) is below expected range 200-250`);
+    console.log(`\n[GovernanceIndexer] Sanity check:`);
+    console.log(`- totalCompleted = accepted + rejected + expired = ${totalCompleted}`);
+    console.log(`- explorerExpectedRange = ${explorerExpectedRange.min}–${explorerExpectedRange.max}`);
+    console.log(`- delta = totalCompleted - explorerExpectedMidpoint = ${delta}`);
+    
+    if (Math.abs(delta) <= 10) {
+      console.log(`✅ Governance counts consistent with external explorers`);
+    } else {
+      console.warn(`⚠️ Governance counts diverge from explorers — investigate`);
     }
     
-    // 6️⃣ SAMPLE FINALIZED PROPOSALS (debug level)
-    if (sampleFinalized.length > 0) {
-      console.log(`   [VoteRequestIndexer] Sample completed proposals:`);
-      sampleFinalized.forEach((p, i) => {
-        console.log(`      ${i + 1}. contract_id=${p.contract_id}, accepts=${p.acceptCount}, rejects=${p.rejectCount}, status=${p.status}, executed=${p.hasBeenExecuted}`);
-      });
-    }
+    // ============================================================
+    // 3️⃣ DSORULES EXECUTION STATS (INFORMATIONAL ONLY)
+    // ============================================================
+    console.log(`\n[GovernanceIndexer] Execution stats:`);
+    console.log(JSON.stringify({
+      consumingDsoRulesEvents: exercisedResult.records.length,
+      executionsLinkedToVoteRequests: closedViaDsoRules
+    }, null, 2));
+    
+    // ============================================================
+    // 4️⃣ MODEL EXPLANATION LOG (ONCE PER RUN)
+    // ============================================================
+    console.log(`\n[GovernanceIndexer] Model note:`);
+    console.log(`VoteRequest status is finalized at voteBefore.`);
+    console.log(`DsoRules execution is optional and does not determine accepted/rejected/expired.`);
 
     // Persist successful build summary for audit trail
     const buildId = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1862,15 +1864,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           ${upserted},
           ${upserted},
           0,
-          ${statusStats.accepted + statusStats.rejected + statusStats.expired},
+          ${totalCompleted},
           ${finalStats.inProgress},
-          ${finalStats.accepted}, -- Now 'accepted' instead of 'executed'
+          ${finalStats.accepted},
           ${finalStats.rejected},
           ${finalStats.expired},
           true
         )
       `);
-      console.log(`   📋 Build summary saved: ${buildId}`);
+      console.log(`\n   📋 Build summary saved: ${buildId}`);
     } catch (histErr) {
       console.warn('   ⚠️ Failed to save build history:', histErr.message);
     }
@@ -1882,18 +1884,6 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       await lockRelease();
       lockRelease = null;
     }
-
-    // 7️⃣ COMBINED GOVERNANCE SUMMARY (NEW MODEL)
-    const completedCount = statusStats.accepted + statusStats.rejected + statusStats.expired;
-    console.log(`   [VoteRequestIndexer] 📊 FINAL GOVERNANCE SUMMARY (VoteRequest State + Time Model):`);
-    console.log(`      - Total VoteRequest proposals indexed: ${upserted}`);
-    console.log(`      - Voting completed (past voteBefore): ${completedCount}`);
-    console.log(`         - Accepted: ${statusStats.accepted} (threshold met)`);
-    console.log(`         - Rejected: ${statusStats.rejected} (rejection threshold met)`);
-    console.log(`         - Expired: ${statusStats.expired} (no threshold met)`);
-    console.log(`      - Voting open (in_progress): ${statusStats.in_progress}`);
-    console.log(`      - Accepted & Executed via DsoRules: ${statusStats.executed}`);
-    console.log(`      - Direct DsoRules governance (no VoteRequest): ${directUpserted}`);
 
     return {
       status: 'complete',
