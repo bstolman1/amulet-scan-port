@@ -308,7 +308,7 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
       return templateId.includes('SvOnboardingConfirmed');
     };
     
-    let debugLoggedFirstFile = false;
+    let svOnboardingEventsFound = 0;
     
     // Scan all SvOnboardingConfirmed files
     for (let i = 0; i < svOnboardingFiles.length; i++) {
@@ -319,20 +319,23 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
         const result = await binaryReader.readBinaryFile(filePath);
         const events = result.records || result || [];
         
-        // Debug: log first file's event shapes
-        if (!debugLoggedFirstFile && events.length > 0) {
-          debugLoggedFirstFile = true;
-          const sample = events.slice(0, 3);
-          console.log(`   🔍 Debug - First file event shapes:`);
-          for (const e of sample) {
-            console.log(`      type=${e.type}, template_id=${e.template_id?.slice(-60)}, choice=${e.choice || 'N/A'}`);
+        // Filter to only SvOnboardingConfirmed events first
+        const svEvents = events.filter(e => isSvOnboardingConfirmed(e.template_id));
+        
+        // Debug: log first file's SvOnboardingConfirmed events
+        if (i === 0) {
+          console.log(`   🔍 Debug - File has ${events.length} total events, ${svEvents.length} SvOnboardingConfirmed`);
+          if (svEvents.length > 0) {
+            const sample = svEvents.slice(0, 3);
+            for (const e of sample) {
+              console.log(`      type=${e.type}, template=${e.template_id?.split(':').pop()}, svParty=${e.payload?.svParty?.slice(0,20) || 'N/A'}`);
+            }
           }
         }
         
-        for (const event of events) {
-          // Only process SvOnboardingConfirmed template (handles @hash suffixes)
-          if (!isSvOnboardingConfirmed(event.template_id)) continue;
-          
+        svOnboardingEventsFound += svEvents.length;
+        
+        for (const event of svEvents) {
           const contractId = event.contract_id;
           if (!contractId) continue;
           
@@ -382,7 +385,7 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
       }
     }
 
-    console.log(`   📊 Found ${svIntervals.size} SV intervals across ${svOnboardingFiles.length} files`);
+    console.log(`   📊 Found ${svOnboardingEventsFound} SvOnboardingConfirmed events → ${svIntervals.size} SV intervals`);
 
     // Insert all intervals into the database
     let insertedCount = 0;
@@ -419,11 +422,12 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
     const currentSvCount = await getActiveSvCountAt(new Date());
     
     // Update index state
+    const now = new Date().toISOString();
     await query(`
       INSERT INTO sv_index_state (id, last_indexed_at, total_svs, files_scanned)
-      VALUES (1, CURRENT_TIMESTAMP, ${currentSvCount}, ${svOnboardingFiles.length})
+      VALUES (1, '${now}', ${currentSvCount}, ${svOnboardingFiles.length})
       ON CONFLICT (id) DO UPDATE SET
-        last_indexed_at = CURRENT_TIMESTAMP,
+        last_indexed_at = '${now}',
         total_svs = ${currentSvCount},
         files_scanned = ${svOnboardingFiles.length}
     `);
