@@ -364,7 +364,23 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
             if (!field) return null;
 
             const v = field.value;
-            return v?.party ?? v?.text ?? v?.int64 ?? v?.numeric ?? v ?? null;
+
+            // DAML Party is nested: field.value.party.party
+            if (v?.party && typeof v.party === 'object' && v.party.party) {
+              return v.party.party;
+            }
+
+            // Sometimes Party is already flat
+            if (typeof v?.party === 'string') {
+              return v.party;
+            }
+
+            // Other DAML primitives
+            if (v?.text) return v.text;
+            if (v?.int64 != null) return Number(v.int64);
+            if (v?.numeric != null) return Number(v.numeric);
+
+            return null;
           };
 
           // CREATE detection
