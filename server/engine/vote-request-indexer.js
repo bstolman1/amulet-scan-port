@@ -41,8 +41,9 @@ import {
   getTemplateIndexStats
 } from './template-file-index.js';
 import * as svIndexer from './sv-indexer.js';
+import * as dsoRulesIndexer from './dso-rules-indexer.js';
 
-// Default SV count if SV index is not populated (fallback)
+// Default SV count if DSO Rules index is not populated (fallback)
 const DEFAULT_SV_COUNT = 13;
 
 let indexingInProgress = false;
@@ -1464,14 +1465,23 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       // ============================================================
       
       // DYNAMIC THRESHOLD: Calculate 2/3 supermajority based on SV count at vote time
+      // Uses DSO Rules as CANONICAL source (not SvOnboardingConfirmed attestations)
       // threshold = ceil(2/3 × number_of_active_SVs_at_vote_time)
       // Same threshold applies to both acceptance AND rejection
       const voteTime = voteBefore || event.effective_at;
       let svCountAtVoteTime = svCountCache.get(voteTime);
       if (svCountAtVoteTime === undefined) {
-        svCountAtVoteTime = await svIndexer.getSvCountAt(voteTime);
+        // PRIMARY: Use DSO Rules index (canonical SV membership)
+        svCountAtVoteTime = await dsoRulesIndexer.getDsoSvCountAt(voteTime);
+        
+        // FALLBACK: If DSO Rules not populated, try SvOnboardingConfirmed (for audit only)
         if (svCountAtVoteTime === 0) {
-          svCountAtVoteTime = DEFAULT_SV_COUNT; // Fallback if SV index not populated
+          svCountAtVoteTime = await svIndexer.getSvCountAt(voteTime);
+        }
+        
+        // FINAL FALLBACK: Use default if no index populated
+        if (svCountAtVoteTime === 0) {
+          svCountAtVoteTime = DEFAULT_SV_COUNT;
           usedFallbackSvCount = true;
         }
         svCountCache.set(voteTime, svCountAtVoteTime);

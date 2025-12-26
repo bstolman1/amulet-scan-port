@@ -20,6 +20,7 @@ import {
   getTemplateIndexStats,
 } from './template-file-index.js';
 import * as svIndexer from './sv-indexer.js';
+import * as dsoRulesIndexer from './dso-rules-indexer.js';
 
 const WORKER_INTERVAL_MS = parseInt(process.env.ENGINE_INTERVAL_MS || '30000', 10);
 const FILES_PER_CYCLE = parseInt(process.env.ENGINE_FILES_PER_CYCLE || '3', 10);
@@ -28,13 +29,15 @@ const AUTO_RECOVER_GAPS = process.env.AUTO_RECOVER_GAPS !== 'false'; // Enable b
 const VOTE_INDEX_BUILD_ON_STARTUP = process.env.VOTE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 const TEMPLATE_INDEX_BUILD_ON_STARTUP = process.env.TEMPLATE_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 const SV_INDEX_BUILD_ON_STARTUP = process.env.SV_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
+const DSO_RULES_INDEX_BUILD_ON_STARTUP = process.env.DSO_RULES_INDEX_BUILD_ON_STARTUP !== 'false'; // Build on startup by default
 
 let running = false;
 let workerInterval = null;
 let lastStats = null;
 let cycleCount = 0;
 let templateIndexBuildPromise = null; // Track background template index build
-let svIndexBuildPromise = null; // Track background SV index build
+let svIndexBuildPromise = null; // Track background SV index build (ephemeral attestations)
+let dsoRulesIndexBuildPromise = null; // Track background DSO Rules index build (canonical SV membership)
 let voteIndexBuildPromise = null; // Track background vote index build
 
 const CYCLE_TIMEOUT_MS = parseInt(process.env.ENGINE_CYCLE_TIMEOUT_MS || '600000', 10); // 10 min default (increased from 5)
@@ -170,8 +173,10 @@ async function startTemplateIndexBuild() {
   const populated = await isTemplateIndexPopulated();
   if (populated) {
     console.log('✅ Template index already populated, skipping build');
-    // Start SV index build (which will then start vote index)
-    if (SV_INDEX_BUILD_ON_STARTUP) {
+    // Start DSO Rules index build (which will then start vote index)
+    if (DSO_RULES_INDEX_BUILD_ON_STARTUP) {
+      startDsoRulesIndexBuild();
+    } else if (SV_INDEX_BUILD_ON_STARTUP) {
       startSvIndexBuild();
     } else if (VOTE_INDEX_BUILD_ON_STARTUP) {
       startVoteIndexBuild();
@@ -180,15 +185,17 @@ async function startTemplateIndexBuild() {
   }
   
   console.log('📑 Starting background template index build...');
-  console.log('   This will dramatically speed up SV and VoteRequest index builds');
+  console.log('   This will dramatically speed up DSO Rules and VoteRequest index builds');
   
   templateIndexBuildPromise = buildTemplateFileIndex({ force: false, incremental: true })
     .then(result => {
       console.log(`✅ Template index complete: ${result.filesIndexed} files, ${result.templatesFound} mappings in ${result.elapsedSeconds}s`);
       templateIndexBuildPromise = null;
       
-      // Now start SV index build (which will then start vote index)
-      if (SV_INDEX_BUILD_ON_STARTUP) {
+      // Now start DSO Rules index build (which will then start vote index)
+      if (DSO_RULES_INDEX_BUILD_ON_STARTUP) {
+        startDsoRulesIndexBuild();
+      } else if (SV_INDEX_BUILD_ON_STARTUP) {
         startSvIndexBuild();
       } else if (VOTE_INDEX_BUILD_ON_STARTUP) {
         startVoteIndexBuild();
@@ -201,11 +208,54 @@ async function startTemplateIndexBuild() {
 }
 
 /**
+ * Start DSO Rules SV membership index build as a background task
+ * This is the CANONICAL source for vote thresholds.
+ * Must run BEFORE VoteRequest index.
+ */
+async function startDsoRulesIndexBuild() {
+  if (dsoRulesIndexBuildPromise || dsoRulesIndexer.isIndexingInProgress()) {
+    console.log('⏭️ DSO Rules index build already in progress');
+    return;
+  }
+  
+  const stats = await dsoRulesIndexer.getDsoIndexStats();
+  if (stats.isPopulated) {
+    console.log(`✅ DSO Rules index already populated (${stats.totalRules} rules, ${stats.currentSvCount} current SVs), skipping build`);
+    // Start vote index build if configured
+    if (VOTE_INDEX_BUILD_ON_STARTUP) {
+      startVoteIndexBuild();
+    }
+    return;
+  }
+  
+  console.log('📜 Starting background DSO Rules SV membership index build...');
+  console.log('   Source: DsoRules template (CANONICAL for vote thresholds)');
+  console.log('   This provides accurate SV count at vote time');
+  
+  dsoRulesIndexBuildPromise = dsoRulesIndexer.buildDsoRulesIndex({ force: false })
+    .then(result => {
+      console.log(`✅ DSO Rules index complete: ${result.filesScanned} files, ${result.rulesIndexed} rules, ${result.currentSvCount} current SVs`);
+      dsoRulesIndexBuildPromise = null;
+      
+      // Now start vote index build if configured
+      if (VOTE_INDEX_BUILD_ON_STARTUP) {
+        startVoteIndexBuild();
+      }
+    })
+    .catch(err => {
+      console.error('❌ DSO Rules index build failed:', err.message);
+      dsoRulesIndexBuildPromise = null;
+      
+      // Try fallback to SV onboarding index, then vote index
+      console.log('⚠️ Falling back to SvOnboardingConfirmed index...');
+      startSvIndexBuild();
+    });
+}
+
+/**
  * Start SV membership index build as a background task
- * Once complete, starts vote index build if configured
- * 
- * This must run BEFORE VoteRequest index so that dynamic threshold
- * calculation can use accurate historical SV counts at each vote time.
+ * NOTE: This is for AUDIT/PROVENANCE only, not for vote thresholds.
+ * DSO Rules index is the canonical source for thresholds.
  */
 async function startSvIndexBuild() {
   if (svIndexBuildPromise || svIndexer.isIndexingInProgress()) {
@@ -215,7 +265,7 @@ async function startSvIndexBuild() {
   
   const stats = await svIndexer.getSvIndexStats();
   if (stats.isPopulated) {
-    console.log(`✅ SV membership index already populated (${stats.totalIntervals} intervals, ${stats.currentActiveSvs} active SVs), skipping build`);
+    console.log(`✅ SV membership index already populated (${stats.totalIntervals} intervals), skipping build`);
     // Start vote index build if configured
     if (VOTE_INDEX_BUILD_ON_STARTUP) {
       startVoteIndexBuild();
@@ -223,13 +273,13 @@ async function startSvIndexBuild() {
     return;
   }
   
-  console.log('👥 Starting background SV membership index build...');
-  console.log('   Source: ONLY SvOnboardingConfirmed (no DsoRules scanning)');
-  console.log('   This is required for accurate vote threshold calculation');
+  console.log('👥 Starting background SV membership index build (audit/provenance)...');
+  console.log('   Source: SvOnboardingConfirmed (ephemeral attestations)');
+  console.log('   NOTE: For thresholds, use DSO Rules index instead');
   
   svIndexBuildPromise = svIndexer.buildSvMembershipIndex({ force: false })
     .then(result => {
-      console.log(`✅ SV membership index complete: ${result.filesScanned} files, ${result.intervalsIndexed} intervals, ${result.currentActiveSvs} active SVs`);
+      console.log(`✅ SV membership index complete: ${result.filesScanned} files, ${result.intervalsIndexed} intervals`);
       svIndexBuildPromise = null;
       
       // Now start vote index build if configured
