@@ -215,7 +215,7 @@ async function startSvIndexBuild() {
   
   const stats = await svIndexer.getSvIndexStats();
   if (stats.isPopulated) {
-    console.log(`✅ SV membership index already populated (${stats.totalEvents} events), skipping build`);
+    console.log(`✅ SV membership index already populated (${stats.totalIntervals} intervals, ${stats.currentActiveSvs} active SVs), skipping build`);
     // Start vote index build if configured
     if (VOTE_INDEX_BUILD_ON_STARTUP) {
       startVoteIndexBuild();
@@ -224,11 +224,12 @@ async function startSvIndexBuild() {
   }
   
   console.log('👥 Starting background SV membership index build...');
+  console.log('   Source: ONLY SvOnboardingConfirmed (no DsoRules scanning)');
   console.log('   This is required for accurate vote threshold calculation');
   
   svIndexBuildPromise = svIndexer.buildSvMembershipIndex({ force: false })
     .then(result => {
-      console.log(`✅ SV membership index complete: ${result.onboardEvents} onboard, ${result.offboardEvents} offboard, current count: ${result.currentSvCount}`);
+      console.log(`✅ SV membership index complete: ${result.filesScanned} files, ${result.intervalsIndexed} intervals, ${result.currentActiveSvs} active SVs`);
       svIndexBuildPromise = null;
       
       // Now start vote index build if configured

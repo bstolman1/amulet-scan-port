@@ -1,15 +1,24 @@
 /**
  * SV Membership Indexer
  * 
- * Tracks Super Validator onboarding/offboarding events over time to:
- * 1. Build historical SV membership snapshots
- * 2. Calculate SV count at any point in time
- * 3. Determine voting thresholds for proposal outcome analysis
+ * Tracks Super Validator membership using ONLY SvOnboardingConfirmed template.
  * 
- * Templates tracked:
- * - Splice.SvOnboarding:SvOnboardingConfirmed (onboard)
- * - Splice.SvOnboarding:SvOnboardingRequest (pending)
- * - DsoRules_OffboardSv actions (offboard)
+ * This is the ONLY authoritative source of SV membership:
+ * - Splice.SvOnboarding:SvOnboardingConfirmed
+ * 
+ * ❌ EXPLICITLY DO NOT:
+ * - Scan DsoRules files
+ * - Infer SVs from votes or DsoRules
+ * - Hardcode thresholds (9 / 5)
+ * - Infer SV count from current network state
+ * - Scan 70k DSO files
+ * 
+ * ✅ CORRECT BEHAVIOR:
+ * - Uses template-file-index to scan only ~10 files containing SvOnboardingConfirmed
+ * - Builds SV active intervals (active_from, active_until)
+ * - active_from = created_at of SvOnboardingConfirmed
+ * - active_until = archive time OR SvOnboardingConfirmed_Expire exercise time OR ∞
+ * - Exposes getActiveSvCountAt(timestamp) for dynamic voting thresholds
  */
 
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
@@ -20,41 +29,41 @@ let indexingInProgress = false;
 let indexingProgress = null;
 
 /**
- * Ensure SV membership tables exist
+ * Ensure SV membership tables exist with active interval schema
  */
 export async function ensureSvTables() {
-  // SV membership events table
+  // SV active intervals table - tracks when each SV was active
   await query(`
-    CREATE TABLE IF NOT EXISTS sv_membership_events (
-      event_id VARCHAR PRIMARY KEY,
-      event_type VARCHAR NOT NULL,
-      sv_party VARCHAR,
+    CREATE TABLE IF NOT EXISTS sv_active_intervals (
+      sv_party VARCHAR NOT NULL,
       sv_name VARCHAR,
-      sv_reward_weight INTEGER,
+      sv_reward_weight INTEGER DEFAULT 1,
       sv_participant_id VARCHAR,
-      effective_at TIMESTAMP,
-      sponsor VARCHAR,
-      reason VARCHAR,
+      contract_id VARCHAR PRIMARY KEY,
+      active_from TIMESTAMP NOT NULL,
+      active_until TIMESTAMP,
       dso VARCHAR,
-      contract_id VARCHAR,
+      reason VARCHAR,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
   // Create unique index for upserts
   await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_sv_membership_events_id 
-    ON sv_membership_events(event_id)
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sv_active_intervals_contract
+    ON sv_active_intervals(contract_id)
   `);
 
-  // SV count snapshots table (for fast lookups)
+  // Index for fast lookups by sv_party
   await query(`
-    CREATE TABLE IF NOT EXISTS sv_count_snapshots (
-      snapshot_date DATE PRIMARY KEY,
-      sv_count INTEGER NOT NULL,
-      sv_parties VARCHAR,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
+    CREATE INDEX IF NOT EXISTS idx_sv_active_intervals_party
+    ON sv_active_intervals(sv_party)
+  `);
+
+  // Index for time-based queries
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_sv_active_intervals_time
+    ON sv_active_intervals(active_from, active_until)
   `);
 
   // Index state
@@ -62,8 +71,8 @@ export async function ensureSvTables() {
     CREATE TABLE IF NOT EXISTS sv_index_state (
       id INTEGER PRIMARY KEY DEFAULT 1,
       last_indexed_at TIMESTAMP,
-      total_events INTEGER DEFAULT 0,
-      total_svs INTEGER DEFAULT 0
+      total_svs INTEGER DEFAULT 0,
+      files_scanned INTEGER DEFAULT 0
     )
   `);
   
@@ -80,57 +89,53 @@ export async function getSvIndexStats() {
   try {
     await ensureSvTables();
     
-    const totalEvents = await queryOne(`SELECT COUNT(*) as count FROM sv_membership_events`);
-    const onboardCount = await queryOne(`SELECT COUNT(*) as count FROM sv_membership_events WHERE event_type = 'onboard'`);
-    const offboardCount = await queryOne(`SELECT COUNT(*) as count FROM sv_membership_events WHERE event_type = 'offboard'`);
-    const state = await queryOne(`SELECT last_indexed_at, total_svs FROM sv_index_state WHERE id = 1`);
+    const totalIntervals = await queryOne(`SELECT COUNT(*) as count FROM sv_active_intervals`);
+    const currentActive = await queryOne(`
+      SELECT COUNT(DISTINCT sv_party) as count 
+      FROM sv_active_intervals 
+      WHERE active_until IS NULL OR active_until > CURRENT_TIMESTAMP
+    `);
+    const state = await queryOne(`SELECT last_indexed_at, total_svs, files_scanned FROM sv_index_state WHERE id = 1`);
     
     return {
-      totalEvents: Number(totalEvents?.count || 0),
-      onboardCount: Number(onboardCount?.count || 0),
-      offboardCount: Number(offboardCount?.count || 0),
+      totalIntervals: Number(totalIntervals?.count || 0),
+      currentActiveSvs: Number(currentActive?.count || 0),
       lastIndexedAt: state?.last_indexed_at || null,
-      currentSvCount: Number(state?.total_svs || 0),
-      isPopulated: Number(totalEvents?.count || 0) > 0,
+      totalSvs: Number(state?.total_svs || 0),
+      filesScanned: Number(state?.files_scanned || 0),
+      isPopulated: Number(totalIntervals?.count || 0) > 0,
       isIndexing: indexingInProgress,
       indexing: indexingInProgress ? indexingProgress : null,
     };
   } catch (err) {
     console.error('Error getting SV index stats:', err);
-    return { totalEvents: 0, onboardCount: 0, offboardCount: 0, isPopulated: false, isIndexing: indexingInProgress, indexing: null };
+    return { totalIntervals: 0, currentActiveSvs: 0, isPopulated: false, isIndexing: indexingInProgress, indexing: null };
   }
 }
 
 /**
- * Get SV count at a specific date/time
+ * Get count of active SVs at a specific point in time.
+ * This is the ONLY function vote-request-indexer should use for threshold calculation.
+ * 
+ * @param {Date|string} dateTime - The timestamp to check
+ * @returns {number} Count of active SVs at that time
  */
-export async function getSvCountAt(dateTime) {
+export async function getActiveSvCountAt(dateTime) {
   try {
     await ensureSvTables();
     
     const timestamp = new Date(dateTime).toISOString();
     
-    // Count unique SVs that were onboarded before this time and not offboarded
-    const result = await query(`
-      WITH onboarded AS (
-        SELECT DISTINCT sv_party, MIN(effective_at) as onboard_time
-        FROM sv_membership_events
-        WHERE event_type = 'onboard' AND effective_at <= '${timestamp}'
-        GROUP BY sv_party
-      ),
-      offboarded AS (
-        SELECT sv_party, MIN(effective_at) as offboard_time
-        FROM sv_membership_events
-        WHERE event_type = 'offboard' AND effective_at <= '${timestamp}'
-        GROUP BY sv_party
-      )
-      SELECT COUNT(*) as count
-      FROM onboarded o
-      LEFT JOIN offboarded off ON o.sv_party = off.sv_party
-      WHERE off.offboard_time IS NULL OR off.offboard_time > o.onboard_time
+    // Count unique SVs that were active at this timestamp
+    // active_from <= timestamp AND (active_until IS NULL OR active_until > timestamp)
+    const result = await queryOne(`
+      SELECT COUNT(DISTINCT sv_party) as count
+      FROM sv_active_intervals
+      WHERE active_from <= '${timestamp}'
+        AND (active_until IS NULL OR active_until > '${timestamp}')
     `);
     
-    return Number(result?.[0]?.count || 0);
+    return Number(result?.count || 0);
   } catch (err) {
     console.error('Error getting SV count at date:', err);
     return 0;
@@ -138,7 +143,14 @@ export async function getSvCountAt(dateTime) {
 }
 
 /**
- * Get list of active SVs at a specific date/time
+ * Legacy alias for backwards compatibility
+ */
+export async function getSvCountAt(dateTime) {
+  return getActiveSvCountAt(dateTime);
+}
+
+/**
+ * Get list of active SVs at a specific date/time with details
  */
 export async function getActiveSvsAt(dateTime) {
   try {
@@ -147,30 +159,20 @@ export async function getActiveSvsAt(dateTime) {
     const timestamp = new Date(dateTime).toISOString();
     
     const result = await query(`
-      WITH onboarded AS (
-        SELECT sv_party, sv_name, sv_reward_weight, MIN(effective_at) as onboard_time
-        FROM sv_membership_events
-        WHERE event_type = 'onboard' AND effective_at <= '${timestamp}'
-        GROUP BY sv_party, sv_name, sv_reward_weight
-      ),
-      offboarded AS (
-        SELECT sv_party, MIN(effective_at) as offboard_time
-        FROM sv_membership_events
-        WHERE event_type = 'offboard' AND effective_at <= '${timestamp}'
-        GROUP BY sv_party
-      )
-      SELECT o.sv_party, o.sv_name, o.sv_reward_weight, o.onboard_time
-      FROM onboarded o
-      LEFT JOIN offboarded off ON o.sv_party = off.sv_party
-      WHERE off.offboard_time IS NULL OR off.offboard_time > o.onboard_time
-      ORDER BY o.onboard_time ASC
+      SELECT sv_party, sv_name, sv_reward_weight, active_from, active_until, contract_id
+      FROM sv_active_intervals
+      WHERE active_from <= '${timestamp}'
+        AND (active_until IS NULL OR active_until > '${timestamp}')
+      ORDER BY active_from ASC
     `);
     
     return result.map(r => ({
       svParty: r.sv_party,
       svName: r.sv_name,
       svRewardWeight: Number(r.sv_reward_weight || 1),
-      onboardTime: r.onboard_time,
+      activeFrom: r.active_from,
+      activeUntil: r.active_until,
+      contractId: r.contract_id,
     }));
   } catch (err) {
     console.error('Error getting active SVs at date:', err);
@@ -179,30 +181,29 @@ export async function getActiveSvsAt(dateTime) {
 }
 
 /**
- * Get SV membership timeline
+ * Get SV membership timeline (all intervals)
  */
 export async function getSvMembershipTimeline(limit = 100) {
   try {
     await ensureSvTables();
     
-    const events = await query(`
-      SELECT event_id, event_type, sv_party, sv_name, sv_reward_weight, 
-             effective_at, sponsor, reason, contract_id
-      FROM sv_membership_events
-      ORDER BY effective_at DESC
+    const intervals = await query(`
+      SELECT sv_party, sv_name, sv_reward_weight, 
+             active_from, active_until, contract_id, dso, reason
+      FROM sv_active_intervals
+      ORDER BY active_from DESC
       LIMIT ${limit}
     `);
     
-    return events.map(e => ({
-      eventId: e.event_id,
-      eventType: e.event_type,
+    return intervals.map(e => ({
       svParty: e.sv_party,
       svName: e.sv_name,
       svRewardWeight: Number(e.sv_reward_weight || 1),
-      effectiveAt: e.effective_at,
-      sponsor: e.sponsor,
-      reason: e.reason,
+      activeFrom: e.active_from,
+      activeUntil: e.active_until,
       contractId: e.contract_id,
+      dso: e.dso,
+      reason: e.reason,
     }));
   } catch (err) {
     console.error('Error getting SV timeline:', err);
@@ -213,6 +214,9 @@ export async function getSvMembershipTimeline(limit = 100) {
 /**
  * Calculate voting threshold based on SV count
  * Canton governance requires 2/3 majority (rounded up) for pass/reject
+ * 
+ * ❌ DO NOT hardcode thresholds like 9 or 5
+ * ✅ ALWAYS use ceil(2/3 * svCount)
  */
 export function calculateVotingThreshold(svCount) {
   // 2/3 majority rounded up - this is the threshold for both accept AND reject
@@ -227,7 +231,10 @@ export function calculateVotingThreshold(svCount) {
 }
 
 /**
- * Build SV membership index by scanning binary files
+ * Build SV membership index by scanning ONLY SvOnboardingConfirmed files
+ * 
+ * Uses template-file-index to find only the ~10 files containing this template.
+ * Does NOT scan DsoRules or any other files.
  */
 export async function buildSvMembershipIndex({ force = false } = {}) {
   if (indexingInProgress) {
@@ -238,6 +245,7 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
   indexingInProgress = true;
   indexingProgress = { phase: 'starting', current: 0, total: 0 };
   console.log('\n👥 Starting SV membership index build...');
+  console.log('   Source: ONLY Splice.SvOnboarding:SvOnboardingConfirmed');
 
   try {
     await ensureSvTables();
@@ -245,169 +253,164 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
     // Check if already populated
     if (!force) {
       const stats = await getSvIndexStats();
-      if (stats.totalEvents > 0) {
-        console.log(`✅ SV index already populated (${stats.totalEvents} events), use force=true to rebuild`);
+      if (stats.totalIntervals > 0) {
+        console.log(`✅ SV index already populated (${stats.totalIntervals} intervals), use force=true to rebuild`);
         indexingInProgress = false;
-        return { status: 'skipped', events: stats.totalEvents };
+        return { status: 'skipped', intervals: stats.totalIntervals };
       }
     }
 
     if (force) {
       console.log('   🗑️ Force rebuild - clearing existing SV data...');
-      await query(`DELETE FROM sv_membership_events`);
+      await query(`DELETE FROM sv_active_intervals`);
     }
-
-    let totalOnboards = 0;
-    let totalOffboards = 0;
 
     // Check if template index is available
     const templateIndexPopulated = await isTemplateIndexPopulated();
     
-    if (templateIndexPopulated) {
-      // FAST PATH: Use template index
-      console.log('   📋 Using template index for fast scanning...');
+    if (!templateIndexPopulated) {
+      console.log('   ⚠️ Template index not available, build it first for fast SV indexing');
+      indexingInProgress = false;
+      return { status: 'error', message: 'Template index required. Build template index first.' };
+    }
+
+    // Get ONLY files containing SvOnboardingConfirmed - should be ~10 files
+    const svOnboardingFiles = await getFilesForTemplate('SvOnboardingConfirmed');
+    console.log(`   📂 Found ${svOnboardingFiles.length} files with SvOnboardingConfirmed events`);
+    
+    if (svOnboardingFiles.length === 0) {
+      console.log('   ⚠️ No SvOnboardingConfirmed files found in template index');
+      indexingInProgress = false;
+      return { status: 'error', message: 'No SvOnboardingConfirmed files found' };
+    }
+
+    indexingProgress = { phase: 'scanning', current: 0, total: svOnboardingFiles.length };
+
+    // Map to track SV intervals by contract_id
+    const svIntervals = new Map();
+    
+    // Scan all SvOnboardingConfirmed files
+    for (let i = 0; i < svOnboardingFiles.length; i++) {
+      indexingProgress.current = i + 1;
+      const filePath = svOnboardingFiles[i];
       
-      // Scan SvOnboardingConfirmed for onboard events
-      const onboardFiles = await getFilesForTemplate('SvOnboardingConfirmed');
-      console.log(`   📂 Found ${onboardFiles.length} files with SvOnboardingConfirmed events`);
-      
-      indexingProgress = { phase: 'scan:onboard', current: 0, total: onboardFiles.length, filesScanned: 0, totalFiles: onboardFiles.length + (await getFilesForTemplate('DsoRules')).length };
-      
-      for (let i = 0; i < onboardFiles.length; i++) {
-        indexingProgress.current = i + 1;
-        indexingProgress.filesScanned = i + 1;
-        const filePath = onboardFiles[i];
+      try {
+        const result = await binaryReader.readBinaryFile(filePath);
+        const events = result.records || result || [];
         
-        try {
-          const result = await binaryReader.readBinaryFile(filePath);
-          const events = result.records || result || [];
+        for (const event of events) {
+          // Only process SvOnboardingConfirmed template
+          if (!event.template_id?.includes('SvOnboardingConfirmed')) continue;
           
-          for (const event of events) {
-            if (event.type !== 'created') continue;
-            if (!event.template_id?.includes('SvOnboardingConfirmed')) continue;
-            
+          const contractId = event.contract_id;
+          if (!contractId) continue;
+          
+          if (event.type === 'created') {
+            // SV onboarding - set active_from
             const payload = event.payload || {};
             const svParty = payload.svParty || null;
             const svName = payload.svName || null;
             
             if (!svParty) continue;
             
-            try {
-              await query(`
-                INSERT INTO sv_membership_events 
-                  (event_id, event_type, sv_party, sv_name, sv_reward_weight, 
-                   sv_participant_id, effective_at, sponsor, reason, dso, contract_id)
-                VALUES (
-                  '${event.event_id?.replace(/'/g, "''")}',
-                  'onboard',
-                  '${svParty.replace(/'/g, "''")}',
-                  ${svName ? `'${svName.replace(/'/g, "''")}'` : 'NULL'},
-                  ${payload.svRewardWeight || 1},
-                  ${payload.svParticipantId ? `'${payload.svParticipantId.replace(/'/g, "''")}'` : 'NULL'},
-                  '${event.effective_at || new Date().toISOString()}',
-                  NULL,
-                  ${payload.reason ? `'${String(payload.reason).slice(0, 500).replace(/'/g, "''")}'` : 'NULL'},
-                  ${payload.dso ? `'${payload.dso.replace(/'/g, "''")}'` : 'NULL'},
-                  '${event.contract_id?.replace(/'/g, "''")}' 
-                )
-                ON CONFLICT (event_id) DO NOTHING
-              `);
-              totalOnboards++;
-            } catch (insertErr) {
-              // Skip duplicates
+            svIntervals.set(contractId, {
+              sv_party: svParty,
+              sv_name: svName,
+              sv_reward_weight: payload.svRewardWeight || 1,
+              sv_participant_id: payload.svParticipantId || null,
+              contract_id: contractId,
+              active_from: event.effective_at || event.ledger_time || new Date().toISOString(),
+              active_until: null, // Active until archived/expired
+              dso: payload.dso || null,
+              reason: payload.reason ? String(payload.reason).slice(0, 500) : null,
+            });
+          } else if (event.type === 'archived' || event.type === 'exercised') {
+            // SV offboarding or expiry - set active_until
+            const existing = svIntervals.get(contractId);
+            if (existing) {
+              // Check for expire choice
+              const choice = event.choice || '';
+              const isExpire = choice.toLowerCase().includes('expire');
+              
+              existing.active_until = event.effective_at || event.ledger_time || new Date().toISOString();
+            } else {
+              // We saw archive before create - create a placeholder
+              svIntervals.set(contractId, {
+                sv_party: null,
+                sv_name: null,
+                sv_reward_weight: 1,
+                sv_participant_id: null,
+                contract_id: contractId,
+                active_from: null,
+                active_until: event.effective_at || event.ledger_time || new Date().toISOString(),
+                dso: null,
+                reason: null,
+              });
             }
           }
-        } catch (fileErr) {
-          console.warn(`   ⚠️ Error reading ${filePath}:`, fileErr.message);
         }
+      } catch (fileErr) {
+        console.warn(`   ⚠️ Error reading ${filePath}:`, fileErr.message);
       }
+    }
+
+    // Insert all intervals into the database
+    let insertedCount = 0;
+    for (const interval of svIntervals.values()) {
+      // Skip intervals without sv_party (incomplete data)
+      if (!interval.sv_party || !interval.active_from) continue;
       
-      console.log(`   ✓ Found ${totalOnboards} SvOnboardingConfirmed events`);
-      
-      // Scan for offboard events in DsoRules files
-      const dsoRulesFiles = await getFilesForTemplate('DsoRules');
-      console.log(`   📂 Found ${dsoRulesFiles.length} files with DsoRules events`);
-      
-      const onboardFilesCount = onboardFiles.length;
-      indexingProgress = { phase: 'scan:offboard', current: 0, total: dsoRulesFiles.length, filesScanned: onboardFilesCount, totalFiles: onboardFilesCount + dsoRulesFiles.length };
-      
-      for (let i = 0; i < dsoRulesFiles.length; i++) {
-        indexingProgress.current = i + 1;
-        indexingProgress.filesScanned = onboardFilesCount + i + 1;
-        const filePath = dsoRulesFiles[i];
-        
-        try {
-          const result = await binaryReader.readBinaryFile(filePath);
-          const events = result.records || result || [];
-          
-          for (const event of events) {
-            if (event.type !== 'exercised') continue;
-            const choice = event.choice || '';
-            if (!choice.includes('OffboardSv')) continue;
-            
-            const args = event.exercise_argument || event.exerciseArgument || {};
-            const svParty = args.sv || args.svParty || null;
-            
-            if (!svParty) continue;
-            
-            try {
-              await query(`
-                INSERT INTO sv_membership_events 
-                  (event_id, event_type, sv_party, sv_name, effective_at, contract_id)
-                VALUES (
-                  '${event.event_id?.replace(/'/g, "''")}',
-                  'offboard',
-                  '${svParty.replace(/'/g, "''")}',
-                  NULL,
-                  '${event.effective_at || new Date().toISOString()}',
-                  '${event.contract_id?.replace(/'/g, "''")}' 
-                )
-                ON CONFLICT (event_id) DO NOTHING
-              `);
-              totalOffboards++;
-            } catch (insertErr) {
-              // Skip duplicates
-            }
-          }
-        } catch (fileErr) {
-          // Skip file errors
-        }
+      try {
+        await query(`
+          INSERT INTO sv_active_intervals 
+            (sv_party, sv_name, sv_reward_weight, sv_participant_id, contract_id, 
+             active_from, active_until, dso, reason)
+          VALUES (
+            '${interval.sv_party.replace(/'/g, "''")}',
+            ${interval.sv_name ? `'${interval.sv_name.replace(/'/g, "''")}'` : 'NULL'},
+            ${interval.sv_reward_weight},
+            ${interval.sv_participant_id ? `'${interval.sv_participant_id.replace(/'/g, "''")}'` : 'NULL'},
+            '${interval.contract_id.replace(/'/g, "''")}',
+            '${interval.active_from}',
+            ${interval.active_until ? `'${interval.active_until}'` : 'NULL'},
+            ${interval.dso ? `'${interval.dso.replace(/'/g, "''")}'` : 'NULL'},
+            ${interval.reason ? `'${interval.reason.replace(/'/g, "''")}'` : 'NULL'}
+          )
+          ON CONFLICT (contract_id) DO UPDATE SET
+            active_until = EXCLUDED.active_until
+        `);
+        insertedCount++;
+      } catch (insertErr) {
+        console.warn(`   ⚠️ Insert error for ${interval.contract_id}:`, insertErr.message);
       }
-      
-      console.log(`   ✓ Found ${totalOffboards} OffboardSv events`);
-      
-    } else {
-      console.log('   ⚠️ Template index not available, build it first for faster SV indexing');
-      indexingInProgress = false;
-      return { status: 'error', message: 'Template index required. Build template index first.' };
     }
 
     // Calculate current SV count
-    const currentSvCount = await getSvCountAt(new Date());
+    const currentSvCount = await getActiveSvCountAt(new Date());
     
     // Update index state
     await query(`
-      INSERT INTO sv_index_state (id, last_indexed_at, total_events, total_svs)
-      VALUES (1, CURRENT_TIMESTAMP, ${totalOnboards + totalOffboards}, ${currentSvCount})
+      INSERT INTO sv_index_state (id, last_indexed_at, total_svs, files_scanned)
+      VALUES (1, CURRENT_TIMESTAMP, ${currentSvCount}, ${svOnboardingFiles.length})
       ON CONFLICT (id) DO UPDATE SET
         last_indexed_at = CURRENT_TIMESTAMP,
-        total_events = ${totalOnboards + totalOffboards},
-        total_svs = ${currentSvCount}
+        total_svs = ${currentSvCount},
+        files_scanned = ${svOnboardingFiles.length}
     `);
 
     console.log(`\n✅ SV membership index complete:`);
-    console.log(`   - Onboard events: ${totalOnboards}`);
-    console.log(`   - Offboard events: ${totalOffboards}`);
-    console.log(`   - Current SV count: ${currentSvCount}`);
+    console.log(`   - Files scanned: ${svOnboardingFiles.length} (ONLY SvOnboardingConfirmed)`);
+    console.log(`   - SV intervals indexed: ${insertedCount}`);
+    console.log(`   - Current active SVs: ${currentSvCount}`);
 
     indexingInProgress = false;
     indexingProgress = null;
     
     return {
       status: 'complete',
-      onboardEvents: totalOnboards,
-      offboardEvents: totalOffboards,
-      currentSvCount,
+      filesScanned: svOnboardingFiles.length,
+      intervalsIndexed: insertedCount,
+      currentActiveSvs: currentSvCount,
     };
   } catch (err) {
     console.error('❌ SV membership index build failed:', err);
