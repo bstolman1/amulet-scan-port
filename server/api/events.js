@@ -3635,8 +3635,9 @@ router.get('/sv-index/debug', async (req, res) => {
           const evtType = String(record.event_type || record.event_type_original || '').toLowerCase();
           const templateId = record.template_id || record.templateId;
 
-          // Helper: extract args from create_arguments OR payload.record.fields
-          const getArg = (label) => {
+          // Recursive DAML field extractor - handles nested records
+          const extractField = (label) => {
+            // First try create_arguments (flat object)
             const ca = record.create_arguments;
             if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
               if (ca[label] != null) return ca[label];
@@ -3644,29 +3645,35 @@ router.get('/sv-index/debug', async (req, res) => {
               if (ca[snake] != null) return ca[snake];
             }
 
-            const fields = record.payload?.record?.fields;
-            if (!Array.isArray(fields)) return null;
-            const field = fields.find((f) => f.label === label);
-            if (!field) return null;
+            // Recursive search through payload.record.fields (handles nested records)
+            const tryFields = (fields) => {
+              if (!Array.isArray(fields)) return null;
 
-            const v = field.value;
+              for (const f of fields) {
+                if (f.label === label) {
+                  const v = f.value;
 
-            // DAML Party is nested: field.value.party.party
-            if (v?.party && typeof v.party === 'object' && v.party.party) {
-              return v.party.party;
-            }
+                  // Party is often nested: field.value.party.party
+                  if (v?.party?.party) return v.party.party;
+                  if (typeof v?.party === 'string') return v.party;
 
-            // Sometimes Party is already flat
-            if (typeof v?.party === 'string') {
-              return v.party;
-            }
+                  if (v?.text) return v.text;
+                  if (v?.int64 != null) return Number(v.int64);
+                  if (v?.numeric != null) return Number(v.numeric);
 
-            // Other DAML primitives
-            if (v?.text) return v.text;
-            if (v?.int64 != null) return Number(v.int64);
-            if (v?.numeric != null) return Number(v.numeric);
+                  return v ?? null;
+                }
 
-            return null;
+                // 🔑 RECURSE INTO NESTED RECORDS
+                if (f.value?.record?.fields) {
+                  const nested = tryFields(f.value.record.fields);
+                  if (nested != null) return nested;
+                }
+              }
+              return null;
+            };
+
+            return tryFields(record.payload?.record?.fields);
           };
 
           const startTimeForCreate =
@@ -3689,8 +3696,8 @@ router.get('/sv-index/debug', async (req, res) => {
             hasPayloadRecordFields: Array.isArray(record.payload?.record?.fields),
             payloadFieldLabels: record.payload?.record?.fields?.map((f) => f.label) || null,
             extracted: {
-              svParty: getArg('svParty') || getArg('sv_party'),
-              svName: getArg('svName') || getArg('sv_name'),
+              svParty: extractField('svParty') || extractField('sv_party'),
+              svName: extractField('svName') || extractField('sv_name'),
               startTime: evtType === 'created' ? startTimeForCreate : null,
               endTime: evtType === 'exercised' ? endTimeForConsume : null,
             },

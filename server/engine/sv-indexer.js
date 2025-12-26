@@ -349,8 +349,9 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
           const templateId = record.template_id || record.templateId;
           const isThisTemplate = isSvOnboardingConfirmed(templateId);
 
-          // Helper: pull args either from create_arguments object OR from payload.record.fields
-          const getArg = (label) => {
+          // Recursive DAML field extractor - handles nested records
+          const extractField = (label) => {
+            // First try create_arguments (flat object)
             const ca = record.create_arguments;
             if (ca && typeof ca === 'object' && !Array.isArray(ca)) {
               if (ca[label] != null) return ca[label];
@@ -358,29 +359,36 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
               if (ca[snake] != null) return ca[snake];
             }
 
-            const fields = record.payload?.record?.fields;
-            if (!Array.isArray(fields)) return null;
-            const field = fields.find((f) => f.label === label);
-            if (!field) return null;
+            // Recursive search through payload.record.fields (handles nested records)
+            const tryFields = (fields) => {
+              if (!Array.isArray(fields)) return null;
 
-            const v = field.value;
+              for (const f of fields) {
+                // Check if this field matches
+                if (f.label === label) {
+                  const v = f.value;
 
-            // DAML Party is nested: field.value.party.party
-            if (v?.party && typeof v.party === 'object' && v.party.party) {
-              return v.party.party;
-            }
+                  // Party is often nested: field.value.party.party
+                  if (v?.party?.party) return v.party.party;
+                  if (typeof v?.party === 'string') return v.party;
 
-            // Sometimes Party is already flat
-            if (typeof v?.party === 'string') {
-              return v.party;
-            }
+                  if (v?.text) return v.text;
+                  if (v?.int64 != null) return Number(v.int64);
+                  if (v?.numeric != null) return Number(v.numeric);
 
-            // Other DAML primitives
-            if (v?.text) return v.text;
-            if (v?.int64 != null) return Number(v.int64);
-            if (v?.numeric != null) return Number(v.numeric);
+                  return v ?? null;
+                }
 
-            return null;
+                // 🔑 RECURSE INTO NESTED RECORDS
+                if (f.value?.record?.fields) {
+                  const nested = tryFields(f.value.record.fields);
+                  if (nested != null) return nested;
+                }
+              }
+              return null;
+            };
+
+            return tryFields(record.payload?.record?.fields);
           };
 
           // CREATE detection
@@ -409,8 +417,8 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
             null;
 
           if (isCreate) {
-            const svParty = getArg('svParty') || getArg('sv_party');
-            const svName = getArg('svName') || getArg('sv_name');
+            const svParty = extractField('svParty') || extractField('sv_party');
+            const svName = extractField('svName') || extractField('sv_name');
 
             if (!svParty || !startTimeForCreate) {
               console.warn('DROP CREATE: missing svParty or startTime', {
@@ -428,13 +436,13 @@ export async function buildSvMembershipIndex({ force = false } = {}) {
             svIntervals.set(contractId, {
               sv_party: svParty,
               sv_name: svName,
-              sv_reward_weight: Number(getArg('svRewardWeight') || getArg('sv_reward_weight')) || 1,
-              sv_participant_id: getArg('svParticipantId') || getArg('sv_participant_id') || null,
+              sv_reward_weight: Number(extractField('svRewardWeight') || extractField('sv_reward_weight')) || 1,
+              sv_participant_id: extractField('svParticipantId') || extractField('sv_participant_id') || null,
               contract_id: contractId,
               active_from: startTimeForCreate,
               // If we saw consume before create, keep its end time
               active_until: existing?.active_until ?? null,
-              dso: getArg('dso') || null,
+              dso: extractField('dso') || null,
               reason: null,
             });
           }
