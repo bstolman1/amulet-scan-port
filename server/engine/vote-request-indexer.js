@@ -991,6 +991,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const knownVoteRequestIds = new Set(createdResult.records.map(r => r.contract_id));
     
     let unmatchedCount = 0;
+    let voteRequestMatchCount = 0; // Debug counter for successful matches
+    const DEBUG_MATCH_LIMIT = 5;
     
     for (const record of exercisedResult.records) {
       // CANTON GOVERNANCE MODEL:
@@ -1000,9 +1002,35 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       
       const choice = String(record.choice || '');
       
-      // Extract ALL contractIds from the exercise_argument using generic walker
+      // =============================================================================
+      // EXTENDED DAML WALKER: Extract contractIds from ALL relevant event fields
+      // Traverses: exercise_argument, exercise_result, child_event_ids
+      // =============================================================================
+      const allContractIds = [];
+      
+      // 1. Extract from exercise_argument
       const exerciseArg = record.exercise_argument || record.payload || record.raw?.choice_argument || {};
-      const allContractIds = extractContractIds(exerciseArg);
+      allContractIds.push(...extractContractIds(exerciseArg));
+      
+      // 2. Extract from exercise_result
+      const exerciseResult = record.exercise_result || record.raw?.exercise_result || {};
+      allContractIds.push(...extractContractIds(exerciseResult));
+      
+      // 3. Extract from child_event_ids (may contain references to consumed VoteRequest)
+      if (record.child_event_ids && Array.isArray(record.child_event_ids)) {
+        for (const childId of record.child_event_ids) {
+          if (typeof childId === 'string') {
+            allContractIds.push(childId);
+          } else if (typeof childId === 'object') {
+            allContractIds.push(...extractContractIds(childId));
+          }
+        }
+      }
+      
+      // 4. Extract from raw event structure (additional coverage)
+      if (record.raw) {
+        allContractIds.push(...extractContractIds(record.raw));
+      }
       
       // Find the VoteRequest contract ID by matching against known created VoteRequests
       let voteRequestCid = null;
@@ -1023,10 +1051,16 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
       
       if (voteRequestCid) {
+        // DEBUG: Log first few successful VoteRequest matches
+        voteRequestMatchCount++;
+        if (voteRequestMatchCount <= DEBUG_MATCH_LIMIT) {
+          console.log(`   🎯 VoteRequest match #${voteRequestMatchCount}: choice=${choice}, voteRequestCid=${voteRequestCid.substring(0, 40)}...`);
+        }
+        
         // Extract outcome from exercise result if available
-        const exerciseResult = record.exercise_result || record.payload?.exercise_result || {};
+        const exerciseResultData = record.exercise_result || record.payload?.exercise_result || {};
         const outcome = 
-          exerciseResult.outcome ||
+          exerciseResultData.outcome ||
           record.exercise_argument?.outcome ||
           record.payload?.outcome;
         
@@ -1050,9 +1084,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           contract_id: voteRequestCid, // Normalize to proposal root
           dso_close_outcome: outcome,
           dso_close_outcome_tag: outcomeTag,
-          completedAt: exerciseResult.completedAt,
-          abstainingSvs: exerciseResult.abstainingSvs,
-          offboardedVoters: exerciseResult.offboardedVoters,
+          completedAt: exerciseResultData.completedAt,
+          abstainingSvs: exerciseResultData.abstainingSvs,
+          offboardedVoters: exerciseResultData.offboardedVoters,
           choice: choice,
           close_source: 'dso_rules',
         });
