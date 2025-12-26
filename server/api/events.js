@@ -1460,6 +1460,14 @@ router.get('/vote-request-index/status', async (req, res) => {
     const progress = voteRequestIndexer.getIndexingProgress?.();
     const lastSuccessfulBuild = await voteRequestIndexer.getLastSuccessfulBuild();
     
+    // Get direct governance stats (Path B - no VoteRequest)
+    let directGovernanceStats = { total: 0, byChoice: [] };
+    try {
+      directGovernanceStats = await voteRequestIndexer.getDirectGovernanceStats();
+    } catch (e) {
+      // Table may not exist yet
+    }
+    
     // Check if a stale lock exists (lock file present but we're not indexing)
     let lockExists = false;
     if (!isIndexing) {
@@ -1485,6 +1493,14 @@ router.get('/vote-request-index/status', async (req, res) => {
         executed: canonicalStats.byStatus.executed,
         rejected: canonicalStats.byStatus.rejected,
         expired: canonicalStats.byStatus.expired,
+      },
+      // Direct DsoRules governance (Path B - no VoteRequest contract)
+      directGovernance: directGovernanceStats,
+      // Combined governance totals (matches other explorer counts ~220)
+      combinedGovernance: {
+        voteRequestBacked: stats.executed + stats.rejected + stats.expired,
+        directDsoRules: directGovernanceStats.total,
+        total: stats.executed + stats.rejected + stats.expired + directGovernanceStats.total,
       },
       // Summary counts for understanding the data layers
       layers: {
@@ -2878,6 +2894,59 @@ router.get('/governance/proposals', async (req, res) => {
     }));
   } catch (err) {
     console.error('Error in governance/proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/governance/combined - Get combined governance history (VoteRequests + Direct DsoRules)
+// This endpoint returns the merged view of both governance paths, matching other explorer counts (~220)
+router.get('/governance/combined', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    const status = req.query.status || 'all';
+    
+    const results = await voteRequestIndexer.queryCombinedGovernance({ limit, offset, status });
+    const combinedStats = await voteRequestIndexer.getCombinedGovernanceStats();
+    
+    res.json(convertBigInts({
+      data: results,
+      count: results.length,
+      stats: combinedStats,
+      source: 'index',
+      _info: {
+        description: 'Combined governance history: VoteRequest-backed proposals + Direct DsoRules governance',
+        voteRequestBacked: combinedStats.voteRequestBacked.total,
+        directDsoRules: combinedStats.directDsoRules.total,
+        totalGovernance: combinedStats.combined.total,
+      }
+    }));
+  } catch (err) {
+    console.error('Error in governance/combined:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/governance/direct - Get direct DsoRules governance actions (Path B - no VoteRequest)
+router.get('/governance/direct', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    
+    const results = await voteRequestIndexer.queryDirectGovernanceActions({ limit, offset });
+    const stats = await voteRequestIndexer.getDirectGovernanceStats();
+    
+    res.json(convertBigInts({
+      data: results,
+      count: results.length,
+      stats,
+      source: 'index',
+      _info: {
+        description: 'Direct DsoRules governance: consuming exercised events without VoteRequest contracts',
+      }
+    }));
+  } catch (err) {
+    console.error('Error in governance/direct:', err);
     res.status(500).json({ error: err.message });
   }
 });
