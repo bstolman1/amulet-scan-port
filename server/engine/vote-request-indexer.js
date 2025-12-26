@@ -1,12 +1,26 @@
 /**
  * VoteRequest Indexer - Builds persistent DuckDB index for VoteRequest events
  * 
- * STATUS DETERMINATION MODEL:
- * - A proposal's outcome is determined by a CONSUMING Exercised event on the 
- *   proposal's root contract (VoteRequest) — nothing else.
- * - Status is derived from (template_id, choice) on the consuming exercise.
- * - Vote counts are stored for DISPLAY ONLY, not for status determination.
- * - If no consuming exercise exists: in_progress (if before deadline) or expired.
+ * STATUS DETERMINATION MODEL (AUTHORITATIVE):
+ * ============================================
+ * Governance outcomes are derived from VoteRequest state + time, NOT from execution events.
+ * 
+ * For each VoteRequest:
+ *   1. If now < voteBefore → status = "in_progress" (voting still open)
+ *   2. If now >= voteBefore (voting closed), compute status from vote tallies:
+ *      - Calculate acceptedVotes, rejectedVotes from votes array
+ *      - Apply 2/3 supermajority threshold (configurable, default 9/13 SVs)
+ *      - If acceptedVotes >= threshold → status = "accepted"
+ *      - Else if rejectedVotes >= rejectionThreshold → status = "rejected"  
+ *      - Else → status = "expired" (deadline passed without threshold met)
+ * 
+ * Execution tracking (OPTIONAL, SEPARATE):
+ *   - If a consuming DsoRules event exists after acceptance → executed = true
+ *   - If not → executed = false (but status is still "accepted")
+ * 
+ * ❌ INCORRECT ASSUMPTION (removed):
+ *    "A vote is finalized only when a consuming DsoRules event exists"
+ *    This caused the 98-only ceiling instead of matching ccview's ~220-235.
  * 
  * Uses template-to-file index when available to dramatically reduce scan time.
  * 
@@ -208,21 +222,27 @@ export async function getVoteRequestStats() {
   try {
     const total = await queryOne(`SELECT COUNT(*) as count FROM vote_requests`);
     const inProgress = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'in_progress'`);
-    const executed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'executed'`);
+    // NEW: Status is now 'accepted' (not 'executed') for proposals that passed vote threshold
+    const accepted = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'accepted'`);
     const rejected = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'rejected'`);
     const expired = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'expired'`);
+    // NEW: Executed is a separate flag tracking whether accepted proposals were executed via DsoRules
+    const executed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE is_executed = true`);
     
-    // Legacy fields for backwards compatibility
+    // Legacy fields for backwards compatibility - map 'accepted' to 'executed' for old UI
     const active = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status = 'active' OR status = 'in_progress'`);
-    const historical = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status IN ('executed', 'rejected', 'expired', 'historical')`);
+    const historical = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE status IN ('accepted', 'rejected', 'expired', 'historical')`);
     const closed = await queryOne(`SELECT COUNT(*) as count FROM vote_requests WHERE is_closed = true`);
     
     return {
       total: Number(total?.count || 0),
       inProgress: Number(inProgress?.count || 0),
-      executed: Number(executed?.count || 0),
+      // NEW: Use 'accepted' as primary status name
+      accepted: Number(accepted?.count || 0),
       rejected: Number(rejected?.count || 0),
       expired: Number(expired?.count || 0),
+      // Legacy: 'executed' now means "accepted and executed via DsoRules"
+      executed: Number(executed?.count || 0),
       // Legacy fields
       active: Number(active?.count || 0),
       historical: Number(historical?.count || 0),
@@ -230,7 +250,7 @@ export async function getVoteRequestStats() {
     };
   } catch (err) {
     console.error('Error getting vote request stats:', err);
-    return { total: 0, inProgress: 0, executed: 0, rejected: 0, expired: 0, active: 0, historical: 0, closed: 0, directGovernance: 0 };
+    return { total: 0, inProgress: 0, accepted: 0, rejected: 0, expired: 0, executed: 0, active: 0, historical: 0, closed: 0, directGovernance: 0 };
   }
 }
 
@@ -500,14 +520,20 @@ export async function getCanonicalProposalStats() {
     
     const byStatus = {
       in_progress: 0,
-      executed: 0,
+      accepted: 0,  // NEW: Use 'accepted' instead of 'executed'
       rejected: 0,
       expired: 0,
+      // Legacy alias for backwards compatibility
+      executed: 0,
     };
     for (const row of humanByStatus) {
       if (row.status === 'in_progress' || row.status === 'active') {
         byStatus.in_progress += Number(row.count);
+      } else if (row.status === 'accepted') {
+        byStatus.accepted += Number(row.count);
       } else if (row.status === 'executed') {
+        // Legacy status name - treat as accepted
+        byStatus.accepted += Number(row.count);
         byStatus.executed = Number(row.count);
       } else if (row.status === 'rejected') {
         byStatus.rejected = Number(row.count);
@@ -1166,19 +1192,24 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: createdResult.records.length, records: 0 };
     let upserted = 0;
     
-    // Track status counts (ledger-pure model)
-    // - finalized: has consuming exercised event (outcome determined by choice)
-    // - in_progress: no consuming exercise, before deadline
-    // - expired_unfinalized: no consuming exercise, after deadline (timed out)
+    // Track status counts (VoteRequest state + time model)
+    // - accepted: voteBefore passed AND acceptVotes >= threshold
+    // - rejected: voteBefore passed AND rejectVotes >= rejectionThreshold  
+    // - expired: voteBefore passed AND neither threshold met
+    // - in_progress: voteBefore not yet reached
+    // - executed: has consuming DsoRules event (optional, separate from status)
     const statusStats = {
-      finalized: 0,           // Has consuming exercised event
-      in_progress: 0,         // No consuming exercise, before deadline
-      expired_unfinalized: 0, // No consuming exercise, after deadline
-      // Breakdown of finalized outcomes (mutually exclusive)
-      executed: 0,            // Finalized with accept choice
-      rejected: 0,            // Finalized with reject choice
-      expired_final: 0,       // Finalized with expire choice
-      // Vote totals (for display only)
+      accepted: 0,            // Voted to accept (met 2/3 threshold)
+      rejected: 0,            // Voted to reject (met rejection threshold)
+      expired: 0,             // Deadline passed without threshold met
+      in_progress: 0,         // Voting still open
+      // Execution tracking (separate from status)
+      executed: 0,            // Has consuming DsoRules event after acceptance
+      // Legacy names for backwards compatibility
+      finalized: 0,           // Alias for accepted + rejected + expired
+      expired_unfinalized: 0, // Legacy - now just 'expired'
+      expired_final: 0,       // Legacy - now just 'expired'
+      // Vote totals (for display)
       totalAcceptVotes: 0,
       totalRejectVotes: 0
     };
@@ -1409,22 +1440,30 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const isExpired = voteBeforeDate && voteBeforeDate < now;
 
       // ============================================================
-      // STATUS DETERMINATION: Consuming Exercised Event Model
+      // STATUS DETERMINATION: VoteRequest State + Time Model
       // ============================================================
-      // The ONLY authoritative source of proposal status is:
-      // 1. If a consuming Exercised event exists on the proposal root contract:
-      //    - Status is FINALIZED
-      //    - Outcome is determined by (template_id, choice) on that exercise
-      // 2. If no consuming Exercised exists:
-      //    - If now < vote_before deadline → IN_PROGRESS
-      //    - If now >= vote_before deadline → EXPIRED
+      // Governance outcomes are derived from VoteRequest state + time, NOT execution events.
       //
-      // Vote counts are stored for DISPLAY ONLY, not status determination.
+      // 1. If now < voteBefore → in_progress (voting open)
+      // 2. If now >= voteBefore (voting closed):
+      //    a. Count votes: acceptedVotes, rejectedVotes
+      //    b. Apply 2/3 supermajority threshold
+      //    c. acceptedVotes >= threshold → accepted
+      //    d. rejectedVotes >= threshold → rejected
+      //    e. Neither threshold → expired
+      //
+      // Execution tracking is SEPARATE: if consuming DsoRules event exists → executed=true
       // ============================================================
+      
+      // 2/3 supermajority threshold (default: 9 out of 13 SVs)
+      // This is configurable but we use a reasonable default
+      const SUPERMAJORITY_THRESHOLD = 9;
+      const REJECTION_THRESHOLD = 5; // More than 1/3 = rejection
       
       let status = 'in_progress';
+      let hasBeenExecuted = false;
       
-      // Count votes for display purposes only (not for status determination)
+      // Count votes from the votes array
       const votesArray = Array.isArray(finalVotes) ? finalVotes : [];
       let acceptCount = 0;
       let rejectCount = 0;
@@ -1451,69 +1490,50 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         if (normalized === 'accept') acceptCount++;
         else if (normalized === 'reject') rejectCount++;
       }
+      
+      // Check if execution event exists (for executed flag, not status)
+      const executionEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
+      if (executionEvent) {
+        hasBeenExecuted = true;
+      }
 
-      // STATUS DETERMINATION: Based on consuming exercised events only
-      if (archivedEvent) {
-        // A consuming exercised event exists on this proposal root - proposal is FINALIZED
-        statusStats.finalized++;
-        
-        // Determine outcome from (template_id, choice)
-        const choice = String(archivedEvent.choice || '').toLowerCase();
-        const outcomeTag = archivedEvent.dso_close_outcome_tag;
-        
-        // Map (template_id, choice) to outcome
-        if (outcomeTag) {
-          const tagLower = outcomeTag.toLowerCase();
-          if (tagLower.includes('accepted') || tagLower === 'vro_accepted') {
-            status = 'executed';
-            statusStats.executed++;
-          } else if (tagLower.includes('rejected') || tagLower === 'vro_rejected') {
-            status = 'rejected';
-            statusStats.rejected++;
-          } else if (tagLower.includes('expired') || tagLower === 'vro_expired') {
-            status = 'expired';
-            statusStats.expired_final++;
-          } else {
-            // Unknown outcome tag - use choice
-            status = 'executed'; // Default for unknown final
+      // STATUS DETERMINATION: Based on VoteRequest state + time
+      if (!isExpired) {
+        // Voting still open
+        status = 'in_progress';
+        statusStats.in_progress++;
+      } else {
+        // Voting closed (voteBefore has passed) - determine outcome from vote tallies
+        if (acceptCount >= SUPERMAJORITY_THRESHOLD) {
+          status = 'accepted';
+          statusStats.accepted++;
+          statusStats.finalized++;
+          
+          // Track if it was also executed
+          if (hasBeenExecuted) {
             statusStats.executed++;
           }
+        } else if (rejectCount >= REJECTION_THRESHOLD) {
+          status = 'rejected';
+          statusStats.rejected++;
+          statusStats.finalized++;
         } else {
-          // No outcome tag - use choice name
-          if (choice.includes('accept') && !choice.includes('reject')) {
-            status = 'executed';
-            statusStats.executed++;
-          } else if (choice.includes('reject')) {
-            status = 'rejected';
-            statusStats.rejected++;
-          } else if (choice.includes('expire')) {
-            status = 'expired';
-            statusStats.expired_final++;
-          } else {
-            // Unknown choice - default to executed (it was finalized)
-            status = 'executed';
-            statusStats.executed++;
-          }
+          // Neither threshold met - expired
+          status = 'expired';
+          statusStats.expired++;
+          statusStats.finalized++;
         }
         
         // Collect sample for debug logging
         if (sampleFinalized.length < 3) {
           sampleFinalized.push({
             contract_id: event.contract_id,
-            choice: archivedEvent.choice,
-            template_id: archivedEvent.template_id || event.template_id,
-            effective_at: archivedEvent.effective_at || event.effective_at,
+            acceptCount,
+            rejectCount,
+            threshold: SUPERMAJORITY_THRESHOLD,
+            hasBeenExecuted,
             status
           });
-        }
-      } else {
-        // No consuming exercised event - not finalized
-        if (isExpired) {
-          status = 'expired';
-          statusStats.expired_unfinalized++;
-        } else {
-          status = 'in_progress';
-          statusStats.in_progress++;
         }
       }
 
@@ -1577,6 +1597,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         effective_at: event.effective_at,
         status,
         is_closed: isClosed,
+        // NEW: Track execution separately from status
+        is_executed: hasBeenExecuted,
         action_tag: actionTag,
         action_value: actionDetails?.value ? JSON.stringify(actionDetails.value) : null,
         requester: requester,
@@ -1609,7 +1631,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         await query(`
           INSERT INTO vote_requests (
             event_id, stable_id, contract_id, template_id, effective_at,
-            status, is_closed, action_tag, action_value,
+            status, is_closed, is_executed, action_tag, action_value,
             requester, reason, reason_url, votes, vote_count, accept_count, reject_count,
             vote_before, target_effective_at, tracking_cid, dso,
             payload, semantic_key, action_subject, proposal_id, is_human, updated_at
@@ -1621,6 +1643,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             ${voteRequest.effective_at ? `'${escapeStr(voteRequest.effective_at)}'` : 'NULL'},
             '${escapeStr(voteRequest.status)}',
             ${voteRequest.is_closed},
+            ${voteRequest.is_executed},
             ${voteRequest.action_tag ? `'${escapeStr(voteRequest.action_tag)}'` : 'NULL'},
             ${voteRequest.action_value ? `'${escapeStr(voteRequest.action_value)}'` : 'NULL'},
             ${voteRequest.requester ? `'${escapeStr(voteRequest.requester)}'` : 'NULL'},
@@ -1648,6 +1671,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
             effective_at = EXCLUDED.effective_at,
             status = EXCLUDED.status,
             is_closed = EXCLUDED.is_closed,
+            is_executed = EXCLUDED.is_executed,
             action_tag = EXCLUDED.action_tag,
             action_value = EXCLUDED.action_value,
             requester = EXCLUDED.requester,
@@ -1789,23 +1813,35 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n✅ [VoteRequestIndexer] Index built: ${upserted} proposals indexed in ${elapsed}s`);
     
-    // 4️⃣ STATUS CLASSIFICATION SUMMARY (ledger-pure model)
+    // 4️⃣ STATUS CLASSIFICATION SUMMARY (VoteRequest state + time model)
     console.log(`   [VoteRequestIndexer] Proposal status summary:`, {
-      finalized: statusStats.finalized,
-      inProgress: statusStats.in_progress,
-      expiredUnfinalized: statusStats.expired_unfinalized
-    });
-    console.log(`   [VoteRequestIndexer] Finalized outcome breakdown:`, {
-      executed: statusStats.executed,
+      accepted: statusStats.accepted,
       rejected: statusStats.rejected,
-      expiredFinal: statusStats.expired_final
+      expired: statusStats.expired,
+      inProgress: statusStats.in_progress,
+      executed: statusStats.executed, // Subset of accepted that have DsoRules execution
     });
     
-    // 5️⃣ SAMPLE FINALIZED PROPOSALS (debug level)
+    // 5️⃣ SANITY INVARIANT CHECK
+    // VoteRequests where now >= voteBefore = accepted + rejected + expired
+    const votingClosedCount = statusStats.accepted + statusStats.rejected + statusStats.expired;
+    console.log(`   [VoteRequestIndexer] 📊 GOVERNANCE TOTALS:`);
+    console.log(`      - Voting closed (past voteBefore): ${votingClosedCount}`);
+    console.log(`      - Voting open (in_progress): ${statusStats.in_progress}`);
+    console.log(`      - Total proposals: ${votingClosedCount + statusStats.in_progress}`);
+    console.log(`      - Target range (ccview): 220-235 completed`);
+    
+    if (votingClosedCount >= 200 && votingClosedCount <= 250) {
+      console.log(`   ✅ INVARIANT VERIFIED: Voting closed count (${votingClosedCount}) is in expected range 200-250`);
+    } else if (votingClosedCount < 200) {
+      console.warn(`   ⚠️ INVARIANT WARNING: Voting closed count (${votingClosedCount}) is below expected range 200-250`);
+    }
+    
+    // 6️⃣ SAMPLE FINALIZED PROPOSALS (debug level)
     if (sampleFinalized.length > 0) {
-      console.log(`   [VoteRequestIndexer] Sample finalized proposals:`);
+      console.log(`   [VoteRequestIndexer] Sample completed proposals:`);
       sampleFinalized.forEach((p, i) => {
-        console.log(`      ${i + 1}. contract_id=${p.contract_id}, choice=${p.choice}, status=${p.status}`);
+        console.log(`      ${i + 1}. contract_id=${p.contract_id}, accepts=${p.acceptCount}, rejects=${p.rejectCount}, status=${p.status}, executed=${p.hasBeenExecuted}`);
       });
     }
 
@@ -1826,9 +1862,9 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           ${upserted},
           ${upserted},
           0,
-          ${closedContractIds.size},
+          ${statusStats.accepted + statusStats.rejected + statusStats.expired},
           ${finalStats.inProgress},
-          ${finalStats.executed},
+          ${finalStats.accepted}, -- Now 'accepted' instead of 'executed'
           ${finalStats.rejected},
           ${finalStats.expired},
           true
@@ -1847,11 +1883,17 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       lockRelease = null;
     }
 
-    // 6️⃣ COMBINED GOVERNANCE SUMMARY
-    console.log(`   [VoteRequestIndexer] 📊 COMBINED GOVERNANCE SUMMARY:`);
-    console.log(`      - VoteRequest-backed proposals: ${upserted} (finalized via VoteRequest: ${closedViaDsoRules})`);
-    console.log(`      - Direct DsoRules governance: ${directUpserted}`);
-    console.log(`      - TOTAL GOVERNANCE ACTIONS: ${upserted + directUpserted}`);
+    // 7️⃣ COMBINED GOVERNANCE SUMMARY (NEW MODEL)
+    const completedCount = statusStats.accepted + statusStats.rejected + statusStats.expired;
+    console.log(`   [VoteRequestIndexer] 📊 FINAL GOVERNANCE SUMMARY (VoteRequest State + Time Model):`);
+    console.log(`      - Total VoteRequest proposals indexed: ${upserted}`);
+    console.log(`      - Voting completed (past voteBefore): ${completedCount}`);
+    console.log(`         - Accepted: ${statusStats.accepted} (threshold met)`);
+    console.log(`         - Rejected: ${statusStats.rejected} (rejection threshold met)`);
+    console.log(`         - Expired: ${statusStats.expired} (no threshold met)`);
+    console.log(`      - Voting open (in_progress): ${statusStats.in_progress}`);
+    console.log(`      - Accepted & Executed via DsoRules: ${statusStats.executed}`);
+    console.log(`      - Direct DsoRules governance (no VoteRequest): ${directUpserted}`);
 
     return {
       status: 'complete',

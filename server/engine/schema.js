@@ -100,6 +100,8 @@ export async function initEngineSchema() {
   // VoteRequest persistent index table
   // Canonical model: proposal_id = COALESCE(tracking_cid, contract_id)
   // is_human = explorer-visible proposals (excludes config maintenance, no-reason/no-votes)
+  // Status model: 'accepted', 'rejected', 'expired', 'in_progress' based on votes + time
+  // is_executed = separate flag for whether accepted proposal was executed via DsoRules
   await query(`
     CREATE TABLE IF NOT EXISTS vote_requests (
       event_id            VARCHAR PRIMARY KEY,
@@ -107,8 +109,9 @@ export async function initEngineSchema() {
       contract_id         VARCHAR,
       template_id         VARCHAR,
       effective_at        TIMESTAMP,
-      status              VARCHAR DEFAULT 'active',
+      status              VARCHAR DEFAULT 'in_progress',
       is_closed           BOOLEAN DEFAULT FALSE,
+      is_executed         BOOLEAN DEFAULT FALSE,
       action_tag          VARCHAR,
       action_value        VARCHAR,
       requester           VARCHAR,
@@ -142,6 +145,7 @@ export async function initEngineSchema() {
     'accept_count INTEGER DEFAULT 0',
     'reject_count INTEGER DEFAULT 0',
     'reason_url VARCHAR',
+    'is_executed BOOLEAN DEFAULT FALSE', // NEW: Tracks if accepted proposal was executed via DsoRules
   ];
   for (const colDef of newColumns) {
     try {
