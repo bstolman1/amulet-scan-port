@@ -1234,17 +1234,127 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     // =============================================================================
     const normalizePayload = (payload) => {
       if (!payload) return {};
-      
+
       // Already normalized format - has direct properties like 'requester', 'action', etc.
       if (payload.requester || payload.action || payload.reason) {
         return payload;
       }
-      
+
+      const unwrapScalar = (v) => {
+        if (v === null || v === undefined) return null;
+        if (typeof v !== 'object') return v;
+        if (v.party) return v.party;
+        if (v.text) return v.text;
+        if (typeof v.bool === 'boolean') return v.bool;
+        if (v.int64 !== undefined) return v.int64;
+        if (v.numeric !== undefined) return v.numeric;
+        if (v.timestamp) {
+          const microTs = parseInt(v.timestamp, 10);
+          return isNaN(microTs) ? v.timestamp : new Date(microTs / 1000).toISOString();
+        }
+        if (v.contractId) return v.contractId;
+        if (v.Some?.contractId) return v.Some.contractId;
+        return v;
+      };
+
+      const damlRecordToObject = (record) => {
+        const out = {};
+        const fields = record?.fields;
+        if (!Array.isArray(fields)) return out;
+        for (let i = 0; i < fields.length; i++) {
+          const f = fields[i];
+          const key = f?.label || `field_${i}`;
+          const val = f?.value;
+          if (val?.variant) {
+            out[key] = { tag: val.variant.constructor, value: val.variant.value };
+          } else if (val?.constructor) {
+            out[key] = { tag: val.constructor, value: val.value };
+          } else if (val?.record) {
+            out[key] = damlRecordToObject(val.record);
+          } else {
+            out[key] = unwrapScalar(val);
+          }
+        }
+        return out;
+      };
+
+      const normalizeVoteValue = (val) => {
+        if (!val || typeof val !== 'object') return val;
+
+        // Common shapes:
+        // - { record: { fields: [...] } }
+        // - { variant: { constructor: 'Accept'|'Reject', value: ... } }
+        // - already normalized { accept: boolean, sv: string, reason?: {body,url} }
+        if (val.record) {
+          const obj = damlRecordToObject(val.record);
+          // Heuristic: try to normalize vote to { sv, accept, reason }
+          const sv = obj.sv || obj.voter || obj.party || obj.field_0 || null;
+
+          // accept can appear as boolean accept OR nested vote variant
+          let accept = null;
+          if (typeof obj.accept === 'boolean') accept = obj.accept;
+          if (accept === null && obj.vote?.tag) {
+            const t = String(obj.vote.tag).toLowerCase();
+            if (t.includes('accept')) accept = true;
+            if (t.includes('reject')) accept = false;
+          }
+
+          const reason = obj.reason && typeof obj.reason === 'object'
+            ? { body: obj.reason.body || null, url: obj.reason.url || null }
+            : undefined;
+
+          return { ...obj, sv: sv || obj.sv, accept, ...(reason ? { reason } : {}) };
+        }
+
+        if (val.variant?.constructor) {
+          const t = String(val.variant.constructor).toLowerCase();
+          if (t === 'accept') return { accept: true };
+          if (t === 'reject') return { accept: false };
+        }
+
+        return val;
+      };
+
+      const normalizeVotes = (votesField) => {
+        // Expect output: Array<[string, object]>
+        if (!votesField) return [];
+
+        // DAML GenMap: { genMap: { entries: [ { key: {...}, value: {...} }, ... ] } }
+        if (votesField.genMap?.entries && Array.isArray(votesField.genMap.entries)) {
+          return votesField.genMap.entries
+            .map((e) => {
+              const key = unwrapScalar(e?.key);
+              const keyStr = typeof key === 'string' ? key : (key?.party || key?.text || JSON.stringify(key));
+              return [keyStr, normalizeVoteValue(e?.value)];
+            })
+            .filter((t) => Array.isArray(t) && typeof t[0] === 'string');
+        }
+
+        // Already a tuple array
+        if (Array.isArray(votesField)) {
+          return votesField.map((v) => {
+            if (Array.isArray(v) && v.length >= 2) {
+              const key = unwrapScalar(v[0]);
+              const keyStr = typeof key === 'string' ? key : (key?.party || key?.text || JSON.stringify(key));
+              return [keyStr, normalizeVoteValue(v[1])];
+            }
+            // Array of vote objects
+            if (typeof v === 'object' && v) {
+              const keyStr = String(v.sv || v.voter || v.party || 'Unknown');
+              return [keyStr, normalizeVoteValue(v)];
+            }
+            return ['Unknown', v];
+          });
+        }
+
+        return [];
+      };
+
       // Raw DAML record format: { record: { fields: [...] } }
       if (payload.record?.fields && Array.isArray(payload.record.fields)) {
         const fields = payload.record.fields;
         const normalized = {};
-        
+
         // VoteRequest field order (from DAML schema):
         // 0: dso (party)
         // 1: requester (text)
@@ -1253,77 +1363,62 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         // 4: voteBefore (timestamp)
         // 5: votes (genMap)
         // 6: trackingCid (optional contractId)
-        
+
         // Extract dso (field 0)
         const dsoField = fields[0]?.value;
-        if (dsoField?.party) normalized.dso = dsoField.party;
-        else if (dsoField?.text) normalized.dso = dsoField.text;
-        
+        normalized.dso = unwrapScalar(dsoField);
+
         // Extract requester (field 1)
         const requesterField = fields[1]?.value;
-        if (requesterField?.text) normalized.requester = requesterField.text;
-        else if (typeof requesterField === 'string') normalized.requester = requesterField;
-        
-        // Extract action (field 2) - this is the critical one for action_tag
+        normalized.requester = unwrapScalar(requesterField);
+
+        // Extract action (field 2)
         const actionField = fields[2]?.value;
         if (actionField?.variant) {
-          // { variant: { constructor: "ARC_DsoRules", value: { record: { fields: [...] } } } }
           normalized.action = {
             tag: actionField.variant.constructor,
-            value: actionField.variant.value
+            value: actionField.variant.value,
           };
         } else if (actionField?.constructor) {
-          // Alternative format: { constructor: "ARC_DsoRules", value: {...} }
           normalized.action = {
             tag: actionField.constructor,
-            value: actionField.value
+            value: actionField.value,
           };
         }
-        
-        // Extract reason (field 3) - record with url and body
+
+        // Extract reason (field 3)
         const reasonField = fields[3]?.value;
         if (reasonField?.record?.fields && Array.isArray(reasonField.record.fields)) {
           const reasonFields = reasonField.record.fields;
           const urlField = reasonFields[0]?.value;
           const bodyField = reasonFields[1]?.value;
           normalized.reason = {
-            url: urlField?.text || urlField || null,
-            body: bodyField?.text || bodyField || null
+            url: unwrapScalar(urlField),
+            body: unwrapScalar(bodyField),
           };
         } else if (typeof reasonField === 'object') {
           normalized.reason = reasonField;
         }
-        
+
         // Extract voteBefore (field 4)
         const voteBeforeField = fields[4]?.value;
-        if (voteBeforeField?.timestamp) {
-          // Convert microseconds to ISO string
-          const microTs = parseInt(voteBeforeField.timestamp, 10);
-          if (!isNaN(microTs)) {
-            normalized.voteBefore = new Date(microTs / 1000).toISOString();
-          }
-        } else if (typeof voteBeforeField === 'string') {
-          normalized.voteBefore = voteBeforeField;
-        }
-        
-        // Extract votes (field 5) - genMap
+        const vb = unwrapScalar(voteBeforeField);
+        if (typeof vb === 'string') normalized.voteBefore = vb;
+
+        // Extract votes (field 5)
         const votesField = fields[5]?.value;
-        if (votesField?.genMap?.entries) {
-          normalized.votes = votesField.genMap.entries;
-        } else if (Array.isArray(votesField)) {
-          normalized.votes = votesField;
-        }
-        
+        normalized.votes = normalizeVotes(votesField);
+
         // Extract trackingCid (field 6, optional)
         if (fields[6]) {
           const trackingField = fields[6]?.value;
-          if (trackingField?.contractId) normalized.trackingCid = trackingField.contractId;
-          else if (trackingField?.Some?.contractId) normalized.trackingCid = trackingField.Some.contractId;
+          const tc = unwrapScalar(trackingField);
+          if (typeof tc === 'string') normalized.trackingCid = tc;
         }
-        
+
         return normalized;
       }
-      
+
       // Unknown format - return as-is
       return payload;
     };
@@ -1500,17 +1595,28 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
       const normalizeVote = (voteData) => {
         if (!voteData || typeof voteData !== 'object') return null;
-        if (voteData.accept === true || voteData.Accept === true) return 'accept';
-        if (voteData.reject === true || voteData.Reject === true) return 'reject';
+
+        // Already normalized (preferred)
+        if (voteData.accept === true) return 'accept';
         if (voteData.accept === false) return 'reject';
-        const tag = voteData.tag || voteData.Tag || voteData.vote?.tag || voteData.vote?.Tag;
+
+        // Variant-style vote: { vote: { tag: 'Accept'|'Reject' } } or { tag: 'Accept' }
+        const directTag = voteData.tag || voteData.Tag;
+        const nestedTag = voteData.vote?.tag || voteData.vote?.Tag;
+        const variantTag = voteData.variant?.constructor || voteData.vote?.variant?.constructor;
+        const tag = directTag || nestedTag || variantTag;
         if (typeof tag === 'string') {
           const t = tag.toLowerCase();
-          if (t === 'accept') return 'accept';
-          if (t === 'reject') return 'reject';
+          if (t.includes('accept')) return 'accept';
+          if (t.includes('reject')) return 'reject';
         }
+
+        // Legacy shapes
+        if (voteData.Accept === true) return 'accept';
+        if (voteData.Reject === true) return 'reject';
         if (Object.prototype.hasOwnProperty.call(voteData, 'Accept')) return 'accept';
         if (Object.prototype.hasOwnProperty.call(voteData, 'Reject')) return 'reject';
+
         return null;
       };
 

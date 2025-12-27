@@ -172,28 +172,41 @@ export function parseCanonicalVotes(proposal: CanonicalProposal): {
     reasonUrl: string;
     castAt: string | null;
   }> = [];
-  
+
   let votesFor = 0;
   let votesAgainst = 0;
-  
+
+  const toPartyString = (key: unknown): string => {
+    if (typeof key === "string") return key;
+    if (key && typeof key === "object") {
+      const anyKey = key as any;
+      return String(anyKey.party || anyKey.text || anyKey.sv || anyKey.voter || "Unknown");
+    }
+    return "Unknown";
+  };
+
   for (const vote of votes) {
-    const [svName, voteData] = Array.isArray(vote) ? vote : [String(vote), null];
+    const tuple = Array.isArray(vote) ? vote : [vote as any, null];
+    const svKey = tuple[0];
+    const voteData = tuple[1] as any;
+
+    const party = toPartyString(svKey);
     const isAccept = voteData?.accept === true;
     const isReject = voteData?.accept === false;
-    
+
     if (isAccept) votesFor++;
     else if (isReject) votesAgainst++;
-    
+
     votedSvs.push({
-      party: svName,
-      sv: voteData?.sv || svName,
+      party,
+      sv: String(voteData?.sv || party),
       vote: isAccept ? "accept" : isReject ? "reject" : "abstain",
-      reason: voteData?.reason?.body || "",
-      reasonUrl: voteData?.reason?.url || "",
+      reason: String(voteData?.reason?.body || ""),
+      reasonUrl: String(voteData?.reason?.url || ""),
       castAt: null, // Not available in canonical model
     });
   }
-  
+
   return { votesFor, votesAgainst, votedSvs };
 }
 
