@@ -545,10 +545,6 @@ export async function getCanonicalProposalStats() {
     };
   }
 }
-      byStatus: { in_progress: 0, executed: 0, rejected: 0, expired: 0 },
-    };
-  }
-}
 
 /**
  * Query governance proposals grouped by semantic_key (legacy).
