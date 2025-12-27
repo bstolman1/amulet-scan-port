@@ -1225,13 +1225,21 @@ function applyOverrides(data) {
       const remainingTopics = [];
 
       item.topics.forEach(topic => {
-        const topicMergeOverride = overrides.mergeOverrides[topic.id];
+        // Check by stringified topic.id and also by topic subject as fallback
+        const topicIdStr = String(topic.id);
+        let topicMergeOverride = overrides.mergeOverrides[topicIdStr];
+        
+        // Fallback: check if override was saved by subject (for older overrides or debugging)
+        if (!topicMergeOverride && topic.subject) {
+          topicMergeOverride = overrides.mergeOverrides[topic.subject];
+        }
+        
         if (topicMergeOverride) {
           const targets = Array.isArray(topicMergeOverride.mergeInto)
             ? topicMergeOverride.mergeInto
             : [topicMergeOverride.mergeInto];
 
-          console.log(`Merging topic "${topic.id}" (from "${item.primaryId}") into ${targets.join(', ')}`);
+          console.log(`Merging topic id="${topicIdStr}" subject="${topic.subject?.slice(0, 50)}" (from "${item.primaryId}") into ${targets.join(', ')}`);
           topicsToMove.push({ topic, targets });
           mergeCount++;
         } else {
@@ -1252,7 +1260,10 @@ function applyOverrides(data) {
       // Also remove moved topics from item.stages
       if (item.stages) {
         Object.keys(item.stages).forEach(stageKey => {
-          item.stages[stageKey] = (item.stages[stageKey] || []).filter(t => !overrides.mergeOverrides[t.id]);
+          item.stages[stageKey] = (item.stages[stageKey] || []).filter(t => {
+            const tIdStr = String(t.id);
+            return !overrides.mergeOverrides[tIdStr] && !overrides.mergeOverrides[t.subject];
+          });
           if (item.stages[stageKey].length === 0) {
             delete item.stages[stageKey];
           }
@@ -1613,12 +1624,16 @@ router.post('/overrides/merge', (req, res) => {
     overrides.mergeOverrides = {};
   }
   
-  const key = sourcePrimaryId || sourceId;
+  // Always stringify the key for consistent lookup
+  const key = String(sourcePrimaryId || sourceId);
   overrides.mergeOverrides[key] = {
     mergeInto: normalizedTargets, // Now always an array
     reason: reason || 'Manual merge',
     createdAt: new Date().toISOString(),
   };
+  
+  console.log(`Saving merge override: key="${key}", targets=${normalizedTargets.join(', ')}`);
+  console.log(`Current mergeOverrides keys: ${Object.keys(overrides.mergeOverrides).join(', ')}`);
   
   if (writeOverrides(overrides)) {
     console.log(`✅ Merge override set: "${key}" -> ${normalizedTargets.join(', ')}`);
@@ -1628,7 +1643,54 @@ router.post('/overrides/merge', (req, res) => {
   }
 });
 
-// Get list of existing CIP items (for merge target selection)
+// Debug endpoint: show merge override status and why things aren't matching
+router.get('/overrides/merge-debug', (req, res) => {
+  const overrides = readOverrides();
+  const cached = readCache();
+  
+  if (!cached || !cached.lifecycleItems) {
+    return res.json({ error: 'No cached data', mergeOverrides: overrides.mergeOverrides || {} });
+  }
+  
+  const mergeKeys = Object.keys(overrides.mergeOverrides || {});
+  const allTopicIds = [];
+  const allItemIds = [];
+  
+  cached.lifecycleItems.forEach(item => {
+    allItemIds.push({ id: item.id, primaryId: item.primaryId, type: item.type });
+    (item.topics || []).forEach(topic => {
+      allTopicIds.push({
+        id: String(topic.id),
+        subject: topic.subject?.slice(0, 80),
+        stage: topic.stage,
+        parentPrimaryId: item.primaryId,
+        parentType: item.type,
+      });
+    });
+  });
+  
+  // Check which merge keys match
+  const matchResults = mergeKeys.map(key => {
+    const override = overrides.mergeOverrides[key];
+    const matchedTopic = allTopicIds.find(t => t.id === key || t.subject === key);
+    const matchedItem = allItemIds.find(i => i.id === key || i.primaryId === key);
+    return {
+      key,
+      override,
+      matchedTopic: matchedTopic || null,
+      matchedItem: matchedItem || null,
+      hasMatch: !!(matchedTopic || matchedItem),
+    };
+  });
+  
+  res.json({
+    mergeOverrideCount: mergeKeys.length,
+    mergeOverrideKeys: mergeKeys,
+    matchResults,
+    sampleTopicIds: allTopicIds.slice(0, 20),
+  });
+});
+
 router.get('/cip-list', (req, res) => {
   const cached = readCache();
   if (!cached || !cached.lifecycleItems) {
