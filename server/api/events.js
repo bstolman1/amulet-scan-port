@@ -1534,7 +1534,7 @@ router.get('/vote-request-index/status', async (req, res) => {
     const isIndexing = voteRequestIndexer.isIndexingInProgress();
     const progress = voteRequestIndexer.getIndexingProgress?.();
     const lastSuccessfulBuild = await voteRequestIndexer.getLastSuccessfulBuild();
-    
+
     // Get direct governance stats (Path B - no VoteRequest)
     let directGovernanceStats = { total: 0, byChoice: [] };
     try {
@@ -1542,7 +1542,16 @@ router.get('/vote-request-index/status', async (req, res) => {
     } catch (e) {
       // Table may not exist yet
     }
-    
+
+    // Extra diagnostics: template index state helps identify partial scans.
+    let templateIndex = null;
+    try {
+      const { getTemplateIndexState } = await import('../engine/template-file-index.js');
+      templateIndex = await getTemplateIndexState();
+    } catch {
+      // ignore
+    }
+
     // Check if a stale lock exists (lock file present but we're not indexing)
     let lockExists = false;
     if (!isIndexing) {
@@ -1565,23 +1574,17 @@ router.get('/vote-request-index/status', async (req, res) => {
       humanStats: {
         total: canonicalStats.humanProposals,
         inProgress: canonicalStats.byStatus.in_progress,
-        // NEW: Use 'accepted' as primary status name
         accepted: canonicalStats.byStatus.accepted,
         rejected: canonicalStats.byStatus.rejected,
         expired: canonicalStats.byStatus.expired,
-        // Legacy alias for backwards compatibility
         executed: canonicalStats.byStatus.executed || canonicalStats.byStatus.accepted,
       },
-      // Direct DsoRules governance (Path B - no VoteRequest contract)
       directGovernance: directGovernanceStats,
-      // Combined governance totals (matches other explorer counts ~220)
       combinedGovernance: {
-        // Use 'accepted' for vote-backed finalized count
         voteRequestBacked: stats.accepted + stats.rejected + stats.expired,
         directDsoRules: directGovernanceStats.total,
         total: stats.accepted + stats.rejected + stats.expired + directGovernanceStats.total,
       },
-      // Summary counts for understanding the data layers
       layers: {
         rawEvents: canonicalStats.rawEvents,
         lifecycleProposals: canonicalStats.lifecycleProposals,
@@ -1591,6 +1594,10 @@ router.get('/vote-request-index/status', async (req, res) => {
       totalIndexed: state.total_indexed,
       progress: isIndexing ? progress : null,
       lastSuccessfulBuild,
+      diagnostics: {
+        templateIndex,
+        note: 'If rawEvents/totalIndexed are unexpectedly small, the index build likely scanned only a subset of files or skipped files due to timeouts.'
+      }
     }));
   } catch (err) {
     console.error('Error getting vote request index status:', err);
