@@ -1821,14 +1821,8 @@ const Governance = () => {
               {canonicalData?.proposals?.length ? (
                 <>
                   <Badge variant="outline" className="ml-2">
-                    {canonicalData.total} Unique Proposals
+                    {canonicalData.total} Proposals
                   </Badge>
-                  {dedupeStats && (
-                    <Badge variant="secondary" className="ml-1 bg-blue-500/20 text-blue-400 border-blue-500/30">
-                      <Hash className="w-3 h-3 mr-1" />
-                      {dedupeStats.totalRows} raw → {dedupeStats.uniqueProposals} unique
-                    </Badge>
-                  )}
                   <Badge variant="secondary" className="ml-1 bg-green-500/20 text-green-400 border-green-500/30">
                     <Database className="w-3 h-3 mr-1" />
                     From Index
@@ -1837,17 +1831,12 @@ const Governance = () => {
               ) : null}
             </h3>
 
-            {/* Dedupe explanation alert */}
+            {/* Model explanation alert */}
             <Alert className="mb-6 bg-muted/30 border-primary/20">
               <Hash className="h-4 w-4" />
               <AlertDescription className="text-sm">
-                <strong>Canonical Model:</strong> 1 governance proposal = 1 unique <code className="bg-muted px-1 rounded">VoteRequest ID</code>.
-                Multiple raw events represent state updates, not separate proposals.
-                {dedupeStats && (
-                  <span className="ml-2 text-muted-foreground">
-                    ({dedupeStats.duplicatePct}% duplicates removed)
-                  </span>
-                )}
+                <strong>Canonical Model:</strong> Each row = 1 unique governance proposal, grouped by <code className="bg-muted px-1 rounded">proposal_key</code> (normalized action + mailing list URL).
+                Status computed once per proposal after grouping all related VoteRequest events.
               </AlertDescription>
             </Alert>
 

@@ -1243,72 +1243,48 @@ router.get('/vote-requests/debug-table', async (req, res) => {
 });
 
 // GET /api/events/vote-requests/dedupe-stats - Diagnostic endpoint for deduplication analysis
-// This answers the question: "1 proposal = 1 VoteRequest ID, how many unique proposals do we have?"
+// NEW MODEL: Each row in vote_requests IS one unique proposal (already grouped at index time)
 router.get('/vote-requests/dedupe-stats', async (req, res) => {
   try {
     console.log('\n📊 DEDUPE-STATS: Running diagnostic query...');
     
-    // The key insight: proposal_id = COALESCE(tracking_cid, contract_id)
-    // Each unique proposal_id represents one governance proposal
-    const dedupeStats = await db.safeQuery(`
+    // With new model: each row = one proposal (already deduplicated at index time)
+    const stats = await db.safeQuery(`
       SELECT
-        COUNT(*) AS total_rows,
-        COUNT(DISTINCT COALESCE(proposal_id, contract_id)) AS unique_proposals,
-        COUNT(*) - COUNT(DISTINCT COALESCE(proposal_id, contract_id)) AS duplicate_rows,
-        ROUND(
-          (COUNT(*) - COUNT(DISTINCT COALESCE(proposal_id, contract_id))) * 100.0 / NULLIF(COUNT(*), 0),
-          2
-        ) AS duplicate_pct
+        COUNT(*) AS total_proposals,
+        COUNT(*) FILTER (WHERE is_human = true) AS human_proposals
       FROM vote_requests
     `);
     
-    // Also get human-only counts (explorer-visible proposals)
-    const humanStats = await db.safeQuery(`
-      SELECT
-        COUNT(*) AS total_rows,
-        COUNT(DISTINCT COALESCE(proposal_id, contract_id)) AS unique_proposals
-      FROM vote_requests
-      WHERE is_human = true
-    `);
-    
-    // Status breakdown for unique proposals (using window function)
+    // Status breakdown (direct count, no grouping needed)
     const statusBreakdown = await db.safeQuery(`
-      WITH latest AS (
-        SELECT 
-          COALESCE(proposal_id, contract_id) as pid,
-          status,
-          ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn
-        FROM vote_requests
-      )
       SELECT status, COUNT(*) as count
-      FROM latest
-      WHERE rn = 1
+      FROM vote_requests
       GROUP BY status
       ORDER BY count DESC
     `);
     
-    const stats = dedupeStats[0] || {};
-    const human = humanStats[0] || {};
+    const row = stats[0] || {};
     
-    console.log(`   Total rows: ${stats.total_rows}`);
-    console.log(`   Unique proposals: ${stats.unique_proposals}`);
-    console.log(`   Duplicate rows: ${stats.duplicate_rows} (${stats.duplicate_pct}%)`);
-    console.log(`   Human proposals: ${human.unique_proposals}`);
+    console.log(`   Total proposals: ${row.total_proposals}`);
+    console.log(`   Human proposals: ${row.human_proposals}`);
     
     res.json(convertBigInts({
-      totalRows: Number(stats.total_rows) || 0,
-      uniqueProposals: Number(stats.unique_proposals) || 0,
-      duplicateRows: Number(stats.duplicate_rows) || 0,
-      duplicatePct: Number(stats.duplicate_pct) || 0,
-      humanProposals: Number(human.unique_proposals) || 0,
+      // For backwards compatibility, return same structure
+      // but now totalRows = uniqueProposals (no duplicates in new model)
+      totalRows: Number(row.total_proposals) || 0,
+      uniqueProposals: Number(row.total_proposals) || 0,
+      duplicateRows: 0, // No duplicates in new model
+      duplicatePct: 0,
+      humanProposals: Number(row.human_proposals) || 0,
       statusBreakdown,
       explanation: {
-        model: '1 governance proposal = 1 unique VoteRequest ID (proposal_id)',
-        deduplication: 'proposal_id = COALESCE(tracking_cid, contract_id)',
-        duplicates: 'Multiple rows per proposal represent state updates during voting lifecycle',
+        model: '1 governance proposal = 1 row in vote_requests (grouped by proposal_key at index time)',
+        deduplication: 'proposal_key = hash(normalized_action + mailing_list_url)',
+        duplicates: 'Raw events are grouped BEFORE insertion, not at query time',
         humanFilter: 'is_human = true filters out config maintenance and non-human proposals',
       },
-      message: 'Diagnostic data showing proposal deduplication stats'
+      message: 'Diagnostic data showing proposal counts (already deduplicated at index time)'
     }));
   } catch (err) {
     console.error('Error in vote-requests dedupe-stats:', err);
