@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2, Link2, Server } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2, Link2, Server, Hash } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +15,7 @@ import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
 import { useGovernanceProposals } from "@/hooks/use-governance-proposals";
 import { useSVNodeAllProposals, parseAction, parseVotes } from "@/hooks/use-sv-node-proposals";
+import { useCanonicalProposals, useDedupeStats, parseCanonicalAction, parseCanonicalVotes } from "@/hooks/use-canonical-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -147,6 +148,17 @@ const Governance = () => {
     isLoading: svNodeLoading,
     error: svNodeError,
   } = useSVNodeAllProposals();
+
+  // Canonical proposals from DuckDB index (deduplicated by proposal_id)
+  // This is the PRIMARY source for historical governance data matching explorer counts
+  const {
+    data: canonicalData,
+    isLoading: canonicalLoading,
+    error: canonicalError,
+  } = useCanonicalProposals({ limit: 500, humanOnly: true });
+
+  // Dedupe stats for debugging
+  const { data: dedupeStats } = useDedupeStats();
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
@@ -1805,235 +1817,305 @@ const Governance = () => {
           <div className="p-6">
             <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
               <History className="h-5 w-5" />
-              Historical Governance Events (DuckDB)
-              {governanceEvents?.length ? (
+              Canonical Governance Proposals
+              {canonicalData?.proposals?.length ? (
                 <>
                   <Badge variant="outline" className="ml-2">
-                    {governanceEvents.filter((e: any) => e.template_id?.includes('VoteRequest')).length} VoteRequests
+                    {canonicalData.total} Unique Proposals
                   </Badge>
-                  {fromIndex && (
-                    <Badge variant="secondary" className="ml-1 bg-green-500/20 text-green-400 border-green-500/30">
-                      <Database className="w-3 h-3 mr-1" />
-                      From Index
+                  {dedupeStats && (
+                    <Badge variant="secondary" className="ml-1 bg-blue-500/20 text-blue-400 border-blue-500/30">
+                      <Hash className="w-3 h-3 mr-1" />
+                      {dedupeStats.totalRows} raw → {dedupeStats.uniqueProposals} unique
                     </Badge>
                   )}
-                  {dataSource && !fromIndex && (
-                    <Badge variant="outline" className="ml-1 text-yellow-400 border-yellow-500/30">
-                      Source: {dataSource}
-                    </Badge>
-                  )}
+                  <Badge variant="secondary" className="ml-1 bg-green-500/20 text-green-400 border-green-500/30">
+                    <Database className="w-3 h-3 mr-1" />
+                    From Index
+                  </Badge>
                 </>
               ) : null}
             </h3>
-            
-            {eventsLoading ? (
+
+            {/* Dedupe explanation alert */}
+            <Alert className="mb-6 bg-muted/30 border-primary/20">
+              <Hash className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                <strong>Canonical Model:</strong> 1 governance proposal = 1 unique <code className="bg-muted px-1 rounded">VoteRequest ID</code>.
+                Multiple raw events represent state updates, not separate proposals.
+                {dedupeStats && (
+                  <span className="ml-2 text-muted-foreground">
+                    ({dedupeStats.duplicatePct}% duplicates removed)
+                  </span>
+                )}
+              </AlertDescription>
+            </Alert>
+
+            {/* Status breakdown */}
+            {canonicalData?.stats?.byStatus && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+                <div className="p-3 rounded-lg bg-muted/30 text-center">
+                  <div className="text-2xl font-bold">{canonicalData.total}</div>
+                  <div className="text-xs text-muted-foreground">Total Proposals</div>
+                </div>
+                <div className="p-3 rounded-lg bg-success/10 text-center">
+                  <div className="text-2xl font-bold text-success">{canonicalData.stats.byStatus.accepted}</div>
+                  <div className="text-xs text-muted-foreground">Accepted</div>
+                </div>
+                <div className="p-3 rounded-lg bg-destructive/10 text-center">
+                  <div className="text-2xl font-bold text-destructive">{canonicalData.stats.byStatus.rejected}</div>
+                  <div className="text-xs text-muted-foreground">Rejected</div>
+                </div>
+                <div className="p-3 rounded-lg bg-warning/10 text-center">
+                  <div className="text-2xl font-bold text-warning">{canonicalData.stats.byStatus.in_progress}</div>
+                  <div className="text-xs text-muted-foreground">In Progress</div>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 text-center">
+                  <div className="text-2xl font-bold text-muted-foreground">{canonicalData.stats.byStatus.expired}</div>
+                  <div className="text-xs text-muted-foreground">Expired</div>
+                </div>
+              </div>
+            )}
+
+            {canonicalLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-32 w-full" />
                 ))}
               </div>
-            ) : !governanceEvents?.length ? (
+            ) : canonicalError ? (
+              <div className="text-center py-12">
+                <AlertTriangle className="h-12 w-12 text-destructive mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">Failed to load canonical proposals</p>
+                <p className="text-xs text-muted-foreground">
+                  Ensure the VoteRequest index is built: POST /api/events/vote-request-index/build
+                </p>
+              </div>
+            ) : !canonicalData?.proposals?.length ? (
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground mb-2">No historical governance events found</p>
+                <p className="text-muted-foreground mb-2">No canonical proposals found</p>
                 <p className="text-xs text-muted-foreground">
-                  Governance history is extracted from local DuckDB backfill data
+                  Build the VoteRequest index to see deduplicated governance proposals
                 </p>
               </div>
             ) : (
               <div className="space-y-4">
-                {governanceEvents
-                  .filter((event: any) => event.template_id?.includes('VoteRequest'))
-                  .slice(0, 100)
-                  .map((event: any, index: number) => {
-                    // Parse the event the same way as active proposals
-                    const payload = event.payload || event.event_data || event;
-                    const action = payload.action || {};
-                    const { title, actionType, actionDetails } = parseAction(action);
-                    
-                    const votesRaw = payload.votes || [];
-                    const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
-                    
-                    const requester = payload.requester || "Unknown";
-                    const reasonObj = payload.reason || {};
-                    const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
-                    const reasonUrl = reasonObj?.url || "";
-                    const voteBefore = payload.voteBefore;
-                    const targetEffectiveAt = payload.targetEffectiveAt;
-                    const trackingCid = payload.trackingCid || event.contract_id;
-                    
-                    // Determine status
-                    const threshold = votingThreshold || svCount || 1;
-                    let status: "approved" | "rejected" | "pending" | "archived" = "archived";
-                    const now = new Date();
-                    const voteDeadline = voteBefore ? new Date(voteBefore) : null;
-                    const isExpired = voteDeadline && voteDeadline < now;
-                    
-                    if (votesFor >= threshold) {
-                      status = "approved";
-                    } else if (isExpired && votesFor < threshold) {
-                      status = "rejected";
-                    } else if (event.event_type === "archived") {
-                      status = "archived";
-                    }
-                    
-                    const eventTs = event.effective_at || event.timestamp || event.created_at;
-                    
-                    return (
-                      <Collapsible key={event.event_id || `${event.contract_id}-${index}`}>
-                        <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
-                          <div className="flex items-start justify-between mb-4">
-                            <div className="flex items-center space-x-3">
-                              <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(status)}</div>
-                              <div className="flex-1">
-                                <h4 className="font-semibold text-lg">{title}</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  {trackingCid?.slice(0, 12) || "unknown"}
-                                  <span className="mx-2">•</span>
-                                  <span className="font-mono text-xs">{actionType}</span>
-                                  <span className="mx-2">•</span>
-                                  <span className="text-xs">{event.event_type}</span>
-                                </p>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  Requested by: <span className="font-medium text-foreground">{requester}</span>
-                                </p>
-                              </div>
-                            </div>
-                            <Badge className={getStatusColor(status)}>{status}</Badge>
-                          </div>
-
-                          {/* Action Details */}
-                          {actionDetails && typeof actionDetails === "object" && Object.keys(actionDetails).length > 0 && (
-                            <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
-                              <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                                {Object.entries(actionDetails)
-                                  .filter(([_, value]) => value !== null && value !== undefined)
-                                  .slice(0, 8)
-                                  .map(([key, value]: [string, any]) => (
-                                  <div key={key} className="flex flex-col">
-                                    <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
-                                    <span className="font-mono text-xs break-all">
-                                      {typeof value === "string" || typeof value === "number" 
-                                        ? String(value).slice(0, 100) 
-                                        : JSON.stringify(value).slice(0, 100)}
+                {canonicalData.proposals.map((proposal) => {
+                  const { title, actionType, actionDetails } = parseCanonicalAction(proposal);
+                  const { votesFor, votesAgainst, votedSvs } = parseCanonicalVotes(proposal);
+                  
+                  // Map status to display
+                  const statusMap: Record<string, 'approved' | 'rejected' | 'pending' | 'expired'> = {
+                    'accepted': 'approved',
+                    'rejected': 'rejected',
+                    'in_progress': 'pending',
+                    'expired': 'expired',
+                  };
+                  const displayStatus = statusMap[proposal.status] || 'pending';
+                  
+                  // Parse reason
+                  const reasonObj = typeof proposal.reason === 'object' ? proposal.reason : null;
+                  const reasonBody = reasonObj?.body || (typeof proposal.reason === 'string' ? proposal.reason : '');
+                  const reasonUrl = proposal.reason_url || reasonObj?.url || '';
+                  
+                  return (
+                    <Collapsible key={proposal.proposal_id || proposal.event_id}>
+                      <div className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-all border border-border/50">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="gradient-accent p-2 rounded-lg">{getStatusIcon(displayStatus)}</div>
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-lg">{title}</h4>
+                              <p className="text-sm text-muted-foreground">
+                                <span className="font-mono text-xs">{actionType}</span>
+                                {proposal.action_subject && (
+                                  <>
+                                    <span className="mx-2">•</span>
+                                    <span className="text-xs text-primary/80 truncate max-w-[200px] inline-block align-bottom" title={proposal.action_subject}>
+                                      {proposal.action_subject.slice(0, 30)}{proposal.action_subject.length > 30 ? '...' : ''}
                                     </span>
-                                  </div>
-                                ))}
-                              </div>
+                                  </>
+                                )}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Requested by: <span className="font-medium text-foreground">{proposal.requester || 'Unknown'}</span>
+                              </p>
                             </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1 text-sm">
+                              <span className="text-success font-medium">{proposal.accept_count}</span>
+                              <span className="text-muted-foreground">/</span>
+                              <span className="text-destructive font-medium">{proposal.reject_count}</span>
+                            </div>
+                            {proposal.related_count > 1 && (
+                              <Badge variant="outline" className="text-xs bg-primary/10 border-primary/30">
+                                <Link2 className="w-3 h-3 mr-1" />
+                                {proposal.related_count} related
+                              </Badge>
+                            )}
+                            <Badge className={cn(
+                              "text-xs",
+                              displayStatus === 'approved' && "bg-success/10 text-success border-success/20",
+                              displayStatus === 'rejected' && "bg-destructive/10 text-destructive border-destructive/20",
+                              displayStatus === 'pending' && "bg-warning/10 text-warning border-warning/20",
+                              displayStatus === 'expired' && "bg-muted text-muted-foreground",
+                            )}>
+                              {displayStatus === 'approved' && <CheckCircle className="h-3 w-3 mr-1" />}
+                              {displayStatus === 'rejected' && <XCircle className="h-3 w-3 mr-1" />}
+                              {displayStatus === 'pending' && <Clock className="h-3 w-3 mr-1" />}
+                              {proposal.status}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">
+                              {safeFormatDate(proposal.effective_at, "MMM d, yyyy")}
+                            </span>
+                            <CollapsibleTrigger asChild>
+                              <Button variant="ghost" size="sm">
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                        </div>
+
+                        {/* Action Details */}
+                        {actionDetails && typeof actionDetails === "object" && Object.keys(actionDetails).length > 0 && (
+                          <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                            <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                              {Object.entries(actionDetails)
+                                .filter(([_, value]) => value !== null && value !== undefined)
+                                .slice(0, 8)
+                                .map(([key, value]: [string, unknown]) => (
+                                <div key={key} className="flex flex-col">
+                                  <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                                  <span className="font-mono text-xs break-all">
+                                    {typeof value === "string" || typeof value === "number" 
+                                      ? String(value).slice(0, 100) 
+                                      : JSON.stringify(value).slice(0, 100)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Reason Section */}
+                        <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
+                          <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
+                          {reasonBody && typeof reasonBody === "string" && (
+                            <p className="text-sm mb-2">{reasonBody}</p>
                           )}
+                          {reasonUrl && typeof reasonUrl === "string" && (
+                            <a 
+                              href={reasonUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-sm text-primary hover:underline break-all"
+                            >
+                              {reasonUrl}
+                            </a>
+                          )}
+                          {(!reasonBody || typeof reasonBody !== "string") && 
+                           (!reasonUrl || typeof reasonUrl !== "string") && (
+                            <p className="text-sm text-muted-foreground italic">No reason provided</p>
+                          )}
+                        </div>
 
-                          {/* Reason Section */}
-                          <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
-                            <p className="text-sm text-muted-foreground mb-1 font-semibold">Reason:</p>
-                            {reasonBody && typeof reasonBody === "string" && (
-                              <p className="text-sm mb-2">{reasonBody}</p>
-                            )}
-                            {reasonUrl && typeof reasonUrl === "string" && (
-                              <a 
-                                href={reasonUrl} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-sm text-primary hover:underline break-all"
-                              >
-                                {reasonUrl}
-                              </a>
-                            )}
-                            {(!reasonBody || typeof reasonBody !== "string") && 
-                             (!reasonUrl || typeof reasonUrl !== "string") && (
-                              <p className="text-sm text-muted-foreground italic">No reason provided</p>
-                            )}
+                        {/* Stats Grid */}
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes For</p>
+                            <p className="text-lg font-bold text-success">{proposal.accept_count}</p>
                           </div>
-
-                          {/* Stats Grid */}
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                            <div className="p-3 rounded-lg bg-background/50">
-                              <p className="text-xs text-muted-foreground mb-1">Votes For</p>
-                              <p className="text-lg font-bold text-success">{votesFor}</p>
-                            </div>
-                            <div className="p-3 rounded-lg bg-background/50">
-                              <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
-                              <p className="text-lg font-bold text-destructive">{votesAgainst}</p>
-                            </div>
-                            <div className="p-3 rounded-lg bg-background/50">
-                              <p className="text-xs text-muted-foreground mb-1">Event Time</p>
-                              <p className="text-xs font-mono">
-                                {safeFormatDate(eventTs)}
-                              </p>
-                            </div>
-                            <div className="p-3 rounded-lg bg-background/50">
-                              <p className="text-xs text-muted-foreground mb-1">Target Effective</p>
-                              <p className="text-xs font-mono">
-                                {safeFormatDate(targetEffectiveAt)}
-                              </p>
-                            </div>
-                            <div className="p-3 rounded-lg bg-background/50">
-                              <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
-                              <p className="text-xs font-mono">
-                                {safeFormatDate(voteBefore)}
-                              </p>
-                            </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Votes Against</p>
+                            <p className="text-lg font-bold text-destructive">{proposal.reject_count}</p>
                           </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">First Seen</p>
+                            <p className="text-xs font-mono">
+                              {safeFormatDate(proposal.first_seen, "MMM d, yyyy HH:mm")}
+                            </p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Vote Deadline</p>
+                            <p className="text-xs font-mono">
+                              {safeFormatDate(proposal.vote_before)}
+                            </p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background/50">
+                            <p className="text-xs text-muted-foreground mb-1">Related</p>
+                            <p className="text-lg font-bold">{proposal.related_count}</p>
+                          </div>
+                        </div>
 
-                          {/* Votes Cast */}
-                          {votedSvs?.length > 0 && (
-                            <div className="mb-4">
-                              <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast ({votedSvs.length}):</p>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                {votedSvs.slice(0, 10).map((sv: any, idx: number) => (
-                                  <div 
-                                    key={idx}
-                                    className={`p-2 rounded border text-sm ${
-                                      sv.vote === "accept" 
-                                        ? "bg-success/5 border-success/30" 
-                                        : "bg-destructive/5 border-destructive/30"
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between">
-                                      <span className="font-medium text-xs truncate max-w-[200px]">{sv.party}</span>
-                                      <Badge 
-                                        variant="outline" 
-                                        className={`text-xs ${sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}`}
-                                      >
-                                        {sv.vote === "accept" ? "✓" : "✗"}
-                                      </Badge>
-                                    </div>
+                        {/* Votes Cast */}
+                        {votedSvs?.length > 0 && (
+                          <div className="mb-4">
+                            <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast ({votedSvs.length}):</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {votedSvs.slice(0, 10).map((sv, idx) => (
+                                <div 
+                                  key={idx}
+                                  className={`p-2 rounded border text-sm ${
+                                    sv.vote === "accept" 
+                                      ? "bg-success/5 border-success/30" 
+                                      : "bg-destructive/5 border-destructive/30"
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium text-xs truncate max-w-[200px]">{sv.party}</span>
+                                    <Badge 
+                                      variant="outline" 
+                                      className={`text-xs ${sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}`}
+                                    >
+                                      {sv.vote === "accept" ? "✓" : "✗"}
+                                    </Badge>
                                   </div>
-                                ))}
-                              </div>
-                              {votedSvs.length > 10 && (
-                                <p className="text-xs text-muted-foreground mt-2">... and {votedSvs.length - 10} more votes</p>
+                                </div>
+                              ))}
+                            </div>
+                            {votedSvs.length > 10 && (
+                              <p className="text-xs text-muted-foreground mt-2">... and {votedSvs.length - 10} more votes</p>
+                            )}
+                          </div>
+                        )}
+
+                        <CollapsibleContent className="mt-4">
+                          <div className="space-y-3">
+                            {/* IDs Section */}
+                            <div className="p-3 rounded-lg bg-background/70 border border-border/50">
+                              <p className="text-xs text-muted-foreground mb-2 font-semibold">
+                                Proposal ID: <span className="font-mono text-primary">{proposal.proposal_id || proposal.contract_id}</span>
+                              </p>
+                              <p className="text-xs text-muted-foreground mb-2">
+                                Contract ID: <span className="font-mono">{proposal.contract_id}</span>
+                              </p>
+                              {proposal.semantic_key && (
+                                <p className="text-xs text-muted-foreground">
+                                  Semantic Key: <span className="font-mono">{proposal.semantic_key}</span>
+                                </p>
                               )}
                             </div>
-                          )}
-
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="sm" className="w-full mt-2">
-                              <Code className="h-4 w-4 mr-2" />
-                              View Full JSON Data
-                            </Button>
-                          </CollapsibleTrigger>
-
-                          <CollapsibleContent className="mt-4">
-                            <div className="p-4 rounded-lg bg-background/70 border border-border/50">
-                              <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                                Event ID: <span className="font-mono">{event.event_id}</span>
-                              </p>
-                              <p className="text-xs text-muted-foreground mb-2 font-semibold">
-                                Contract ID: <span className="font-mono">{event.contract_id}</span>
-                              </p>
-                              <pre className="text-xs overflow-x-auto p-3 bg-muted/30 rounded border border-border/30 max-h-96">
-                                {JSON.stringify(event, null, 2)}
-                              </pre>
-                            </div>
-                          </CollapsibleContent>
-                        </div>
-                      </Collapsible>
-                    );
-                  })}
+                          </div>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
+                  );
+                })}
               </div>
             )}
+
+            {/* Model explanation */}
+            <Alert className="mt-6">
+              <Database className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                This view shows <strong>canonical proposals</strong> deduplicated by <code className="bg-muted px-1 rounded">proposal_id = COALESCE(tracking_cid, contract_id)</code>.
+                Each row represents one governance proposal's final state, not individual ledger events.
+                The "Related" count shows state updates for each proposal.
+              </AlertDescription>
+            </Alert>
           </div>
         </Card>
       </TabsContent>
