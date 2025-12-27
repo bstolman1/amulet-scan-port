@@ -265,7 +265,7 @@ const GovernanceFlow = () => {
 
   const { toast } = useToast();
   
-  // Handler to reclassify a lifecycle item
+  // Handler to reclassify a lifecycle item (card-level)
   const handleReclassify = async (primaryId: string, newType: LifecycleItem['type']) => {
     try {
       const baseUrl = getDuckDBApiUrl();
@@ -295,6 +295,41 @@ const GovernanceFlow = () => {
       toast({
         title: "Error",
         description: "Failed to save classification override",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handler to reclassify a single topic (moves it to a different type category)
+  const handleReclassifyTopic = async (topicId: string, topicSubject: string, newType: LifecycleItem['type']) => {
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/topic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topicId,
+          newType,
+          reason: 'Manual topic reclassification',
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to save topic override');
+      }
+      
+      toast({
+        title: "Topic reclassified",
+        description: `Topic will now appear as ${TYPE_CONFIG[newType].label}`,
+      });
+      
+      // Refresh data to show the change
+      fetchData(false);
+    } catch (err) {
+      console.error('Failed to reclassify topic:', err);
+      toast({
+        title: "Error",
+        description: "Failed to save topic classification override",
         variant: "destructive",
       });
     }
@@ -941,7 +976,7 @@ const GovernanceFlow = () => {
     );
   };
 
-  const renderTopicCard = (topic: Topic, showGroup = true) => {
+  const renderTopicCard = (topic: Topic, showGroup = true, parentType?: LifecycleItem['type']) => {
     return (
       <div 
         key={topic.id}
@@ -976,33 +1011,64 @@ const GovernanceFlow = () => {
           </a>
           
           <div className="flex items-center gap-1 shrink-0">
-            {/* Merge into CIP button - show for non-CIP topics */}
-            {cipList.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <MoreVertical className="h-3.5 w-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="bg-popover">
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      openMergeDialog(topic.id, topic.subject);
-                    }}
-                  >
-                    <Merge className="mr-2 h-3 w-3" />
-                    Merge into CIP(s)...
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+            {/* Topic actions dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MoreVertical className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-popover w-56">
+                {/* Reclassify submenu */}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="text-xs">
+                    <Edit2 className="mr-2 h-3 w-3" />
+                    Reclassify as...
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="bg-popover">
+                    {Object.entries(TYPE_CONFIG).map(([typeKey, config]) => (
+                      <DropdownMenuItem
+                        key={typeKey}
+                        disabled={typeKey === parentType}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleReclassifyTopic(topic.id, topic.subject, typeKey as LifecycleItem['type']);
+                        }}
+                        className="text-xs"
+                      >
+                        <Badge className={cn("mr-2 text-[10px]", config.color)}>
+                          {config.label}
+                        </Badge>
+                        {typeKey === parentType && <span className="text-muted-foreground">(current)</span>}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                
+                {/* Merge into CIP(s) option */}
+                {cipList.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        openMergeDialog(topic.id, topic.subject);
+                      }}
+                      className="text-xs"
+                    >
+                      <Merge className="mr-2 h-3 w-3" />
+                      Merge into CIP(s)...
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
             
             {topic.sourceUrl && (
               <a 
@@ -1382,7 +1448,7 @@ const GovernanceFlow = () => {
                       </CardHeader>
                       {expandedIds.has('cip-00xx-section') && (
                         <CardContent className="pt-0 space-y-2">
-                          {tbdItems.flatMap(item => item.topics).map(topic => renderTopicCard(topic, true))}
+                          {tbdItems.flatMap(item => item.topics.map(topic => ({ topic, type: item.type }))).map(({ topic, type }) => renderTopicCard(topic, true, type))}
                         </CardContent>
                       )}
                     </Card>
@@ -1623,7 +1689,7 @@ const GovernanceFlow = () => {
                                           {config.label} ({stageTopics.length})
                                         </h4>
                                         <div className="space-y-2 pl-6">
-                                          {stageTopics.map(topic => renderTopicCard(topic))}
+                                          {stageTopics.map(topic => renderTopicCard(topic, false, item.type))}
                                         </div>
                                       </div>
                                     );

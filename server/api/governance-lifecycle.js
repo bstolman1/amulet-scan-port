@@ -1113,13 +1113,15 @@ function applyOverrides(data) {
   const overrides = readOverrides();
   const hasItemOverrides = overrides.itemOverrides && Object.keys(overrides.itemOverrides).length > 0;
   const hasMergeOverrides = overrides.mergeOverrides && Object.keys(overrides.mergeOverrides).length > 0;
+  const hasTopicOverrides = overrides.topicOverrides && Object.keys(overrides.topicOverrides).length > 0;
   
-  if (!hasItemOverrides && !hasMergeOverrides) {
+  if (!hasItemOverrides && !hasMergeOverrides && !hasTopicOverrides) {
     return data;
   }
   
   let appliedCount = 0;
   let mergeCount = 0;
+  let topicOverrideCount = 0;
   
   // First pass: Apply type overrides
   if (hasItemOverrides) {
@@ -1297,8 +1299,77 @@ function applyOverrides(data) {
     }
   }
   
+  // Third pass: Apply topic-level type overrides (move individual topics to different categories)
+  if (hasTopicOverrides) {
+    const topicsToMove = []; // { topic, sourceItem, newType }
+    
+    // Identify topics that need to be moved
+    data.lifecycleItems.forEach(item => {
+      if (!item.topics) return;
+      
+      item.topics.forEach(topic => {
+        const topicIdStr = String(topic.id);
+        const override = overrides.topicOverrides[topicIdStr];
+        if (override && override.type !== item.type) {
+          topicsToMove.push({ topic, sourceItem: item, newType: override.type, reason: override.reason });
+        }
+      });
+    });
+    
+    // Move topics to their new type categories
+    topicsToMove.forEach(({ topic, sourceItem, newType, reason }) => {
+      // Remove from source item
+      sourceItem.topics = sourceItem.topics.filter(t => String(t.id) !== String(topic.id));
+      
+      // Remove from source stages
+      if (sourceItem.stages) {
+        Object.keys(sourceItem.stages).forEach(stageKey => {
+          sourceItem.stages[stageKey] = (sourceItem.stages[stageKey] || []).filter(t => String(t.id) !== String(topic.id));
+          if (sourceItem.stages[stageKey].length === 0) {
+            delete sourceItem.stages[stageKey];
+          }
+        });
+      }
+      
+      // Find or create target lifecycle item of the new type
+      // For topic reclassification, we create a new standalone item for the topic
+      const newItemId = `topic-reclassified-${topic.id}`;
+      let targetItem = data.lifecycleItems.find(i => i.id === newItemId);
+      
+      if (!targetItem) {
+        // Determine appropriate stages for the new type
+        const targetStages = WORKFLOW_STAGES[newType] || WORKFLOW_STAGES.other;
+        const effectiveStage = targetStages.includes(topic.stage) ? topic.stage : targetStages[0];
+        
+        targetItem = {
+          id: newItemId,
+          primaryId: topic.subject?.slice(0, 80) || `Reclassified Topic ${topic.id}`,
+          type: newType,
+          network: sourceItem.network || null,
+          stages: { [effectiveStage]: [{ ...topic, stage: effectiveStage }] },
+          topics: [{ ...topic, stage: effectiveStage }],
+          firstDate: topic.date,
+          lastDate: topic.date,
+          currentStage: effectiveStage,
+          overrideApplied: true,
+          overrideReason: reason || 'Topic reclassified',
+        };
+        data.lifecycleItems.push(targetItem);
+      }
+      
+      topicOverrideCount++;
+      console.log(`Moved topic "${topic.subject?.slice(0, 50)}" from ${sourceItem.type} to ${newType}`);
+    });
+    
+    // Remove any source items that are now empty
+    data.lifecycleItems = data.lifecycleItems.filter(item => 
+      (item.topics && item.topics.length > 0) || item.id.startsWith('topic-reclassified-')
+    );
+  }
+  
   if (appliedCount > 0) console.log(`Applied ${appliedCount} type overrides`);
   if (mergeCount > 0) console.log(`Applied ${mergeCount} merge overrides`);
+  if (topicOverrideCount > 0) console.log(`Applied ${topicOverrideCount} topic type overrides`);
   
   return data;
 }
@@ -1595,6 +1666,39 @@ router.delete('/overrides/:key', (req, res) => {
     }
   } else {
     res.status(404).json({ error: `No override found for "${key}"` });
+  }
+});
+
+// Set/update a topic-level type override (moves a single topic to a different type category)
+router.post('/overrides/topic', (req, res) => {
+  const { topicId, newType, reason } = req.body;
+  
+  if (!topicId || !newType) {
+    return res.status(400).json({ error: 'Missing required fields: topicId and newType' });
+  }
+  
+  const validTypes = ['cip', 'featured-app', 'validator', 'protocol-upgrade', 'outcome', 'other'];
+  if (!validTypes.includes(newType)) {
+    return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+  }
+  
+  const overrides = readOverrides();
+  if (!overrides.topicOverrides) {
+    overrides.topicOverrides = {};
+  }
+  
+  const key = String(topicId);
+  overrides.topicOverrides[key] = {
+    type: newType,
+    reason: reason || 'Manual topic reclassification',
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Topic override set: "${key}" -> ${newType} (${reason || 'Manual topic reclassification'})`);
+    res.json({ success: true, override: overrides.topicOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save topic override' });
   }
 });
 
