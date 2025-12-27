@@ -1140,62 +1140,140 @@ function applyOverrides(data) {
   }
   
   // Second pass: Apply merge overrides
+  // Supports:
+  //  - Item-level merges: key matches lifecycle item id or primaryId
+  //  - Topic-level merges: key matches a topic id (moves just that topic)
   if (hasMergeOverrides) {
-    const itemsToMerge = [];
     const targetItems = new Map();
-    
-    // Identify items to merge and their targets
-    data.lifecycleItems.forEach(item => {
-      const mergeOverride = overrides.mergeOverrides[item.id] || overrides.mergeOverrides[item.primaryId];
-      if (mergeOverride) {
-        itemsToMerge.push({ item, targetCip: mergeOverride.mergeInto });
-      }
-    });
-    
-    // Find target items
+
+    // Build target lookup by primaryId
     data.lifecycleItems.forEach(item => {
       if (item.primaryId) {
         targetItems.set(item.primaryId.toUpperCase(), item);
       }
     });
-    
-    // Perform merges
-    itemsToMerge.forEach(({ item, targetCip }) => {
-      const normalizedTarget = targetCip.toUpperCase();
-      const target = targetItems.get(normalizedTarget);
-      if (target) {
-        console.log(`Merging "${item.primaryId}" into "${target.primaryId}"`);
-        // Merge topics into target
+
+    const mergedItemIds = new Set();
+    const mergedItemPrimaryIds = new Set();
+
+    // Helper to merge a single topic into one or multiple targets
+    const mergeTopicIntoTargets = (topic, targets, sourcePrimaryId) => {
+      targets.forEach(targetCip => {
+        const normalizedTarget = String(targetCip).toUpperCase();
+        const target = targetItems.get(normalizedTarget);
+        if (!target) return;
+
+        if (!target.topics.find(t => t.id === topic.id)) {
+          target.topics.push(topic);
+        }
+
+        const stage = topic.stage;
+        if (!target.stages[stage]) target.stages[stage] = [];
+        if (!target.stages[stage].find(t => t.id === topic.id)) {
+          target.stages[stage].push(topic);
+        }
+
+        target.mergedFrom = target.mergedFrom || [];
+        if (sourcePrimaryId && !target.mergedFrom.includes(sourcePrimaryId)) {
+          target.mergedFrom.push(sourcePrimaryId);
+        }
+      });
+    };
+
+    // Walk items and apply both item-level and topic-level merges
+    data.lifecycleItems.forEach(item => {
+      const itemMergeOverride = overrides.mergeOverrides[item.id] || overrides.mergeOverrides[item.primaryId];
+
+      // Item-level merge: move ALL topics to targets, remove the item afterwards
+      if (itemMergeOverride) {
+        const targets = Array.isArray(itemMergeOverride.mergeInto)
+          ? itemMergeOverride.mergeInto
+          : [itemMergeOverride.mergeInto];
+
+        console.log(`Merging item "${item.primaryId}" into ${targets.join(', ')}`);
+
         item.topics.forEach(topic => {
-          if (!target.topics.find(t => t.id === topic.id)) {
-            target.topics.push(topic);
-            // Also add to the appropriate stage
-            const stage = topic.stage;
-            if (!target.stages[stage]) target.stages[stage] = [];
-            if (!target.stages[stage].find(t => t.id === topic.id)) {
-              target.stages[stage].push(topic);
-            }
+          mergeTopicIntoTargets(topic, targets, item.primaryId);
+        });
+
+        // Update date ranges on all targets
+        targets.forEach(targetCip => {
+          const target = targetItems.get(String(targetCip).toUpperCase());
+          if (!target) return;
+          if (new Date(item.firstDate) < new Date(target.firstDate)) target.firstDate = item.firstDate;
+          if (new Date(item.lastDate) > new Date(target.lastDate)) target.lastDate = item.lastDate;
+        });
+
+        mergedItemIds.add(item.id);
+        mergedItemPrimaryIds.add(item.primaryId);
+        mergeCount++;
+        return;
+      }
+
+      // Topic-level merge: move only the topics that have an override keyed by topic.id
+      if (!item.topics || item.topics.length === 0) return;
+
+      const topicsToMove = [];
+      const remainingTopics = [];
+
+      item.topics.forEach(topic => {
+        const topicMergeOverride = overrides.mergeOverrides[topic.id];
+        if (topicMergeOverride) {
+          const targets = Array.isArray(topicMergeOverride.mergeInto)
+            ? topicMergeOverride.mergeInto
+            : [topicMergeOverride.mergeInto];
+
+          console.log(`Merging topic "${topic.id}" (from "${item.primaryId}") into ${targets.join(', ')}`);
+          topicsToMove.push({ topic, targets });
+          mergeCount++;
+        } else {
+          remainingTopics.push(topic);
+        }
+      });
+
+      if (topicsToMove.length === 0) return;
+
+      // Apply topic moves
+      topicsToMove.forEach(({ topic, targets }) => {
+        mergeTopicIntoTargets(topic, targets, item.primaryId);
+      });
+
+      // Remove moved topics from item.topics
+      item.topics = remainingTopics;
+
+      // Also remove moved topics from item.stages
+      if (item.stages) {
+        Object.keys(item.stages).forEach(stageKey => {
+          item.stages[stageKey] = (item.stages[stageKey] || []).filter(t => !overrides.mergeOverrides[t.id]);
+          if (item.stages[stageKey].length === 0) {
+            delete item.stages[stageKey];
           }
         });
-        // Update date range
-        if (new Date(item.firstDate) < new Date(target.firstDate)) {
-          target.firstDate = item.firstDate;
+      }
+
+      // Recompute date range based on remaining topics
+      if (item.topics.length > 0) {
+        const dates = item.topics
+          .map(t => t.date)
+          .filter(Boolean)
+          .map(d => new Date(d))
+          .filter(d => !isNaN(d.getTime()));
+
+        if (dates.length > 0) {
+          item.firstDate = new Date(Math.min(...dates.map(d => d.getTime()))).toISOString();
+          item.lastDate = new Date(Math.max(...dates.map(d => d.getTime()))).toISOString();
         }
-        if (new Date(item.lastDate) > new Date(target.lastDate)) {
-          target.lastDate = item.lastDate;
-        }
-        target.mergedFrom = target.mergedFrom || [];
-        target.mergedFrom.push(item.primaryId);
-        mergeCount++;
+      } else {
+        // If nothing left, remove the whole item
+        mergedItemIds.add(item.id);
+        mergedItemPrimaryIds.add(item.primaryId);
       }
     });
-    
-    // Remove merged items from the list
-    if (itemsToMerge.length > 0) {
-      const mergedIds = new Set(itemsToMerge.map(m => m.item.id));
-      const mergedPrimaryIds = new Set(itemsToMerge.map(m => m.item.primaryId));
-      data.lifecycleItems = data.lifecycleItems.filter(item => 
-        !mergedIds.has(item.id) && !mergedPrimaryIds.has(item.primaryId)
+
+    // Remove merged/emptied items from the list
+    if (mergedItemIds.size > 0 || mergedItemPrimaryIds.size > 0) {
+      data.lifecycleItems = data.lifecycleItems.filter(item =>
+        !mergedItemIds.has(item.id) && !mergedItemPrimaryIds.has(item.primaryId)
       );
     }
   }
