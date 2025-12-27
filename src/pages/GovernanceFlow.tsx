@@ -935,18 +935,21 @@ const GovernanceFlow = () => {
 
   const renderTopicCard = (topic: Topic, showGroup = true) => {
     return (
-      <a 
+      <div 
         key={topic.id}
-        href={topic.sourceUrl || '#'}
-        target="_blank"
-        rel="noopener noreferrer"
         className={cn(
           "block p-3 rounded-lg bg-muted/30 border border-border/50 hover:border-primary/30 transition-colors",
           topic.sourceUrl ? "cursor-pointer hover:bg-muted/50" : "cursor-default"
         )}
       >
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
+          <a 
+            href={topic.sourceUrl || '#'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="min-w-0 flex-1"
+            onClick={(e) => !topic.sourceUrl && e.preventDefault()}
+          >
             <h4 className="font-medium text-sm">{topic.subject}</h4>
             <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
@@ -962,19 +965,55 @@ const GovernanceFlow = () => {
                 <span>{topic.messageCount} msgs</span>
               )}
             </div>
+          </a>
+          
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Merge into CIP button - show for non-CIP topics */}
+            {cipList.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <MoreVertical className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="bg-popover">
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      openMergeDialog(topic.subject);
+                    }}
+                  >
+                    <Merge className="mr-2 h-3 w-3" />
+                    Merge into CIP(s)...
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            
+            {topic.sourceUrl && (
+              <a 
+                href={topic.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="h-7 w-7 p-0 flex items-center justify-center text-muted-foreground hover:text-foreground"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            )}
           </div>
-          {topic.sourceUrl && (
-            <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
-              <ExternalLink className="h-3.5 w-3.5" />
-            </div>
-          )}
         </div>
         {topic.excerpt && (
           <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
             {topic.excerpt}
           </p>
         )}
-      </a>
+      </div>
     );
   };
 
