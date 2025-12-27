@@ -895,7 +895,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
     // Check if template index is available for faster scanning
     const templateIndexPopulated = await isTemplateIndexPopulated();
-    let createdResult, exercisedResult;
+    let createdResult;
 
     if (templateIndexPopulated) {
       // FAST PATH: Use template index to scan only relevant files
@@ -906,32 +906,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const totalEventFiles = binaryReader.findBinaryFiles(DATA_PATH, 'events')?.length || 0;
       console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events (of ~${totalEventFiles} event files)`);
 
-      // Safety: if the template index looks incomplete (very few VoteRequest files relative to total files),
-      // fall back to a full scan so we don't produce a misleadingly tiny index.
+      // Safety check
       const suspiciouslySmall = totalEventFiles > 2000 && voteRequestFiles.length < 50;
 
       if (voteRequestFiles.length === 0 || suspiciouslySmall) {
         if (suspiciouslySmall) {
-          console.warn('   ⚠️ Template index appears incomplete (VoteRequest files unexpectedly low) — falling back to full scan');
-          console.warn('      Tip: rebuild template index with force=true to speed future builds.');
+          console.warn('   ⚠️ Template index appears incomplete — falling back to full scan');
         } else {
           console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
         }
-
         indexingProgress = { ...indexingProgress, phase: 'scan:created (full)', current: 0, total: 0, records: 0 };
         createdResult = await scanAllFilesForVoteRequests('created');
-        indexingProgress = { ...indexingProgress, phase: 'scan:exercised (full)', current: 0, total: 0, records: 0 };
-        exercisedResult = await scanAllFilesForVoteRequests('exercised');
       } else {
-        // Scan only the relevant files
         console.log('   Scanning VoteRequest files for created events...');
         indexingProgress = { ...indexingProgress, phase: 'scan:created', current: 0, total: voteRequestFiles.length, records: 0 };
         createdResult = await scanFilesForVoteRequests(voteRequestFiles, 'created');
-
-        // Scan VoteRequest files for archive/exercised events
-        console.log('   Scanning VoteRequest files for archive events...');
-        indexingProgress = { ...indexingProgress, phase: 'scan:archived', current: 0, total: voteRequestFiles.length, records: 0 };
-        exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
       }
 
     } else {
@@ -941,236 +930,15 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
 
       indexingProgress = { ...indexingProgress, phase: 'scan:created (full)', current: 0, total: 0, records: 0 };
       createdResult = await scanAllFilesForVoteRequests('created');
-      indexingProgress = { ...indexingProgress, phase: 'scan:exercised (full)', current: 0, total: 0, records: 0 };
-      exercisedResult = await scanAllFilesForVoteRequests('exercised');
     }
 
-    // 2️⃣ EXERCISED SCAN SUMMARY
-    const missingCount = exercisedResult.missingConsumingCount || 0;
-    console.log(`   [VoteRequestIndexer] Exercised scan summary:`, {
-      totalCreated: createdResult.records.length,
-      consumingExercised: exercisedResult.records.length,
-      missingConsumingFlag: missingCount
-    });
-
-    // Build map of proposal root contract_id -> consuming exercised event
-    // This is keyed by the proposal root contract_id, not by any other identifier.
-    // The exercised event scanner already filters for consuming === true.
+    console.log(`   ✅ Found ${createdResult.records.length} VoteRequest created events`);
+    
+    // SKIP DsoRules exercised scan - not needed for status determination
+    // Status is now computed from votes + voteBefore time
+    // is_executed flag will be false (can be added in a separate pass if needed)
     const archivedEventsMap = new Map();
-    let closedViaDsoRules = 0;
-    
-    // PATH B: Direct DsoRules governance actions (no VoteRequest contract)
     const directGovernanceActions = [];
-    
-    // Helper: Extract action subject from DsoRules choice name
-    function extractActionSubjectFromChoice(choice) {
-      if (!choice) return null;
-      // Common patterns: DsoRules_UpdateSvRewardWeight, DsoRules_RevokeFeaturedAppRight, etc.
-      const match = choice.match(/DsoRules_(\w+)/);
-      if (match) return match[1];
-      return choice;
-    }
-    
-    // =============================================================================
-    // GENERIC DAML RECORD WALKER
-    // Recursively extracts all contractId values from nested DAML structures
-    // =============================================================================
-    function extractContractIds(node, depth = 0) {
-      if (!node || depth > 20) return []; // Prevent infinite recursion
-      
-      const ids = [];
-      
-      // Direct contractId field
-      if (node.contractId) {
-        ids.push(node.contractId);
-      }
-      
-      // DAML record: { record: { fields: [ { value: {...} }, ... ] } }
-      if (node.record?.fields && Array.isArray(node.record.fields)) {
-        for (const field of node.record.fields) {
-          if (field.value) {
-            ids.push(...extractContractIds(field.value, depth + 1));
-          }
-        }
-      }
-      
-      // DAML variant: { variant: { value: {...} } }
-      if (node.variant?.value) {
-        ids.push(...extractContractIds(node.variant.value, depth + 1));
-      }
-      
-      // DAML optional: { optional: { value: {...} } }
-      if (node.optional?.value) {
-        ids.push(...extractContractIds(node.optional.value, depth + 1));
-      }
-      
-      // DAML list: { list: [ {...}, ... ] }
-      if (node.list && Array.isArray(node.list)) {
-        for (const item of node.list) {
-          ids.push(...extractContractIds(item, depth + 1));
-        }
-      }
-      
-      // Generic object traversal (for non-DAML structures)
-      if (typeof node === 'object' && !Array.isArray(node)) {
-        for (const key of Object.keys(node)) {
-          if (key !== 'record' && key !== 'variant' && key !== 'optional' && key !== 'list') {
-            const val = node[key];
-            if (typeof val === 'object' && val !== null) {
-              ids.push(...extractContractIds(val, depth + 1));
-            }
-          }
-        }
-      }
-      
-      return ids;
-    }
-    
-    // Build set of known VoteRequest contract IDs for matching
-    const knownVoteRequestIds = new Set(createdResult.records.map(r => r.contract_id));
-    
-    let unmatchedCount = 0;
-    let voteRequestMatchCount = 0; // Debug counter for successful matches
-    const DEBUG_MATCH_LIMIT = 5;
-    
-    for (const record of exercisedResult.records) {
-      // CANTON GOVERNANCE MODEL:
-      // The winning rule execution IS the vote outcome.
-      // ANY consuming exercised event on :DsoRules template = finalized proposal.
-      // The scanner already guarantees consuming === true AND template_id.endsWith(':DsoRules').
-      
-      const choice = String(record.choice || '');
-      
-      // =============================================================================
-      // EXTENDED DAML WALKER: Extract contractIds from ALL relevant event fields
-      // Traverses: exercise_argument, exercise_result, child_event_ids
-      // =============================================================================
-      const allContractIds = [];
-      
-      // 1. Extract from exercise_argument
-      const exerciseArg = record.exercise_argument || record.payload || record.raw?.choice_argument || {};
-      allContractIds.push(...extractContractIds(exerciseArg));
-      
-      // 2. Extract from exercise_result
-      const exerciseResult = record.exercise_result || record.raw?.exercise_result || {};
-      allContractIds.push(...extractContractIds(exerciseResult));
-      
-      // 3. Extract from child_event_ids (may contain references to consumed VoteRequest)
-      if (record.child_event_ids && Array.isArray(record.child_event_ids)) {
-        for (const childId of record.child_event_ids) {
-          if (typeof childId === 'string') {
-            allContractIds.push(childId);
-          } else if (typeof childId === 'object') {
-            allContractIds.push(...extractContractIds(childId));
-          }
-        }
-      }
-      
-      // 4. Extract from raw event structure (additional coverage)
-      if (record.raw) {
-        allContractIds.push(...extractContractIds(record.raw));
-      }
-      
-      // Find the VoteRequest contract ID by matching against known created VoteRequests
-      let voteRequestCid = null;
-      for (const cid of allContractIds) {
-        if (knownVoteRequestIds.has(cid)) {
-          voteRequestCid = cid;
-          break;
-        }
-      }
-      
-      // Fallback: try direct field access patterns (legacy support)
-      if (!voteRequestCid) {
-        voteRequestCid = 
-          exerciseArg.voteRequestCid || 
-          exerciseArg.voteRequest ||
-          record.raw?.choice_argument?.voteRequestCid ||
-          record.raw?.choice_argument?.voteRequest;
-      }
-      
-      if (voteRequestCid) {
-        // DEBUG: Log first few successful VoteRequest matches
-        voteRequestMatchCount++;
-        if (voteRequestMatchCount <= DEBUG_MATCH_LIMIT) {
-          console.log(`   🎯 VoteRequest match #${voteRequestMatchCount}: choice=${choice}, voteRequestCid=${voteRequestCid.substring(0, 40)}...`);
-        }
-        
-        // Extract outcome from exercise result if available
-        const exerciseResultData = record.exercise_result || record.payload?.exercise_result || {};
-        const outcome = 
-          exerciseResultData.outcome ||
-          record.exercise_argument?.outcome ||
-          record.payload?.outcome;
-        
-        let outcomeTag = null;
-        if (outcome) {
-          if (typeof outcome === 'string') {
-            outcomeTag = outcome;
-          } else if (outcome.tag) {
-            outcomeTag = outcome.tag;
-          } else {
-            const keys = Object.keys(outcome);
-            if (keys.length > 0 && keys[0].startsWith('VRO_')) {
-              outcomeTag = keys[0];
-            }
-          }
-        }
-        
-        // Key by the proposal root contract_id (voteRequestCid)
-        archivedEventsMap.set(voteRequestCid, {
-          ...record,
-          contract_id: voteRequestCid, // Normalize to proposal root
-          dso_close_outcome: outcome,
-          dso_close_outcome_tag: outcomeTag,
-          completedAt: exerciseResultData.completedAt,
-          abstainingSvs: exerciseResultData.abstainingSvs,
-          offboardedVoters: exerciseResultData.offboardedVoters,
-          choice: choice,
-          close_source: 'dso_rules',
-        });
-        closedViaDsoRules++;
-      } else {
-        // ============================================================
-        // PATH B: DIRECT DSORULES GOVERNANCE (no VoteRequest contract)
-        // These are standalone governance actions without a formal vote request
-        // ============================================================
-        unmatchedCount++;
-        
-        // Collect unmatched events for insertion into direct_governance_actions
-        directGovernanceActions.push({
-          event_id: record.event_id,
-          contract_id: record.contract_id,
-          template_id: record.template_id,
-          effective_at: record.effective_at,
-          choice: choice,
-          status: 'executed', // Direct DsoRules executions are always executed
-          action_subject: extractActionSubjectFromChoice(choice), 
-          exercise_argument: record.exercise_argument ? JSON.stringify(record.exercise_argument) : null,
-          exercise_result: record.exercise_result ? JSON.stringify(record.exercise_result) : null,
-          dso: record.payload?.dso || null,
-          source: 'dso_rules_direct',
-        });
-        
-        // Reduced logging - first 3 only
-        if (unmatchedCount <= 3) {
-          console.log(`   📋 Direct DsoRules governance: choice=${choice}`);
-        }
-      }
-    }
-    
-    if (unmatchedCount > 3) {
-      console.log(`   📋 ... and ${unmatchedCount - 3} more direct DsoRules governance actions`);
-    }
-    
-    const closedContractIds = new Set(archivedEventsMap.keys());
-    
-    // INFORMATIONAL: DsoRules execution summary (does NOT affect VoteRequest status)
-    console.log(`   [GovernanceIndexer] DsoRules execution scan complete:`, {
-      consumingDsoRulesEvents: exercisedResult.records.length,
-      executionsLinkedToVoteRequests: closedViaDsoRules,
-      directGovernance: directGovernanceActions.length
-    });
 
     const now = new Date();
 
@@ -1706,13 +1474,10 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
     }
     
     // ============================================================
-    // 3️⃣ DSORULES EXECUTION STATS (INFORMATIONAL ONLY)
+    // 3️⃣ MODEL NOTE (DsoRules scan skipped for speed)
     // ============================================================
-    console.log(`\n[GovernanceIndexer] Execution stats:`);
-    console.log(JSON.stringify({
-      consumingDsoRulesEvents: exercisedResult.records.length,
-      executionsLinkedToVoteRequests: closedViaDsoRules
-    }, null, 2));
+    console.log(`\n[GovernanceIndexer] Note: DsoRules execution scan skipped for speed.`);
+    console.log(`   is_executed flag not populated. Status based on votes + voteBefore time.`);
     
     // ============================================================
     // 4️⃣ MODEL EXPLANATION LOG (ONCE PER RUN)
@@ -1774,7 +1539,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       upserted,
       directGovernanceUpserted: directUpserted,
       totalGovernance: upserted + directUpserted,
-      closedCount: closedContractIds.size,
+      closedCount: 0, // DsoRules scan skipped
       elapsedSeconds: parseFloat(elapsed),
       totalIndexed: upserted,
       stats: finalStats,
