@@ -4027,4 +4027,239 @@ router.get('/dso-rules-index/sv-count-at', async (req, res) => {
   }
 });
 
+// ===== SV NODE DIRECT API ENDPOINTS =====
+// These endpoints fetch directly from the SV node at scan.sv-1.global.canton.network.sync.global
+
+const SV_NODE_BASE_URL = 'https://scan.sv-1.global.canton.network.sync.global';
+
+// GET /api/events/sv-node/active-vote-requests - Fetch active vote requests from SV node
+router.get('/sv-node/active-vote-requests', async (req, res) => {
+  try {
+    console.log('[SV-NODE] Fetching active vote requests...');
+    const response = await fetch(`${SV_NODE_BASE_URL}/api/sv/v0/admin/sv/voterequests`);
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SV-NODE] Error fetching active vote requests: ${response.status} - ${text}`);
+      return res.status(response.status).json({ error: text });
+    }
+    
+    const data = await response.json();
+    console.log(`[SV-NODE] Fetched ${data.dso_rules_vote_requests?.length || 0} active vote requests`);
+    
+    res.json({
+      vote_requests: data.dso_rules_vote_requests || [],
+      count: data.dso_rules_vote_requests?.length || 0,
+      source: 'sv-node-live',
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[SV-NODE] Error fetching active vote requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/events/sv-node/vote-results - Query historical vote results from SV node
+router.post('/sv-node/vote-results', async (req, res) => {
+  try {
+    const { actionName, accepted, requester, effectiveFrom, effectiveTo, limit = 1000 } = req.body;
+    
+    console.log('[SV-NODE] Fetching vote results with filters:', { actionName, accepted, requester, effectiveFrom, effectiveTo, limit });
+    
+    const response = await fetch(`${SV_NODE_BASE_URL}/api/sv/v0/admin/sv/voteresults`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actionName: actionName || undefined,
+        accepted: accepted !== undefined ? accepted : undefined,
+        requester: requester || undefined,
+        effectiveFrom: effectiveFrom || undefined,
+        effectiveTo: effectiveTo || undefined,
+        limit: limit,
+      }),
+    });
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SV-NODE] Error fetching vote results: ${response.status} - ${text}`);
+      return res.status(response.status).json({ error: text });
+    }
+    
+    const data = await response.json();
+    console.log(`[SV-NODE] Fetched ${data.dso_rules_vote_results?.length || 0} vote results`);
+    
+    res.json({
+      vote_results: data.dso_rules_vote_results || [],
+      count: data.dso_rules_vote_results?.length || 0,
+      source: 'sv-node-live',
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[SV-NODE] Error fetching vote results:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/sv-node/vote-request/:contractId - Fetch single vote request by contract ID
+router.get('/sv-node/vote-request/:contractId', async (req, res) => {
+  try {
+    const { contractId } = req.params;
+    console.log(`[SV-NODE] Fetching vote request: ${contractId}`);
+    
+    const response = await fetch(`${SV_NODE_BASE_URL}/api/sv/v0/voterequests/${encodeURIComponent(contractId)}`);
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: 'VoteRequest not found' });
+      }
+      const text = await response.text();
+      console.error(`[SV-NODE] Error fetching vote request: ${response.status} - ${text}`);
+      return res.status(response.status).json({ error: text });
+    }
+    
+    const data = await response.json();
+    res.json({
+      vote_request: data.dso_rules_vote_request || data,
+      source: 'sv-node-live',
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[SV-NODE] Error fetching vote request:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/events/sv-node/vote-requests-batch - Batch lookup vote requests by contract IDs
+router.post('/sv-node/vote-requests-batch', async (req, res) => {
+  try {
+    const { vote_request_contract_ids } = req.body;
+    
+    if (!Array.isArray(vote_request_contract_ids)) {
+      return res.status(400).json({ error: 'vote_request_contract_ids must be an array' });
+    }
+    
+    console.log(`[SV-NODE] Batch fetching ${vote_request_contract_ids.length} vote requests...`);
+    
+    const response = await fetch(`${SV_NODE_BASE_URL}/api/sv/v0/voterequest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vote_request_contract_ids }),
+    });
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SV-NODE] Error batch fetching vote requests: ${response.status} - ${text}`);
+      return res.status(response.status).json({ error: text });
+    }
+    
+    const data = await response.json();
+    console.log(`[SV-NODE] Batch fetched ${data.vote_requests?.length || 0} vote requests`);
+    
+    res.json({
+      vote_requests: data.vote_requests || [],
+      count: data.vote_requests?.length || 0,
+      source: 'sv-node-live',
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[SV-NODE] Error batch fetching vote requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/events/sv-node/all-proposals - Fetch ALL proposals (active + historical) from SV node
+// This is the primary endpoint for populating the governance page with complete data
+router.get('/sv-node/all-proposals', async (req, res) => {
+  try {
+    console.log('[SV-NODE] Fetching all proposals (active + historical)...');
+    
+    // Fetch both active vote requests AND historical vote results in parallel
+    const [activeResponse, acceptedResponse, rejectedResponse] = await Promise.all([
+      // Active vote requests
+      fetch(`${SV_NODE_BASE_URL}/api/sv/v0/admin/sv/voterequests`),
+      // Accepted vote results
+      fetch(`${SV_NODE_BASE_URL}/api/sv/v0/admin/sv/voteresults`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accepted: true, limit: 1000 }),
+      }),
+      // Rejected vote results
+      fetch(`${SV_NODE_BASE_URL}/api/sv/v0/admin/sv/voteresults`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accepted: false, limit: 1000 }),
+      }),
+    ]);
+    
+    // Parse responses
+    const activeData = activeResponse.ok ? await activeResponse.json() : { dso_rules_vote_requests: [] };
+    const acceptedData = acceptedResponse.ok ? await acceptedResponse.json() : { dso_rules_vote_results: [] };
+    const rejectedData = rejectedResponse.ok ? await rejectedResponse.json() : { dso_rules_vote_results: [] };
+    
+    const activeRequests = activeData.dso_rules_vote_requests || [];
+    const acceptedResults = acceptedData.dso_rules_vote_results || [];
+    const rejectedResults = rejectedData.dso_rules_vote_results || [];
+    
+    console.log(`[SV-NODE] Fetched: ${activeRequests.length} active, ${acceptedResults.length} accepted, ${rejectedResults.length} rejected`);
+    
+    // Transform active requests into a unified format
+    const activeProposals = activeRequests.map(vr => ({
+      contract_id: vr.contract_id,
+      template_id: vr.template_id,
+      status: 'in_progress',
+      payload: vr.payload,
+      created_at: vr.created_at,
+      source_type: 'active_request',
+    }));
+    
+    // Transform vote results into unified format
+    const historicalProposals = [...acceptedResults, ...rejectedResults].map(vr => ({
+      contract_id: vr.request?.tracking_cid || vr.request?.contract_id || 'unknown',
+      template_id: vr.request?.template_id || 'unknown',
+      status: vr.outcome?.accepted ? 'executed' : 'rejected',
+      payload: vr.request,
+      outcome: vr.outcome,
+      effective_at: vr.outcome?.effective_at || vr.request?.vote_before,
+      source_type: 'vote_result',
+    }));
+    
+    // Deduplicate by contract_id (prefer historical results over active if both exist)
+    const proposalMap = new Map();
+    
+    // Add active first
+    for (const p of activeProposals) {
+      proposalMap.set(p.contract_id, p);
+    }
+    
+    // Historical results override active (more definitive status)
+    for (const p of historicalProposals) {
+      proposalMap.set(p.contract_id, p);
+    }
+    
+    const allProposals = Array.from(proposalMap.values());
+    
+    // Calculate stats
+    const stats = {
+      total: allProposals.length,
+      active: activeProposals.length,
+      accepted: acceptedResults.length,
+      rejected: rejectedResults.length,
+      in_progress: allProposals.filter(p => p.status === 'in_progress').length,
+      executed: allProposals.filter(p => p.status === 'executed').length,
+    };
+    
+    console.log(`[SV-NODE] Total unique proposals: ${allProposals.length}`);
+    
+    res.json({
+      proposals: allProposals,
+      stats,
+      source: 'sv-node-live',
+      fetched_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[SV-NODE] Error fetching all proposals:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
