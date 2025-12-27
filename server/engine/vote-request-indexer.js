@@ -891,13 +891,25 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
   
   // 1️⃣ MODEL BANNER - confirms the binary and model in use
   console.log('\n🗳️ [VoteRequestIndexer] Starting index build...');
-  console.log('   Status model: FINAL iff consuming Exercised event exists on proposal root contract');
+  console.log('   Status model: VoteRequest state + time (2/3 SV threshold at vote time)');
 
   try {
     const startTime = Date.now();
 
     // Ensure tables exist first
     await ensureIndexTables();
+
+    // Ensure DSO Rules SV membership index is available (needed for correct thresholds)
+    // If missing, we build it once up-front to avoid misclassifying proposals as expired.
+    try {
+      const dsoStats = await dsoRulesIndexer.getDsoIndexStats();
+      if (!dsoStats?.isPopulated) {
+        console.log('   📜 DSO Rules index not populated — building it for accurate vote thresholds...');
+        await dsoRulesIndexer.buildDsoRulesIndex({ force: false });
+      }
+    } catch (e) {
+      console.warn('   ⚠️ Unable to ensure DSO Rules index (will fall back to default SV count):', e?.message || e);
+    }
 
     // Heartbeat: mark "last indexed" as now() so the UI doesn't look stale while building.
     try {
@@ -1539,9 +1551,13 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const finalVotes = archivedNormalized?.votes || normalizedPayload.votes || archivedEvent?.payload?.votes || event.payload?.votes;
       const finalVoteCount = finalVotes?.length || 0;
 
+      // Prefer effective_at for ordering, but fall back to other timestamps if missing
+      const effectiveAt = event.effective_at || event.timestamp || event.record_time || event.created_at_ts || null;
+
       const voteBefore = normalizedPayload.voteBefore || event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
-      const isExpired = voteBeforeDate && voteBeforeDate < now;
+      const isVoteBeforeValid = voteBeforeDate && !isNaN(voteBeforeDate.getTime());
+      const isExpired = isVoteBeforeValid && voteBeforeDate < now;
 
       // ============================================================
       // STATUS DETERMINATION: VoteRequest State + Time Model
@@ -1563,7 +1579,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       // Uses DSO Rules as CANONICAL source (not SvOnboardingConfirmed attestations)
       // threshold = ceil(2/3 × number_of_active_SVs_at_vote_time)
       // Same threshold applies to both acceptance AND rejection
-      const voteTime = voteBefore || event.effective_at;
+      const voteTime = (isVoteBeforeValid ? voteBefore : null) || effectiveAt || event.effective_at;
       let svCountAtVoteTime = svCountCache.get(voteTime);
       if (svCountAtVoteTime === undefined) {
         // PRIMARY: Use DSO Rules index (canonical SV membership)
@@ -1731,7 +1747,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         stable_id: event.contract_id || event.event_id || event.update_id,
         contract_id: event.contract_id,
         template_id: event.template_id,
-        effective_at: event.effective_at,
+        effective_at: effectiveAt,
         status,
         is_closed: isClosed,
         // NEW: Track execution separately from status
@@ -1746,7 +1762,7 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         vote_count: finalVoteCount,
         accept_count: acceptCount,
         reject_count: rejectCount,
-        vote_before: normalizedPayload.voteBefore || voteBefore || null,
+        vote_before: (isVoteBeforeValid ? voteBefore : null) || null,
         target_effective_at: normalizedPayload.targetEffectiveAt || event.payload?.targetEffectiveAt || null,
         tracking_cid: trackingCid,
         dso: dso,
