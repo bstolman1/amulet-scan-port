@@ -1242,6 +1242,80 @@ router.get('/vote-requests/debug-table', async (req, res) => {
   }
 });
 
+// GET /api/events/vote-requests/dedupe-stats - Diagnostic endpoint for deduplication analysis
+// This answers the question: "1 proposal = 1 VoteRequest ID, how many unique proposals do we have?"
+router.get('/vote-requests/dedupe-stats', async (req, res) => {
+  try {
+    console.log('\n📊 DEDUPE-STATS: Running diagnostic query...');
+    
+    // The key insight: proposal_id = COALESCE(tracking_cid, contract_id)
+    // Each unique proposal_id represents one governance proposal
+    const dedupeStats = await db.safeQuery(`
+      SELECT
+        COUNT(*) AS total_rows,
+        COUNT(DISTINCT COALESCE(proposal_id, contract_id)) AS unique_proposals,
+        COUNT(*) - COUNT(DISTINCT COALESCE(proposal_id, contract_id)) AS duplicate_rows,
+        ROUND(
+          (COUNT(*) - COUNT(DISTINCT COALESCE(proposal_id, contract_id))) * 100.0 / NULLIF(COUNT(*), 0),
+          2
+        ) AS duplicate_pct
+      FROM vote_requests
+    `);
+    
+    // Also get human-only counts (explorer-visible proposals)
+    const humanStats = await db.safeQuery(`
+      SELECT
+        COUNT(*) AS total_rows,
+        COUNT(DISTINCT COALESCE(proposal_id, contract_id)) AS unique_proposals
+      FROM vote_requests
+      WHERE is_human = true
+    `);
+    
+    // Status breakdown for unique proposals (using window function)
+    const statusBreakdown = await db.safeQuery(`
+      WITH latest AS (
+        SELECT 
+          COALESCE(proposal_id, contract_id) as pid,
+          status,
+          ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn
+        FROM vote_requests
+      )
+      SELECT status, COUNT(*) as count
+      FROM latest
+      WHERE rn = 1
+      GROUP BY status
+      ORDER BY count DESC
+    `);
+    
+    const stats = dedupeStats[0] || {};
+    const human = humanStats[0] || {};
+    
+    console.log(`   Total rows: ${stats.total_rows}`);
+    console.log(`   Unique proposals: ${stats.unique_proposals}`);
+    console.log(`   Duplicate rows: ${stats.duplicate_rows} (${stats.duplicate_pct}%)`);
+    console.log(`   Human proposals: ${human.unique_proposals}`);
+    
+    res.json(convertBigInts({
+      totalRows: Number(stats.total_rows) || 0,
+      uniqueProposals: Number(stats.unique_proposals) || 0,
+      duplicateRows: Number(stats.duplicate_rows) || 0,
+      duplicatePct: Number(stats.duplicate_pct) || 0,
+      humanProposals: Number(human.unique_proposals) || 0,
+      statusBreakdown,
+      explanation: {
+        model: '1 governance proposal = 1 unique VoteRequest ID (proposal_id)',
+        deduplication: 'proposal_id = COALESCE(tracking_cid, contract_id)',
+        duplicates: 'Multiple rows per proposal represent state updates during voting lifecycle',
+        humanFilter: 'is_human = true filters out config maintenance and non-human proposals',
+      },
+      message: 'Diagnostic data showing proposal deduplication stats'
+    }));
+  } catch (err) {
+    console.error('Error in vote-requests dedupe-stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/events/template-scan - Scan all binary files to find unique templates (for debugging)
 router.get('/template-scan', async (req, res) => {
   try {
