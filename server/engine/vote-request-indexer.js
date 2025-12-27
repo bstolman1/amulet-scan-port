@@ -411,40 +411,23 @@ export async function queryCanonicalProposals({ limit = 100, status = 'all', off
   if (status === 'active' || status === 'in_progress' || status === 'pending') {
     whereConditions.push("status IN ('in_progress', 'pending')");
   } else if (status === 'accepted' || status === 'executed' || status === 'approved') {
-    // Map legacy 'executed' to new 'accepted'
     whereConditions.push("status = 'accepted'");
   } else if (status === 'rejected') {
     whereConditions.push("status = 'rejected'");
   } else if (status === 'expired') {
     whereConditions.push("status = 'expired'");
   } else if (status === 'historical' || status === 'completed') {
-    // Historical = vote deadline passed (accepted, rejected, expired)
     whereConditions.push("status IN ('accepted', 'rejected', 'expired')");
   }
   
-  // Human filter - this is the key canonical filter
   if (humanOnly) {
     whereConditions.push("is_human = true");
   }
   
   const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-  // Group by proposal_id to collapse lifecycle duplicates (migrations, re-submissions)
+  // NOW: Each row IS one proposal (already grouped at index time)
   const results = await query(`
-    WITH base AS (
-      SELECT * FROM vote_requests ${whereClause}
-    ),
-    ranked AS (
-      SELECT 
-        *,
-        ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn,
-        COUNT(*) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as related_count,
-        MIN(effective_at) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as first_seen,
-        MAX(effective_at) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as last_seen,
-        MAX(accept_count) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as max_accept_count,
-        MAX(reject_count) OVER (PARTITION BY COALESCE(proposal_id, contract_id)) as max_reject_count
-      FROM base
-    )
     SELECT 
       proposal_id,
       event_id,
@@ -452,6 +435,8 @@ export async function queryCanonicalProposals({ limit = 100, status = 'all', off
       contract_id,
       template_id,
       effective_at,
+      effective_at as first_seen,
+      effective_at as last_seen,
       status,
       is_closed,
       action_tag,
@@ -461,8 +446,8 @@ export async function queryCanonicalProposals({ limit = 100, status = 'all', off
       reason_url,
       votes,
       vote_count,
-      max_accept_count as accept_count,
-      max_reject_count as reject_count,
+      accept_count,
+      reject_count,
       vote_before,
       target_effective_at,
       tracking_cid,
@@ -470,11 +455,9 @@ export async function queryCanonicalProposals({ limit = 100, status = 'all', off
       semantic_key,
       action_subject,
       is_human,
-      related_count,
-      first_seen,
-      last_seen
-    FROM ranked
-    WHERE rn = 1
+      1 as related_count
+    FROM vote_requests
+    ${whereClause}
     ORDER BY effective_at DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
@@ -504,47 +487,31 @@ export async function queryCanonicalProposals({ limit = 100, status = 'all', off
 
 /**
  * Get canonical proposal counts matching explorer semantics
- * Returns counts at each layer of the model
+ * NOW: Each row IS one proposal (already grouped at index time)
  */
 export async function getCanonicalProposalStats() {
   try {
-    // Raw events (all VoteRequest records in index)
+    // Total proposals in index (each row = one proposal)
     const rawTotal = await queryOne(`SELECT COUNT(*) as count FROM vote_requests`);
-    
-    // Lifecycle proposals (unique proposal_id)
-    const lifecycleTotal = await queryOne(`
-      SELECT COUNT(DISTINCT COALESCE(proposal_id, contract_id)) as count FROM vote_requests
-    `);
     
     // Human proposals (explorer-visible)
     const humanTotal = await queryOne(`
-      SELECT COUNT(DISTINCT COALESCE(proposal_id, contract_id)) as count 
-      FROM vote_requests 
-      WHERE is_human = true
+      SELECT COUNT(*) as count FROM vote_requests WHERE is_human = true
     `);
     
-    // Status breakdown for human proposals
+    // Status breakdown for human proposals (direct count, no grouping needed)
     const humanByStatus = await query(`
-      WITH latest AS (
-        SELECT 
-          COALESCE(proposal_id, contract_id) as pid,
-          status,
-          ROW_NUMBER() OVER (PARTITION BY COALESCE(proposal_id, contract_id) ORDER BY effective_at DESC) as rn
-        FROM vote_requests
-        WHERE is_human = true
-      )
       SELECT status, COUNT(*) as count
-      FROM latest
-      WHERE rn = 1
+      FROM vote_requests
+      WHERE is_human = true
       GROUP BY status
     `);
     
     const byStatus = {
       in_progress: 0,
-      accepted: 0,  // NEW: Use 'accepted' instead of 'executed'
+      accepted: 0,
       rejected: 0,
       expired: 0,
-      // Legacy alias for backwards compatibility
       executed: 0,
     };
     for (const row of humanByStatus) {
@@ -553,7 +520,6 @@ export async function getCanonicalProposalStats() {
       } else if (row.status === 'accepted') {
         byStatus.accepted += Number(row.count);
       } else if (row.status === 'executed') {
-        // Legacy status name - treat as accepted
         byStatus.accepted += Number(row.count);
         byStatus.executed = Number(row.count);
       } else if (row.status === 'rejected') {
@@ -565,7 +531,7 @@ export async function getCanonicalProposalStats() {
     
     return {
       rawEvents: Number(rawTotal?.count || 0),
-      lifecycleProposals: Number(lifecycleTotal?.count || 0),
+      lifecycleProposals: Number(rawTotal?.count || 0), // Same as rawEvents now
       humanProposals: Number(humanTotal?.count || 0),
       byStatus,
     };
@@ -575,6 +541,10 @@ export async function getCanonicalProposalStats() {
       rawEvents: 0,
       lifecycleProposals: 0,
       humanProposals: 0,
+      byStatus: { in_progress: 0, accepted: 0, rejected: 0, expired: 0 },
+    };
+  }
+}
       byStatus: { in_progress: 0, executed: 0, rejected: 0, expired: 0 },
     };
   }
@@ -1215,392 +1185,201 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       }
     }
 
-    // Upsert vote requests (ON CONFLICT doesn't throw, so we just count upserts)
-    indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: createdResult.records.length, records: 0 };
-    let upserted = 0;
-    
-    // Track status counts (VoteRequest state + time model)
-    // - accepted: voteBefore passed AND acceptVotes >= threshold
-    // - rejected: voteBefore passed AND rejectVotes >= rejectionThreshold  
-    // - expired: voteBefore passed AND neither threshold met
-    // - in_progress: voteBefore not yet reached
-    // - executed: has consuming DsoRules event (optional, separate from status)
-    const statusStats = {
-      accepted: 0,            // Voted to accept (met 2/3 threshold)
-      rejected: 0,            // Voted to reject (met rejection threshold)
-      expired: 0,             // Deadline passed without threshold met
-      in_progress: 0,         // Voting still open
-      // Execution tracking (separate from status)
-      executed: 0,            // Has consuming DsoRules event after acceptance
-      // Legacy names for backwards compatibility
-      finalized: 0,           // Alias for accepted + rejected + expired
-      expired_unfinalized: 0, // Legacy - now just 'expired'
-      expired_final: 0,       // Legacy - now just 'expired'
-      // Vote totals (for display)
-      totalAcceptVotes: 0,
-      totalRejectVotes: 0
-    };
-    
-    // 5️⃣ SAMPLE FINALIZED PROPOSALS (first 3)
-    const sampleFinalized = [];
-    
-    // Cache SV counts by vote time to avoid repeated lookups
-    const svCountCache = new Map();
-    let usedFallbackSvCount = false; // Track if we used fallback (SV index not populated)
-
-    // =============================================================================
-    // PAYLOAD NORMALIZATION: Handle both DAML record format and normalized format
-    // =============================================================================
-    // Raw DAML format: { record: { fields: [ { value: {...} }, ... ] } }
-    // Normalized format: { requester: "...", action: { tag: "...", value: {...} }, reason: {...}, ... }
-    // =============================================================================
+    // ============================================================
+    // PAYLOAD NORMALIZATION HELPER
+    // ============================================================
     const normalizePayload = (payload) => {
       if (!payload) return {};
-
-      // Already normalized format - has direct properties like 'requester', 'action', etc.
-      if (payload.requester || payload.action || payload.reason) {
-        return payload;
-      }
-
+      if (payload.requester || payload.action || payload.reason) return payload;
+      
       const unwrapScalar = (v) => {
         if (v === null || v === undefined) return null;
         if (typeof v !== 'object') return v;
         if (v.party) return v.party;
         if (v.text) return v.text;
-        if (typeof v.bool === 'boolean') return v.bool;
-        if (v.int64 !== undefined) return v.int64;
-        if (v.numeric !== undefined) return v.numeric;
-        if (v.timestamp) {
-          const microTs = parseInt(v.timestamp, 10);
-          return isNaN(microTs) ? v.timestamp : new Date(microTs / 1000).toISOString();
-        }
+        if (v.timestamp) return new Date(parseInt(v.timestamp, 10) / 1000).toISOString();
         if (v.contractId) return v.contractId;
-        if (v.Some?.contractId) return v.Some.contractId;
         return v;
       };
-
-      const damlRecordToObject = (record) => {
-        const out = {};
-        const fields = record?.fields;
-        if (!Array.isArray(fields)) return out;
-        for (let i = 0; i < fields.length; i++) {
-          const f = fields[i];
-          const key = f?.label || `field_${i}`;
-          const val = f?.value;
-          if (val?.variant) {
-            out[key] = { tag: val.variant.constructor, value: val.variant.value };
-          } else if (val?.constructor) {
-            out[key] = { tag: val.constructor, value: val.value };
-          } else if (val?.record) {
-            out[key] = damlRecordToObject(val.record);
-          } else {
-            out[key] = unwrapScalar(val);
-          }
-        }
-        return out;
-      };
-
-      const normalizeVoteValue = (val) => {
-        if (!val || typeof val !== 'object') return val;
-
-        // Common shapes:
-        // - { record: { fields: [...] } }
-        // - { variant: { constructor: 'Accept'|'Reject', value: ... } }
-        // - already normalized { accept: boolean, sv: string, reason?: {body,url} }
-        if (val.record) {
-          const obj = damlRecordToObject(val.record);
-          // Heuristic: try to normalize vote to { sv, accept, reason }
-          const sv = obj.sv || obj.voter || obj.party || obj.field_0 || null;
-
-          // accept can appear as boolean accept OR nested vote variant
-          let accept = null;
-          if (typeof obj.accept === 'boolean') accept = obj.accept;
-          if (accept === null && obj.vote?.tag) {
-            const t = String(obj.vote.tag).toLowerCase();
-            if (t.includes('accept')) accept = true;
-            if (t.includes('reject')) accept = false;
-          }
-
-          const reason = obj.reason && typeof obj.reason === 'object'
-            ? { body: obj.reason.body || null, url: obj.reason.url || null }
-            : undefined;
-
-          return { ...obj, sv: sv || obj.sv, accept, ...(reason ? { reason } : {}) };
-        }
-
-        if (val.variant?.constructor) {
-          const t = String(val.variant.constructor).toLowerCase();
-          if (t === 'accept') return { accept: true };
-          if (t === 'reject') return { accept: false };
-        }
-
-        return val;
-      };
-
-      const normalizeVotes = (votesField) => {
-        // Expect output: Array<[string, object]>
-        if (!votesField) return [];
-
-        // DAML GenMap: { genMap: { entries: [ { key: {...}, value: {...} }, ... ] } }
-        if (votesField.genMap?.entries && Array.isArray(votesField.genMap.entries)) {
-          return votesField.genMap.entries
-            .map((e) => {
-              const key = unwrapScalar(e?.key);
-              const keyStr = typeof key === 'string' ? key : (key?.party || key?.text || JSON.stringify(key));
-              return [keyStr, normalizeVoteValue(e?.value)];
-            })
-            .filter((t) => Array.isArray(t) && typeof t[0] === 'string');
-        }
-
-        // Already a tuple array
-        if (Array.isArray(votesField)) {
-          return votesField.map((v) => {
-            if (Array.isArray(v) && v.length >= 2) {
-              const key = unwrapScalar(v[0]);
-              const keyStr = typeof key === 'string' ? key : (key?.party || key?.text || JSON.stringify(key));
-              return [keyStr, normalizeVoteValue(v[1])];
-            }
-            // Array of vote objects
-            if (typeof v === 'object' && v) {
-              const keyStr = String(v.sv || v.voter || v.party || 'Unknown');
-              return [keyStr, normalizeVoteValue(v)];
-            }
-            return ['Unknown', v];
-          });
-        }
-
-        return [];
-      };
-
-      // Raw DAML record format: { record: { fields: [...] } }
+      
       if (payload.record?.fields && Array.isArray(payload.record.fields)) {
         const fields = payload.record.fields;
         const normalized = {};
-
-        // VoteRequest field order (from DAML schema):
-        // 0: dso (party)
-        // 1: requester (text)
-        // 2: action (variant - ARC_DsoRules, ARC_AmuletRules, etc.)
-        // 3: reason (record with url and body)
-        // 4: voteBefore (timestamp)
-        // 5: votes (genMap)
-        // 6: trackingCid (optional contractId)
-
-        // Extract dso (field 0)
-        const dsoField = fields[0]?.value;
-        normalized.dso = unwrapScalar(dsoField);
-
-        // Extract requester (field 1)
-        const requesterField = fields[1]?.value;
-        normalized.requester = unwrapScalar(requesterField);
-
-        // Extract action (field 2)
+        normalized.dso = unwrapScalar(fields[0]?.value);
+        normalized.requester = unwrapScalar(fields[1]?.value);
         const actionField = fields[2]?.value;
         if (actionField?.variant) {
-          normalized.action = {
-            tag: actionField.variant.constructor,
-            value: actionField.variant.value,
-          };
-        } else if (actionField?.constructor) {
-          normalized.action = {
-            tag: actionField.constructor,
-            value: actionField.value,
-          };
+          normalized.action = { tag: actionField.variant.constructor, value: actionField.variant.value };
         }
-
-        // Extract reason (field 3)
         const reasonField = fields[3]?.value;
-        if (reasonField?.record?.fields && Array.isArray(reasonField.record.fields)) {
-          const reasonFields = reasonField.record.fields;
-          const urlField = reasonFields[0]?.value;
-          const bodyField = reasonFields[1]?.value;
-          normalized.reason = {
-            url: unwrapScalar(urlField),
-            body: unwrapScalar(bodyField),
-          };
-        } else if (typeof reasonField === 'object') {
-          normalized.reason = reasonField;
+        if (reasonField?.record?.fields) {
+          normalized.reason = { url: unwrapScalar(reasonField.record.fields[0]?.value), body: unwrapScalar(reasonField.record.fields[1]?.value) };
         }
-
-        // Extract voteBefore (field 4)
-        const voteBeforeField = fields[4]?.value;
-        const vb = unwrapScalar(voteBeforeField);
-        if (typeof vb === 'string') normalized.voteBefore = vb;
-
-        // Extract votes (field 5)
+        normalized.voteBefore = unwrapScalar(fields[4]?.value);
         const votesField = fields[5]?.value;
-        normalized.votes = normalizeVotes(votesField);
-
-        // Extract trackingCid (field 6, optional)
-        if (fields[6]) {
-          const trackingField = fields[6]?.value;
-          const tc = unwrapScalar(trackingField);
-          if (typeof tc === 'string') normalized.trackingCid = tc;
+        if (votesField?.genMap?.entries) {
+          normalized.votes = votesField.genMap.entries.map(e => [unwrapScalar(e?.key), e?.value]);
         }
-
+        normalized.trackingCid = unwrapScalar(fields[6]?.value?.contractId || fields[6]?.value);
         return normalized;
       }
-
-      // Unknown format - return as-is
       return payload;
     };
 
     // ============================================================
-    // PAYLOAD SHAPE PROBE: Detect payload structure before normalization
+    // STEP 1: Build proposal_key for each VoteRequest
+    // proposal_key = normalized(action JSON) + mailing_list_url
     // ============================================================
-    const detectPayloadShape = (payload) => {
-      if (!payload) return 'null';
-      if (payload.action && payload.requester) return 'normalized';
-      if (payload.record?.fields && Array.isArray(payload.record.fields)) return 'daml_record';
-      return 'unknown';
+    console.log('   📋 Building proposal keys...');
+    const buildProposalKey = (payload) => {
+      const normalized = normalizePayload(payload);
+      
+      // Extract action for normalization
+      const action = normalized.action || {};
+      const actionTag = action.tag || '';
+      const actionValue = action.value || {};
+      
+      // Sort keys and strip metadata for consistent hashing
+      const normalizeObj = (obj) => {
+        if (!obj || typeof obj !== 'object') return obj;
+        if (Array.isArray(obj)) return obj.map(normalizeObj);
+        const sorted = {};
+        for (const key of Object.keys(obj).sort()) {
+          // Strip metadata fields that change between events
+          if (['timestamp', 'createdAt', 'updatedAt', 'recordTime'].includes(key)) continue;
+          sorted[key] = normalizeObj(obj[key]);
+        }
+        return sorted;
+      };
+      
+      const normalizedAction = normalizeObj(actionValue);
+      const actionStr = JSON.stringify(normalizedAction);
+      
+      // Extract mailing list URL if present
+      const reason = normalized.reason || {};
+      const mailingListUrl = (reason.url && reason.url.includes('lists.sync.global')) 
+        ? reason.url 
+        : null;
+      
+      // Combine for proposal key
+      const keyParts = [actionTag, actionStr];
+      if (mailingListUrl) {
+        // Normalize URL by removing trailing slashes and query params
+        const cleanUrl = mailingListUrl.split('?')[0].replace(/\/+$/, '');
+        keyParts.push(cleanUrl);
+      }
+      
+      return simpleHash(keyParts.join('::'));
     };
-    
-    const shapeStats = {
-      normalized: 0,
-      daml_record: 0,
-      unknown: 0,
-      null: 0,
-    };
-    const shapeSamples = {
-      normalized: [],
-      daml_record: [],
-      unknown: [],
-      null: [],
-    };
-    const MAX_SAMPLES = 5;
 
     // ============================================================
-    // DIAGNOSTIC LOGGING: Track payload extraction during build
+    // STEP 2: Group ALL VoteRequest events by proposal_key
     // ============================================================
-    let nullPayloadCount = 0;
-    let validPayloadCount = 0;
-    let emptyPayloadCount = 0;
-    const nullPayloadSamples = [];
+    console.log('   📋 Grouping events by proposal key...');
     
-    const totalEvents = createdResult.records.length;
-    console.log(`\n   🔬 Starting payload shape probe for ${totalEvents} created events...`);
-    
-    let processedCount = 0;
-    const PROBE_LOG_INTERVAL = 100; // Log every 100 events
+    const proposalGroups = new Map(); // proposal_key -> { events: [], latestEvent, votes: Map }
     
     for (const event of createdResult.records) {
-      processedCount++;
+      const payload = event.payload || {};
+      const proposalKey = buildProposalKey(payload);
       
-      // Progress logging
-      if (processedCount % PROBE_LOG_INTERVAL === 0 || processedCount === totalEvents) {
-        const pct = Math.round((processedCount / totalEvents) * 100);
-        console.log(`   🔬 [${pct}%] Processed ${processedCount}/${totalEvents} events | valid: ${validPayloadCount} | null: ${nullPayloadCount} | empty: ${emptyPayloadCount}`);
-      }
-      // ============================================================
-      // PAYLOAD SHAPE PROBE: Detect and track shape before normalization
-      // ============================================================
-      const shape = detectPayloadShape(event.payload);
-      shapeStats[shape]++;
-      
-      // Collect samples for each shape (max 5 each)
-      if (shapeSamples[shape].length < MAX_SAMPLES) {
-        const sample = {
-          event_id: event.event_id,
-          contract_id: event.contract_id,
-          trackingCid: event.payload?.trackingCid || event.payload?.record?.fields?.[6]?.value?.contractId || null,
-          shape,
-        };
-        
-        // Add shape-specific structure info
-        if (shape === 'normalized') {
-          sample.topLevelKeys = Object.keys(event.payload || {}).slice(0, 10);
-        } else if (shape === 'daml_record') {
-          // Extract field labels from DAML record structure
-          sample.fieldLabels = (event.payload?.record?.fields || [])
-            .map((f, i) => f.label || `field_${i}`)
-            .slice(0, 10);
-          sample.fieldCount = event.payload?.record?.fields?.length || 0;
-        } else if (shape === 'unknown' && event.payload) {
-          sample.topLevelKeys = Object.keys(event.payload).slice(0, 10);
-          sample.payloadType = typeof event.payload;
-        }
-        
-        shapeSamples[shape].push(sample);
+      if (!proposalGroups.has(proposalKey)) {
+        proposalGroups.set(proposalKey, {
+          events: [],
+          latestEvent: null,
+          allVotes: new Map(), // svParty -> latest vote
+          effectiveAt: null,
+        });
       }
       
-      // NORMALIZE PAYLOAD EARLY - handle both DAML record format and normalized format
-      const normalizedPayload = normalizePayload(event.payload);
+      const group = proposalGroups.get(proposalKey);
+      group.events.push(event);
       
-      // Diagnostic: check payload status
-      if (!event.payload) {
-        nullPayloadCount++;
-        if (nullPayloadSamples.length < 5) {
-          nullPayloadSamples.push({
-            event_id: event.event_id,
-            contract_id: event.contract_id,
-            hasPayloadField: 'payload' in event,
-            payloadType: typeof event.payload,
-            rawKeys: event.raw ? Object.keys(event.raw).slice(0, 10) : [],
-          });
-        }
-      } else if (Object.keys(event.payload).length === 0) {
-        emptyPayloadCount++;
-        if (nullPayloadSamples.length < 5) {
-          nullPayloadSamples.push({
-            event_id: event.event_id,
-            contract_id: event.contract_id,
-            payloadType: 'empty_object',
-            rawKeys: event.raw ? Object.keys(event.raw).slice(0, 10) : [],
-          });
-        }
-      } else {
-        validPayloadCount++;
+      // Track latest event by effective_at
+      const eventTime = event.effective_at || event.timestamp || event.record_time || event.created_at_ts;
+      if (!group.effectiveAt || (eventTime && eventTime > group.effectiveAt)) {
+        group.effectiveAt = eventTime;
+        group.latestEvent = event;
       }
+      
+      // Merge votes from this event
+      const normalized = normalizePayload(payload);
+      const votes = normalized.votes || [];
+      const voteArray = Array.isArray(votes) ? votes : [];
+      
+      for (const vote of voteArray) {
+        const [svParty, voteData] = Array.isArray(vote) ? vote : ['', vote];
+        if (svParty && voteData) {
+          // Later events overwrite earlier votes (captures vote changes)
+          group.allVotes.set(svParty, { ...voteData, castAt: eventTime });
+        }
+      }
+    }
+    
+    console.log(`   📋 Grouped ${createdResult.records.length} events into ${proposalGroups.size} unique proposals`);
 
-      // is_closed indicates ledger consumption (consuming exercised event exists), not semantic completion
-      const isClosed = !!event.contract_id && closedContractIds.has(event.contract_id);
+    // ============================================================
+    // STEP 3: Compute status ONCE per proposal group (using latest state)
+    // ============================================================
+    indexingProgress = { ...indexingProgress, phase: 'upsert', current: 0, total: proposalGroups.size, records: 0 };
+    let upserted = 0;
+    
+    const statusStats = {
+      accepted: 0,
+      rejected: 0,
+      expired: 0,
+      in_progress: 0,
+      executed: 0,
+      finalized: 0,
+      totalAcceptVotes: 0,
+      totalRejectVotes: 0
+    };
+    
+    const sampleFinalized = [];
+    const svCountCache = new Map();
+    let usedFallbackSvCount = false;
 
-      // Get archived/exercised event for this contract (single declaration, used for votes and status)
-      const archivedEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
-      const archivedNormalized = archivedEvent ? normalizePayload(archivedEvent.payload) : null;
-      const finalVotes = archivedNormalized?.votes || normalizedPayload.votes || archivedEvent?.payload?.votes || event.payload?.votes;
-      const finalVoteCount = finalVotes?.length || 0;
-
-      // Prefer effective_at for ordering, but fall back to other timestamps if missing
-      const effectiveAt = event.effective_at || event.timestamp || event.record_time || event.created_at_ts || null;
-
-      const voteBefore = normalizedPayload.voteBefore || event.payload?.voteBefore;
+    for (const [proposalKey, group] of proposalGroups) {
+      const event = group.latestEvent;
+      if (!event) continue;
+      
+      const normalized = normalizePayload(event.payload);
+      
+      // Use merged votes from all events in the group
+      const mergedVotes = Array.from(group.allVotes.entries()).map(([sv, data]) => [sv, data]);
+      const finalVoteCount = mergedVotes.length;
+      
+      // Determine effective_at (prefer earliest for first_seen semantics)
+      const earliestEvent = group.events.reduce((earliest, e) => {
+        const t = e.effective_at || e.timestamp || e.record_time || e.created_at_ts;
+        const et = earliest.effective_at || earliest.timestamp || earliest.record_time || earliest.created_at_ts;
+        return (t && (!et || t < et)) ? e : earliest;
+      }, group.events[0]);
+      const effectiveAt = earliestEvent.effective_at || earliestEvent.timestamp || earliestEvent.record_time || earliestEvent.created_at_ts;
+      
+      // Check for execution (any event in group was consumed by DsoRules)
+      let hasBeenExecuted = false;
+      for (const e of group.events) {
+        if (e.contract_id && archivedEventsMap.has(e.contract_id)) {
+          hasBeenExecuted = true;
+          break;
+        }
+      }
+      
+      // Get voteBefore from latest event
+      const voteBefore = normalized.voteBefore || event.payload?.voteBefore;
       const voteBeforeDate = voteBefore ? new Date(voteBefore) : null;
       const isVoteBeforeValid = voteBeforeDate && !isNaN(voteBeforeDate.getTime());
       const isExpired = isVoteBeforeValid && voteBeforeDate < now;
-
-      // ============================================================
-      // STATUS DETERMINATION: VoteRequest State + Time Model
-      // ============================================================
-      // Governance outcomes are derived from VoteRequest state + time, NOT execution events.
-      //
-      // 1. If now < voteBefore → in_progress (voting open)
-      // 2. If now >= voteBefore (voting closed):
-      //    a. Count votes: acceptedVotes, rejectedVotes
-      //    b. Apply 2/3 supermajority threshold
-      //    c. acceptedVotes >= threshold → accepted
-      //    d. rejectedVotes >= threshold → rejected
-      //    e. Neither threshold → expired
-      //
-      // Execution tracking is SEPARATE: if consuming DsoRules event exists → executed=true
-      // ============================================================
       
-      // DYNAMIC THRESHOLD: Calculate 2/3 supermajority based on SV count at vote time
-      // Uses DSO Rules as CANONICAL source (not SvOnboardingConfirmed attestations)
-      // threshold = ceil(2/3 × number_of_active_SVs_at_vote_time)
-      // Same threshold applies to both acceptance AND rejection
-      const voteTime = (isVoteBeforeValid ? voteBefore : null) || effectiveAt || event.effective_at;
+      // Dynamic threshold calculation
+      const voteTime = (isVoteBeforeValid ? voteBefore : null) || effectiveAt;
       let svCountAtVoteTime = svCountCache.get(voteTime);
       if (svCountAtVoteTime === undefined) {
-        // PRIMARY: Use DSO Rules index (canonical SV membership)
         svCountAtVoteTime = await dsoRulesIndexer.getDsoSvCountAt(voteTime);
-        
-        // FALLBACK: If DSO Rules not populated, try SvOnboardingConfirmed (for audit only)
         if (svCountAtVoteTime === 0) {
           svCountAtVoteTime = await svIndexer.getSvCountAt(voteTime);
         }
-        
-        // FINAL FALLBACK: Use default if no index populated
         if (svCountAtVoteTime === 0) {
           svCountAtVoteTime = DEFAULT_SV_COUNT;
           usedFallbackSvCount = true;
@@ -1608,104 +1387,71 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         svCountCache.set(voteTime, svCountAtVoteTime);
       }
       const SUPERMAJORITY_THRESHOLD = Math.ceil((svCountAtVoteTime * 2) / 3);
-      // Rejection uses the SAME threshold as acceptance (per user requirement)
-      const REJECTION_THRESHOLD = SUPERMAJORITY_THRESHOLD;
       
-      let status = 'in_progress';
-      let hasBeenExecuted = false;
-      
-      // Count votes from the votes array
-      const votesArray = Array.isArray(finalVotes) ? finalVotes : [];
+      // Count votes from merged votes
       let acceptCount = 0;
       let rejectCount = 0;
-
+      
       const normalizeVote = (voteData) => {
         if (!voteData || typeof voteData !== 'object') return null;
-
-        // Already normalized (preferred)
         if (voteData.accept === true) return 'accept';
         if (voteData.accept === false) return 'reject';
-
-        // Variant-style vote: { vote: { tag: 'Accept'|'Reject' } } or { tag: 'Accept' }
-        const directTag = voteData.tag || voteData.Tag;
-        const nestedTag = voteData.vote?.tag || voteData.vote?.Tag;
-        const variantTag = voteData.variant?.constructor || voteData.vote?.variant?.constructor;
-        const tag = directTag || nestedTag || variantTag;
+        const tag = voteData.tag || voteData.Tag || voteData.vote?.tag || voteData.variant?.constructor;
         if (typeof tag === 'string') {
           const t = tag.toLowerCase();
           if (t.includes('accept')) return 'accept';
           if (t.includes('reject')) return 'reject';
         }
-
-        // Legacy shapes
-        if (voteData.Accept === true) return 'accept';
-        if (voteData.Reject === true) return 'reject';
-        if (Object.prototype.hasOwnProperty.call(voteData, 'Accept')) return 'accept';
-        if (Object.prototype.hasOwnProperty.call(voteData, 'Reject')) return 'reject';
-
+        if (voteData.Accept === true || Object.prototype.hasOwnProperty.call(voteData, 'Accept')) return 'accept';
+        if (voteData.Reject === true || Object.prototype.hasOwnProperty.call(voteData, 'Reject')) return 'reject';
         return null;
       };
-
-      for (const vote of votesArray) {
-        const [, voteData] = Array.isArray(vote) ? vote : ['', vote];
-        const normalized = normalizeVote(voteData);
-        if (normalized === 'accept') acceptCount++;
-        else if (normalized === 'reject') rejectCount++;
+      
+      for (const [, voteData] of mergedVotes) {
+        const result = normalizeVote(voteData);
+        if (result === 'accept') acceptCount++;
+        else if (result === 'reject') rejectCount++;
       }
       
-      // Check if execution event exists (for executed flag, not status)
-      const executionEvent = event.contract_id ? archivedEventsMap.get(event.contract_id) : null;
-      if (executionEvent) {
-        hasBeenExecuted = true;
-      }
-
-      // STATUS DETERMINATION: Based on VoteRequest state + time
+      // COMPUTE STATUS (once per proposal, not per event)
+      let status = 'in_progress';
       if (!isExpired) {
-        // Voting still open
         status = 'in_progress';
         statusStats.in_progress++;
       } else {
-        // Voting closed (voteBefore has passed) - determine outcome from vote tallies
         if (acceptCount >= SUPERMAJORITY_THRESHOLD) {
           status = 'accepted';
           statusStats.accepted++;
           statusStats.finalized++;
-          
-          // Track if it was also executed
-          if (hasBeenExecuted) {
-            statusStats.executed++;
-          }
-        } else if (rejectCount >= REJECTION_THRESHOLD) {
+          if (hasBeenExecuted) statusStats.executed++;
+        } else if (rejectCount >= SUPERMAJORITY_THRESHOLD) {
           status = 'rejected';
           statusStats.rejected++;
           statusStats.finalized++;
         } else {
-          // Neither threshold met - expired
           status = 'expired';
           statusStats.expired++;
           statusStats.finalized++;
         }
         
-        // Collect sample for debug logging
         if (sampleFinalized.length < 3) {
           sampleFinalized.push({
-            contract_id: event.contract_id,
+            proposalKey,
+            eventCount: group.events.length,
             acceptCount,
             rejectCount,
             svCount: svCountAtVoteTime,
             threshold: SUPERMAJORITY_THRESHOLD,
-            hasBeenExecuted,
             status
           });
         }
       }
-
-      // Track vote totals for display purposes
+      
       statusStats.totalAcceptVotes += acceptCount;
       statusStats.totalRejectVotes += rejectCount;
-
-      // Normalize reason - can be string or object with body and url
-      const rawReason = normalizedPayload.reason || event.payload?.reason;
+      
+      // Build the canonical row for this proposal
+      const rawReason = normalized.reason || event.payload?.reason;
       let reasonStr = null;
       let reasonUrl = null;
       if (rawReason) {
@@ -1716,28 +1462,20 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
           reasonUrl = rawReason.url || null;
         }
       }
-
-      // Build semantic key for proposal grouping
-      // Use normalized payload for extraction, fallback to raw payload
-      const actionTag = normalizedPayload.action?.tag || event.payload?.action?.tag || null;
-      const actionDetails = normalizedPayload.action || event.payload?.action || null;
-      const requester = normalizedPayload.requester || event.payload?.requester || null;
+      
+      const actionTag = normalized.action?.tag || event.payload?.action?.tag || null;
+      const actionDetails = normalized.action || event.payload?.action || null;
+      const requester = normalized.requester || event.payload?.requester || null;
       const semanticKey = buildSemanticKey(actionTag, actionDetails, requester);
       const actionSubject = extractActionSubject(actionDetails);
       
-      // CANONICAL MODEL: proposal_id = COALESCE(trackingCid, contract_id)
-      // This is the authoritative proposal identity that survives migrations/re-submissions
-      const trackingCid = normalizedPayload.trackingCid || event.payload?.trackingCid || null;
-      const proposalId = trackingCid || event.contract_id || null;
+      const trackingCid = normalized.trackingCid || event.payload?.trackingCid || null;
+      // Use proposal_key as the canonical ID
+      const proposalId = proposalKey;
       
-      // Extract dso from normalized payload
-      const dso = normalizedPayload.dso || event.payload?.dso || null;
+      const dso = normalized.dso || event.payload?.dso || null;
       
-      // CANONICAL MODEL: is_human classification
-      // Explorers only show human-readable governance proposals, excluding:
-      // 1. Config maintenance: SRARC_SetConfig, CRARC_SetConfig
-      // 2. No narrative AND no votes: (reason IS NULL) AND (vote_count = 0)
-      // 3. No mailing list link AND no meaningful participation
+      // is_human classification
       const isConfigMaintenance = actionTag && (
         actionTag === 'SRARC_SetConfig' || 
         actionTag === 'CRARC_SetConfig' ||
@@ -1746,51 +1484,46 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       const hasReason = reasonStr && typeof reasonStr === 'string' && reasonStr.trim().length > 0;
       const hasMailingListLink = reasonUrl && typeof reasonUrl === 'string' && reasonUrl.includes('lists.sync.global');
       const hasVotes = finalVoteCount > 0;
-      const hasNarrative = hasReason || hasMailingListLink;
+      const isHuman = !isConfigMaintenance && (hasReason || hasMailingListLink || hasVotes);
       
-      // is_human = NOT config maintenance AND (has narrative OR has votes)
-      const isHuman = !isConfigMaintenance && (hasNarrative || hasVotes);
-
+      // is_closed: any event in group was consumed
+      const isClosed = hasBeenExecuted;
+      
       const voteRequest = {
         event_id: event.event_id,
-        // Always set stable_id to a non-null identifier (some older records may lack contract_id)
-        stable_id: event.contract_id || event.event_id || event.update_id,
+        stable_id: proposalKey, // Use proposal_key as stable identifier
         contract_id: event.contract_id,
         template_id: event.template_id,
         effective_at: effectiveAt,
         status,
         is_closed: isClosed,
-        // NEW: Track execution separately from status
         is_executed: hasBeenExecuted,
         action_tag: actionTag,
         action_value: actionDetails?.value ? JSON.stringify(actionDetails.value) : null,
-        requester: requester,
+        requester,
         reason: reasonStr,
         reason_url: reasonUrl,
-        // Use final votes from archived event if available, otherwise use created event votes
-        votes: finalVotes ? JSON.stringify(finalVotes) : '[]',
+        votes: JSON.stringify(mergedVotes),
         vote_count: finalVoteCount,
         accept_count: acceptCount,
         reject_count: rejectCount,
-        vote_before: (isVoteBeforeValid ? voteBefore : null) || null,
-        target_effective_at: normalizedPayload.targetEffectiveAt || event.payload?.targetEffectiveAt || null,
+        vote_before: isVoteBeforeValid ? voteBefore : null,
+        target_effective_at: normalized.targetEffectiveAt || event.payload?.targetEffectiveAt || null,
         tracking_cid: trackingCid,
-        dso: dso,
+        dso,
         payload: event.payload ? JSON.stringify(event.payload) : null,
         semantic_key: semanticKey,
         action_subject: actionSubject,
         proposal_id: proposalId,
         is_human: isHuman,
+        related_count: group.events.length,
       };
-
+      
       try {
-        // Escape helper for safe SQL string values
         const escapeStr = (val) => (val === null || val === undefined) ? null : String(val).replace(/'/g, "''");
         const payloadStr = voteRequest.payload ? escapeStr(voteRequest.payload) : null;
-        // stable_id should never be NULL; fall back to event_id if needed
-        const stableIdSql = `'${escapeStr(voteRequest.stable_id ?? voteRequest.event_id)}'`;
+        const stableIdSql = `'${escapeStr(voteRequest.stable_id)}'`;
 
-        // Upsert - insert or update on conflict
         await query(`
           INSERT INTO vote_requests (
             event_id, stable_id, contract_id, template_id, effective_at,
@@ -1858,58 +1591,20 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         upserted++;
       } catch (err) {
         if (!err.message?.includes('duplicate')) {
-          console.error(`   Error upserting vote request ${voteRequest.event_id}:`, err.message);
+          console.error(`   Error upserting proposal ${proposalKey}:`, err.message);
         }
-        // ON CONFLICT handles duplicates silently, so this path is rarely hit
       } finally {
         indexingProgress = { ...indexingProgress, current: upserted, records: upserted };
       }
     }
 
     // ============================================================
-    // PAYLOAD SHAPE PROBE SUMMARY
+    // GROUPING SUMMARY
     // ============================================================
-    const shapeTotal = shapeStats.normalized + shapeStats.daml_record + shapeStats.unknown + shapeStats.null;
-    console.log(`\n   🔬 PAYLOAD SHAPE PROBE SUMMARY:`);
-    console.log(`      Total VoteRequest CREATED events: ${shapeTotal}`);
-    console.log(`      - normalized:   ${shapeStats.normalized} (${(shapeStats.normalized / shapeTotal * 100).toFixed(1)}%)`);
-    console.log(`      - daml_record:  ${shapeStats.daml_record} (${(shapeStats.daml_record / shapeTotal * 100).toFixed(1)}%)`);
-    console.log(`      - unknown:      ${shapeStats.unknown} (${(shapeStats.unknown / shapeTotal * 100).toFixed(1)}%)`);
-    console.log(`      - null:         ${shapeStats.null} (${(shapeStats.null / shapeTotal * 100).toFixed(1)}%)`);
-    
-    // Log samples for each shape
-    for (const shapeType of ['normalized', 'daml_record', 'unknown', 'null']) {
-      if (shapeSamples[shapeType].length > 0) {
-        console.log(`\n      📋 ${shapeType.toUpperCase()} samples (${shapeSamples[shapeType].length}):`);
-        shapeSamples[shapeType].forEach((sample, i) => {
-          console.log(`         ${i + 1}. event_id: ${sample.event_id}`);
-          console.log(`            contract_id: ${sample.contract_id}`);
-          if (sample.trackingCid) console.log(`            trackingCid: ${sample.trackingCid}`);
-          if (sample.topLevelKeys) console.log(`            topLevelKeys: [${sample.topLevelKeys.join(', ')}]`);
-          if (sample.fieldLabels) console.log(`            fieldLabels: [${sample.fieldLabels.join(', ')}]`);
-          if (sample.fieldCount !== undefined) console.log(`            fieldCount: ${sample.fieldCount}`);
-          if (sample.payloadType) console.log(`            payloadType: ${sample.payloadType}`);
-        });
-      }
-    }
-
-    // ============================================================
-    // DIAGNOSTIC SUMMARY: Log payload extraction results
-    // ============================================================
-    console.log(`\n   📊 PAYLOAD DIAGNOSTIC SUMMARY:`);
-    console.log(`      - Valid payloads: ${validPayloadCount}`);
-    console.log(`      - Null payloads: ${nullPayloadCount}`);
-    console.log(`      - Empty payloads ({}): ${emptyPayloadCount}`);
-    console.log(`      - Total processed: ${validPayloadCount + nullPayloadCount + emptyPayloadCount}`);
-    if (nullPayloadSamples.length > 0) {
-      console.log(`      - Sample problematic events:`);
-      nullPayloadSamples.forEach((sample, i) => {
-        console.log(`        ${i + 1}. event_id: ${sample.event_id}`);
-        console.log(`           contract_id: ${sample.contract_id}`);
-        console.log(`           payloadType: ${sample.payloadType}`);
-        console.log(`           rawKeys: ${sample.rawKeys?.join(', ') || 'none'}`);
-      });
-    }
+    console.log(`\n   📊 PROPOSAL GROUPING SUMMARY:`);
+    console.log(`      - Raw VoteRequest events: ${createdResult.records.length}`);
+    console.log(`      - Unique proposals (by proposal_key): ${proposalGroups.size}`);
+    console.log(`      - Deduplication rate: ${((1 - proposalGroups.size / createdResult.records.length) * 100).toFixed(1)}%`);
 
     // ============================================================
     // INSERT DIRECT GOVERNANCE ACTIONS (Path B)
