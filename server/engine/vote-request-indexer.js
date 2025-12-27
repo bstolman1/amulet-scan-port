@@ -933,10 +933,21 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
       console.log(`   📋 Using template index (${templateIndexStats.totalFiles} files indexed)`);
 
       const voteRequestFiles = await getFilesForTemplate('VoteRequest');
-      console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events`);
+      const totalEventFiles = binaryReader.findBinaryFiles(DATA_PATH, 'events')?.length || 0;
+      console.log(`   📂 Found ${voteRequestFiles.length} files containing VoteRequest events (of ~${totalEventFiles} event files)`);
 
-      if (voteRequestFiles.length === 0) {
-        console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
+      // Safety: if the template index looks incomplete (very few VoteRequest files relative to total files),
+      // fall back to a full scan so we don't produce a misleadingly tiny index.
+      const suspiciouslySmall = totalEventFiles > 2000 && voteRequestFiles.length < 50;
+
+      if (voteRequestFiles.length === 0 || suspiciouslySmall) {
+        if (suspiciouslySmall) {
+          console.warn('   ⚠️ Template index appears incomplete (VoteRequest files unexpectedly low) — falling back to full scan');
+          console.warn('      Tip: rebuild template index with force=true to speed future builds.');
+        } else {
+          console.log('   ⚠️ No VoteRequest files found in index, falling back to full scan');
+        }
+
         indexingProgress = { ...indexingProgress, phase: 'scan:created (full)', current: 0, total: 0, records: 0 };
         createdResult = await scanAllFilesForVoteRequests('created');
         indexingProgress = { ...indexingProgress, phase: 'scan:exercised (full)', current: 0, total: 0, records: 0 };
@@ -951,9 +962,8 @@ export async function buildVoteRequestIndex({ force = false } = {}) {
         console.log('   Scanning VoteRequest files for archive events...');
         indexingProgress = { ...indexingProgress, phase: 'scan:archived', current: 0, total: voteRequestFiles.length, records: 0 };
         exercisedResult = await scanFilesForVoteRequests(voteRequestFiles, 'exercised');
-
-        // Status determined by consuming exercised events only
       }
+
     } else {
       // SLOW PATH: Full scan (template index not built yet)
       console.log('   ⚠️ Template index not available, using full scan (this will be slow)');
@@ -2113,17 +2123,26 @@ async function scanFilesForVoteRequests(files, eventType) {
   const startTime = Date.now();
   let lastLogTime = startTime;
 
-  const readWithTimeout = async (file, timeoutMs = 30000) => {
+  const readWithTimeout = async (file, timeoutMs = 120000) => {
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)
     );
     return Promise.race([binaryReader.readBinaryFile(file), timeout]);
   };
 
+  let skippedFiles = 0;
+
   for (const file of files) {
     const fileStart = Date.now();
     try {
-      const result = await readWithTimeout(file, 30000);
+      // Try once with a reasonable timeout; retry once with a longer timeout before skipping.
+      let result;
+      try {
+        result = await readWithTimeout(file, 120000);
+      } catch (e) {
+        result = await readWithTimeout(file, 300000);
+      }
+
       const fileRecords = result.records || [];
 
       for (const record of fileRecords) {
@@ -2134,14 +2153,10 @@ async function scanFilesForVoteRequests(files, eventType) {
             records.push(record);
           }
         } else if (eventType === 'exercised' && record.event_type === 'exercised') {
-          // CANTON GOVERNANCE MODEL:
-          // There is NO explicit "vote closed" event on Canton.
-          // The winning rule execution IS the vote outcome.
-          // ANY consuming exercised event on :DsoRules template = finalized proposal.
-          // Examples: DsoRules_UpdateSvRewardWeight, DsoRules_RevokeFeaturedAppRight, etc.
-          
+          // NOTE: exercised scan is used only for optional vote-final snapshotting/closure detection.
+          // We keep it conservative; it should not prevent created events from being indexed.
           if (!record.template_id?.endsWith(':DsoRules')) continue;
-          
+
           const consuming = record.consuming === true || record.consuming === 'true';
           if (consuming) {
             records.push(record);
@@ -2154,6 +2169,7 @@ async function scanFilesForVoteRequests(files, eventType) {
         }
       }
     } catch (err) {
+      skippedFiles++;
       // Skip unreadable/hanging files (but still advance progress)
       console.warn(`   ⚠️ Skipping VoteRequest file due to read error: ${file} (${err?.message || err})`);
     } finally {
@@ -2189,8 +2205,11 @@ async function scanFilesForVoteRequests(files, eventType) {
   if (missingConsumingCount > 0) {
     console.warn(`   ⚠️ Total exercised events lacking 'consuming' flag: ${missingConsumingCount} (treated as non-terminal)`);
   }
+  if (skippedFiles > 0) {
+    console.warn(`   ⚠️ Skipped ${skippedFiles}/${filesProcessed} VoteRequest files due to read errors/timeouts`);
+  }
 
-  return { records, filesScanned: filesProcessed, missingConsumingCount };
+  return { records, filesScanned: filesProcessed, missingConsumingCount, skippedFiles };
 }
 
 /**
