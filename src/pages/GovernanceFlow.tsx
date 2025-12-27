@@ -306,8 +306,10 @@ const GovernanceFlow = () => {
   // State for multi-CIP merge dialog
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
+  const [mergeSourceLabel, setMergeSourceLabel] = useState<string | null>(null);
   const [selectedMergeCips, setSelectedMergeCips] = useState<Set<string>>(new Set());
   const [mergeSearchQuery, setMergeSearchQuery] = useState('');
+  const [isMerging, setIsMerging] = useState(false);
   
   // Fetch CIP list for merge dropdown
   const fetchCipList = async () => {
@@ -323,9 +325,10 @@ const GovernanceFlow = () => {
     }
   };
   
-  // Open the merge dialog for a specific item
-  const openMergeDialog = (sourcePrimaryId: string) => {
-    setMergeSourceId(sourcePrimaryId);
+  // Open the merge dialog for a specific item (id for API, label for display)
+  const openMergeDialog = (sourceId: string, sourceLabel?: string) => {
+    setMergeSourceId(sourceId);
+    setMergeSourceLabel(sourceLabel || sourceId);
     setSelectedMergeCips(new Set());
     setMergeSearchQuery('');
     setMergeDialogOpen(true);
@@ -348,6 +351,7 @@ const GovernanceFlow = () => {
   const handleMergeInto = async () => {
     if (!mergeSourceId || selectedMergeCips.size === 0) return;
     
+    setIsMerging(true);
     try {
       const baseUrl = getDuckDBApiUrl();
       const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/merge`, {
@@ -356,12 +360,13 @@ const GovernanceFlow = () => {
         body: JSON.stringify({
           sourcePrimaryId: mergeSourceId,
           mergeInto: Array.from(selectedMergeCips),
-          reason: 'Manual merge via UI',
+          reason: `Manual merge via UI: ${mergeSourceLabel}`,
         }),
       });
       
       if (!response.ok) {
-        throw new Error('Failed to save merge override');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server error: ${response.status}`);
       }
       
       const targetDisplay = selectedMergeCips.size === 1 
@@ -370,11 +375,12 @@ const GovernanceFlow = () => {
       
       toast({
         title: "Merge saved",
-        description: `"${mergeSourceId}" will be merged into ${targetDisplay}`,
+        description: `Will be merged into ${targetDisplay}`,
       });
       
       setMergeDialogOpen(false);
       setMergeSourceId(null);
+      setMergeSourceLabel(null);
       setSelectedMergeCips(new Set());
       
       // Refresh data to show the change
@@ -383,9 +389,11 @@ const GovernanceFlow = () => {
       console.error('Failed to merge:', err);
       toast({
         title: "Error",
-        description: "Failed to save merge override",
+        description: err instanceof Error ? err.message : "Failed to save merge override",
         variant: "destructive",
       });
+    } finally {
+      setIsMerging(false);
     }
   };
   
@@ -986,7 +994,7 @@ const GovernanceFlow = () => {
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
-                      openMergeDialog(topic.subject);
+                      openMergeDialog(topic.id, topic.subject);
                     }}
                   >
                     <Merge className="mr-2 h-3 w-3" />
@@ -1856,8 +1864,8 @@ const GovernanceFlow = () => {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Merge into CIP(s)</DialogTitle>
-            <DialogDescription>
-              Select one or more CIPs to merge "{mergeSourceId}" into.
+            <DialogDescription className="break-words">
+              Select one or more CIPs to merge "{mergeSourceLabel?.slice(0, 80)}{(mergeSourceLabel?.length || 0) > 80 ? '...' : ''}" into.
             </DialogDescription>
           </DialogHeader>
           
@@ -1914,14 +1922,21 @@ const GovernanceFlow = () => {
           </div>
           
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMergeDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setMergeDialogOpen(false)} disabled={isMerging}>
               Cancel
             </Button>
             <Button 
               onClick={handleMergeInto}
-              disabled={selectedMergeCips.size === 0}
+              disabled={selectedMergeCips.size === 0 || isMerging}
             >
-              Merge into {selectedMergeCips.size > 0 ? selectedMergeCips.size : ''} CIP{selectedMergeCips.size !== 1 ? 's' : ''}
+              {isMerging ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                `Merge into ${selectedMergeCips.size > 0 ? selectedMergeCips.size : ''} CIP${selectedMergeCips.size !== 1 ? 's' : ''}`
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
