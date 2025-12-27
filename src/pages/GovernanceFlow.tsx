@@ -11,6 +11,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subYears } from "date-fns";
 import { 
   ExternalLink, 
@@ -33,6 +34,7 @@ import {
   Edit2,
   CheckSquare,
   Square,
+  Merge,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -301,6 +303,12 @@ const GovernanceFlow = () => {
   // State for CIP list (for merge dropdown)
   const [cipList, setCipList] = useState<{ primaryId: string; topicCount: number }[]>([]);
   
+  // State for multi-CIP merge dialog
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
+  const [selectedMergeCips, setSelectedMergeCips] = useState<Set<string>>(new Set());
+  const [mergeSearchQuery, setMergeSearchQuery] = useState('');
+  
   // Fetch CIP list for merge dropdown
   const fetchCipList = async () => {
     try {
@@ -315,16 +323,39 @@ const GovernanceFlow = () => {
     }
   };
   
-  // Handler to merge an item into a CIP
-  const handleMergeInto = async (sourcePrimaryId: string, targetCip: string) => {
+  // Open the merge dialog for a specific item
+  const openMergeDialog = (sourcePrimaryId: string) => {
+    setMergeSourceId(sourcePrimaryId);
+    setSelectedMergeCips(new Set());
+    setMergeSearchQuery('');
+    setMergeDialogOpen(true);
+  };
+  
+  // Toggle a CIP in the selection
+  const toggleMergeCip = (cipId: string) => {
+    setSelectedMergeCips(prev => {
+      const next = new Set(prev);
+      if (next.has(cipId)) {
+        next.delete(cipId);
+      } else {
+        next.add(cipId);
+      }
+      return next;
+    });
+  };
+  
+  // Handler to merge an item into multiple CIPs
+  const handleMergeInto = async () => {
+    if (!mergeSourceId || selectedMergeCips.size === 0) return;
+    
     try {
       const baseUrl = getDuckDBApiUrl();
       const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourcePrimaryId,
-          mergeInto: targetCip,
+          sourcePrimaryId: mergeSourceId,
+          mergeInto: Array.from(selectedMergeCips),
           reason: 'Manual merge via UI',
         }),
       });
@@ -333,10 +364,18 @@ const GovernanceFlow = () => {
         throw new Error('Failed to save merge override');
       }
       
+      const targetDisplay = selectedMergeCips.size === 1 
+        ? Array.from(selectedMergeCips)[0] 
+        : `${selectedMergeCips.size} CIPs`;
+      
       toast({
         title: "Merge saved",
-        description: `"${sourcePrimaryId}" will be merged into ${targetCip}`,
+        description: `"${mergeSourceId}" will be merged into ${targetDisplay}`,
       });
+      
+      setMergeDialogOpen(false);
+      setMergeSourceId(null);
+      setSelectedMergeCips(new Set());
       
       // Refresh data to show the change
       fetchData(false);
@@ -349,6 +388,13 @@ const GovernanceFlow = () => {
       });
     }
   };
+  
+  // Filter CIP list for merge dialog
+  const filteredMergeCips = useMemo(() => {
+    if (!mergeSearchQuery.trim()) return cipList;
+    const q = mergeSearchQuery.toLowerCase();
+    return cipList.filter(cip => cip.primaryId.toLowerCase().includes(q));
+  }, [cipList, mergeSearchQuery]);
 
   // Bulk selection handlers
   const toggleItemSelection = (primaryId: string) => {
@@ -1443,31 +1489,20 @@ const GovernanceFlow = () => {
                                     </DropdownMenuItem>
                                   ))}
                                   
-                                  {/* Merge into CIP submenu - only show for non-CIP items */}
+                                  {/* Merge into CIP(s) - only show for non-CIP items */}
                                   {!group.primaryId.match(/^CIP-\d+$/i) && cipList.length > 0 && (
                                     <>
                                       <DropdownMenuSeparator />
-                                      <DropdownMenuSub>
-                                        <DropdownMenuSubTrigger className="text-xs">
-                                          <Edit2 className="mr-2 h-3 w-3" />
-                                          Merge into CIP...
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuSubContent className="bg-popover max-h-64 overflow-y-auto">
-                                          {cipList.slice(0, 20).map((cip) => (
-                                            <DropdownMenuItem
-                                              key={cip.primaryId}
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleMergeInto(group.primaryId, cip.primaryId);
-                                              }}
-                                              className="text-xs"
-                                            >
-                                              <span className="font-mono">{cip.primaryId}</span>
-                                              <span className="ml-2 text-muted-foreground">({cip.topicCount} topics)</span>
-                                            </DropdownMenuItem>
-                                          ))}
-                                        </DropdownMenuSubContent>
-                                      </DropdownMenuSub>
+                                      <DropdownMenuItem
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          openMergeDialog(group.primaryId);
+                                        }}
+                                        className="text-xs"
+                                      >
+                                        <Merge className="mr-2 h-3 w-3" />
+                                        Merge into CIP(s)...
+                                      </DropdownMenuItem>
                                     </>
                                   )}
                                 </DropdownMenuContent>
@@ -1776,6 +1811,82 @@ const GovernanceFlow = () => {
         </Tabs>
 
       </div>
+      
+      {/* Multi-CIP Merge Dialog */}
+      <Dialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Merge into CIP(s)</DialogTitle>
+            <DialogDescription>
+              Select one or more CIPs to merge "{mergeSourceId}" into.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search CIPs..."
+                value={mergeSearchQuery}
+                onChange={(e) => setMergeSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            
+            {/* Selection count */}
+            {selectedMergeCips.size > 0 && (
+              <div className="text-sm text-muted-foreground">
+                {selectedMergeCips.size} CIP{selectedMergeCips.size > 1 ? 's' : ''} selected
+              </div>
+            )}
+            
+            {/* CIP List with checkboxes */}
+            <ScrollArea className="h-64 border rounded-md">
+              <div className="p-2 space-y-1">
+                {filteredMergeCips.map((cip) => (
+                  <div
+                    key={cip.primaryId}
+                    onClick={() => toggleMergeCip(cip.primaryId)}
+                    className={cn(
+                      "flex items-center gap-3 p-2 rounded-md cursor-pointer transition-colors",
+                      selectedMergeCips.has(cip.primaryId) 
+                        ? "bg-primary/20 border border-primary/40" 
+                        : "hover:bg-muted/50"
+                    )}
+                  >
+                    <Checkbox 
+                      checked={selectedMergeCips.has(cip.primaryId)}
+                      onCheckedChange={() => toggleMergeCip(cip.primaryId)}
+                    />
+                    <span className="font-mono text-sm">{cip.primaryId}</span>
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {cip.topicCount} topics
+                    </span>
+                  </div>
+                ))}
+                {filteredMergeCips.length === 0 && (
+                  <div className="text-center text-sm text-muted-foreground py-4">
+                    No CIPs found
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMergeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleMergeInto}
+              disabled={selectedMergeCips.size === 0}
+            >
+              Merge into {selectedMergeCips.size > 0 ? selectedMergeCips.size : ''} CIP{selectedMergeCips.size !== 1 ? 's' : ''}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };

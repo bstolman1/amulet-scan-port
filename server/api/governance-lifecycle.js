@@ -1501,7 +1501,8 @@ router.delete('/overrides/:key', (req, res) => {
   }
 });
 
-// Set a merge override (merge one item into another CIP)
+// Set a merge override (merge one item into one or multiple CIPs)
+// Supports both single CIP (string) and multiple CIPs (array)
 router.post('/overrides/merge', (req, res) => {
   const { sourceId, sourcePrimaryId, mergeInto, reason } = req.body;
   
@@ -1509,8 +1510,17 @@ router.post('/overrides/merge', (req, res) => {
     return res.status(400).json({ error: 'Missing required fields: mergeInto and either sourceId or sourcePrimaryId' });
   }
   
-  // Normalize the target CIP number
-  const normalizedTarget = mergeInto.toUpperCase().replace(/^CIP\s*[-#]?\s*0*/, 'CIP-').padEnd(8, '0');
+  // Normalize the target CIP number(s) - support both string and array
+  const normalizeCip = (cip) => {
+    return cip.toUpperCase().replace(/^CIP\s*[-#]?\s*0*/, 'CIP-').replace(/CIP-(\d+)/, (_, num) => `CIP-${num.padStart(4, '0')}`);
+  };
+  
+  let normalizedTargets;
+  if (Array.isArray(mergeInto)) {
+    normalizedTargets = mergeInto.map(normalizeCip);
+  } else {
+    normalizedTargets = [normalizeCip(mergeInto)];
+  }
   
   const overrides = readOverrides();
   if (!overrides.mergeOverrides) {
@@ -1519,13 +1529,13 @@ router.post('/overrides/merge', (req, res) => {
   
   const key = sourcePrimaryId || sourceId;
   overrides.mergeOverrides[key] = {
-    mergeInto: normalizedTarget,
+    mergeInto: normalizedTargets, // Now always an array
     reason: reason || 'Manual merge',
     createdAt: new Date().toISOString(),
   };
   
   if (writeOverrides(overrides)) {
-    console.log(`✅ Merge override set: "${key}" -> ${normalizedTarget}`);
+    console.log(`✅ Merge override set: "${key}" -> ${normalizedTargets.join(', ')}`);
     res.json({ success: true, override: overrides.mergeOverrides[key] });
   } else {
     res.status(500).json({ error: 'Failed to save merge override' });
