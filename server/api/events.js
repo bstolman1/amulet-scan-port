@@ -4029,60 +4029,33 @@ router.get('/dso-rules-index/sv-count-at', async (req, res) => {
 
 // ===== SV NODE DIRECT API ENDPOINTS =====
 // These endpoints fetch directly from the SV node API
-// The SV app API is typically at /api/sv/ path on the scan server
+// Scan API: /api/scan/v0/...
+// SV App API: /api/sv/v0/... (for vote requests/results)
 
 const SV_NODE_BASE_URL = 'https://scan.sv-1.global.canton.network.sync.global';
-
-// Try multiple possible API paths for the SV app endpoints
-const SV_API_PATHS = [
-  '/api/sv/v0',      // Common path pattern
-  '/api/sv-1/v0',    // Alternate naming
-  '/v0',             // Direct path (unlikely but try)
-];
-
-// Helper to try multiple paths
-async function tryFetchWithPaths(basePaths, endpoint, options = {}) {
-  const errors = [];
-  for (const basePath of basePaths) {
-    const url = `${SV_NODE_BASE_URL}${basePath}${endpoint}`;
-    console.log(`[SV-NODE] Trying: ${url}`);
-    try {
-      const response = await fetch(url, options);
-      if (response.ok) {
-        console.log(`[SV-NODE] Success with path: ${basePath}`);
-        return { response, path: basePath };
-      }
-      const text = await response.text();
-      errors.push({ path: basePath, status: response.status, text: text.slice(0, 200) });
-    } catch (err) {
-      errors.push({ path: basePath, error: err.message });
-    }
-  }
-  return { errors };
-}
+const SV_API_BASE = `${SV_NODE_BASE_URL}/api/sv/v0`;
 
 // GET /api/events/sv-node/active-vote-requests - Fetch active vote requests from SV node
 router.get('/sv-node/active-vote-requests', async (req, res) => {
   try {
-    console.log('[SV-NODE] Fetching active vote requests...');
-    const result = await tryFetchWithPaths(SV_API_PATHS, '/admin/sv/voterequests');
+    const url = `${SV_API_BASE}/admin/sv/voterequests`;
+    console.log(`[SV-NODE] Fetching active vote requests from: ${url}`);
     
-    if (result.errors) {
-      console.error('[SV-NODE] All paths failed:', result.errors);
-      return res.status(502).json({ 
-        error: 'All SV API paths failed', 
-        attempts: result.errors 
-      });
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SV-NODE] Error: ${response.status} - ${text.slice(0, 500)}`);
+      return res.status(response.status).json({ error: text.slice(0, 500), url });
     }
     
-    const data = await result.response.json();
+    const data = await response.json();
     console.log(`[SV-NODE] Fetched ${data.dso_rules_vote_requests?.length || 0} active vote requests`);
     
     res.json({
       vote_requests: data.dso_rules_vote_requests || [],
       count: data.dso_rules_vote_requests?.length || 0,
       source: 'sv-node-live',
-      api_path: result.path,
       fetched_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -4095,10 +4068,11 @@ router.get('/sv-node/active-vote-requests', async (req, res) => {
 router.post('/sv-node/vote-results', async (req, res) => {
   try {
     const { actionName, accepted, requester, effectiveFrom, effectiveTo, limit = 1000 } = req.body;
+    const url = `${SV_API_BASE}/admin/sv/voteresults`;
     
-    console.log('[SV-NODE] Fetching vote results with filters:', { actionName, accepted, requester, effectiveFrom, effectiveTo, limit });
+    console.log(`[SV-NODE] Fetching vote results from: ${url}`);
     
-    const result = await tryFetchWithPaths(SV_API_PATHS, '/admin/sv/voteresults', {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4111,19 +4085,19 @@ router.post('/sv-node/vote-results', async (req, res) => {
       }),
     });
     
-    if (result.errors) {
-      console.error('[SV-NODE] All paths failed:', result.errors);
-      return res.status(502).json({ error: 'All SV API paths failed', attempts: result.errors });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SV-NODE] Error: ${response.status} - ${text.slice(0, 500)}`);
+      return res.status(response.status).json({ error: text.slice(0, 500), url });
     }
     
-    const data = await result.response.json();
+    const data = await response.json();
     console.log(`[SV-NODE] Fetched ${data.dso_rules_vote_results?.length || 0} vote results`);
     
     res.json({
       vote_results: data.dso_rules_vote_results || [],
       count: data.dso_rules_vote_results?.length || 0,
       source: 'sv-node-live',
-      api_path: result.path,
       fetched_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -4136,23 +4110,24 @@ router.post('/sv-node/vote-results', async (req, res) => {
 router.get('/sv-node/vote-request/:contractId', async (req, res) => {
   try {
     const { contractId } = req.params;
-    console.log(`[SV-NODE] Fetching vote request: ${contractId}`);
+    const url = `${SV_API_BASE}/voterequests/${encodeURIComponent(contractId)}`;
+    console.log(`[SV-NODE] Fetching vote request from: ${url}`);
     
-    const result = await tryFetchWithPaths(SV_API_PATHS, `/voterequests/${encodeURIComponent(contractId)}`);
+    const response = await fetch(url);
     
-    if (result.errors) {
-      const has404 = result.errors.some(e => e.status === 404);
-      if (has404) {
+    if (!response.ok) {
+      if (response.status === 404) {
         return res.status(404).json({ error: 'VoteRequest not found' });
       }
-      return res.status(502).json({ error: 'All SV API paths failed', attempts: result.errors });
+      const text = await response.text();
+      console.error(`[SV-NODE] Error: ${response.status} - ${text.slice(0, 500)}`);
+      return res.status(response.status).json({ error: text.slice(0, 500), url });
     }
     
-    const data = await result.response.json();
+    const data = await response.json();
     res.json({
       vote_request: data.dso_rules_vote_request || data,
       source: 'sv-node-live',
-      api_path: result.path,
       fetched_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -4170,26 +4145,28 @@ router.post('/sv-node/vote-requests-batch', async (req, res) => {
       return res.status(400).json({ error: 'vote_request_contract_ids must be an array' });
     }
     
-    console.log(`[SV-NODE] Batch fetching ${vote_request_contract_ids.length} vote requests...`);
+    const url = `${SV_API_BASE}/voterequest`;
+    console.log(`[SV-NODE] Batch fetching ${vote_request_contract_ids.length} vote requests from: ${url}`);
     
-    const result = await tryFetchWithPaths(SV_API_PATHS, '/voterequest', {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ vote_request_contract_ids }),
     });
     
-    if (result.errors) {
-      return res.status(502).json({ error: 'All SV API paths failed', attempts: result.errors });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[SV-NODE] Error: ${response.status} - ${text.slice(0, 500)}`);
+      return res.status(response.status).json({ error: text.slice(0, 500), url });
     }
     
-    const data = await result.response.json();
+    const data = await response.json();
     console.log(`[SV-NODE] Batch fetched ${data.vote_requests?.length || 0} vote requests`);
     
     res.json({
       vote_requests: data.vote_requests || [],
       count: data.vote_requests?.length || 0,
       source: 'sv-node-live',
-      api_path: result.path,
       fetched_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -4199,46 +4176,53 @@ router.post('/sv-node/vote-requests-batch', async (req, res) => {
 });
 
 // GET /api/events/sv-node/all-proposals - Fetch ALL proposals (active + historical) from SV node
-// This is the primary endpoint for populating the governance page with complete data
 router.get('/sv-node/all-proposals', async (req, res) => {
   try {
     console.log('[SV-NODE] Fetching all proposals (active + historical)...');
     
-    // Try to find working API path first with a test request
-    const testResult = await tryFetchWithPaths(SV_API_PATHS, '/admin/sv/voterequests');
-    
-    if (testResult.errors) {
-      console.error('[SV-NODE] Cannot access SV API:', testResult.errors);
-      return res.status(502).json({ 
-        error: 'Cannot access SV node API', 
-        attempts: testResult.errors,
-        message: 'The SV admin API may require authentication or is not publicly accessible. Please check the API endpoint configuration.'
-      });
-    }
-    
-    // Use the working path for all requests
-    const workingPath = testResult.path;
-    console.log(`[SV-NODE] Using working path: ${workingPath}`);
-    
-    const activeData = await testResult.response.json();
-    
-    // Fetch historical vote results in parallel
-    const [acceptedResponse, rejectedResponse] = await Promise.all([
-      fetch(`${SV_NODE_BASE_URL}${workingPath}/admin/sv/voteresults`, {
+    // Fetch active vote requests AND historical vote results in parallel
+    const [activeResponse, acceptedResponse, rejectedResponse] = await Promise.all([
+      fetch(`${SV_API_BASE}/admin/sv/voterequests`),
+      fetch(`${SV_API_BASE}/admin/sv/voteresults`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accepted: true, limit: 1000 }),
       }),
-      fetch(`${SV_NODE_BASE_URL}${workingPath}/admin/sv/voteresults`, {
+      fetch(`${SV_API_BASE}/admin/sv/voteresults`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accepted: false, limit: 1000 }),
       }),
     ]);
     
-    // Parse responses
-    const acceptedData = acceptedResponse.ok ? await acceptedResponse.json() : { dso_rules_vote_results: [] };
-    const rejectedData = rejectedResponse.ok ? await rejectedResponse.json() : { dso_rules_vote_results: [] };
+    // Check for errors and provide detailed info
+    if (!activeResponse.ok) {
+      const text = await activeResponse.text();
+      console.error(`[SV-NODE] Active requests failed: ${activeResponse.status} - ${text.slice(0, 500)}`);
+      return res.status(activeResponse.status).json({ 
+        error: `Failed to fetch active vote requests: ${text.slice(0, 200)}`,
+        url: `${SV_API_BASE}/admin/sv/voterequests`,
+        status: activeResponse.status,
+      });
+    }
+    
+    // Parse responses (treat non-OK as empty, with logging)
+    const activeData = await activeResponse.json();
+    
+    let acceptedData = { dso_rules_vote_results: [] };
+    let rejectedData = { dso_rules_vote_results: [] };
+    
+    if (acceptedResponse.ok) {
+      acceptedData = await acceptedResponse.json();
+    } else {
+      console.warn(`[SV-NODE] Accepted results failed: ${acceptedResponse.status}`);
+    }
+    
+    if (rejectedResponse.ok) {
+      rejectedData = await rejectedResponse.json();
+    } else {
+      console.warn(`[SV-NODE] Rejected results failed: ${rejectedResponse.status}`);
+    }
     
     const activeRequests = activeData.dso_rules_vote_requests || [];
     const acceptedResults = acceptedData.dso_rules_vote_results || [];
@@ -4258,34 +4242,31 @@ router.get('/sv-node/all-proposals', async (req, res) => {
     
     // Transform vote results into unified format
     const historicalProposals = [...acceptedResults, ...rejectedResults].map(vr => ({
-      contract_id: vr.request?.tracking_cid || vr.request?.contract_id || 'unknown',
+      contract_id: vr.request?.tracking_cid || vr.request?.trackingCid || vr.contract_id || 'unknown',
       template_id: vr.request?.template_id || 'unknown',
       status: vr.outcome?.accepted ? 'executed' : 'rejected',
       payload: vr.request,
       outcome: vr.outcome,
-      effective_at: vr.outcome?.effective_at || vr.request?.vote_before,
+      effective_at: vr.outcome?.effective_at || vr.outcome?.effectiveAt || vr.request?.vote_before,
       source_type: 'vote_result',
     }));
     
     // Deduplicate by contract_id (prefer historical results over active if both exist)
     const proposalMap = new Map();
     
-    // Add active first
     for (const p of activeProposals) {
       proposalMap.set(p.contract_id, p);
     }
     
-    // Historical results override active (more definitive status)
     for (const p of historicalProposals) {
       proposalMap.set(p.contract_id, p);
     }
     
     const allProposals = Array.from(proposalMap.values());
     
-    // Calculate stats
     const stats = {
       total: allProposals.length,
-      active: activeProposals.length,
+      active: activeRequests.length,
       accepted: acceptedResults.length,
       rejected: rejectedResults.length,
       in_progress: allProposals.filter(p => p.status === 'in_progress').length,
@@ -4298,7 +4279,6 @@ router.get('/sv-node/all-proposals', async (req, res) => {
       proposals: allProposals,
       stats,
       source: 'sv-node-live',
-      api_path: workingPath,
       fetched_at: new Date().toISOString(),
     });
   } catch (err) {
