@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-const SV_NODE_BASE_URL = "https://scan.sv-1.global.canton.network.sync.global";
-const SV_API_BASE = `${SV_NODE_BASE_URL}/api/sv/v0`;
+const SCAN_API_BASE = "https://scan.sv-1.global.canton.network.sync.global/api/scan/v0";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
@@ -9,13 +8,12 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const contentType = res.headers.get("content-type") || "";
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`SV API ${res.status}: ${text.slice(0, 200) || res.statusText}`);
+    throw new Error(`Scan API ${res.status}: ${text.slice(0, 200) || res.statusText}`);
   }
 
-  // Guard against HTML error pages returned with 200
   if (!contentType.includes("application/json")) {
     const text = await res.text().catch(() => "");
-    throw new Error(`SV API returned non-JSON (${contentType || "unknown"}): ${text.slice(0, 120)}`);
+    throw new Error(`Scan API returned non-JSON (${contentType || "unknown"}): ${text.slice(0, 120)}`);
   }
 
   return res.json();
@@ -72,78 +70,62 @@ export interface ActiveVoteRequestsResponse {
   fetched_at: string;
 }
 
+interface DsoRulesPayload {
+  voteRequests?: Array<[string, any]>;
+  svs?: Record<string, any>;
+  [key: string]: any;
+}
+
+interface DsoInfoResponse {
+  dso_rules?: {
+    contract: {
+      contract_id: string;
+      template_id: string;
+      payload: DsoRulesPayload;
+      created_at: string;
+    };
+  };
+  voting_threshold?: number;
+  [key: string]: any;
+}
+
 /**
- * Fetch ALL proposals from SV node (active + historical)
- * NOTE: /admin/sv/* endpoints may require authentication depending on deployment.
+ * Fetch ALL proposals from the public Scan API /v0/dso endpoint.
+ * This uses the dso_rules.payload.voteRequests which contains active vote requests.
  */
 export function useSVNodeAllProposals() {
   return useQuery<AllProposalsResponse>({
     queryKey: ["sv-node-all-proposals"],
     queryFn: async () => {
-      const activeUrl = `${SV_API_BASE}/admin/sv/voterequests`;
-      const active = await fetchJson<{ dso_rules_vote_requests?: SVNodeVoteRequest[] }>(activeUrl);
-      const activeRequests = active.dso_rules_vote_requests || [];
+      const url = `${SCAN_API_BASE}/v0/dso`;
+      const dsoInfo = await fetchJson<DsoInfoResponse>(url);
 
-      const resultsUrl = `${SV_API_BASE}/admin/sv/voteresults`;
-      const [accepted, rejected] = await Promise.all([
-        fetchJson<{ dso_rules_vote_results?: SVNodeVoteResult[] }>(resultsUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accepted: true, limit: 1000 }),
-        }),
-        fetchJson<{ dso_rules_vote_results?: SVNodeVoteResult[] }>(resultsUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accepted: false, limit: 1000 }),
-        }),
-      ]);
+      const dsoRulesPayload = dsoInfo.dso_rules?.contract?.payload;
+      const voteRequests = dsoRulesPayload?.voteRequests || [];
 
-      const acceptedResults = accepted.dso_rules_vote_results || [];
-      const rejectedResults = rejected.dso_rules_vote_results || [];
-
-      const activeProposals: SVNodeProposal[] = activeRequests.map((vr) => ({
-        contract_id: vr.contract_id,
-        template_id: vr.template_id,
-        status: "in_progress",
-        payload: vr.payload,
-        created_at: vr.created_at,
-        source_type: "active_request",
+      // voteRequests is an array of tuples: [[trackingCid, voteRequestData], ...]
+      const activeProposals: SVNodeProposal[] = voteRequests.map(([trackingCid, voteRequestData]: [string, any]) => ({
+        contract_id: trackingCid,
+        template_id: "Splice.DsoRules:VoteRequest",
+        status: "in_progress" as const,
+        payload: voteRequestData,
+        created_at: dsoInfo.dso_rules?.contract?.created_at,
+        source_type: "active_request" as const,
       }));
-
-      const historicalProposals: SVNodeProposal[] = [...acceptedResults, ...rejectedResults].map((vr: any) => ({
-        contract_id:
-          vr?.request?.tracking_cid ||
-          vr?.request?.trackingCid ||
-          vr?.request?.contract_id ||
-          vr?.contract_id ||
-          "unknown",
-        template_id: vr?.request?.template_id || vr?.template_id || "unknown",
-        status: vr?.outcome?.accepted ? "executed" : "rejected",
-        payload: vr?.request || vr,
-        outcome: vr?.outcome,
-        effective_at: vr?.outcome?.effective_at || vr?.outcome?.effectiveAt,
-        source_type: "vote_result",
-      }));
-
-      const proposalMap = new Map<string, SVNodeProposal>();
-      for (const p of activeProposals) proposalMap.set(p.contract_id, p);
-      for (const p of historicalProposals) proposalMap.set(p.contract_id, p);
-
-      const proposals = Array.from(proposalMap.values());
 
       const stats = {
-        total: proposals.length,
-        active: activeRequests.length,
-        accepted: acceptedResults.length,
-        rejected: rejectedResults.length,
-        in_progress: proposals.filter((p) => p.status === "in_progress").length,
-        executed: proposals.filter((p) => p.status === "executed").length,
+        total: activeProposals.length,
+        active: activeProposals.length,
+        accepted: 0, // Historical data not available from this endpoint
+        rejected: 0,
+        in_progress: activeProposals.length,
+        executed: 0,
       };
 
       return {
-        proposals,
+        proposals: activeProposals,
         stats,
-        source: "sv-node-live",
+        source: "scan-api-dso-rules",
         fetched_at: new Date().toISOString(),
       };
     },
@@ -156,13 +138,21 @@ export function useSVNodeActiveRequests() {
   return useQuery<ActiveVoteRequestsResponse>({
     queryKey: ["sv-node-active-requests"],
     queryFn: async () => {
-      const url = `${SV_API_BASE}/admin/sv/voterequests`;
-      const data = await fetchJson<{ dso_rules_vote_requests?: SVNodeVoteRequest[] }>(url);
-      const vote_requests = data.dso_rules_vote_requests || [];
+      const url = `${SCAN_API_BASE}/v0/dso`;
+      const dsoInfo = await fetchJson<DsoInfoResponse>(url);
+      const voteRequests = dsoInfo.dso_rules?.contract?.payload?.voteRequests || [];
+
+      const vote_requests: SVNodeVoteRequest[] = voteRequests.map(([trackingCid, voteRequestData]: [string, any]) => ({
+        template_id: "Splice.DsoRules:VoteRequest",
+        contract_id: trackingCid,
+        payload: voteRequestData,
+        created_at: dsoInfo.dso_rules?.contract?.created_at || "",
+      }));
+
       return {
         vote_requests,
         count: vote_requests.length,
-        source: "sv-node-live",
+        source: "scan-api-dso-rules",
         fetched_at: new Date().toISOString(),
       };
     },
@@ -182,17 +172,12 @@ export function useSVNodeVoteResults(filters?: {
   return useQuery<VoteResultsResponse>({
     queryKey: ["sv-node-vote-results", filters],
     queryFn: async () => {
-      const url = `${SV_API_BASE}/admin/sv/voteresults`;
-      const data = await fetchJson<{ dso_rules_vote_results?: SVNodeVoteResult[] }>(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(filters || {}),
-      });
-      const vote_results = data.dso_rules_vote_results || [];
+      // Historical vote results are not available from the public scan API
+      // Return empty results - historical data would require the admin API
       return {
-        vote_results,
-        count: vote_results.length,
-        source: "sv-node-live",
+        vote_results: [],
+        count: 0,
+        source: "scan-api-dso-rules",
         fetched_at: new Date().toISOString(),
       };
     },
