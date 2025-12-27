@@ -1163,14 +1163,22 @@ function applyOverrides(data) {
         const target = targetItems.get(normalizedTarget);
         if (!target) return;
 
-        if (!target.topics.find(t => t.id === topic.id)) {
-          target.topics.push(topic);
+        // If we're merging into a CIP, map non-CIP stages into the CIP workflow
+        // so the merged topic is actually visible on the CIP card.
+        let stage = topic.stage;
+        if (target.type === 'cip' && WORKFLOW_STAGES.cip && !WORKFLOW_STAGES.cip.includes(stage)) {
+          stage = WORKFLOW_STAGES.cip[0];
         }
 
-        const stage = topic.stage;
+        const topicForTarget = stage === topic.stage ? topic : { ...topic, stage };
+
+        if (!target.topics.find(t => t.id === topicForTarget.id)) {
+          target.topics.push(topicForTarget);
+        }
+
         if (!target.stages[stage]) target.stages[stage] = [];
-        if (!target.stages[stage].find(t => t.id === topic.id)) {
-          target.stages[stage].push(topic);
+        if (!target.stages[stage].find(t => t.id === topicForTarget.id)) {
+          target.stages[stage].push(topicForTarget);
         }
 
         target.mergedFrom = target.mergedFrom || [];
