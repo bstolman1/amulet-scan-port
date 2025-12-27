@@ -88,20 +88,40 @@ export function useGovernanceEvents() {
           return true;
         })
         .map((r) => {
+          // Helper to safely parse JSON if it's a string
+          const safeJsonParse = (val: unknown): unknown => {
+            if (val === null || val === undefined) return null;
+            if (typeof val !== 'string') return val;
+            try {
+              return JSON.parse(val);
+            } catch {
+              return val;
+            }
+          };
+
           // Use full payload if available (new indexer stores complete JSON)
+          // Parse it if it's a string (DuckDB may return VARCHAR as string)
           // Fall back to reconstructed payload for backwards compatibility
-          const fullPayload = (r as any).payload;
+          const rawPayload = (r as any).payload;
+          const parsedPayload = safeJsonParse(rawPayload);
           
-          const payload = fullPayload || {
-            action: r.action_tag ? { tag: r.action_tag, value: r.action_value } : undefined,
-            requester: r.requester ?? undefined,
-            reason: r.reason ?? undefined,
-            votes: r.votes ?? undefined,
-            voteBefore: r.vote_before ?? undefined,
-            targetEffectiveAt: r.target_effective_at ?? undefined,
-            trackingCid: r.tracking_cid ?? undefined,
-            dso: r.dso ?? undefined,
-          } satisfies Record<string, unknown>;
+          // Also parse votes and reason if they are strings
+          const parsedVotes = safeJsonParse(r.votes);
+          const parsedReason = safeJsonParse(r.reason);
+          const parsedActionValue = safeJsonParse(r.action_value);
+          
+          const payload = (parsedPayload && typeof parsedPayload === 'object') 
+            ? parsedPayload as Record<string, unknown>
+            : {
+                action: r.action_tag ? { tag: r.action_tag, value: parsedActionValue } : undefined,
+                requester: r.requester ?? undefined,
+                reason: parsedReason ?? undefined,
+                votes: parsedVotes ?? undefined,
+                voteBefore: r.vote_before ?? undefined,
+                targetEffectiveAt: r.target_effective_at ?? undefined,
+                trackingCid: r.tracking_cid ?? undefined,
+                dso: r.dso ?? undefined,
+              } satisfies Record<string, unknown>;
 
           return {
             event_id: r.event_id,
