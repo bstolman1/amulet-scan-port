@@ -1177,12 +1177,13 @@ function readOverrides() {
         topicOverrides: data.topicOverrides || {},
         mergeOverrides: data.mergeOverrides || {},
         extractOverrides: data.extractOverrides || {},
+        moveOverrides: data.moveOverrides || {},
       };
     }
   } catch (err) {
     console.error('Error reading overrides:', err.message);
   }
-  return { itemOverrides: {}, topicOverrides: {}, mergeOverrides: {}, extractOverrides: {} };
+  return { itemOverrides: {}, topicOverrides: {}, mergeOverrides: {}, extractOverrides: {}, moveOverrides: {} };
 }
 
 // Write overrides to file
@@ -1198,6 +1199,74 @@ function writeOverrides(overrides) {
     console.error('Error writing overrides:', err.message);
     return false;
   }
+}
+
+// ========== AUDIT LOG SYSTEM ==========
+const AUDIT_LOG_FILE = path.join(CACHE_DIR, 'override-audit-log.json');
+
+// Read audit log
+function readAuditLog() {
+  try {
+    if (fs.existsSync(AUDIT_LOG_FILE)) {
+      const data = JSON.parse(fs.readFileSync(AUDIT_LOG_FILE, 'utf8'));
+      return Array.isArray(data) ? data : [];
+    }
+  } catch (err) {
+    console.error('Error reading audit log:', err.message);
+  }
+  return [];
+}
+
+// Write audit log
+function writeAuditLog(entries) {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(AUDIT_LOG_FILE, JSON.stringify(entries, null, 2));
+    return true;
+  } catch (err) {
+    console.error('Error writing audit log:', err.message);
+    return false;
+  }
+}
+
+// Log an override action
+function logOverrideAction(action) {
+  const entries = readAuditLog();
+  const entry = {
+    id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: new Date().toISOString(),
+    ...action,
+  };
+  entries.push(entry);
+  writeAuditLog(entries);
+  console.log(`📝 Audit log: ${action.actionType} - ${action.targetId} (${action.originalValue || 'n/a'} → ${action.newValue || 'n/a'})`);
+  return entry;
+}
+
+// Helper to find original classification for an item/topic
+function findOriginalClassification(targetId, targetType = 'item') {
+  const cached = readCache();
+  if (!cached || !cached.lifecycleItems) return null;
+  
+  if (targetType === 'item') {
+    const item = cached.lifecycleItems.find(i => i.id === targetId || i.primaryId === targetId);
+    return item ? { type: item.type, primaryId: item.primaryId, id: item.id } : null;
+  } else if (targetType === 'topic') {
+    for (const item of cached.lifecycleItems) {
+      const topic = (item.topics || []).find(t => String(t.id) === String(targetId));
+      if (topic) {
+        return { 
+          parentType: item.type, 
+          parentId: item.primaryId, 
+          stage: topic.effectiveStage || topic.stage,
+          subject: topic.subject?.slice(0, 100),
+        };
+      }
+    }
+  }
+  return null;
 }
 
 // Apply overrides to lifecycle data (type changes and merges)
@@ -1886,16 +1955,30 @@ router.post('/overrides', (req, res) => {
     return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
   }
   
-  const overrides = readOverrides();
   const key = primaryId || itemId;
   
+  // Find original classification for audit log
+  const original = findOriginalClassification(key, 'item');
+  
+  const overrides = readOverrides();
   overrides.itemOverrides[key] = {
     type,
+    originalType: original?.type || null,
     reason: reason || 'Manual correction',
     createdAt: new Date().toISOString(),
   };
   
   if (writeOverrides(overrides)) {
+    // Log to audit trail
+    logOverrideAction({
+      actionType: 'reclassify_item',
+      targetId: key,
+      targetLabel: original?.primaryId || key,
+      originalValue: original?.type || 'unknown',
+      newValue: type,
+      reason: reason || 'Manual correction',
+    });
+    
     console.log(`✅ Override set: "${key}" -> ${type} (${reason || 'Manual correction'})`);
     res.json({ success: true, override: overrides.itemOverrides[key] });
   } else {
@@ -1920,7 +2003,56 @@ router.delete('/overrides/:key', (req, res) => {
   }
 });
 
-// Set/update a topic-level type override (moves a single topic to a different type category)
+// ========== AUDIT LOG ENDPOINTS ==========
+
+// Get the full audit log
+router.get('/audit-log', (req, res) => {
+  const entries = readAuditLog();
+  const limit = parseInt(req.query.limit) || 100;
+  const actionType = req.query.actionType;
+  
+  let filtered = entries;
+  if (actionType) {
+    filtered = entries.filter(e => e.actionType === actionType);
+  }
+  
+  // Return most recent first
+  const sorted = filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  
+  res.json({
+    total: entries.length,
+    filtered: sorted.length,
+    entries: sorted.slice(0, limit),
+    actionTypes: [...new Set(entries.map(e => e.actionType))],
+  });
+});
+
+// Get audit log stats
+router.get('/audit-log/stats', (req, res) => {
+  const entries = readAuditLog();
+  
+  const byActionType = {};
+  const byMonth = {};
+  
+  entries.forEach(e => {
+    // Count by action type
+    byActionType[e.actionType] = (byActionType[e.actionType] || 0) + 1;
+    
+    // Count by month
+    const month = e.timestamp?.slice(0, 7) || 'unknown';
+    byMonth[month] = (byMonth[month] || 0) + 1;
+  });
+  
+  res.json({
+    total: entries.length,
+    byActionType,
+    byMonth,
+    oldestEntry: entries[0]?.timestamp || null,
+    newestEntry: entries[entries.length - 1]?.timestamp || null,
+  });
+});
+
+
 router.post('/overrides/topic', (req, res) => {
   const { topicId, newType, reason } = req.body;
   
@@ -1933,19 +2065,36 @@ router.post('/overrides/topic', (req, res) => {
     return res.status(400).json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
   }
   
+  const key = String(topicId);
+  
+  // Find original classification for audit log
+  const original = findOriginalClassification(key, 'topic');
+  
   const overrides = readOverrides();
   if (!overrides.topicOverrides) {
     overrides.topicOverrides = {};
   }
   
-  const key = String(topicId);
   overrides.topicOverrides[key] = {
     type: newType,
+    originalParentType: original?.parentType || null,
+    originalParentId: original?.parentId || null,
     reason: reason || 'Manual topic reclassification',
     createdAt: new Date().toISOString(),
   };
   
   if (writeOverrides(overrides)) {
+    // Log to audit trail
+    logOverrideAction({
+      actionType: 'reclassify_topic',
+      targetId: key,
+      targetLabel: original?.subject || key,
+      originalValue: original?.parentType || 'unknown',
+      originalParentId: original?.parentId || null,
+      newValue: newType,
+      reason: reason || 'Manual topic reclassification',
+    });
+    
     console.log(`✅ Topic override set: "${key}" -> ${newType} (${reason || 'Manual topic reclassification'})`);
     res.json({ success: true, override: overrides.topicOverrides[key] });
   } else {
@@ -1961,19 +2110,35 @@ router.post('/overrides/extract', (req, res) => {
     return res.status(400).json({ error: 'Missing required field: topicId' });
   }
   
+  const key = String(topicId);
+  
+  // Find original classification for audit log
+  const original = findOriginalClassification(key, 'topic');
+  
   const overrides = readOverrides();
   if (!overrides.extractOverrides) {
     overrides.extractOverrides = {};
   }
   
-  const key = String(topicId);
   overrides.extractOverrides[key] = {
     customName: customName || null,
+    originalParentId: original?.parentId || null,
+    originalParentType: original?.parentType || null,
     reason: reason || 'Extracted to own card',
     createdAt: new Date().toISOString(),
   };
   
   if (writeOverrides(overrides)) {
+    // Log to audit trail
+    logOverrideAction({
+      actionType: 'extract_topic',
+      targetId: key,
+      targetLabel: original?.subject || key,
+      originalValue: original?.parentId || 'unknown',
+      newValue: customName || 'new card',
+      reason: reason || 'Extracted to own card',
+    });
+    
     console.log(`✅ Extract override set: "${key}"${customName ? ` -> "${customName}"` : ''}`);
     res.json({ success: true, override: overrides.extractOverrides[key] });
   } else {
@@ -2002,23 +2167,41 @@ router.post('/overrides/merge', (req, res) => {
     normalizedTargets = [normalizeCip(mergeInto)];
   }
   
+  // Always stringify the key for consistent lookup
+  const key = String(sourcePrimaryId || sourceId);
+  
+  // Find original classification for audit log
+  // Could be an item (card) or a topic
+  const originalItem = findOriginalClassification(key, 'item');
+  const originalTopic = findOriginalClassification(key, 'topic');
+  const original = originalItem || originalTopic;
+  
   const overrides = readOverrides();
   if (!overrides.mergeOverrides) {
     overrides.mergeOverrides = {};
   }
   
-  // Always stringify the key for consistent lookup
-  const key = String(sourcePrimaryId || sourceId);
   overrides.mergeOverrides[key] = {
     mergeInto: normalizedTargets, // Now always an array
+    originalParentId: original?.parentId || original?.primaryId || null,
+    originalType: original?.parentType || original?.type || null,
     reason: reason || 'Manual merge',
     createdAt: new Date().toISOString(),
   };
   
   console.log(`Saving merge override: key="${key}", targets=${normalizedTargets.join(', ')}`);
-  console.log(`Current mergeOverrides keys: ${Object.keys(overrides.mergeOverrides).join(', ')}`);
   
   if (writeOverrides(overrides)) {
+    // Log to audit trail
+    logOverrideAction({
+      actionType: 'merge',
+      targetId: key,
+      targetLabel: original?.subject || original?.primaryId || key,
+      originalValue: original?.parentId || original?.primaryId || 'unknown',
+      newValue: normalizedTargets.join(', '),
+      reason: reason || 'Manual merge',
+    });
+    
     console.log(`✅ Merge override set: "${key}" -> ${normalizedTargets.join(', ')}`);
     res.json({ success: true, override: overrides.mergeOverrides[key] });
   } else {
@@ -2132,14 +2315,31 @@ router.post('/overrides/move-topic', (req, res) => {
     return res.status(400).json({ error: 'Missing required fields: topicId and targetCardId' });
   }
   
+  const key = String(topicId);
+  
+  // Find original classification for audit log
+  const original = findOriginalClassification(key, 'topic');
+  
+  // Find target card info
+  const cached = readCache();
+  let targetInfo = null;
+  if (cached?.lifecycleItems) {
+    const targetCard = cached.lifecycleItems.find(i => i.id === targetCardId || i.primaryId === targetCardId);
+    if (targetCard) {
+      targetInfo = { id: targetCard.id, primaryId: targetCard.primaryId, type: targetCard.type };
+    }
+  }
+  
   const overrides = readOverrides();
   if (!overrides.moveOverrides) {
     overrides.moveOverrides = {};
   }
   
-  const key = String(topicId);
   overrides.moveOverrides[key] = {
     targetCardId: String(targetCardId),
+    originalParentId: original?.parentId || null,
+    originalParentType: original?.parentType || null,
+    targetType: targetInfo?.type || null,
     reason: reason || 'Manual topic move',
     createdAt: new Date().toISOString(),
   };
@@ -2147,6 +2347,16 @@ router.post('/overrides/move-topic', (req, res) => {
   console.log(`Saving move override: topic "${key}" -> card "${targetCardId}"`);
   
   if (writeOverrides(overrides)) {
+    // Log to audit trail
+    logOverrideAction({
+      actionType: 'move_topic',
+      targetId: key,
+      targetLabel: original?.subject || key,
+      originalValue: original?.parentId || 'unknown',
+      newValue: targetInfo?.primaryId || targetCardId,
+      reason: reason || 'Manual topic move',
+    });
+    
     console.log(`✅ Move override set: topic "${key}" -> card "${targetCardId}"`);
     res.json({ success: true, override: overrides.moveOverrides[key] });
   } else {
