@@ -83,6 +83,32 @@ function parseActionTitle(tag: string): string {
     .trim();
 }
 
+// Parse date from various formats (ISO string, object with microsecondsSinceEpoch, etc.)
+function parseDate(value: any): string {
+  if (!value) return "";
+  
+  // Already a string
+  if (typeof value === "string") return value;
+  
+  // Object with microsecondsSinceEpoch (DAML format)
+  if (typeof value === "object" && value.microsecondsSinceEpoch) {
+    const ms = Number(value.microsecondsSinceEpoch) / 1000;
+    return new Date(ms).toISOString();
+  }
+  
+  // Object with unixtime
+  if (typeof value === "object" && value.unixtime) {
+    return new Date(Number(value.unixtime) * 1000).toISOString();
+  }
+  
+  // Number (assume milliseconds)
+  if (typeof value === "number") {
+    return new Date(value).toISOString();
+  }
+  
+  return "";
+}
+
 // Parse vote results into display format
 function parseVoteResults(results: VoteResult[]): ParsedVoteResult[] {
   if (!results || !Array.isArray(results)) return [];
@@ -129,9 +155,9 @@ function parseVoteResults(results: VoteResult[]): ParsedVoteResult[] {
       requester: request?.requester || "",
       reasonBody: request?.reason?.body || "",
       reasonUrl: request?.reason?.url || "",
-      voteBefore: request?.vote_before || "",
-      completedAt: result?.completed_at || "",
-      expiresAt: request?.expires_at || "",
+      voteBefore: parseDate(request?.vote_before),
+      completedAt: parseDate(result?.completed_at),
+      expiresAt: parseDate(request?.expires_at),
       outcome,
       votesFor,
       votesAgainst,
