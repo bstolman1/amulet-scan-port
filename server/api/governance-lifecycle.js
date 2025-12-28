@@ -1083,12 +1083,13 @@ function readOverrides() {
         itemOverrides: data.itemOverrides || {},
         topicOverrides: data.topicOverrides || {},
         mergeOverrides: data.mergeOverrides || {},
+        extractOverrides: data.extractOverrides || {},
       };
     }
   } catch (err) {
     console.error('Error reading overrides:', err.message);
   }
-  return { itemOverrides: {}, topicOverrides: {}, mergeOverrides: {} };
+  return { itemOverrides: {}, topicOverrides: {}, mergeOverrides: {}, extractOverrides: {} };
 }
 
 // Write overrides to file
@@ -1114,14 +1115,16 @@ function applyOverrides(data) {
   const hasItemOverrides = overrides.itemOverrides && Object.keys(overrides.itemOverrides).length > 0;
   const hasMergeOverrides = overrides.mergeOverrides && Object.keys(overrides.mergeOverrides).length > 0;
   const hasTopicOverrides = overrides.topicOverrides && Object.keys(overrides.topicOverrides).length > 0;
+  const hasExtractOverrides = overrides.extractOverrides && Object.keys(overrides.extractOverrides).length > 0;
   
-  if (!hasItemOverrides && !hasMergeOverrides && !hasTopicOverrides) {
+  if (!hasItemOverrides && !hasMergeOverrides && !hasTopicOverrides && !hasExtractOverrides) {
     return data;
   }
   
   let appliedCount = 0;
   let mergeCount = 0;
   let topicOverrideCount = 0;
+  let extractCount = 0;
   
   // First pass: Apply type overrides
   if (hasItemOverrides) {
@@ -1363,13 +1366,76 @@ function applyOverrides(data) {
     
     // Remove any source items that are now empty
     data.lifecycleItems = data.lifecycleItems.filter(item => 
-      (item.topics && item.topics.length > 0) || item.id.startsWith('topic-reclassified-')
+      (item.topics && item.topics.length > 0) || item.id.startsWith('topic-reclassified-') || item.id.startsWith('topic-extracted-')
+    );
+  }
+  
+  // Fourth pass: Apply extract overrides (extract a topic to its own card, keeping same type)
+  if (hasExtractOverrides) {
+    const topicsToExtract = []; // { topic, sourceItem, customName }
+    
+    // Identify topics that need to be extracted
+    data.lifecycleItems.forEach(item => {
+      if (!item.topics) return;
+      
+      item.topics.forEach(topic => {
+        const topicIdStr = String(topic.id);
+        const override = overrides.extractOverrides[topicIdStr];
+        if (override) {
+          topicsToExtract.push({ topic, sourceItem: item, customName: override.customName, reason: override.reason });
+        }
+      });
+    });
+    
+    // Extract topics to their own cards
+    topicsToExtract.forEach(({ topic, sourceItem, customName, reason }) => {
+      // Remove from source item
+      sourceItem.topics = sourceItem.topics.filter(t => String(t.id) !== String(topic.id));
+      
+      // Remove from source stages
+      if (sourceItem.stages) {
+        Object.keys(sourceItem.stages).forEach(stageKey => {
+          sourceItem.stages[stageKey] = (sourceItem.stages[stageKey] || []).filter(t => String(t.id) !== String(topic.id));
+          if (sourceItem.stages[stageKey].length === 0) {
+            delete sourceItem.stages[stageKey];
+          }
+        });
+      }
+      
+      // Create a new standalone item for the extracted topic (keeping same type)
+      const newItemId = `topic-extracted-${topic.id}`;
+      const effectiveStage = topic.stage || Object.keys(sourceItem.stages || {})[0] || 'announced';
+      
+      const extractedItem = {
+        id: newItemId,
+        primaryId: customName || topic.subject?.slice(0, 80) || `Extracted Topic ${topic.id}`,
+        type: sourceItem.type, // Keep the same type
+        network: sourceItem.network || null,
+        stages: { [effectiveStage]: [{ ...topic, stage: effectiveStage }] },
+        topics: [{ ...topic, stage: effectiveStage }],
+        firstDate: topic.date,
+        lastDate: topic.date,
+        currentStage: effectiveStage,
+        overrideApplied: true,
+        overrideReason: reason || 'Topic extracted to own card',
+        extractedFrom: sourceItem.primaryId,
+      };
+      data.lifecycleItems.push(extractedItem);
+      
+      extractCount++;
+      console.log(`Extracted topic "${topic.subject?.slice(0, 50)}" from "${sourceItem.primaryId}" to its own card${customName ? ` with name "${customName}"` : ''}`);
+    });
+    
+    // Remove any source items that are now empty
+    data.lifecycleItems = data.lifecycleItems.filter(item => 
+      (item.topics && item.topics.length > 0) || item.id.startsWith('topic-reclassified-') || item.id.startsWith('topic-extracted-')
     );
   }
   
   if (appliedCount > 0) console.log(`Applied ${appliedCount} type overrides`);
   if (mergeCount > 0) console.log(`Applied ${mergeCount} merge overrides`);
   if (topicOverrideCount > 0) console.log(`Applied ${topicOverrideCount} topic type overrides`);
+  if (extractCount > 0) console.log(`Applied ${extractCount} extract overrides`);
   
   return data;
 }
@@ -1699,6 +1765,34 @@ router.post('/overrides/topic', (req, res) => {
     res.json({ success: true, override: overrides.topicOverrides[key] });
   } else {
     res.status(500).json({ error: 'Failed to save topic override' });
+  }
+});
+
+// Extract a topic to its own card (keeps same type, just separates it)
+router.post('/overrides/extract', (req, res) => {
+  const { topicId, customName, reason } = req.body;
+  
+  if (!topicId) {
+    return res.status(400).json({ error: 'Missing required field: topicId' });
+  }
+  
+  const overrides = readOverrides();
+  if (!overrides.extractOverrides) {
+    overrides.extractOverrides = {};
+  }
+  
+  const key = String(topicId);
+  overrides.extractOverrides[key] = {
+    customName: customName || null,
+    reason: reason || 'Extracted to own card',
+    createdAt: new Date().toISOString(),
+  };
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Extract override set: "${key}"${customName ? ` -> "${customName}"` : ''}`);
+    res.json({ success: true, override: overrides.extractOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save extract override' });
   }
 });
 
