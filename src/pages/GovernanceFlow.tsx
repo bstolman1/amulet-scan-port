@@ -35,6 +35,7 @@ import {
   CheckSquare,
   Square,
   Merge,
+  SplitSquareVertical,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -330,6 +331,40 @@ const GovernanceFlow = () => {
       toast({
         title: "Error",
         description: "Failed to save topic classification override",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handler to extract a topic to its own card (keeps same type)
+  const handleExtractTopic = async (topicId: string, topicSubject: string) => {
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/extract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topicId,
+          reason: 'Extracted via UI',
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to save extract override');
+      }
+      
+      toast({
+        title: "Topic extracted",
+        description: `"${topicSubject.slice(0, 50)}..." will now appear as its own card`,
+      });
+      
+      // Refresh data to show the change
+      fetchData(false);
+    } catch (err) {
+      console.error('Failed to extract topic:', err);
+      toast({
+        title: "Error",
+        description: "Failed to extract topic to own card",
         variant: "destructive",
       });
     }
@@ -1050,22 +1085,32 @@ const GovernanceFlow = () => {
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
                 
+                {/* Extract to own card option */}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleExtractTopic(topic.id, topic.subject);
+                  }}
+                  className="text-xs"
+                >
+                  <SplitSquareVertical className="mr-2 h-3 w-3" />
+                  Extract to own card
+                </DropdownMenuItem>
+                
                 {/* Merge into CIP(s) option */}
                 {cipList.length > 0 && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        openMergeDialog(topic.id, topic.subject);
-                      }}
-                      className="text-xs"
-                    >
-                      <Merge className="mr-2 h-3 w-3" />
-                      Merge into CIP(s)...
-                    </DropdownMenuItem>
-                  </>
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      openMergeDialog(topic.id, topic.subject);
+                    }}
+                    className="text-xs"
+                  >
+                    <Merge className="mr-2 h-3 w-3" />
+                    Merge into CIP(s)...
+                  </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
