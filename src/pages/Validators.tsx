@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronUp, FileDown, RefreshCw, Trophy, Zap, Award, Download, TrendingUp, Users } from "lucide-react";
 import { SVWeightHistoryChart } from "@/components/SVWeightHistoryChart";
+import { SVWeightStackedChart } from "@/components/SVWeightStackedChart";
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -208,6 +209,9 @@ const Validators = () => {
 
         {/* SV Weight History Chart */}
         <SVWeightHistoryChart />
+
+        {/* SV Distribution Stacked Chart */}
+        <SVWeightStackedChart />
 
         {/* Operators List */}
         <Card className="glass-card p-6">

@@ -16,12 +16,22 @@ interface SvWeightEntry {
 interface DailySvData {
   date: string;
   svCount: number;
+  svParties: string[];
   timestamp: string;
+}
+
+interface StackedSvData {
+  date: string;
+  timestamp: string;
+  total: number;
+  [svName: string]: string | number; // Dynamic SV name keys
 }
 
 interface SvWeightHistoryResponse {
   data: SvWeightEntry[];
   dailyData: DailySvData[];
+  stackedData: StackedSvData[];
+  svNames: string[];
   totalRules: number;
 }
 
