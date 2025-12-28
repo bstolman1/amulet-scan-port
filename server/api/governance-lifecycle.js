@@ -28,6 +28,19 @@ import {
   getCachedContent,
   clearContentCache,
 } from '../inference/post-content-cache.js';
+// Hybrid audit system - LLM verifies all rule-based classifications
+import {
+  isAuditorAvailable,
+  verifyAllItems,
+  verifyItem,
+  getAuditStatus,
+  getAuditDisagreements,
+  getAuditReviewItems,
+  clearAuditCache,
+  getSampleAuditEntries,
+  getAllAuditEntries,
+  AUDIT_VERSION,
+} from '../inference/hybrid-auditor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -1019,28 +1032,34 @@ function fixLifecycleItemTypes(data) {
   return data;
 }
 
-// LLM-based classification for ambiguous items
-// Design principle: "LLMs may read raw human text exactly once per artifact;
-// results are cached and treated as authoritative governance metadata."
-async function classifyAmbiguousItems(lifecycleItems, allTopics) {
-  if (!isLLMAvailable()) {
-    console.log('⚠️ LLM classification unavailable (OPENAI_API_KEY not set)');
+// ========== HYBRID AUDIT MODEL ==========
+// Design principle: "assumed semantics vs verified semantics"
+// - Rule-based = assumed semantics (deterministic, fast, may be wrong)
+// - LLM-verified = verified semantics (reads content, cached permanently)
+//
+// This implements Option 3 - Hybrid Audit Model:
+// 1. Rules classify everything (deterministic)
+// 2. LLM reads content and confirms OR flags disagreement
+// 3. Disagreements are flagged for human review
+// 4. Results are cached and treated as authoritative
+
+async function runHybridAudit(lifecycleItems, allTopics) {
+  if (!isAuditorAvailable()) {
+    console.log('⚠️ Hybrid audit unavailable (OPENAI_API_KEY not set)');
+    console.log('   All items have assumed semantics only (rule-based)');
     return lifecycleItems;
   }
   
-  // Find items still classified as 'other' (ambiguous)
-  const ambiguousItems = lifecycleItems.filter(item => item.type === 'other');
+  console.log('\n========== HYBRID AUDIT MODEL ==========');
+  console.log('Key distinction: assumed semantics vs verified semantics');
+  console.log('- Rule-based: assumed (may be wrong)');
+  console.log('- LLM-verified: verified (reads actual content)');
+  console.log('=========================================\n');
   
-  if (ambiguousItems.length === 0) {
-    console.log('✅ No ambiguous items to classify');
-    return lifecycleItems;
-  }
-  
-  console.log(`🤖 Found ${ambiguousItems.length} ambiguous items for LLM classification...`);
-  
-  // Step 1: Fetch content for all topics in ambiguous items (if not cached)
+  // Step 1: Fetch content for ALL items (not just ambiguous)
+  // This is a one-time pass - content is cached permanently
   const topicsNeedingContent = [];
-  for (const item of ambiguousItems) {
+  for (const item of lifecycleItems) {
     for (const topic of (item.topics || [])) {
       if (!hasContentCached(topic.id)) {
         topicsNeedingContent.push({
@@ -1052,66 +1071,69 @@ async function classifyAmbiguousItems(lifecycleItems, allTopics) {
   }
   
   if (topicsNeedingContent.length > 0) {
-    console.log(`📄 Fetching content for ${topicsNeedingContent.length} topics...`);
+    console.log(`📄 Fetching content for ${topicsNeedingContent.length} topics (one-time pass)...`);
     await fetchTopicsContentBatch(topicsNeedingContent, {
       onProgress: (done, total) => {
-        if (done % 10 === 0 || done === total) {
+        if (done % 20 === 0 || done === total) {
           console.log(`📄 Content fetch progress: ${done}/${total}`);
         }
       }
     });
   }
   
-  // Step 2: Prepare topics for classification (using the first topic of each item)
-  const topicsToClassify = ambiguousItems.map(item => {
-    const firstTopic = item.topics?.[0];
-    return {
-      id: firstTopic?.id || item.id,
-      subject: firstTopic?.subject || item.primaryId,
-      groupName: firstTopic?.groupName || 'unknown',
-      excerpt: firstTopic?.excerpt || '',
-    };
-  });
-  
-  // Step 3: Classify topics (will use cache if already classified)
-  const classifyResult = await classifyTopicsBatch(topicsToClassify, {
+  // Step 2: Run hybrid audit on ALL items
+  const auditResult = await verifyAllItems(lifecycleItems, {
     onProgress: (done, total) => {
-      if (done % 10 === 0 || done === total) {
-        console.log(`🤖 Classification progress: ${done}/${total}`);
+      if (done % 20 === 0 || done === total) {
+        console.log(`📋 Audit progress: ${done}/${total}`);
       }
     }
   });
   
-  // Step 4: Apply classifications to lifecycle items
-  let classified = 0;
-  let fromCache = 0;
+  // Step 3: Annotate lifecycle items with audit data
+  const auditEntries = getAllAuditEntries();
+  let annotated = 0;
   
   for (const item of lifecycleItems) {
-    if (item.type !== 'other') continue;
+    const itemId = item.id || item.primaryId;
+    const auditEntry = auditEntries.get(itemId);
     
-    const firstTopicId = item.topics?.[0]?.id;
-    if (!firstTopicId) continue;
-    
-    const result = classifyResult.results.get(firstTopicId);
-    if (result?.type && result.type !== 'other') {
-      item.type = result.type;
-      item.llmClassified = true;
-      item.llmConfidence = result.confidence;
-      item.llmReasoning = result.reasoning;
-      item.llmCached = result.cached;
+    if (auditEntry) {
+      // Store both rule-based and LLM types for comparison
+      item.ruleType = auditEntry.rule_type;
+      item.llmType = auditEntry.llm_type;
+      item.agreement = auditEntry.agreement;
+      item.needsReview = auditEntry.needs_review;
+      item.llmConfidence = auditEntry.llm_confidence;
+      item.llmReasoning = auditEntry.llm_reasoning;
+      item.verifiedSemantics = true;
       
-      if (result.cached) {
-        fromCache++;
+      // If there's disagreement AND LLM has high confidence, use LLM type
+      // Otherwise keep rule-based type as canonical
+      if (!auditEntry.agreement && auditEntry.llm_confidence >= 0.85) {
+        item.type = auditEntry.llm_type;
+        item.typeSource = 'llm_override';
       } else {
-        classified++;
+        item.typeSource = 'rule';
       }
       
-      console.log(`  ✓ "${item.primaryId.slice(0, 50)}" -> ${result.type}${result.cached ? ' (cached)' : ''}`);
+      annotated++;
+    } else {
+      item.verifiedSemantics = false;
+      item.typeSource = 'rule';
     }
   }
   
-  console.log(`🤖 LLM classification complete: ${classified} new, ${fromCache} from cache, ${ambiguousItems.length - classified - fromCache} still ambiguous`);
+  console.log(`\n📋 Annotated ${annotated} items with audit data`);
+  console.log(`   Agreements: ${auditResult.agreements} | Disagreements: ${auditResult.disagreements}`);
+  
   return lifecycleItems;
+}
+
+// Legacy function for backward compatibility
+async function classifyAmbiguousItems(lifecycleItems, allTopics) {
+  // Now delegates to hybrid audit
+  return runHybridAudit(lifecycleItems, allTopics);
 }
 
 // Helper to read cached data
@@ -2190,74 +2212,106 @@ router.get('/overrides/analysis', (req, res) => {
   });
 });
 
-// Debug endpoint: LLM classification status (enhanced)
+// Debug endpoint: LLM classification status (enhanced with hybrid audit)
 router.get('/llm-status', async (req, res) => {
   const stats = getClassificationStats();
+  const auditStatus = getAuditStatus();
   const cached = readCache();
   
-  let llmClassifiedCount = 0;
+  let verifiedCount = 0;
+  let unverifiedCount = 0;
+  let agreementsCount = 0;
+  let disagreementsCount = 0;
   let otherTypeCount = 0;
   let totalItems = 0;
   let totalTopics = 0;
-  const llmClassifiedSamples = [];
-  const otherTypeSamples = [];
+  const verifiedSamples = [];
+  const disagreementSamples = [];
   
   if (cached?.lifecycleItems) {
     totalItems = cached.lifecycleItems.length;
     totalTopics = cached.allTopics?.length || 0;
     
     for (const item of cached.lifecycleItems) {
-      if (item.llmClassified) {
-        llmClassifiedCount++;
-        if (llmClassifiedSamples.length < 5) {
-          llmClassifiedSamples.push({
+      if (item.verifiedSemantics) {
+        verifiedCount++;
+        if (item.agreement) {
+          agreementsCount++;
+        } else {
+          disagreementsCount++;
+          if (disagreementSamples.length < 5) {
+            disagreementSamples.push({
+              primaryId: item.primaryId,
+              ruleType: item.ruleType,
+              llmType: item.llmType,
+              confidence: item.llmConfidence,
+              reasoning: item.llmReasoning,
+              needsReview: item.needsReview,
+            });
+          }
+        }
+        if (verifiedSamples.length < 5) {
+          verifiedSamples.push({
             primaryId: item.primaryId,
             type: item.type,
-            confidence: item.llmConfidence,
-            reasoning: item.llmReasoning,
-            cached: item.llmCached,
-            subject: item.topics?.[0]?.subject?.slice(0, 80),
+            typeSource: item.typeSource,
+            ruleType: item.ruleType,
+            llmType: item.llmType,
+            agreement: item.agreement,
           });
         }
+      } else {
+        unverifiedCount++;
       }
       if (item.type === 'other') {
         otherTypeCount++;
-        if (otherTypeSamples.length < 5) {
-          otherTypeSamples.push({
-            primaryId: item.primaryId,
-            topicId: item.topics?.[0]?.id,
-            subject: item.topics?.[0]?.subject?.slice(0, 80),
-          });
-        }
       }
     }
   }
   
   res.json({
-    designPrinciple: "LLMs may read raw human text exactly once per artifact; results are cached and treated as authoritative governance metadata.",
+    designPrinciple: "assumed semantics vs verified semantics",
+    hybridAuditModel: {
+      description: "Rules classify everything; LLM reads content and confirms OR flags disagreement",
+      ruleType: "Assumed semantics (deterministic, fast)",
+      llmType: "Verified semantics (reads content, cached permanently)",
+    },
+    auditorAvailable: auditStatus.available,
     llmAvailable: stats.llmAvailable,
     apiKeySet: !!process.env.OPENAI_API_KEY,
     model: stats.model,
-    promptVersion: stats.promptVersion,
+    auditVersion: AUDIT_VERSION,
     lifecycle: {
       totalTopics,
       totalItems,
+      verifiedSemantics: verifiedCount,
+      assumedSemantics: unverifiedCount,
+      agreements: agreementsCount,
+      disagreements: disagreementsCount,
+      agreementRate: verifiedCount > 0 ? ((agreementsCount / verifiedCount) * 100).toFixed(1) + '%' : 'N/A',
       otherTypeCount,
-      llmClassifiedCount,
-      llmClassifiedPct: totalItems > 0 ? ((llmClassifiedCount / totalItems) * 100).toFixed(1) + '%' : '0%',
     },
     cache: {
+      audit: auditStatus.stats,
       llm: stats.llm,
       content: stats.content,
     },
     samples: {
-      llmClassified: llmClassifiedSamples,
-      needsClassification: otherTypeSamples,
+      verified: verifiedSamples,
+      disagreements: disagreementSamples,
+    },
+    needsReview: {
+      count: auditStatus.needsReviewCount,
+      message: auditStatus.needsReviewCount > 0 
+        ? `${auditStatus.needsReviewCount} items have high-confidence disagreements`
+        : 'No items need review',
     },
     endpoints: {
-      refresh: 'POST /api/governance-lifecycle/refresh - Fetch fresh data and classify ambiguous items',
-      reclassify: 'POST /api/governance-lifecycle/reclassify/:topicId - Force reclassify a specific topic',
-      clearCache: 'POST /api/governance-lifecycle/clear-llm-cache - Clear all LLM classifications (use with caution)',
+      refresh: 'POST /api/governance-lifecycle/refresh - Fetch data and run hybrid audit',
+      auditStatus: 'GET /api/governance-lifecycle/audit-status - Detailed audit statistics',
+      disagreements: 'GET /api/governance-lifecycle/audit-disagreements - List all disagreements',
+      reviewItems: 'GET /api/governance-lifecycle/audit-review - Items needing human review',
+      clearAudit: 'POST /api/governance-lifecycle/clear-audit-cache - Clear audit cache (triggers full re-audit)',
     },
   });
 });
@@ -2291,6 +2345,162 @@ router.post('/reclassify/:topicId', async (req, res) => {
 router.post('/clear-llm-cache', (req, res) => {
   clearLLMCache();
   res.json({ success: true, message: 'LLM classification cache cleared. Run POST /refresh to reclassify.' });
+});
+
+// ========== HYBRID AUDIT ENDPOINTS ==========
+
+// Get hybrid audit status and statistics
+router.get('/audit-status', (req, res) => {
+  const auditStatus = getAuditStatus();
+  const cached = readCache();
+  
+  // Count verified vs unverified items
+  let verifiedCount = 0;
+  let unverifiedCount = 0;
+  let agreementsInData = 0;
+  let disagreementsInData = 0;
+  
+  if (cached?.lifecycleItems) {
+    for (const item of cached.lifecycleItems) {
+      if (item.verifiedSemantics) {
+        verifiedCount++;
+        if (item.agreement) agreementsInData++;
+        else disagreementsInData++;
+      } else {
+        unverifiedCount++;
+      }
+    }
+  }
+  
+  res.json({
+    designPrinciple: "assumed semantics vs verified semantics",
+    explanation: {
+      ruleBasedType: "Assumed semantics - deterministic, fast, may be wrong",
+      llmVerifiedType: "Verified semantics - read actual content, cached permanently",
+      agreement: "Rule and LLM agree on classification",
+      needsReview: "High-confidence disagreement requiring human review",
+    },
+    auditorAvailable: auditStatus.available,
+    auditVersion: AUDIT_VERSION,
+    lifecycle: {
+      totalItems: cached?.lifecycleItems?.length || 0,
+      verifiedSemantics: verifiedCount,
+      assumedSemantics: unverifiedCount,
+      agreements: agreementsInData,
+      disagreements: disagreementsInData,
+    },
+    auditCache: auditStatus.stats,
+    needsReview: {
+      count: auditStatus.needsReviewCount,
+      samples: auditStatus.needsReviewItems,
+    },
+    endpoints: {
+      status: 'GET /api/governance-lifecycle/audit-status - This endpoint',
+      disagreements: 'GET /api/governance-lifecycle/audit-disagreements - List all disagreements',
+      reviewItems: 'GET /api/governance-lifecycle/audit-review - Items needing human review',
+      clearAudit: 'POST /api/governance-lifecycle/clear-audit-cache - Clear all audit data',
+      reverify: 'POST /api/governance-lifecycle/reverify/:itemId - Re-verify a specific item',
+    },
+  });
+});
+
+// Get all disagreements (rule != LLM)
+router.get('/audit-disagreements', (req, res) => {
+  const disagreements = getAuditDisagreements();
+  const limit = parseInt(req.query.limit) || 100;
+  
+  // Group by type mismatch
+  const byMismatch = {};
+  for (const item of disagreements) {
+    const key = `${item.rule_type} → ${item.llm_type}`;
+    if (!byMismatch[key]) {
+      byMismatch[key] = { count: 0, items: [] };
+    }
+    byMismatch[key].count++;
+    if (byMismatch[key].items.length < 5) {
+      byMismatch[key].items.push({
+        itemId: item.item_id,
+        primaryId: item.primary_id,
+        confidence: item.llm_confidence,
+        reasoning: item.llm_reasoning,
+        needsReview: item.needs_review,
+      });
+    }
+  }
+  
+  res.json({
+    total: disagreements.length,
+    byMismatch,
+    items: disagreements.slice(0, limit).map(d => ({
+      itemId: d.item_id,
+      primaryId: d.primary_id,
+      ruleType: d.rule_type,
+      llmType: d.llm_type,
+      confidence: d.llm_confidence,
+      reasoning: d.llm_reasoning,
+      needsReview: d.needs_review,
+      classifiedAt: d.classified_at,
+    })),
+  });
+});
+
+// Get items needing human review (high-confidence disagreements)
+router.get('/audit-review', (req, res) => {
+  const reviewItems = getAuditReviewItems();
+  
+  res.json({
+    total: reviewItems.length,
+    message: reviewItems.length > 0 
+      ? `${reviewItems.length} items have high-confidence disagreements and need human review`
+      : 'No items need review - all classifications are in agreement or low-confidence',
+    items: reviewItems.map(r => ({
+      itemId: r.item_id,
+      primaryId: r.primary_id,
+      ruleType: r.rule_type,
+      llmType: r.llm_type,
+      confidence: r.llm_confidence,
+      reasoning: r.llm_reasoning,
+      classifiedAt: r.classified_at,
+    })),
+  });
+});
+
+// Clear audit cache (for full re-audit)
+router.post('/clear-audit-cache', (req, res) => {
+  clearAuditCache();
+  res.json({ 
+    success: true, 
+    message: 'Audit cache cleared. Run POST /refresh to re-verify all items.',
+    note: 'This will trigger a one-time LLM pass over ALL lifecycle items',
+  });
+});
+
+// Re-verify a specific item
+router.post('/reverify/:itemId', async (req, res) => {
+  const { itemId } = req.params;
+  
+  if (!isAuditorAvailable()) {
+    return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+  }
+  
+  const cached = readCache();
+  const item = cached?.lifecycleItems?.find(i => 
+    i.id === itemId || i.primaryId === itemId
+  );
+  
+  if (!item) {
+    return res.status(404).json({ error: 'Item not found in cache' });
+  }
+  
+  const result = await verifyItem(item, { forceReverify: true });
+  
+  res.json({
+    itemId,
+    primaryId: item.primaryId,
+    ruleType: item.type,
+    verification: result,
+    note: 'Run POST /refresh to apply updated verification to cache',
+  });
 });
 
 export { fetchFreshData, writeCache, readCache };
