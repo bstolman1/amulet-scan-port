@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2, Link2, Server, Hash } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Code, DollarSign, History, Database, AlertTriangle, ChevronDown, FileSearch, Loader2, Link2, Server, Hash, Globe } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,7 +25,7 @@ import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
 import { VoteRequestIndexBanner } from "@/components/VoteRequestIndexBanner";
-
+import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
 // Safe date formatter that won't crash on invalid dates
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
   if (!dateStr || typeof dateStr !== "string") return "N/A";
@@ -458,6 +458,10 @@ const Governance = () => {
               <Server className="h-4 w-4" />
               SV Node Live
             </TabsTrigger>
+            <TabsTrigger value="scanapi" className="gap-1">
+              <Globe className="h-4 w-4" />
+              Scan API History
+            </TabsTrigger>
             <TabsTrigger value="active">Active (ACS)</TabsTrigger>
             <TabsTrigger value="semantic">
               <Link2 className="h-4 w-4 mr-1" />
@@ -678,6 +682,26 @@ const Governance = () => {
                     Fetched: {safeFormatDate(svNodeData.fetched_at)}
                   </div>
                 )}
+              </div>
+            </Card>
+          </TabsContent>
+
+          {/* Scan API History Tab - Complete vote results from external API */}
+          <TabsContent value="scanapi">
+            <Card className="glass-card">
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      <Globe className="h-5 w-5 text-primary" />
+                      Scan API Vote Results
+                    </h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Complete governance history from scan.sv-1.global.canton.network.sync.global
+                    </p>
+                  </div>
+                </div>
+                <GovernanceHistoryTable limit={500} />
               </div>
             </Card>
           </TabsContent>
