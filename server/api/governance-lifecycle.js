@@ -3,7 +3,31 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { inferStagesBatch } from '../inference/inferStage.js';
-import { classifyTopicsBatch, isLLMAvailable } from '../inference/llm-classifier.js';
+import { 
+  classifyTopicsBatch, 
+  classifyTopic,
+  isLLMAvailable, 
+  getClassificationStats,
+  getAllClassifications,
+  PROMPT_VERSION,
+} from '../inference/llm-classifier.js';
+import {
+  fetchTopicsContentBatch,
+  getTopicContent,
+  hasContentCached,
+  getContentCacheStats,
+} from '../inference/content-fetcher.js';
+import {
+  getCachedClassification,
+  invalidateClassification,
+  clearLLMCache,
+  getLLMCacheStats,
+  getSampleClassifications,
+} from '../inference/llm-classification-cache.js';
+import {
+  getCachedContent,
+  clearContentCache,
+} from '../inference/post-content-cache.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -996,13 +1020,15 @@ function fixLifecycleItemTypes(data) {
 }
 
 // LLM-based classification for ambiguous items
-async function classifyAmbiguousItems(lifecycleItems) {
+// Design principle: "LLMs may read raw human text exactly once per artifact;
+// results are cached and treated as authoritative governance metadata."
+async function classifyAmbiguousItems(lifecycleItems, allTopics) {
   if (!isLLMAvailable()) {
     console.log('⚠️ LLM classification unavailable (OPENAI_API_KEY not set)');
     return lifecycleItems;
   }
   
-  // Find items still classified as 'other'
+  // Find items still classified as 'other' (ambiguous)
   const ambiguousItems = lifecycleItems.filter(item => item.type === 'other');
   
   if (ambiguousItems.length === 0) {
@@ -1010,45 +1036,81 @@ async function classifyAmbiguousItems(lifecycleItems) {
     return lifecycleItems;
   }
   
-  console.log(`🤖 Classifying ${ambiguousItems.length} ambiguous items with LLM...`);
+  console.log(`🤖 Found ${ambiguousItems.length} ambiguous items for LLM classification...`);
   
-  // Prepare topics for batch classification with excerpts for smarter categorization
-  const topicsToClassify = ambiguousItems.map(item => {
-    const firstTopic = item.topics?.[0];
-    // Combine excerpts from all topics for richer context
-    const combinedExcerpt = item.topics
-      ?.slice(0, 3)  // Use up to 3 topics for context
-      .map(t => t.excerpt || '')
-      .filter(e => e.length > 0)
-      .join('\n---\n')
-      .substring(0, 600) || '';
-    
-    return {
-      id: item.id,
-      subject: firstTopic?.subject || item.primaryId,
-      groupName: firstTopic?.groupName || 'unknown',
-      excerpt: combinedExcerpt,
-    };
-  });
-  
-  // Batch classify
-  const classifications = await classifyTopicsBatch(topicsToClassify);
-  
-  // Apply classifications
-  let classified = 0;
-  for (const item of lifecycleItems) {
-    if (item.type === 'other' && classifications.has(item.id)) {
-      const result = classifications.get(item.id);
-      if (result.type && result.type !== 'other') {
-        console.log(`  ✓ "${item.primaryId}" -> ${result.type}`);
-        item.type = result.type;
-        item.llmClassified = true;
-        classified++;
+  // Step 1: Fetch content for all topics in ambiguous items (if not cached)
+  const topicsNeedingContent = [];
+  for (const item of ambiguousItems) {
+    for (const topic of (item.topics || [])) {
+      if (!hasContentCached(topic.id)) {
+        topicsNeedingContent.push({
+          id: topic.id,
+          groupName: topic.groupName,
+        });
       }
     }
   }
   
-  console.log(`🤖 LLM classified ${classified}/${ambiguousItems.length} items`);
+  if (topicsNeedingContent.length > 0) {
+    console.log(`📄 Fetching content for ${topicsNeedingContent.length} topics...`);
+    await fetchTopicsContentBatch(topicsNeedingContent, {
+      onProgress: (done, total) => {
+        if (done % 10 === 0 || done === total) {
+          console.log(`📄 Content fetch progress: ${done}/${total}`);
+        }
+      }
+    });
+  }
+  
+  // Step 2: Prepare topics for classification (using the first topic of each item)
+  const topicsToClassify = ambiguousItems.map(item => {
+    const firstTopic = item.topics?.[0];
+    return {
+      id: firstTopic?.id || item.id,
+      subject: firstTopic?.subject || item.primaryId,
+      groupName: firstTopic?.groupName || 'unknown',
+      excerpt: firstTopic?.excerpt || '',
+    };
+  });
+  
+  // Step 3: Classify topics (will use cache if already classified)
+  const classifyResult = await classifyTopicsBatch(topicsToClassify, {
+    onProgress: (done, total) => {
+      if (done % 10 === 0 || done === total) {
+        console.log(`🤖 Classification progress: ${done}/${total}`);
+      }
+    }
+  });
+  
+  // Step 4: Apply classifications to lifecycle items
+  let classified = 0;
+  let fromCache = 0;
+  
+  for (const item of lifecycleItems) {
+    if (item.type !== 'other') continue;
+    
+    const firstTopicId = item.topics?.[0]?.id;
+    if (!firstTopicId) continue;
+    
+    const result = classifyResult.results.get(firstTopicId);
+    if (result?.type && result.type !== 'other') {
+      item.type = result.type;
+      item.llmClassified = true;
+      item.llmConfidence = result.confidence;
+      item.llmReasoning = result.reasoning;
+      item.llmCached = result.cached;
+      
+      if (result.cached) {
+        fromCache++;
+      } else {
+        classified++;
+      }
+      
+      console.log(`  ✓ "${item.primaryId.slice(0, 50)}" -> ${result.type}${result.cached ? ' (cached)' : ''}`);
+    }
+  }
+  
+  console.log(`🤖 LLM classification complete: ${classified} new, ${fromCache} from cache, ${ambiguousItems.length - classified - fromCache} still ambiguous`);
   return lifecycleItems;
 }
 
@@ -1544,7 +1606,7 @@ async function fetchFreshData() {
   // Classify ambiguous items (type='other') using LLM
   const ambiguousBefore = lifecycleItems.filter(i => i.type === 'other').length;
   if (ambiguousBefore > 0) {
-    lifecycleItems = await classifyAmbiguousItems(lifecycleItems);
+    lifecycleItems = await classifyAmbiguousItems(lifecycleItems, allTopics);
   }
   // ========== END LLM CLASSIFICATION ==========
   
@@ -2122,9 +2184,9 @@ router.get('/overrides/analysis', (req, res) => {
   });
 });
 
-// Debug endpoint: LLM classification status
+// Debug endpoint: LLM classification status (enhanced)
 router.get('/llm-status', async (req, res) => {
-  const available = isLLMAvailable();
+  const stats = getClassificationStats();
   const cached = readCache();
   
   let llmClassifiedCount = 0;
@@ -2145,6 +2207,9 @@ router.get('/llm-status', async (req, res) => {
           llmClassifiedSamples.push({
             primaryId: item.primaryId,
             type: item.type,
+            confidence: item.llmConfidence,
+            reasoning: item.llmReasoning,
+            cached: item.llmCached,
             subject: item.topics?.[0]?.subject?.slice(0, 80),
           });
         }
@@ -2154,6 +2219,7 @@ router.get('/llm-status', async (req, res) => {
         if (otherTypeSamples.length < 5) {
           otherTypeSamples.push({
             primaryId: item.primaryId,
+            topicId: item.topics?.[0]?.id,
             subject: item.topics?.[0]?.subject?.slice(0, 80),
           });
         }
@@ -2162,23 +2228,63 @@ router.get('/llm-status', async (req, res) => {
   }
   
   res.json({
-    llmAvailable: available,
+    designPrinciple: "LLMs may read raw human text exactly once per artifact; results are cached and treated as authoritative governance metadata.",
+    llmAvailable: stats.llmAvailable,
     apiKeySet: !!process.env.OPENAI_API_KEY,
-    stats: {
+    model: stats.model,
+    promptVersion: stats.promptVersion,
+    lifecycle: {
       totalTopics,
       totalItems,
       otherTypeCount,
       llmClassifiedCount,
       llmClassifiedPct: totalItems > 0 ? ((llmClassifiedCount / totalItems) * 100).toFixed(1) + '%' : '0%',
     },
-    otherTypeSamples,
-    llmClassifiedSamples,
-    hint: otherTypeCount === 0 
-      ? 'No "other" type items found - rule-based classification handled everything. LLM only classifies ambiguous items.'
-      : available 
-        ? `${otherTypeCount} items need LLM classification. POST to /api/governance-lifecycle/refresh to trigger.`
-        : 'Set OPENAI_API_KEY in server/.env and restart the server to enable LLM classification.',
+    cache: {
+      llm: stats.llm,
+      content: stats.content,
+    },
+    samples: {
+      llmClassified: llmClassifiedSamples,
+      needsClassification: otherTypeSamples,
+    },
+    endpoints: {
+      refresh: 'POST /api/governance-lifecycle/refresh - Fetch fresh data and classify ambiguous items',
+      reclassify: 'POST /api/governance-lifecycle/reclassify/:topicId - Force reclassify a specific topic',
+      clearCache: 'POST /api/governance-lifecycle/clear-llm-cache - Clear all LLM classifications (use with caution)',
+    },
   });
+});
+
+// Force reclassify a specific topic
+router.post('/reclassify/:topicId', async (req, res) => {
+  const { topicId } = req.params;
+  
+  if (!isLLMAvailable()) {
+    return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+  }
+  
+  // Get content
+  const content = getCachedContent(topicId);
+  if (!content) {
+    return res.status(404).json({ error: 'Topic content not found in cache' });
+  }
+  
+  // Force reclassify
+  const result = await classifyTopic(topicId, content.subject, content.body, { forceReclassify: true });
+  
+  res.json({
+    topicId,
+    subject: content.subject,
+    classification: result,
+    note: 'Run POST /refresh to apply to lifecycle items',
+  });
+});
+
+// Clear LLM cache (for full reindex)
+router.post('/clear-llm-cache', (req, res) => {
+  clearLLMCache();
+  res.json({ success: true, message: 'LLM classification cache cleared. Run POST /refresh to reclassify.' });
 });
 
 export { fetchFreshData, writeCache, readCache };
