@@ -1028,13 +1028,41 @@ router.get('/sv-weight-history', async (req, res) => {
       .map(([date, entry]) => ({
         date,
         svCount: entry.svCount,
+        svParties: entry.svParties,
         timestamp: entry.timestamp,
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    // Build operator weight distribution data
+    // Extract unique SV names from party IDs (before ::)
+    const allSvNames = new Set();
+    for (const day of dailyData) {
+      for (const party of day.svParties || []) {
+        const name = party.split('::')[0] || party.substring(0, 20);
+        allSvNames.add(name);
+      }
+    }
+
+    // Create stacked data - each day has a count for each SV
+    const stackedData = dailyData.map(day => {
+      const svCounts = {};
+      for (const party of day.svParties || []) {
+        const name = party.split('::')[0] || party.substring(0, 20);
+        svCounts[name] = (svCounts[name] || 0) + 1;
+      }
+      return {
+        date: day.date,
+        timestamp: day.timestamp,
+        total: day.svCount,
+        ...svCounts,
+      };
+    });
+
     res.json({
       data: timeline,
       dailyData,
+      stackedData,
+      svNames: Array.from(allSvNames).sort(),
       totalRules: timeline.length,
     });
   } catch (err) {
