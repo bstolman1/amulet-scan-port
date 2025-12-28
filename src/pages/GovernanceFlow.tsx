@@ -1518,7 +1518,7 @@ const GovernanceFlow = () => {
                           className="pb-3 cursor-pointer" 
                           onClick={() => !bulkSelectMode && toggleExpand(groupId)}
                         >
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-start justify-between gap-2">
                             {/* Checkbox for bulk selection */}
                             {bulkSelectMode && (
                               <div 
@@ -1536,7 +1536,7 @@ const GovernanceFlow = () => {
                               </div>
                             )}
                             
-                            <div className="space-y-2 flex-1">
+                            <div className="space-y-2 flex-1 min-w-0">
                               {/* Type and Network Badges */}
                               <div className="flex items-center gap-2 flex-wrap">
                                 <Badge className={typeConfig.color}>
@@ -1565,7 +1565,7 @@ const GovernanceFlow = () => {
                               </div>
                               
                               {/* Title */}
-                              <CardTitle className="text-base leading-tight">
+                              <CardTitle className="text-base leading-normal break-words">
                                 {group.primaryId}
                               </CardTitle>
                               
