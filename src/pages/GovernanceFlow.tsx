@@ -1739,6 +1739,41 @@ const GovernanceFlow = () => {
                                       </div>
                                     );
                                   })}
+                                  
+                                  {/* Render topics with stages not in the expected workflow */}
+                                  {(() => {
+                                    // Find topics whose stage is NOT in the expected workflow stages for this type
+                                    const unexpectedStageTopics = item.topics.filter(topic => 
+                                      !stages.includes(topic.stage)
+                                    );
+                                    
+                                    if (unexpectedStageTopics.length === 0) return null;
+                                    
+                                    // Group by their actual stage
+                                    const groupedByStage = unexpectedStageTopics.reduce((acc, topic) => {
+                                      if (!acc[topic.stage]) acc[topic.stage] = [];
+                                      acc[topic.stage].push(topic);
+                                      return acc;
+                                    }, {} as Record<string, Topic[]>);
+                                    
+                                    return Object.entries(groupedByStage).map(([stage, topics]) => {
+                                      const config = STAGE_CONFIG[stage];
+                                      const Icon = config?.icon || FileText;
+                                      const label = config?.label || stage;
+                                      
+                                      return (
+                                        <div key={`extra-${stage}`} className="space-y-2">
+                                          <h4 className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+                                            <Icon className="h-4 w-4" />
+                                            {label} ({topics.length})
+                                          </h4>
+                                          <div className="space-y-2 pl-6">
+                                            {topics.map(topic => renderTopicCard(topic, false, item.type))}
+                                          </div>
+                                        </div>
+                                      );
+                                    });
+                                  })()}
                                 </div>
                               );
                             })}
