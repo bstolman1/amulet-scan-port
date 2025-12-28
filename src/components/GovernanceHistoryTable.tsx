@@ -2,11 +2,10 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle, XCircle, Clock, ChevronDown, History, Users, ExternalLink, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, Clock, History, Code, ExternalLink, AlertTriangle, Users, ChevronDown } from "lucide-react";
 import { format } from "date-fns";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 import { cn } from "@/lib/utils";
@@ -26,45 +25,51 @@ const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = 
   }
 };
 
+const truncateParty = (party: string | undefined | null, maxLen = 24) => {
+  if (!party) return "Unknown";
+  if (party.length <= maxLen) return party;
+  return `${party.slice(0, 18)}…${party.slice(-6)}`;
+};
+
 export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTableProps) {
   const { data: voteResults, isLoading, error } = useGovernanceVoteHistory(limit);
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  const [showRawJson, setShowRawJson] = useState<Set<string>>(new Set());
 
-  const toggleRow = (id: string) => {
-    setExpandedRows((prev) => {
+  const toggleCard = (id: string) => {
+    setExpandedCards((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
 
-  const getOutcomeColor = (outcome: ParsedVoteResult["outcome"]) => {
+  const toggleRawJson = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowRawJson((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const getOutcomeVariant = (outcome: ParsedVoteResult["outcome"]) => {
     switch (outcome) {
-      case "accepted":
-        return "bg-success/10 text-success border-success/20";
-      case "rejected":
-        return "bg-destructive/10 text-destructive border-destructive/20";
-      case "expired":
-        return "bg-warning/10 text-warning border-warning/20";
-      default:
-        return "bg-muted text-muted-foreground";
+      case "accepted": return "default";
+      case "rejected": return "destructive";
+      case "expired": return "secondary";
+      default: return "outline";
     }
   };
 
   const getOutcomeIcon = (outcome: ParsedVoteResult["outcome"]) => {
     switch (outcome) {
-      case "accepted":
-        return <CheckCircle className="h-4 w-4" />;
-      case "rejected":
-        return <XCircle className="h-4 w-4" />;
-      case "expired":
-        return <Clock className="h-4 w-4" />;
-      default:
-        return <History className="h-4 w-4" />;
+      case "accepted": return <CheckCircle className="h-4 w-4 text-success" />;
+      case "rejected": return <XCircle className="h-4 w-4 text-destructive" />;
+      case "expired": return <Clock className="h-4 w-4 text-warning" />;
+      default: return <History className="h-4 w-4" />;
     }
   };
 
@@ -88,248 +93,258 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card className="glass-card p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Total</span>
-            <History className="h-4 w-4 text-primary" />
-          </div>
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card className="p-6">
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">Total Votes</h3>
           {isLoading ? (
-            <Skeleton className="h-8 w-16 mt-1" />
+            <Skeleton className="h-8 w-24" />
           ) : (
-            <p className="text-2xl font-bold text-primary">{stats.total}</p>
+            <div>
+              <p className="text-2xl font-bold">{stats.total}</p>
+              <p className="text-xs text-muted-foreground mt-1">governance decisions</p>
+            </div>
           )}
         </Card>
-        <Card className="glass-card p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Accepted</span>
-            <CheckCircle className="h-4 w-4 text-success" />
-          </div>
+
+        <Card className="p-6">
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">Accepted</h3>
           {isLoading ? (
-            <Skeleton className="h-8 w-16 mt-1" />
+            <Skeleton className="h-8 w-24" />
           ) : (
-            <p className="text-2xl font-bold text-success">{stats.accepted}</p>
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-success" />
+              <p className="text-2xl font-bold text-success">{stats.accepted}</p>
+            </div>
           )}
         </Card>
-        <Card className="glass-card p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Rejected</span>
-            <XCircle className="h-4 w-4 text-destructive" />
-          </div>
+
+        <Card className="p-6">
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">Rejected</h3>
           {isLoading ? (
-            <Skeleton className="h-8 w-16 mt-1" />
+            <Skeleton className="h-8 w-24" />
           ) : (
-            <p className="text-2xl font-bold text-destructive">{stats.rejected}</p>
+            <div className="flex items-center gap-2">
+              <XCircle className="h-5 w-5 text-destructive" />
+              <p className="text-2xl font-bold text-destructive">{stats.rejected}</p>
+            </div>
           )}
         </Card>
-        <Card className="glass-card p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Expired</span>
-            <Clock className="h-4 w-4 text-warning" />
-          </div>
+
+        <Card className="p-6">
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">Expired</h3>
           {isLoading ? (
-            <Skeleton className="h-8 w-16 mt-1" />
+            <Skeleton className="h-8 w-24" />
           ) : (
-            <p className="text-2xl font-bold text-warning">{stats.expired}</p>
+            <div className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-warning" />
+              <p className="text-2xl font-bold text-warning">{stats.expired}</p>
+            </div>
           )}
         </Card>
       </div>
 
-      {/* Table */}
-      <Card className="glass-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-border/50 hover:bg-transparent">
-                <TableHead className="w-[40px]"></TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Outcome</TableHead>
-                <TableHead>Votes</TableHead>
-                <TableHead>Completed</TableHead>
-                <TableHead className="text-right">Requester</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                Array.from({ length: 10 }).map((_, i) => (
-                  <TableRow key={i} className="border-border/50">
-                    <TableCell><Skeleton className="h-4 w-4" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-40" /></TableCell>
-                    <TableCell><Skeleton className="h-5 w-20" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-16" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-32" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
-                  </TableRow>
-                ))
-              ) : voteResults?.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                    No governance history found
-                  </TableCell>
-                </TableRow>
-              ) : (
-                voteResults?.map((result) => (
-                  <Collapsible key={result.trackingCid} asChild>
-                    <>
-                      <TableRow 
-                        className={cn(
-                          "border-border/50 cursor-pointer transition-colors",
-                          expandedRows.has(result.trackingCid) && "bg-muted/30"
-                        )}
-                        onClick={() => toggleRow(result.trackingCid)}
-                      >
-                        <TableCell>
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-6 w-6">
-                              <ChevronDown 
-                                className={cn(
-                                  "h-4 w-4 transition-transform",
-                                  expandedRows.has(result.trackingCid) && "rotate-180"
-                                )} 
-                              />
-                            </Button>
-                          </CollapsibleTrigger>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{result.actionTitle}</span>
-                            <span className="text-xs text-muted-foreground font-mono">
-                              {result.actionType}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge className={cn("gap-1", getOutcomeColor(result.outcome))}>
-                            {getOutcomeIcon(result.outcome)}
-                            {result.outcome}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="text-success">{result.votesFor}</span>
-                            <span className="text-muted-foreground">/</span>
-                            <span className="text-destructive">{result.votesAgainst}</span>
-                            {result.abstainers.length > 0 && (
-                              <span className="text-xs text-muted-foreground">
-                                (+{result.abstainers.length} abstain)
-                              </span>
+      {/* Vote results list */}
+      <div className="space-y-3">
+        {isLoading ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-32 w-full" />
+          ))
+        ) : voteResults?.length === 0 ? (
+          <Card className="p-8">
+            <p className="text-center text-muted-foreground">No governance history found</p>
+          </Card>
+        ) : (
+          voteResults?.map((result) => (
+            <Card key={result.trackingCid} className="p-4 space-y-3">
+              <div 
+                className="flex justify-between items-start cursor-pointer"
+                onClick={() => toggleCard(result.trackingCid)}
+              >
+                <div className="flex-1 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {getOutcomeIcon(result.outcome)}
+                    <p className="text-sm font-semibold">{result.actionTitle}</p>
+                    <span className="text-xs font-mono text-muted-foreground">({result.actionType})</span>
+                    <ChevronDown 
+                      className={cn(
+                        "h-4 w-4 text-muted-foreground transition-transform ml-2",
+                        expandedCards.has(result.trackingCid) && "rotate-180"
+                      )} 
+                    />
+                  </div>
+
+                  {/* Reason URL */}
+                  {result.reasonUrl && (
+                    <a 
+                      href={result.reasonUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      {result.reasonUrl}
+                    </a>
+                  )}
+                </div>
+                <Badge variant={getOutcomeVariant(result.outcome)} className="capitalize">
+                  {result.outcome}
+                </Badge>
+              </div>
+
+              {/* Expanded content */}
+              {expandedCards.has(result.trackingCid) && (
+                <div className="space-y-4 pt-3 border-t">
+                  {/* Action Details */}
+                  {result.actionDetails && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">Action Details</p>
+                      <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-48 font-mono">
+                        {typeof result.actionDetails === "object" 
+                          ? JSON.stringify(result.actionDetails, null, 2)
+                          : String(result.actionDetails)
+                        }
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Reason */}
+                  {result.reasonBody && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1">Reason</p>
+                      <p className="text-sm bg-muted/50 p-3 rounded">{result.reasonBody}</p>
+                    </div>
+                  )}
+
+                  {/* Voting Stats */}
+                  <div className="grid grid-cols-3 gap-4 text-center py-2">
+                    <div className="p-3 rounded-lg bg-success/10">
+                      <p className="text-xs text-muted-foreground uppercase">Votes For</p>
+                      <p className="text-xl font-semibold text-success">{result.votesFor}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-destructive/10">
+                      <p className="text-xs text-muted-foreground uppercase">Votes Against</p>
+                      <p className="text-xl font-semibold text-destructive">{result.votesAgainst}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-muted/50">
+                      <p className="text-xs text-muted-foreground uppercase">Abstained</p>
+                      <p className="text-xl font-semibold">{result.abstainers.length}</p>
+                    </div>
+                  </div>
+
+                  {/* Individual Votes */}
+                  {result.votes.length > 0 && (
+                    <Collapsible className="border-t pt-3">
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full justify-start">
+                          <Users className="h-4 w-4 mr-2" />
+                          Individual Votes ({result.votes.length})
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="mt-2 space-y-2">
+                        {result.votes.map((vote, idx) => (
+                          <Card 
+                            key={idx} 
+                            className={cn(
+                              "p-3 flex items-center justify-between",
+                              vote.accept ? "border-success/30 bg-success/5" : "border-destructive/30 bg-destructive/5"
                             )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm">
-                            {safeFormatDate(result.completedAt)}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <span className="text-xs font-mono text-muted-foreground">
-                            {result.requester?.split("::")[0]?.slice(0, 16)}...
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                      <CollapsibleContent asChild>
-                        <TableRow className="bg-muted/20 border-border/50">
-                          <TableCell colSpan={6} className="p-0">
-                            <div className="p-4 space-y-4">
-                              {/* Reason */}
-                              {(result.reasonBody || result.reasonUrl) && (
-                                <div className="space-y-1">
-                                  <span className="text-sm font-medium">Reason</span>
-                                  {result.reasonBody && (
-                                    <p className="text-sm text-muted-foreground">{result.reasonBody}</p>
-                                  )}
-                                  {result.reasonUrl && (
-                                    <a 
-                                      href={result.reasonUrl} 
-                                      target="_blank" 
-                                      rel="noopener noreferrer"
-                                      className="text-sm text-primary hover:underline inline-flex items-center gap-1"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <ExternalLink className="h-3 w-3" />
-                                      {result.reasonUrl}
-                                    </a>
-                                  )}
-                                </div>
+                          >
+                            <div className="space-y-1">
+                              <p className="text-sm font-medium">{vote.svName}</p>
+                              {vote.svParty && (
+                                <p className="text-xs font-mono text-muted-foreground">
+                                  {truncateParty(vote.svParty)}
+                                </p>
                               )}
-
-                              {/* Votes breakdown */}
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <Users className="h-4 w-4" />
-                                  <span className="text-sm font-medium">Votes ({result.totalVotes})</span>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                                  {result.votes.map((vote, idx) => (
-                                    <div 
-                                      key={idx}
-                                      className={cn(
-                                        "flex items-center justify-between p-2 rounded-md text-sm",
-                                        vote.accept ? "bg-success/10" : "bg-destructive/10"
-                                      )}
-                                    >
-                                      <span className="font-mono text-xs truncate max-w-[200px]">
-                                        {vote.svName}
-                                      </span>
-                                      <Badge 
-                                        variant="outline" 
-                                        className={cn(
-                                          "text-xs",
-                                          vote.accept ? "border-success text-success" : "border-destructive text-destructive"
-                                        )}
-                                      >
-                                        {vote.accept ? "For" : "Against"}
-                                      </Badge>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* Abstainers */}
-                              {result.abstainers.length > 0 && (
-                                <div className="space-y-1">
-                                  <span className="text-sm font-medium text-muted-foreground">
-                                    Abstained ({result.abstainers.length})
-                                  </span>
-                                  <div className="flex flex-wrap gap-1">
-                                    {result.abstainers.map((a, idx) => (
-                                      <Badge key={idx} variant="outline" className="text-xs font-mono">
-                                        {a.split("::")[0]?.slice(0, 16)}...
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </div>
+                              {vote.reasonBody && (
+                                <p className="text-xs text-muted-foreground mt-1">{vote.reasonBody}</p>
                               )}
-
-                              {/* Metadata */}
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-muted-foreground">
-                                <div>
-                                  <span className="font-medium">Vote Before</span>
-                                  <p>{safeFormatDate(result.voteBefore)}</p>
-                                </div>
-                                <div>
-                                  <span className="font-medium">Expires At</span>
-                                  <p>{safeFormatDate(result.expiresAt)}</p>
-                                </div>
-                                <div className="col-span-2">
-                                  <span className="font-medium">Tracking CID</span>
-                                  <p className="font-mono truncate">{result.trackingCid}</p>
-                                </div>
-                              </div>
                             </div>
-                          </TableCell>
-                        </TableRow>
+                            <Badge 
+                              variant="outline" 
+                              className={vote.accept ? "border-success text-success" : "border-destructive text-destructive"}
+                            >
+                              {vote.accept ? "For" : "Against"}
+                            </Badge>
+                          </Card>
+                        ))}
                       </CollapsibleContent>
-                    </>
+                    </Collapsible>
+                  )}
+
+                  {/* Abstainers */}
+                  {result.abstainers.length > 0 && (
+                    <Collapsible className="border-t pt-3">
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full justify-start">
+                          <Clock className="h-4 w-4 mr-2" />
+                          Abstainers ({result.abstainers.length})
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="mt-2 flex flex-wrap gap-2">
+                        {result.abstainers.map((a, idx) => (
+                          <Badge key={idx} variant="outline" className="text-xs font-mono">
+                            {truncateParty(a)}
+                          </Badge>
+                        ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+
+                  {/* Metadata */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm border-t pt-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Completed At</p>
+                      <p className="font-medium">{safeFormatDate(result.completedAt)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Vote Before</p>
+                      <p className="font-medium">{safeFormatDate(result.voteBefore)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Expires At</p>
+                      <p className="font-medium">{safeFormatDate(result.expiresAt)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Requester</p>
+                      <p className="font-mono text-xs break-all">{truncateParty(result.requester)}</p>
+                    </div>
+                  </div>
+
+                  {/* Tracking CID */}
+                  <div className="border-t pt-3">
+                    <p className="text-xs text-muted-foreground">Tracking CID</p>
+                    <p className="font-mono text-xs break-all">{result.trackingCid}</p>
+                  </div>
+
+                  {/* Show Raw JSON */}
+                  <Collapsible className="border-t pt-3">
+                    <CollapsibleTrigger asChild>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="w-full justify-start"
+                        onClick={(e) => toggleRawJson(result.trackingCid, e)}
+                      >
+                        <Code className="h-4 w-4 mr-2" />
+                        Show Full JSON Data
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-2">
+                      <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-96 font-mono">
+                        {JSON.stringify(result, null, 2)}
+                      </pre>
+                    </CollapsibleContent>
                   </Collapsible>
-                ))
+                </div>
               )}
-            </TableBody>
-          </Table>
-        </div>
-      </Card>
+            </Card>
+          ))
+        )}
+      </div>
     </div>
   );
 }
