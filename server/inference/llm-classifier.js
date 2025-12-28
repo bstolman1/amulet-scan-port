@@ -1,51 +1,86 @@
 /**
  * LLM-based classification for ambiguous governance topics
  * Uses OpenAI API for classification when rule-based methods fail
+ * Enhanced to analyze topic excerpts for smarter categorization
  */
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// Classification prompt with few-shot examples
-const CLASSIFICATION_PROMPT = `You are a governance topic classifier for the Canton Network. Classify each topic into one of these types:
+// Enhanced classification prompt with excerpt analysis
+const CLASSIFICATION_PROMPT = `You are an expert governance topic classifier for the Canton Network / Splice ecosystem. Your job is to analyze topic subjects AND their content excerpts to classify each topic accurately.
 
-**cip** - Canton Improvement Proposals (technical protocol changes, new features, standards)
-- Usually has "CIP-XXXX" or a 4-digit number like "0054"
-- Examples: "CIP-0054 Add Figment as SV", "0066 - RPC Voting", "CIP Discussion: New feature"
+## Classification Types:
 
-**validator** - Validator applications and operations
-- About companies becoming validators/super validators
-- Examples: "Validator Approved: Figment", "Node Fortress SV Application", "Validator Operations Update"
+**cip** - Canton Improvement Proposals
+- Technical protocol changes, standards, new features
+- Usually contains "CIP-XXXX", "CIP #XX", or 4-digit proposal numbers like "0054"
+- Discusses protocol specifications, governance rules, voting parameters
+- Examples: "CIP-0054 Add Figment as SV", "0066 - RPC Voting", "CIP Discussion: Validator onboarding"
+
+**validator** - Validator/Super-Validator applications and operations
+- About companies becoming validators or super-validators
+- Node operators, infrastructure providers joining the network
+- Validator approvals, applications, onboarding discussions
+- Look for company names with terms like "SV", "validator", "operator", "node"
+- Examples: "Validator Approved: Figment", "Node Fortress SV Application", "New validator: Blockdaemon"
 
 **featured-app** - Featured applications on the network
-- About apps being featured/added to the network
-- Examples: "Featured App: PaymentApp", "MainNet: New Trading App", "Testnet: DeFi Protocol"
+- Apps being reviewed, featured, or added to Canton/Splice
+- Usually mentions app/product names with terms like "featured", "app", "application"
+- May reference testnet or mainnet deployments
+- Examples: "Featured App: PaymentApp", "New Featured App Request: Rhein Finance", "Testnet: DeFi Protocol"
 
 **protocol-upgrade** - Network upgrades and migrations
-- About Splice versions, synchronizer migrations, hard forks
-- Examples: "Migration to Splice 0.2", "Protocol Upgrade v3.0", "Synchronizer Migration"
+- Splice version upgrades (e.g., Splice 0.2.x)
+- Synchronizer migrations, hard forks, breaking changes
+- Global domain participant upgrades
+- Examples: "Migration to Splice 0.2", "Protocol Upgrade v3.0", "Synchronizer Migration Required"
 
 **outcome** - Tokenomics outcome reports
 - Periodic reports about network tokenomics
-- Examples: "Tokenomics Outcomes - December 2024"
+- Round outcomes, CC statistics, network metrics
+- Examples: "Tokenomics Outcomes - December 2024", "Round 123 Outcome Report"
 
-**other** - Doesn't fit other categories
+**other** - Only use this if topic genuinely doesn't fit ANY other category
+- Administrative announcements unrelated to governance
+- General discussions without clear governance implications
 
-Respond with ONLY the type (one word, lowercase).`;
+## Analysis Guidelines:
+1. Read BOTH the subject line AND the excerpt content carefully
+2. Look for key entity names (companies, apps, protocols) in the excerpt
+3. Consider the context: where was it posted, what is being discussed?
+4. When in doubt between validator/featured-app, check if it's infrastructure (validator) vs application (featured-app)
+5. CIPs almost always have a number - if no number but discusses protocol changes, still use "cip"
+
+Respond with ONLY the type (one word, lowercase). Never respond with explanations.`;
 
 /**
- * Classify a single topic using LLM
+ * Classify a single topic using LLM with excerpt analysis
  * @param {string} subject - The topic subject line
  * @param {string} groupName - The group name where it was posted
- * @returns {Promise<{type: string, confidence: number}>}
+ * @param {string} excerpt - Content excerpt (first 500 chars of topic body)
+ * @returns {Promise<{type: string, confidence: number, llmClassified: boolean}>}
  */
-export async function classifyTopic(subject, groupName) {
+export async function classifyTopic(subject, groupName, excerpt = '') {
   if (!OPENAI_API_KEY) {
     console.warn('⚠️ OPENAI_API_KEY not set, skipping LLM classification');
-    return { type: null, confidence: 0 };
+    return { type: null, confidence: 0, llmClassified: false };
   }
 
   try {
-    const userPrompt = `Group: ${groupName}\nSubject: ${subject}\n\nType:`;
+    // Build context-rich prompt including excerpt
+    let userPrompt = `Group: ${groupName}\nSubject: ${subject}`;
+    
+    if (excerpt && excerpt.trim().length > 20) {
+      // Clean and truncate excerpt for prompt
+      const cleanExcerpt = excerpt
+        .replace(/\s+/g, ' ')
+        .trim()
+        .substring(0, 400);
+      userPrompt += `\n\nContent excerpt:\n${cleanExcerpt}`;
+    }
+    
+    userPrompt += '\n\nType:';
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -67,7 +102,7 @@ export async function classifyTopic(subject, groupName) {
     if (!response.ok) {
       const error = await response.text();
       console.error('❌ OpenAI API error:', response.status, error);
-      return { type: null, confidence: 0 };
+      return { type: null, confidence: 0, llmClassified: false };
     }
 
     const data = await response.json();
@@ -77,23 +112,25 @@ export async function classifyTopic(subject, groupName) {
     const validTypes = ['cip', 'validator', 'featured-app', 'protocol-upgrade', 'outcome', 'other'];
     const type = validTypes.includes(rawType) ? rawType : null;
     
-    console.log(`🤖 LLM classified "${subject.slice(0, 50)}..." -> ${type}`);
+    // Log with excerpt indicator
+    const excerptIndicator = excerpt ? ' [+excerpt]' : '';
+    console.log(`🤖 LLM classified "${subject.slice(0, 50)}..."${excerptIndicator} -> ${type}`);
     
     return { 
       type, 
-      confidence: type ? 0.85 : 0,  // LLM confidence is moderately high
+      confidence: type ? 0.90 : 0,  // Higher confidence when using excerpt
       llmClassified: true
     };
   } catch (error) {
     console.error('❌ LLM classification error:', error.message);
-    return { type: null, confidence: 0 };
+    return { type: null, confidence: 0, llmClassified: false };
   }
 }
 
 /**
- * Batch classify multiple topics (more efficient API usage)
- * @param {Array<{subject: string, groupName: string, id: string}>} topics
- * @returns {Promise<Map<string, {type: string, confidence: number}>>}
+ * Batch classify multiple topics with excerpts (more efficient API usage)
+ * @param {Array<{subject: string, groupName: string, id: string, excerpt?: string}>} topics
+ * @returns {Promise<Map<string, {type: string, confidence: number, llmClassified: boolean}>>}
  */
 export async function classifyTopicsBatch(topics) {
   if (!OPENAI_API_KEY || topics.length === 0) {
@@ -109,7 +146,11 @@ export async function classifyTopicsBatch(topics) {
     
     // Classify each topic in parallel within the batch
     const promises = batch.map(async (topic) => {
-      const result = await classifyTopic(topic.subject, topic.groupName);
+      const result = await classifyTopic(
+        topic.subject, 
+        topic.groupName, 
+        topic.excerpt || ''
+      );
       return { id: topic.id, result };
     });
     
@@ -124,6 +165,7 @@ export async function classifyTopicsBatch(topics) {
     }
   }
   
+  console.log(`🤖 Batch classification complete: ${results.size} topics processed`);
   return results;
 }
 

@@ -1012,13 +1012,22 @@ async function classifyAmbiguousItems(lifecycleItems) {
   
   console.log(`🤖 Classifying ${ambiguousItems.length} ambiguous items with LLM...`);
   
-  // Prepare topics for batch classification
+  // Prepare topics for batch classification with excerpts for smarter categorization
   const topicsToClassify = ambiguousItems.map(item => {
     const firstTopic = item.topics?.[0];
+    // Combine excerpts from all topics for richer context
+    const combinedExcerpt = item.topics
+      ?.slice(0, 3)  // Use up to 3 topics for context
+      .map(t => t.excerpt || '')
+      .filter(e => e.length > 0)
+      .join('\n---\n')
+      .substring(0, 600) || '';
+    
     return {
       id: item.id,
       subject: firstTopic?.subject || item.primaryId,
       groupName: firstTopic?.groupName || 'unknown',
+      excerpt: combinedExcerpt,
     };
   });
   
