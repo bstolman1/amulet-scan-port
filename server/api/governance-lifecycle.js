@@ -1722,7 +1722,7 @@ router.get('/', async (req, res) => {
 });
 
 // Refresh endpoint - explicitly fetches fresh data
-router.post('/refresh', async (req, res) => {
+async function handleRefresh(req, res) {
   if (!API_KEY) {
     return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured' });
   }
@@ -1733,9 +1733,15 @@ router.post('/refresh', async (req, res) => {
     return res.json({ success: true, stats: data.stats, cachedAt: data.cachedAt });
   } catch (error) {
     console.error('Error refreshing governance lifecycle:', error);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
-});
+}
+
+// POST is the intended method (safe for browsers/tools)
+router.post('/refresh', handleRefresh);
+
+// Convenience: allow GET so visiting in a browser doesn't show "Cannot GET"
+router.get('/refresh', handleRefresh);
 
 // Cache info endpoint
 router.get('/cache-info', (req, res) => {
