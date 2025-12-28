@@ -975,4 +975,72 @@ router.delete('/live-cursor', async (req, res) => {
   }
 });
 
+// GET /api/stats/sv-weight-history - SV weight distribution over time from DSO Rules
+router.get('/sv-weight-history', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    
+    // Query dso_rules_state table for historical SV state
+    const rules = await query(`
+      SELECT 
+        contract_id,
+        effective_from,
+        effective_until,
+        sv_count,
+        sv_parties,
+        rule_version
+      FROM dso_rules_state
+      WHERE effective_from IS NOT NULL
+      ORDER BY effective_from ASC
+      LIMIT ${limit}
+    `);
+
+    // Parse sv_parties JSON and build timeline data
+    const timeline = rules.map(rule => {
+      let svParties = [];
+      try {
+        svParties = rule.sv_parties ? JSON.parse(rule.sv_parties) : [];
+      } catch (e) {
+        svParties = [];
+      }
+
+      return {
+        timestamp: rule.effective_from,
+        effectiveUntil: rule.effective_until,
+        svCount: Number(rule.sv_count || 0),
+        svParties: svParties,
+        contractId: rule.contract_id,
+      };
+    });
+
+    // Build time-series data points grouped by day
+    const byDay = {};
+    for (const entry of timeline) {
+      const date = new Date(entry.timestamp).toISOString().slice(0, 10);
+      // Keep the latest entry for each day (most recent SV count)
+      if (!byDay[date] || new Date(entry.timestamp) > new Date(byDay[date].timestamp)) {
+        byDay[date] = entry;
+      }
+    }
+
+    // Convert to sorted array
+    const dailyData = Object.entries(byDay)
+      .map(([date, entry]) => ({
+        date,
+        svCount: entry.svCount,
+        timestamp: entry.timestamp,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({
+      data: timeline,
+      dailyData,
+      totalRules: timeline.length,
+    });
+  } catch (err) {
+    console.error('Error fetching SV weight history:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
