@@ -948,7 +948,7 @@ const GovernanceFlow = () => {
               )}
             </div>
             {reason?.body && (
-              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+              <p className="text-xs text-muted-foreground mt-2 break-words whitespace-pre-wrap">
                 {reason.body}
               </p>
             )}
@@ -1128,7 +1128,7 @@ const GovernanceFlow = () => {
           </div>
         </div>
         {topic.excerpt && (
-          <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+          <p className="text-xs text-muted-foreground mt-2 break-words whitespace-pre-wrap">
             {topic.excerpt}
           </p>
         )}
@@ -1870,7 +1870,7 @@ const GovernanceFlow = () => {
                                       )}
                                     </div>
                                     {topic.excerpt && (
-                                      <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                                      <p className="text-xs text-muted-foreground mt-2 break-words whitespace-pre-wrap">
                                         {topic.excerpt}
                                       </p>
                                     )}
@@ -1963,7 +1963,7 @@ const GovernanceFlow = () => {
                                     <ExternalLink className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                   </div>
                                   {reason?.body && (
-                                    <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
+                                    <p className="text-xs text-muted-foreground mt-2 break-words whitespace-pre-wrap">
                                       {reason.body}
                                     </p>
                                   )}
