@@ -85,52 +85,60 @@ function parseActionTitle(tag: string): string {
 
 // Parse vote results into display format
 function parseVoteResults(results: VoteResult[]): ParsedVoteResult[] {
+  if (!results || !Array.isArray(results)) return [];
+  
   return results.map((result) => {
-    const action = result.request.action;
-    const votes = result.request.votes || [];
+    // Safely access nested properties with type coercion for safety
+    const request = (result?.request || {}) as any;
+    const action = request?.action || { tag: "Unknown", value: null };
+    const votes = request?.votes || [];
+    const trackingCid = result?.request_tracking_cid || (result as any)?.tracking_cid || "";
     
     let votesFor = 0;
     let votesAgainst = 0;
     const parsedVotes: ParsedVoteResult["votes"] = [];
     
-    for (const [svName, voteData] of votes) {
-      if (voteData.accept) {
+    for (const vote of votes) {
+      // Handle both array format [svName, voteData] and object format
+      const [svName, voteData] = Array.isArray(vote) ? vote : [vote?.sv || "Unknown", vote];
+      if (voteData?.accept) {
         votesFor++;
       } else {
         votesAgainst++;
       }
       parsedVotes.push({
-        svName,
-        svParty: voteData.sv,
-        accept: voteData.accept,
-        reasonUrl: voteData.reason?.url || "",
-        reasonBody: voteData.reason?.body || "",
+        svName: svName || "Unknown",
+        svParty: voteData?.sv || "",
+        accept: voteData?.accept ?? false,
+        reasonUrl: voteData?.reason?.url || "",
+        reasonBody: voteData?.reason?.body || "",
       });
     }
     
     let outcome: ParsedVoteResult["outcome"] = "expired";
-    if (result.outcome.tag === "VRO_Accepted") outcome = "accepted";
-    else if (result.outcome.tag === "VRO_Rejected") outcome = "rejected";
+    const outcomeTag = result?.outcome?.tag || "";
+    if (outcomeTag === "VRO_Accepted") outcome = "accepted";
+    else if (outcomeTag === "VRO_Rejected") outcome = "rejected";
     
     return {
-      id: result.request_tracking_cid.slice(0, 12),
-      trackingCid: result.request_tracking_cid,
-      actionType: action.tag,
-      actionTitle: parseActionTitle(action.tag),
-      actionDetails: action.value,
-      requester: result.request.requester,
-      reasonBody: result.request.reason?.body || "",
-      reasonUrl: result.request.reason?.url || "",
-      voteBefore: result.request.vote_before,
-      completedAt: result.completed_at,
-      expiresAt: result.request.expires_at,
+      id: trackingCid ? trackingCid.slice(0, 12) : "unknown",
+      trackingCid: trackingCid,
+      actionType: action?.tag || "Unknown",
+      actionTitle: parseActionTitle(action?.tag || "Unknown"),
+      actionDetails: action?.value,
+      requester: request?.requester || "",
+      reasonBody: request?.reason?.body || "",
+      reasonUrl: request?.reason?.url || "",
+      voteBefore: request?.vote_before || "",
+      completedAt: result?.completed_at || "",
+      expiresAt: request?.expires_at || "",
       outcome,
       votesFor,
       votesAgainst,
       totalVotes: votesFor + votesAgainst,
       votes: parsedVotes,
-      abstainers: result.abstaining_voters || [],
-      offboarded: result.offboarded_voters || [],
+      abstainers: result?.abstaining_voters || [],
+      offboarded: result?.offboarded_voters || [],
     };
   });
 }
