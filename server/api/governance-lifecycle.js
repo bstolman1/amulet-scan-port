@@ -2122,5 +2122,45 @@ router.get('/overrides/analysis', (req, res) => {
   });
 });
 
+// Debug endpoint: LLM classification status
+router.get('/llm-status', async (req, res) => {
+  const available = isLLMAvailable();
+  const cached = readCache();
+  
+  let llmClassifiedCount = 0;
+  let totalItems = 0;
+  const llmClassifiedSamples = [];
+  
+  if (cached?.lifecycleItems) {
+    totalItems = cached.lifecycleItems.length;
+    for (const item of cached.lifecycleItems) {
+      if (item.llmClassified) {
+        llmClassifiedCount++;
+        if (llmClassifiedSamples.length < 5) {
+          llmClassifiedSamples.push({
+            primaryId: item.primaryId,
+            type: item.type,
+            subject: item.topics?.[0]?.subject?.slice(0, 80),
+          });
+        }
+      }
+    }
+  }
+  
+  res.json({
+    llmAvailable: available,
+    apiKeySet: !!process.env.OPENAI_API_KEY,
+    stats: {
+      totalItems,
+      llmClassifiedCount,
+      llmClassifiedPct: totalItems > 0 ? ((llmClassifiedCount / totalItems) * 100).toFixed(1) + '%' : '0%',
+    },
+    samples: llmClassifiedSamples,
+    hint: available 
+      ? 'LLM classification is active. Refresh lifecycle data to classify new items.'
+      : 'Set OPENAI_API_KEY in server/.env and restart the server to enable LLM classification.',
+  });
+});
+
 export { fetchFreshData, writeCache, readCache };
 export default router;
