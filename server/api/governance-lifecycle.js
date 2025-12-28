@@ -2508,6 +2508,117 @@ router.post('/overrides/move-topic', (req, res) => {
   }
 });
 
+// Also allow GET for convenience (browser-friendly)
+router.get('/audit-log/backfill', (req, res) => {
+  const overrides = readOverrides();
+  const existingAuditLog = readAuditLog();
+  const existingIds = new Set(existingAuditLog.map(e => e.targetId));
+  
+  const backfilledEntries = [];
+  
+  // Process item overrides
+  Object.entries(overrides.itemOverrides || {}).forEach(([key, override]) => {
+    if (existingIds.has(key)) return;
+    const original = findOriginalClassification(key, 'item');
+    backfilledEntries.push({
+      id: `backfill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: override.createdAt || new Date().toISOString(),
+      backfilled: true,
+      actionType: 'reclassify_item',
+      targetId: key,
+      targetLabel: original?.primaryId || key,
+      originalValue: override.originalType || original?.type || 'unknown',
+      newValue: override.type,
+      reason: override.reason || 'Manual correction',
+    });
+  });
+  
+  // Process topic overrides
+  Object.entries(overrides.topicOverrides || {}).forEach(([key, override]) => {
+    if (existingIds.has(key)) return;
+    const original = findOriginalClassification(key, 'topic');
+    backfilledEntries.push({
+      id: `backfill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: override.createdAt || new Date().toISOString(),
+      backfilled: true,
+      actionType: 'reclassify_topic',
+      targetId: key,
+      targetLabel: original?.subject || key,
+      originalValue: override.originalParentType || original?.parentType || 'unknown',
+      originalParentId: override.originalParentId || original?.parentId || null,
+      newValue: override.type,
+      reason: override.reason || 'Manual topic reclassification',
+    });
+  });
+  
+  // Process extract overrides
+  Object.entries(overrides.extractOverrides || {}).forEach(([key, override]) => {
+    if (existingIds.has(key)) return;
+    const original = findOriginalClassification(key, 'topic');
+    backfilledEntries.push({
+      id: `backfill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: override.createdAt || new Date().toISOString(),
+      backfilled: true,
+      actionType: 'extract_topic',
+      targetId: key,
+      targetLabel: original?.subject || key,
+      originalValue: override.originalParentId || original?.parentId || 'unknown',
+      newValue: override.customName || 'new card',
+      reason: override.reason || 'Extracted to own card',
+    });
+  });
+  
+  // Process merge overrides
+  Object.entries(overrides.mergeOverrides || {}).forEach(([key, override]) => {
+    if (existingIds.has(key)) return;
+    const originalItem = findOriginalClassification(key, 'item');
+    const originalTopic = findOriginalClassification(key, 'topic');
+    const original = originalItem || originalTopic;
+    backfilledEntries.push({
+      id: `backfill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: override.createdAt || new Date().toISOString(),
+      backfilled: true,
+      actionType: 'merge',
+      targetId: key,
+      targetLabel: original?.subject || original?.primaryId || key,
+      originalValue: override.originalParentId || original?.parentId || original?.primaryId || 'unknown',
+      newValue: Array.isArray(override.mergeInto) ? override.mergeInto.join(', ') : override.mergeInto,
+      reason: override.reason || 'Manual merge',
+    });
+  });
+  
+  // Process move overrides
+  Object.entries(overrides.moveOverrides || {}).forEach(([key, override]) => {
+    if (existingIds.has(key)) return;
+    const original = findOriginalClassification(key, 'topic');
+    backfilledEntries.push({
+      id: `backfill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: override.createdAt || new Date().toISOString(),
+      backfilled: true,
+      actionType: 'move_topic',
+      targetId: key,
+      targetLabel: original?.subject || key,
+      originalValue: override.originalParentId || original?.parentId || 'unknown',
+      newValue: override.targetCardId,
+      reason: override.reason || 'Manual topic move',
+    });
+  });
+  
+  if (backfilledEntries.length > 0) {
+    const updatedLog = [...backfilledEntries, ...existingAuditLog];
+    updatedLog.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    writeAuditLog(updatedLog);
+    console.log(`📝 Backfilled ${backfilledEntries.length} audit entries`);
+  }
+  
+  res.json({
+    success: true,
+    backfilledCount: backfilledEntries.length,
+    backfilledEntries,
+    totalAuditEntries: existingAuditLog.length + backfilledEntries.length,
+  });
+});
+
 
 // Shows high-confidence disagreements between postedStage and inferredStage
 // This is for observation only - does NOT change any behavior
