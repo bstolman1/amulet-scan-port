@@ -83,29 +83,42 @@ function parseActionTitle(tag: string): string {
     .trim();
 }
 
-// Parse date from various formats (ISO string, object with microsecondsSinceEpoch, etc.)
+// Parse date from various formats (ISO string, DAML objects, protobuf timestamps, etc.)
 function parseDate(value: any): string {
   if (!value) return "";
-  
+
   // Already a string
   if (typeof value === "string") return value;
-  
-  // Object with microsecondsSinceEpoch (DAML format)
-  if (typeof value === "object" && value.microsecondsSinceEpoch) {
-    const ms = Number(value.microsecondsSinceEpoch) / 1000;
-    return new Date(ms).toISOString();
-  }
-  
-  // Object with unixtime
-  if (typeof value === "object" && value.unixtime) {
-    return new Date(Number(value.unixtime) * 1000).toISOString();
-  }
-  
+
   // Number (assume milliseconds)
-  if (typeof value === "number") {
-    return new Date(value).toISOString();
+  if (typeof value === "number") return new Date(value).toISOString();
+
+  if (typeof value === "object") {
+    // DAML style: { microsecondsSinceEpoch: "..." | number }
+    if (value.microsecondsSinceEpoch != null) {
+      const micros = Number(value.microsecondsSinceEpoch);
+      if (!Number.isNaN(micros)) return new Date(micros / 1000).toISOString();
+    }
+
+    // Alternative epoch seconds: { unixtime: "..." | number }
+    if (value.unixtime != null) {
+      const seconds = Number(value.unixtime);
+      if (!Number.isNaN(seconds)) return new Date(seconds * 1000).toISOString();
+    }
+
+    // Protobuf Timestamp: { seconds: "..."|number, nanos?: number }
+    if (value.seconds != null) {
+      const seconds = Number(value.seconds);
+      const nanos = value.nanos != null ? Number(value.nanos) : 0;
+      if (!Number.isNaN(seconds)) return new Date(seconds * 1000 + Math.floor(nanos / 1e6)).toISOString();
+    }
+
+    // Common wrappers: { value: "2025-..." } or { timestamp: "..." }
+    if (typeof value.value === "string") return value.value;
+    if (typeof value.timestamp === "string") return value.timestamp;
+    if (typeof value.iso === "string") return value.iso;
   }
-  
+
   return "";
 }
 
@@ -117,8 +130,14 @@ function parseVoteResults(results: VoteResult[]): ParsedVoteResult[] {
     // Safely access nested properties with type coercion for safety
     const request = (result?.request || {}) as any;
     const action = request?.action || { tag: "Unknown", value: null };
-    const votes = request?.votes || [];
-    const trackingCid = result?.request_tracking_cid || (result as any)?.tracking_cid || "";
+    const votes = request?.votes || request?.Votes || [];
+    const trackingCid =
+      result?.request_tracking_cid ||
+      (result as any)?.requestTrackingCid ||
+      (result as any)?.tracking_cid ||
+      (result as any)?.trackingCid ||
+      request?.trackingCid ||
+      "";
     
     let votesFor = 0;
     let votesAgainst = 0;
@@ -155,9 +174,9 @@ function parseVoteResults(results: VoteResult[]): ParsedVoteResult[] {
       requester: request?.requester || "",
       reasonBody: request?.reason?.body || "",
       reasonUrl: request?.reason?.url || "",
-      voteBefore: parseDate(request?.vote_before),
-      completedAt: parseDate(result?.completed_at),
-      expiresAt: parseDate(request?.expires_at),
+      voteBefore: parseDate(request?.vote_before ?? request?.voteBefore ?? (request?.voteBefore as any)?.value),
+      completedAt: parseDate((result as any)?.completed_at ?? (result as any)?.completedAt),
+      expiresAt: parseDate(request?.expires_at ?? request?.expiresAt),
       outcome,
       votesFor,
       votesAgainst,
