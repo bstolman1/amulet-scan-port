@@ -183,11 +183,7 @@ const Validators = () => {
 
         {/* Overview Cards */}
         <Card className="glass-card p-6">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
-            <div>
-              <p className="text-sm text-muted-foreground">Total SVs</p>
-              <p className="text-xl font-semibold">{totalSVs}</p>
-            </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
             <div>
               <p className="text-sm text-muted-foreground">Live SVs</p>
               <p className="text-xl font-semibold">{liveSVs}</p>
