@@ -2128,11 +2128,16 @@ router.get('/llm-status', async (req, res) => {
   const cached = readCache();
   
   let llmClassifiedCount = 0;
+  let otherTypeCount = 0;
   let totalItems = 0;
+  let totalTopics = 0;
   const llmClassifiedSamples = [];
+  const otherTypeSamples = [];
   
   if (cached?.lifecycleItems) {
     totalItems = cached.lifecycleItems.length;
+    totalTopics = cached.allTopics?.length || 0;
+    
     for (const item of cached.lifecycleItems) {
       if (item.llmClassified) {
         llmClassifiedCount++;
@@ -2144,6 +2149,15 @@ router.get('/llm-status', async (req, res) => {
           });
         }
       }
+      if (item.type === 'other') {
+        otherTypeCount++;
+        if (otherTypeSamples.length < 5) {
+          otherTypeSamples.push({
+            primaryId: item.primaryId,
+            subject: item.topics?.[0]?.subject?.slice(0, 80),
+          });
+        }
+      }
     }
   }
   
@@ -2151,14 +2165,19 @@ router.get('/llm-status', async (req, res) => {
     llmAvailable: available,
     apiKeySet: !!process.env.OPENAI_API_KEY,
     stats: {
+      totalTopics,
       totalItems,
+      otherTypeCount,
       llmClassifiedCount,
       llmClassifiedPct: totalItems > 0 ? ((llmClassifiedCount / totalItems) * 100).toFixed(1) + '%' : '0%',
     },
-    samples: llmClassifiedSamples,
-    hint: available 
-      ? 'LLM classification is active. Refresh lifecycle data to classify new items.'
-      : 'Set OPENAI_API_KEY in server/.env and restart the server to enable LLM classification.',
+    otherTypeSamples,
+    llmClassifiedSamples,
+    hint: otherTypeCount === 0 
+      ? 'No "other" type items found - rule-based classification handled everything. LLM only classifies ambiguous items.'
+      : available 
+        ? `${otherTypeCount} items need LLM classification. POST to /api/governance-lifecycle/refresh to trigger.`
+        : 'Set OPENAI_API_KEY in server/.env and restart the server to enable LLM classification.',
   });
 });
 
