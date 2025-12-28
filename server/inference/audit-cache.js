@@ -30,8 +30,8 @@ const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../dat
 const AUDIT_CACHE_DIR = path.join(BASE_DATA_DIR, 'cache', 'audit');
 const AUDIT_INDEX_FILE = path.join(AUDIT_CACHE_DIR, 'audit-index.json');
 
-// Current audit schema version
-export const AUDIT_VERSION = '1.0.0';
+// Current audit schema version - bump when prompt/logic changes significantly
+export const AUDIT_VERSION = '2.0.0';
 
 // Valid types for classification
 export const VALID_TYPES = ['cip', 'validator', 'featured-app', 'protocol-upgrade', 'outcome', 'governance_discussion', 'meta', 'other'];
@@ -115,6 +115,13 @@ export function needsVerification(itemId, contentHash) {
 
 /**
  * Store an audit result (rule type + LLM verification)
+ * 
+ * Key decision rule for needs_review:
+ * If LLM confidence >= 0.9 AND LLM type != rule type AND LLM explicitly contradicts:
+ *   mark needs_review = true
+ * Else: treat as agreement
+ * 
+ * Not every mismatch is a failure — only high-confidence contradictions matter.
  */
 export function cacheAuditResult({
   itemId,
@@ -126,6 +133,8 @@ export function cacheAuditResult({
   llmModel,
   contentHash,
   tokensUsed = 0,
+  forceNeedsReview = null, // Allow override from hybrid-auditor
+  contradictsRule = false,
 }) {
   ensureCacheDir();
   const index = readAuditIndex();
@@ -133,7 +142,17 @@ export function cacheAuditResult({
   
   // Determine agreement
   const agreement = normalizeType(ruleType) === normalizeType(llmType);
-  const needsReview = !agreement && llmConfidence > 0.7; // High confidence disagreement
+  
+  // Key change: only flag high-confidence contradictions for review
+  // Not every mismatch is a failure — only when LLM is confident AND explicitly contradicts
+  let needsReview;
+  if (forceNeedsReview !== null) {
+    needsReview = forceNeedsReview;
+  } else {
+    // Old logic: !agreement && llmConfidence > 0.7
+    // New logic: Must be high-confidence AND explicit contradiction
+    needsReview = !agreement && contradictsRule && llmConfidence >= 0.9;
+  }
   
   // Update old entry stats
   const oldEntry = index.items[idStr];
@@ -161,6 +180,7 @@ export function cacheAuditResult({
     llm_type: llmType,
     agreement,
     needs_review: needsReview,
+    contradicts_rule: contradictsRule,
     llm_confidence: llmConfidence,
     llm_reasoning: llmReasoning || null,
     llm_model: llmModel || 'gpt-4o-mini',
@@ -195,6 +215,7 @@ export function cacheAuditResult({
 
 /**
  * Bulk cache multiple audit results
+ * Uses same decision rule: only high-confidence contradictions get needs_review=true
  */
 export function cacheAuditResultsBulk(results) {
   ensureCacheDir();
@@ -204,7 +225,15 @@ export function cacheAuditResultsBulk(results) {
   for (const result of results) {
     const idStr = String(result.itemId);
     const agreement = normalizeType(result.ruleType) === normalizeType(result.llmType);
-    const needsReview = !agreement && result.llmConfidence > 0.7;
+    
+    // Key change: only flag high-confidence contradictions
+    const contradictsRule = result.contradictsRule === true;
+    let needsReview;
+    if (result.forceNeedsReview !== undefined) {
+      needsReview = result.forceNeedsReview;
+    } else {
+      needsReview = !agreement && contradictsRule && result.llmConfidence >= 0.9;
+    }
     
     // Update old entry stats
     const oldEntry = index.items[idStr];
@@ -232,6 +261,7 @@ export function cacheAuditResultsBulk(results) {
       llm_type: result.llmType,
       agreement,
       needs_review: needsReview,
+      contradicts_rule: contradictsRule,
       llm_confidence: result.llmConfidence,
       llm_reasoning: result.llmReasoning || null,
       llm_model: result.llmModel || 'gpt-4o-mini',

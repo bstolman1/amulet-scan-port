@@ -39,30 +39,65 @@ import { generateContentHash } from './post-content-cache.js';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = 'gpt-4o-mini';
 
-// Verification prompt - simpler than classification, just verify the rule's output
-const VERIFICATION_PROMPT = `You are auditing governance topic classifications for the Canton Network / Splice ecosystem. Your job is to read the full forum post and verify if the rule-based classification is correct.
+// Canton Governance Interpreter Prompt
+// Key insight: We are not asking the LLM to rediscover Canton governance from text alone;
+// we are asking it to interpret text within an existing governance framework.
+const VERIFICATION_PROMPT = `You are a Canton Network governance interpreter operating within an existing governance ontology.
 
-## Classification Types:
-- **cip**: Canton Improvement Proposals (protocol changes, CIP-XXXX numbers)
-- **validator**: Validator/Super-Validator applications and operations
-- **featured-app**: Featured applications on the network
-- **protocol-upgrade**: Network upgrades and migrations (Splice versions, etc.)
-- **outcome**: Tokenomics outcome reports
-- **governance_discussion**: General governance discussions
-- **meta**: Informational/administrative content
-- **other**: Doesn't fit any category
+Your role is NOT to be a generic text classifier. You are interpreting governance artifacts according to Canton Network institutional norms.
 
-## Your Task:
-1. Read the post content carefully
-2. Determine what type this content actually is
-3. Compare with the rule-based classification
-4. If they match, confirm. If not, provide the correct type.
+## Critical Framework:
+- You must interpret text WITHIN the existing Canton governance framework
+- A lack of explicit approval language does NOT imply lack of governance effect
+- Consider posting context (mailing list, channel, author role, timing) as governance signal
+- The rule-based system already encodes Canton governance practice; you are verifying semantic alignment
+
+## Canton Governance Ontology (Authoritative Definitions):
+
+- **cip**:
+  A Canton Improvement Proposal or discussion thereof. This includes formal proposals,
+  proposal discussions, voting announcements, or results, even if framed as announcements.
+
+- **featured-app**:
+  An application that has been approved, announced, or discussed in the context of
+  being a Featured Application. Posts in tokenomics or tokenomics-announce frequently
+  represent featured-app governance outcomes even when approval language is implicit.
+
+- **validator**:
+  An entity approved or discussed in the context of validator or super-validator status,
+  weights, onboarding, or governance.
+
+- **protocol-upgrade**:
+  A network-level protocol or synchronizer upgrade that affects Canton consensus,
+  not merely a client release or maintenance notice.
+
+- **outcome**:
+  A post summarizing governance or tokenomics outcomes, metrics, or finalized decisions.
+
+- **governance_discussion**:
+  Discussion of governance process or policy without proposing or approving a specific artifact.
+
+- **meta**:
+  Informational or administrative communication without governance effect.
+
+- **other**:
+  Use ONLY if you are confident the content has NO governance relevance.
+  Not merely because approval language is implicit. If in doubt, prefer the rule-based type.
+
+## Critical Question (This is what you're answering):
+"Does the text CONTRADICT the rule-based governance interpretation?"
+NOT: "Does the text prove the rule-based classification?"
+
+The rule-based system operates on institutional assumptions. You should only disagree when:
+1. The content clearly belongs to a DIFFERENT governance category, OR
+2. The content demonstrably has NO governance relevance (for "other")
 
 ## Response Format (JSON):
 {
-  "llm_type": "the correct type based on content",
+  "llm_type": "the type based on governance interpretation",
   "confidence": 0.0 to 1.0,
-  "reasoning": "brief explanation (1-2 sentences)"
+  "reasoning": "brief explanation (1-2 sentences)",
+  "contradicts_rule": true/false
 }`;
 
 /**
@@ -113,7 +148,7 @@ export async function verifyItem(item, options = {}) {
   }
   
   try {
-    const userPrompt = buildVerificationPrompt(subject, body, ruleType);
+    const userPrompt = buildVerificationPrompt(subject, body, ruleType, item);
     
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -161,6 +196,14 @@ export async function verifyItem(item, options = {}) {
       ? Math.max(0, Math.min(1, result.confidence)) 
       : 0.8;
     const reasoning = result.reasoning || null;
+    const contradictsRule = result.contradicts_rule === true;
+    
+    // Key decision rule:
+    // If LLM confidence >= 0.9 AND LLM type != rule type AND LLM explicitly contradicts:
+    //   mark needs_review = true
+    // Else: treat as agreement
+    // Not every mismatch is a failure — only high-confidence contradictions matter.
+    const isHighConfidenceContradiction = contradictsRule && confidence >= 0.9 && llmType !== ruleType;
     
     // Cache the result
     const auditEntry = cacheAuditResult({
@@ -173,6 +216,9 @@ export async function verifyItem(item, options = {}) {
       llmModel: MODEL,
       contentHash,
       tokensUsed,
+      // Override needs_review: only flag high-confidence contradictions
+      forceNeedsReview: isHighConfidenceContradiction,
+      contradictsRule,
     });
     
     const symbol = auditEntry.agreement ? '✓' : '⚠️';
@@ -194,14 +240,29 @@ export async function verifyItem(item, options = {}) {
 }
 
 /**
- * Build verification prompt with content
+ * Build verification prompt with content and institutional context
  */
-function buildVerificationPrompt(subject, body, ruleType) {
+function buildVerificationPrompt(subject, body, ruleType, item = {}) {
   const bodyTruncated = body?.length > 4000 ? body.substring(0, 4000) + '\n[truncated]' : body;
   
-  return `## Rule-based classification: "${ruleType}"
+  // Extract institutional context signals
+  const contextParts = [];
+  if (item.topics?.[0]?.list) {
+    contextParts.push(`Mailing list: ${item.topics[0].list}`);
+  }
+  if (item.topics?.[0]?.author) {
+    contextParts.push(`Author: ${item.topics[0].author}`);
+  }
+  if (item.primaryId) {
+    contextParts.push(`Primary ID: ${item.primaryId}`);
+  }
+  const contextStr = contextParts.length > 0 
+    ? `## Institutional Context:\n${contextParts.join('\n')}\n\n` 
+    : '';
+  
+  return `## Rule-based governance interpretation: "${ruleType}"
 
-## Title:
+${contextStr}## Title:
 ${subject || 'No subject'}
 
 ## Forum post content:
@@ -209,7 +270,14 @@ ${subject || 'No subject'}
 ${bodyTruncated || 'No content available'}
 """
 
-Verify if the rule-based classification "${ruleType}" is correct. If incorrect, provide the correct type.`;
+## Your Task:
+The rule engine classified this as "${ruleType}" based on Canton governance norms.
+Does the content CONTRADICT this interpretation?
+
+Remember:
+- Implicit governance effect is still governance effect
+- Posts about apps in tokenomics lists often ARE featured-app governance
+- Only return "other" if confident this has NO governance relevance`;
 }
 
 /**
