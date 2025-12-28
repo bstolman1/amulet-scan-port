@@ -1395,6 +1395,92 @@ function applyOverrides(data) {
     }
   }
   
+  // Apply move overrides: move a topic from one card to a specific target card by ID
+  const hasMoveOverrides = overrides.moveOverrides && Object.keys(overrides.moveOverrides).length > 0;
+  if (hasMoveOverrides) {
+    // Build a map from card id/primaryId to item
+    const cardMap = new Map();
+    data.lifecycleItems.forEach(item => {
+      cardMap.set(String(item.id), item);
+      cardMap.set(String(item.primaryId), item);
+    });
+    
+    const movedTopicIds = new Set();
+    
+    data.lifecycleItems.forEach(item => {
+      if (!item.topics) return;
+      
+      const topicsToMove = [];
+      const remainingTopics = [];
+      
+      item.topics.forEach(topic => {
+        const topicIdStr = String(topic.id);
+        const moveOverride = overrides.moveOverrides[topicIdStr];
+        
+        if (moveOverride && moveOverride.targetCardId) {
+          const targetCard = cardMap.get(moveOverride.targetCardId);
+          if (targetCard && targetCard.id !== item.id) {
+            topicsToMove.push({ topic, targetCard });
+            movedTopicIds.add(topicIdStr);
+          } else {
+            // Target not found or same card, keep in place
+            remainingTopics.push(topic);
+          }
+        } else {
+          remainingTopics.push(topic);
+        }
+      });
+      
+      // Move topics to target cards
+      topicsToMove.forEach(({ topic, targetCard }) => {
+        console.log(`Moving topic "${topic.subject?.slice(0, 50)}" from "${item.primaryId}" to "${targetCard.primaryId}"`);
+        
+        // Add to target card
+        targetCard.topics = targetCard.topics || [];
+        targetCard.topics.push(topic);
+        
+        // Add to target's stages
+        const stage = topic.effectiveStage || topic.stage;
+        if (stage) {
+          targetCard.stages = targetCard.stages || {};
+          targetCard.stages[stage] = targetCard.stages[stage] || [];
+          targetCard.stages[stage].push(topic);
+        }
+        
+        // Update target date range
+        if (topic.date) {
+          const topicDate = new Date(topic.date);
+          if (!isNaN(topicDate.getTime())) {
+            if (!targetCard.firstDate || topicDate < new Date(targetCard.firstDate)) {
+              targetCard.firstDate = topicDate.toISOString();
+            }
+            if (!targetCard.lastDate || topicDate > new Date(targetCard.lastDate)) {
+              targetCard.lastDate = topicDate.toISOString();
+            }
+          }
+        }
+      });
+      
+      // Update source item
+      item.topics = remainingTopics;
+      
+      // Remove from source stages
+      if (item.stages && movedTopicIds.size > 0) {
+        Object.keys(item.stages).forEach(stageKey => {
+          item.stages[stageKey] = (item.stages[stageKey] || []).filter(t => !movedTopicIds.has(String(t.id)));
+          if (item.stages[stageKey].length === 0) {
+            delete item.stages[stageKey];
+          }
+        });
+      }
+    });
+    
+    // Remove empty items
+    data.lifecycleItems = data.lifecycleItems.filter(item => item.topics && item.topics.length > 0);
+    
+    console.log(`Applied ${movedTopicIds.size} move overrides`);
+  }
+  
   // Third pass: Apply topic-level type overrides (move individual topics to different categories)
   if (hasTopicOverrides) {
     const topicsToMove = []; // { topic, sourceItem, newType }
@@ -2009,6 +2095,63 @@ router.get('/cip-list', (req, res) => {
     });
   
   res.json({ cips });
+});
+
+// Get all lifecycle cards for the "Move to card" dropdown
+router.get('/card-list', (req, res) => {
+  const cached = readCache();
+  if (!cached || !cached.lifecycleItems) {
+    return res.json({ cards: [] });
+  }
+  
+  const cards = cached.lifecycleItems
+    .map(item => ({
+      id: item.id,
+      primaryId: item.primaryId,
+      type: item.type,
+      firstDate: item.firstDate,
+      lastDate: item.lastDate,
+      topicCount: item.topics.length,
+      // Include first topic subject as preview
+      preview: item.topics[0]?.subject?.slice(0, 60) || '',
+    }))
+    .sort((a, b) => {
+      // Sort by type first, then by date
+      if (a.type !== b.type) return a.type.localeCompare(b.type);
+      return new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime();
+    });
+  
+  res.json({ cards });
+});
+
+// Move a topic from one card to another
+router.post('/overrides/move-topic', (req, res) => {
+  const { topicId, targetCardId, reason } = req.body;
+  
+  if (!topicId || !targetCardId) {
+    return res.status(400).json({ error: 'Missing required fields: topicId and targetCardId' });
+  }
+  
+  const overrides = readOverrides();
+  if (!overrides.moveOverrides) {
+    overrides.moveOverrides = {};
+  }
+  
+  const key = String(topicId);
+  overrides.moveOverrides[key] = {
+    targetCardId: String(targetCardId),
+    reason: reason || 'Manual topic move',
+    createdAt: new Date().toISOString(),
+  };
+  
+  console.log(`Saving move override: topic "${key}" -> card "${targetCardId}"`);
+  
+  if (writeOverrides(overrides)) {
+    console.log(`✅ Move override set: topic "${key}" -> card "${targetCardId}"`);
+    res.json({ success: true, override: overrides.moveOverrides[key] });
+  } else {
+    res.status(500).json({ error: 'Failed to save move override' });
+  }
 });
 
 

@@ -36,6 +36,7 @@ import {
   Square,
   Merge,
   SplitSquareVertical,
+  MoveRight,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -473,6 +474,108 @@ const GovernanceFlow = () => {
     const q = mergeSearchQuery.toLowerCase();
     return cipList.filter(cip => cip.primaryId.toLowerCase().includes(q));
   }, [cipList, mergeSearchQuery]);
+
+  // State for card list (for "Move to card" dropdown)
+  interface CardItem {
+    id: string;
+    primaryId: string;
+    type: string;
+    topicCount: number;
+    preview: string;
+  }
+  const [cardList, setCardList] = useState<CardItem[]>([]);
+  
+  // State for move to card dialog
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+  const [moveSourceId, setMoveSourceId] = useState<string | null>(null);
+  const [moveSourceLabel, setMoveSourceLabel] = useState<string | null>(null);
+  const [selectedTargetCard, setSelectedTargetCard] = useState<string | null>(null);
+  const [moveSearchQuery, setMoveSearchQuery] = useState('');
+  const [isMoving, setIsMoving] = useState(false);
+  
+  // Fetch card list for "Move to card" dropdown
+  const fetchCardList = async () => {
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/card-list`);
+      if (response.ok) {
+        const { cards } = await response.json();
+        setCardList(cards || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch card list:', err);
+    }
+  };
+  
+  // Open the move dialog for a specific topic
+  const openMoveDialog = (topicId: string, topicLabel?: string) => {
+    setMoveSourceId(topicId);
+    setMoveSourceLabel(topicLabel || topicId);
+    setSelectedTargetCard(null);
+    setMoveSearchQuery('');
+    setMoveDialogOpen(true);
+    fetchCardList(); // Refresh card list when opening
+  };
+  
+  // Handler to move a topic to a different card
+  const handleMoveToCard = async () => {
+    if (!moveSourceId || !selectedTargetCard) return;
+    
+    setIsMoving(true);
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/overrides/move-topic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topicId: moveSourceId,
+          targetCardId: selectedTargetCard,
+          reason: `Manual move via UI: ${moveSourceLabel}`,
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+      }
+      
+      const targetCard = cardList.find(c => c.id === selectedTargetCard || c.primaryId === selectedTargetCard);
+      const targetName = targetCard?.primaryId || selectedTargetCard;
+      
+      toast({
+        title: "Topic moved",
+        description: `Will be moved to "${targetName}"`,
+      });
+      
+      setMoveDialogOpen(false);
+      setMoveSourceId(null);
+      setMoveSourceLabel(null);
+      setSelectedTargetCard(null);
+      
+      // Refresh data to show the change
+      fetchData(false);
+    } catch (err) {
+      console.error('Failed to move topic:', err);
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : "Failed to move topic",
+        variant: "destructive",
+      });
+    } finally {
+      setIsMoving(false);
+    }
+  };
+  
+  // Filter card list for move dialog
+  const filteredCards = useMemo(() => {
+    if (!moveSearchQuery.trim()) return cardList;
+    const q = moveSearchQuery.toLowerCase();
+    return cardList.filter(card => 
+      card.primaryId.toLowerCase().includes(q) || 
+      card.preview.toLowerCase().includes(q) ||
+      card.type.toLowerCase().includes(q)
+    );
+  }, [cardList, moveSearchQuery]);
 
   // Bulk selection handlers
   const toggleItemSelection = (primaryId: string) => {
@@ -1112,6 +1215,19 @@ const GovernanceFlow = () => {
                     Merge into CIP(s)...
                   </DropdownMenuItem>
                 )}
+                
+                {/* Move to card option */}
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    openMoveDialog(topic.id, topic.subject);
+                  }}
+                  className="text-xs"
+                >
+                  <MoveRight className="mr-2 h-3 w-3" />
+                  Move to card...
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             
@@ -2082,6 +2198,101 @@ const GovernanceFlow = () => {
                 </>
               ) : (
                 `Merge into ${selectedMergeCips.size > 0 ? selectedMergeCips.size : ''} CIP${selectedMergeCips.size !== 1 ? 's' : ''}`
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Move to Card Dialog */}
+      <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Move to Card</DialogTitle>
+            <DialogDescription className="break-words">
+              Select a card to move "{moveSourceLabel?.slice(0, 80)}{(moveSourceLabel?.length || 0) > 80 ? '...' : ''}" to.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search cards..."
+                value={moveSearchQuery}
+                onChange={(e) => setMoveSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            
+            {/* Card List with radio selection */}
+            <ScrollArea className="h-64 border rounded-md">
+              <div className="p-2 space-y-1">
+                {filteredCards.map((card) => (
+                  <div
+                    key={card.id}
+                    onClick={() => setSelectedTargetCard(card.id)}
+                    className={cn(
+                      "flex items-start gap-3 p-2 rounded-md cursor-pointer transition-colors",
+                      selectedTargetCard === card.id 
+                        ? "bg-primary/20 border border-primary/40" 
+                        : "hover:bg-muted/50"
+                    )}
+                  >
+                    <div className={cn(
+                      "h-4 w-4 mt-0.5 rounded-full border-2 flex items-center justify-center",
+                      selectedTargetCard === card.id ? "border-primary" : "border-muted-foreground"
+                    )}>
+                      {selectedTargetCard === card.id && (
+                        <div className="h-2 w-2 rounded-full bg-primary" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm">{card.primaryId}</span>
+                        <Badge className={cn("text-[10px]", TYPE_CONFIG[card.type as keyof typeof TYPE_CONFIG]?.color || 'bg-muted')}>
+                          {TYPE_CONFIG[card.type as keyof typeof TYPE_CONFIG]?.label || card.type}
+                        </Badge>
+                      </div>
+                      {card.preview && (
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">
+                          {card.preview}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {card.topicCount} topics
+                    </span>
+                  </div>
+                ))}
+                {filteredCards.length === 0 && (
+                  <div className="text-center text-sm text-muted-foreground py-4">
+                    {cardList.length === 0 ? 'Loading cards...' : 'No cards found'}
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveDialogOpen(false)} disabled={isMoving}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleMoveToCard}
+              disabled={!selectedTargetCard || isMoving}
+            >
+              {isMoving ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Moving...
+                </>
+              ) : (
+                <>
+                  <MoveRight className="mr-2 h-4 w-4" />
+                  Move to Card
+                </>
               )}
             </Button>
           </DialogFooter>
