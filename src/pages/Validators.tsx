@@ -5,7 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, FileDown, RefreshCw, Trophy, Zap, Award, Download, TrendingUp } from "lucide-react";
+import { ChevronDown, ChevronUp, FileDown, RefreshCw, Trophy, Zap, Award, Download, TrendingUp, Users } from "lucide-react";
+import { SVWeightHistoryChart } from "@/components/SVWeightHistoryChart";
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -204,6 +205,9 @@ const Validators = () => {
             </div>
           </div>
         </Card>
+
+        {/* SV Weight History Chart */}
+        <SVWeightHistoryChart />
 
         {/* Operators List */}
         <Card className="glass-card p-6">
