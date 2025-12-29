@@ -206,7 +206,13 @@ export function useScanVoteResults(request: VoteResultRequest = {}) {
       }
       
       const data: VoteResultsResponse = await res.json();
-      return parseVoteResults(data.dso_rules_vote_results || []);
+      const parsed = parseVoteResults(data.dso_rules_vote_results || []);
+      // Sort by completedAt DESC (most recent first)
+      return parsed.sort((a, b) => {
+        const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+        const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+        return dateB - dateA;
+      });
     },
     staleTime: 60_000, // 1 minute
     retry: 2,
