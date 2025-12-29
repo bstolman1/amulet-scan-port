@@ -144,7 +144,7 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                     <p className="font-mono text-xs">{result.actionType}</p>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     <div>
                       <p className="text-xs text-muted-foreground">Completed At</p>
                       <p className="text-sm">{safeFormatDate(result.completedAt)}</p>
@@ -154,10 +154,6 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                       <p className="text-sm">{safeFormatDate(result.voteBefore)}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-muted-foreground">Expires At</p>
-                      <p className="text-sm">{safeFormatDate(result.expiresAt)}</p>
-                    </div>
-                    <div>
                       <p className="text-xs text-muted-foreground">Votes</p>
                       <p className="text-sm">
                         <span className="text-green-500">{result.votesFor} for</span>
@@ -165,6 +161,27 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                         <span className="text-red-500">{result.votesAgainst} against</span>
                       </p>
                     </div>
+                  </div>
+
+                  {/* Reason Section */}
+                  <div className="mt-3 p-3 rounded-lg bg-background/30 border border-border/30">
+                    <p className="text-xs text-muted-foreground mb-1 font-semibold">Reason:</p>
+                    {result.reasonBody && (
+                      <p className="text-sm mb-2">{result.reasonBody}</p>
+                    )}
+                    {result.reasonUrl && (
+                      <a 
+                        href={result.reasonUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-sm text-primary hover:underline break-all"
+                      >
+                        {result.reasonUrl}
+                      </a>
+                    )}
+                    {!result.reasonBody && !result.reasonUrl && (
+                      <p className="text-sm text-muted-foreground italic">No reason provided</p>
+                    )}
                   </div>
 
                   <div>
