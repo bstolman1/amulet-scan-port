@@ -116,11 +116,11 @@ interface GovernanceData {
 // Type-specific workflow stages
 const WORKFLOW_STAGES = {
   cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce', 'sv-onchain-vote'],
-  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce'],
-  validator: ['tokenomics', 'sv-announce'],
-  'protocol-upgrade': ['tokenomics', 'sv-announce'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce', 'sv-onchain-vote'],
+  validator: ['tokenomics', 'sv-announce', 'sv-onchain-vote'],
+  'protocol-upgrade': ['tokenomics', 'sv-announce', 'sv-onchain-vote'],
   outcome: ['sv-announce'],
-  other: ['tokenomics', 'sv-announce'],
+  other: ['tokenomics', 'sv-announce', 'sv-onchain-vote'],
 };
 
 // All possible stages with their display config
@@ -170,17 +170,66 @@ interface VoteRequest {
   record_time: string;
 }
 
-// Helper to extract CIP number from VoteRequest reason
-const extractCipReference = (voteRequest: VoteRequest): string | null => {
+// Helper to extract reference key from VoteRequest for mapping
+interface VoteRequestMapping {
+  type: 'cip' | 'featured-app' | 'validator' | 'protocol-upgrade' | 'other';
+  key: string;
+}
+
+const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping | null => {
   const reason = voteRequest.payload?.reason;
-  if (!reason) return null;
+  const actionTag = voteRequest.payload?.action?.tag || '';
+  const actionValue = voteRequest.payload?.action?.value || {};
+  const text = `${reason?.body || ''} ${reason?.url || ''}`;
   
-  // Check both body and url for CIP references
-  const text = `${reason.body || ''} ${reason.url || ''}`;
-  const match = text.match(/CIP[#\-\s]?0*(\d+)/i);
-  if (match) {
-    // Normalize to 4-digit format (e.g., "83" -> "0083")
-    return match[1].padStart(4, '0');
+  // Check for CIP references
+  const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
+  if (cipMatch) {
+    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}` };
+  }
+  
+  // Check for Featured App actions
+  if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
+      actionTag.includes('SetFeaturedAppRight') || text.toLowerCase().includes('featured app')) {
+    // Extract app name from action value or reason
+    const appName = (actionValue as any)?.provider || (actionValue as any)?.name || 
+                   text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
+                   text.match(/app[:\s]+([^\s,]+)/i)?.[1];
+    if (appName) {
+      const normalized = appName.replace(/::/g, '::').toLowerCase();
+      return { type: 'featured-app', key: normalized };
+    }
+  }
+  
+  // Check for Validator actions
+  if (actionTag.includes('OnboardValidator') || actionTag.includes('OffboardValidator') ||
+      actionTag.includes('ValidatorOnboarding') || text.toLowerCase().includes('validator')) {
+    const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
+                         text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
+    if (validatorName) {
+      return { type: 'validator', key: validatorName.toLowerCase() };
+    }
+  }
+  
+  // Check for Protocol Upgrade actions
+  if (actionTag.includes('ScheduleDomainMigration') || actionTag.includes('ProtocolUpgrade') ||
+      actionTag.includes('Synchronizer') || text.toLowerCase().includes('migration') ||
+      text.toLowerCase().includes('splice')) {
+    const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
+                   text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
+    return { type: 'protocol-upgrade', key: version || 'upgrade' };
+  }
+  
+  return null;
+};
+
+// Legacy helper for backwards compatibility
+const extractCipReference = (voteRequest: VoteRequest): string | null => {
+  const mapping = extractVoteRequestMapping(voteRequest);
+  if (mapping?.type === 'cip') {
+    // Return just the number part for legacy CIP mapping
+    const match = mapping.key.match(/CIP-(\d+)/i);
+    return match ? match[1] : null;
   }
   return null;
 };
@@ -206,7 +255,23 @@ const GovernanceFlow = () => {
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   
-  // Map CIP numbers to their active VoteRequests
+  // Map lifecycle item keys to their active VoteRequests (supports CIPs, Featured Apps, Validators, Protocol Upgrades)
+  const voteRequestMap = useMemo(() => {
+    const map = new Map<string, VoteRequest[]>();
+    voteRequests.forEach(vr => {
+      const mapping = extractVoteRequestMapping(vr);
+      if (mapping) {
+        const key = mapping.key.toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, []);
+        }
+        map.get(key)!.push(vr);
+      }
+    });
+    return map;
+  }, [voteRequests]);
+  
+  // Legacy CIP-only map for backwards compatibility
   const cipVoteRequestMap = useMemo(() => {
     const map = new Map<string, VoteRequest[]>();
     voteRequests.forEach(vr => {
@@ -791,15 +856,8 @@ const GovernanceFlow = () => {
       });
     });
 
-    // Sort: CIPs by CIP number descending, others by lastDate descending
+    // Sort all items by lastDate descending (most recent first)
     return result.sort((a, b) => {
-      // CIPs sorted by CIP number (descending)
-      if (a.type === 'cip' && b.type === 'cip') {
-        const aNum = parseInt(a.primaryId.match(/CIP-?(\d+)/i)?.[1] || '0', 10);
-        const bNum = parseInt(b.primaryId.match(/CIP-?(\d+)/i)?.[1] || '0', 10);
-        return bNum - aNum;
-      }
-      // Everything else by lastDate descending
       return new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime();
     });
   }, [regularItems]);
@@ -986,7 +1044,7 @@ const GovernanceFlow = () => {
       });
   }, [filteredTopics, voteRequests]);
 
-  // Helper to render VoteRequest card
+  // Helper to render VoteRequest card with links to Governance page
   const renderVoteRequestCard = (vr: VoteRequest) => {
     const payload = vr.payload;
     const actionTag = payload?.action?.tag || 'Unknown Action';
@@ -1011,16 +1069,21 @@ const GovernanceFlow = () => {
     const proposalId = payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown';
     
     // Determine status
-    let status: 'pending' | 'approved' | 'rejected' = 'pending';
-    // Assuming threshold of 10 for now (actual threshold would need to come from DSO rules)
     const threshold = 10;
+    let status: 'pending' | 'approved' | 'rejected' = 'pending';
     if (votesFor >= threshold) status = 'approved';
     else if (isExpired && votesFor < threshold) status = 'rejected';
+    
+    // Link to ACS tab for in-progress votes, Scan API History tab for completed votes
+    const isInProgress = status === 'pending' && !isExpired;
+    const linkUrl = isInProgress 
+      ? `/governance?proposal=${proposalId}` 
+      : `/governance?tab=scan-history&proposal=${proposalId}`;
     
     return (
       <a
         key={vr.contract_id}
-        href={`/governance?proposal=${proposalId}`}
+        href={linkUrl}
         className="block p-3 rounded-lg bg-pink-500/10 border border-pink-500/30 hover:border-pink-500/50 transition-colors"
       >
         <div className="flex items-start justify-between gap-3">
@@ -1035,7 +1098,10 @@ const GovernanceFlow = () => {
                   'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
                 )}
               >
-                {status === 'approved' ? '✓ Approved' : status === 'rejected' ? '✗ Rejected' : '⏳ Pending'}
+                {status === 'approved' ? '✓ Approved' : status === 'rejected' ? '✗ Rejected' : '⏳ In Progress'}
+              </Badge>
+              <Badge variant="outline" className="text-[10px] h-5 border-pink-500/50 text-pink-400 bg-pink-500/10">
+                {isInProgress ? 'View in ACS' : 'View History'}
               </Badge>
             </div>
             <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
@@ -1050,10 +1116,26 @@ const GovernanceFlow = () => {
                 </span>
               )}
             </div>
-            {reason?.body && (
-              <p className="text-xs text-muted-foreground mt-2 break-words whitespace-pre-wrap">
-                {reason.body}
-              </p>
+            {/* Reason section */}
+            {(reason?.body || reason?.url) && (
+              <div className="mt-2 p-2 rounded bg-background/30 border border-border/30">
+                {reason?.body && (
+                  <p className="text-xs text-muted-foreground break-words whitespace-pre-wrap mb-1">
+                    {reason.body}
+                  </p>
+                )}
+                {reason?.url && (
+                  <a 
+                    href={reason.url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-xs text-primary hover:underline break-all"
+                  >
+                    {reason.url}
+                  </a>
+                )}
+              </div>
             )}
           </div>
           <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
@@ -1064,13 +1146,13 @@ const GovernanceFlow = () => {
     );
   };
 
-  const renderLifecycleProgress = (item: LifecycleItem, cipNumber?: string) => {
+  const renderLifecycleProgress = (item: LifecycleItem, lifecycleKey?: string) => {
     // Get the stages specific to this item's type
     const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
     const currentIdx = stages.indexOf(item.currentStage);
     
-    // Check if there are VoteRequests for this CIP
-    const matchingVoteRequests = cipNumber ? cipVoteRequestMap.get(cipNumber) || [] : [];
+    // Check if there are VoteRequests for this lifecycle item using the new unified map
+    const matchingVoteRequests = lifecycleKey ? voteRequestMap.get(lifecycleKey.toLowerCase()) || [] : [];
     
     return (
       <div className="flex items-center gap-1 flex-wrap">
@@ -1694,22 +1776,57 @@ const GovernanceFlow = () => {
                               {/* Lifecycle Progress */}
                               <div className="pt-1">
                                 {(() => {
-                                  // Extract CIP number for VoteRequest lookup
-                                  const cipMatch = group.primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
-                                  const cipNum = cipMatch ? cipMatch[1].padStart(4, '0') : undefined;
-                                  return renderLifecycleProgress(group.items[0], cipNum);
+                                  // Extract lifecycle key for VoteRequest lookup based on type
+                                  const getLifecycleKey = (type: string, primaryId: string, item: LifecycleItem): string | undefined => {
+                                    if (type === 'cip') {
+                                      const cipMatch = primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+                                      return cipMatch ? `CIP-${cipMatch[1].padStart(4, '0')}` : undefined;
+                                    }
+                                    if (type === 'featured-app') {
+                                      // Use app name from identifiers or primaryId
+                                      const appName = item.topics[0]?.identifiers?.appName;
+                                      return appName?.toLowerCase() || primaryId.toLowerCase();
+                                    }
+                                    if (type === 'validator') {
+                                      const validatorName = item.topics[0]?.identifiers?.validatorName;
+                                      return validatorName?.toLowerCase() || primaryId.toLowerCase();
+                                    }
+                                    if (type === 'protocol-upgrade') {
+                                      return primaryId.toLowerCase();
+                                    }
+                                    return primaryId.toLowerCase();
+                                  };
+                                  const lifecycleKey = getLifecycleKey(group.type, group.primaryId, group.items[0]);
+                                  return renderLifecycleProgress(group.items[0], lifecycleKey);
                                 })()}
                               </div>
                               
                               {/* Active Vote Badge */}
                               {(() => {
-                                const cipMatch = group.primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
-                                const cipNum = cipMatch ? cipMatch[1].padStart(4, '0') : null;
-                                const hasActiveVote = cipNum && cipVoteRequestMap.has(cipNum) && 
-                                  cipVoteRequestMap.get(cipNum)!.some(vr => {
-                                    const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
-                                    return !voteBefore || voteBefore > new Date();
-                                  });
+                                const getLifecycleKey = (type: string, primaryId: string, item: LifecycleItem): string | undefined => {
+                                  if (type === 'cip') {
+                                    const cipMatch = primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+                                    return cipMatch ? `CIP-${cipMatch[1].padStart(4, '0')}` : undefined;
+                                  }
+                                  if (type === 'featured-app') {
+                                    const appName = item.topics[0]?.identifiers?.appName;
+                                    return appName?.toLowerCase() || primaryId.toLowerCase();
+                                  }
+                                  if (type === 'validator') {
+                                    const validatorName = item.topics[0]?.identifiers?.validatorName;
+                                    return validatorName?.toLowerCase() || primaryId.toLowerCase();
+                                  }
+                                  if (type === 'protocol-upgrade') {
+                                    return primaryId.toLowerCase();
+                                  }
+                                  return primaryId.toLowerCase();
+                                };
+                                const lifecycleKey = getLifecycleKey(group.type, group.primaryId, group.items[0]);
+                                const matchingVotes = lifecycleKey ? voteRequestMap.get(lifecycleKey.toLowerCase()) : undefined;
+                                const hasActiveVote = matchingVotes?.some(vr => {
+                                  const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
+                                  return !voteBefore || voteBefore > new Date();
+                                });
                                 return hasActiveVote ? (
                                   <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30 animate-pulse">
                                     🗳️ Active Vote
@@ -1795,10 +1912,27 @@ const GovernanceFlow = () => {
                           <CardContent className="pt-0 space-y-3 border-t">
                             {group.items.map((item) => {
                               const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
-                              // Extract CIP number for this item
-                              const cipMatch = group.primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
-                              const cipNum = cipMatch ? cipMatch[1].padStart(4, '0') : null;
-                              const matchingVoteReqs = cipNum ? cipVoteRequestMap.get(cipNum) || [] : [];
+                              // Extract lifecycle key for this item based on type
+                              const getLifecycleKey = (type: string, primaryId: string, lifecycleItem: LifecycleItem): string | undefined => {
+                                if (type === 'cip') {
+                                  const cipMatch = primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+                                  return cipMatch ? `CIP-${cipMatch[1].padStart(4, '0')}` : undefined;
+                                }
+                                if (type === 'featured-app') {
+                                  const appName = lifecycleItem.topics[0]?.identifiers?.appName;
+                                  return appName?.toLowerCase() || primaryId.toLowerCase();
+                                }
+                                if (type === 'validator') {
+                                  const validatorName = lifecycleItem.topics[0]?.identifiers?.validatorName;
+                                  return validatorName?.toLowerCase() || primaryId.toLowerCase();
+                                }
+                                if (type === 'protocol-upgrade') {
+                                  return primaryId.toLowerCase();
+                                }
+                                return primaryId.toLowerCase();
+                              };
+                              const lifecycleKey = getLifecycleKey(item.type, group.primaryId, item);
+                              const matchingVoteReqs = lifecycleKey ? voteRequestMap.get(lifecycleKey.toLowerCase()) || [] : [];
                               
                               return (
                                 <div key={item.id} className="space-y-2 pt-3">
