@@ -434,7 +434,7 @@ async function detectMigrations() {
   console.log("🔎 Detecting available migrations via /v0/backfilling/migration-info");
 
   const migrations = [];
-  let id = 1;
+  let id = 0;
 
   while (true) {
     try {
