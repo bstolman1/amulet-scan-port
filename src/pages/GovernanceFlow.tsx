@@ -52,6 +52,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { cn } from "@/lib/utils";
+import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 
 
 interface TopicIdentifiers {
@@ -223,6 +224,55 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
   return null;
 };
 
+// Extract reference key from ParsedVoteResult (historical votes from Scan API)
+const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMapping | null => {
+  const actionTag = vote.actionType || '';
+  const text = `${vote.reasonBody || ''} ${vote.reasonUrl || ''} ${vote.actionTitle || ''}`;
+  
+  // Check for CIP references
+  const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
+  if (cipMatch) {
+    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}` };
+  }
+  
+  // Check for Featured App actions
+  if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
+      actionTag.includes('SetFeaturedAppRight') || actionTag.includes('FeaturedApp') ||
+      text.toLowerCase().includes('featured app')) {
+    // Extract app name from action details or reason
+    const actionValue = vote.actionDetails || {};
+    const appName = (actionValue as any)?.provider || (actionValue as any)?.name || 
+                   text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
+                   text.match(/app[:\s]+([^\s,]+)/i)?.[1];
+    if (appName) {
+      const normalized = appName.replace(/::/g, '::').toLowerCase();
+      return { type: 'featured-app', key: normalized };
+    }
+  }
+  
+  // Check for Validator actions
+  if (actionTag.includes('OnboardValidator') || actionTag.includes('OffboardValidator') ||
+      actionTag.includes('ValidatorOnboarding') || text.toLowerCase().includes('validator')) {
+    const actionValue = vote.actionDetails || {};
+    const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
+                         text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
+    if (validatorName) {
+      return { type: 'validator', key: validatorName.toLowerCase() };
+    }
+  }
+  
+  // Check for Protocol Upgrade actions
+  if (actionTag.includes('ScheduleDomainMigration') || actionTag.includes('ProtocolUpgrade') ||
+      actionTag.includes('Synchronizer') || text.toLowerCase().includes('migration') ||
+      text.toLowerCase().includes('splice')) {
+    const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
+                   text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
+    return { type: 'protocol-upgrade', key: version || 'upgrade' };
+  }
+  
+  return null;
+};
+
 // Legacy helper for backwards compatibility
 const extractCipReference = (voteRequest: VoteRequest): string | null => {
   const mapping = extractVoteRequestMapping(voteRequest);
@@ -251,12 +301,31 @@ const GovernanceFlow = () => {
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [voteRequests, setVoteRequests] = useState<VoteRequest[]>([]);
   
+  // Fetch historical vote results from Scan API
+  const { data: historicalVotes = [] } = useGovernanceVoteHistory(500);
+  
   // Bulk selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
   
-  // Map lifecycle item keys to their active VoteRequests (supports CIPs, Featured Apps, Validators, Protocol Upgrades)
-  const voteRequestMap = useMemo(() => {
+  // Unified on-chain vote item for display
+  interface OnChainVoteItem {
+    id: string;
+    source: 'acs' | 'history';
+    status: 'pending' | 'approved' | 'rejected' | 'expired';
+    votesFor: number;
+    votesAgainst: number;
+    totalVotes: number;
+    voteBefore: Date | null;
+    reasonBody: string;
+    reasonUrl: string;
+    // Original data for linking
+    voteRequest?: VoteRequest;
+    historicalVote?: ParsedVoteResult;
+  }
+  
+  // Map lifecycle item keys to their in-progress VoteRequests (from ACS)
+  const acsVoteRequestMap = useMemo(() => {
     const map = new Map<string, VoteRequest[]>();
     voteRequests.forEach(vr => {
       const mapping = extractVoteRequestMapping(vr);
@@ -270,6 +339,108 @@ const GovernanceFlow = () => {
     });
     return map;
   }, [voteRequests]);
+  
+  // Map lifecycle item keys to their historical votes (from Scan API History)
+  const historicalVoteMap = useMemo(() => {
+    const map = new Map<string, ParsedVoteResult[]>();
+    historicalVotes.forEach(vote => {
+      const mapping = extractHistoricalVoteMapping(vote);
+      if (mapping) {
+        const key = mapping.key.toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, []);
+        }
+        map.get(key)!.push(vote);
+      }
+    });
+    return map;
+  }, [historicalVotes]);
+  
+  // Combined map: unifies ACS (in-progress) and historical votes into OnChainVoteItem[]
+  const combinedVoteMap = useMemo(() => {
+    const map = new Map<string, OnChainVoteItem[]>();
+    
+    // Add in-progress votes from ACS
+    acsVoteRequestMap.forEach((votes, key) => {
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      votes.forEach(vr => {
+        const payload = vr.payload;
+        const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
+        const isExpired = voteBefore && voteBefore < new Date();
+        const votesRaw = payload?.votes || [];
+        
+        let votesFor = 0;
+        let votesAgainst = 0;
+        for (const vote of votesRaw) {
+          const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
+          const isAccept = voteData?.accept === true || voteData?.Accept === true;
+          const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
+          if (isAccept) votesFor++;
+          else if (isReject) votesAgainst++;
+        }
+        
+        const threshold = 10;
+        let status: 'pending' | 'approved' | 'rejected' | 'expired' = 'pending';
+        if (votesFor >= threshold) status = 'approved';
+        else if (isExpired && votesFor < threshold) status = isExpired ? 'expired' : 'rejected';
+        
+        map.get(key)!.push({
+          id: payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown',
+          source: 'acs',
+          status: status === 'expired' ? 'pending' : status, // ACS votes are in-progress
+          votesFor,
+          votesAgainst,
+          totalVotes: votesRaw.length,
+          voteBefore,
+          reasonBody: payload?.reason?.body || '',
+          reasonUrl: payload?.reason?.url || '',
+          voteRequest: vr,
+        });
+      });
+    });
+    
+    // Add historical votes from Scan API
+    historicalVoteMap.forEach((votes, key) => {
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      votes.forEach(vote => {
+        map.get(key)!.push({
+          id: vote.id,
+          source: 'history',
+          status: vote.outcome === 'accepted' ? 'approved' : vote.outcome === 'rejected' ? 'rejected' : 'expired',
+          votesFor: vote.votesFor,
+          votesAgainst: vote.votesAgainst,
+          totalVotes: vote.totalVotes,
+          voteBefore: vote.voteBefore ? new Date(vote.voteBefore) : null,
+          reasonBody: vote.reasonBody || '',
+          reasonUrl: vote.reasonUrl || '',
+          historicalVote: vote,
+        });
+      });
+    });
+    
+    // Sort each entry: ACS (in-progress) first, then historical by date DESC
+    map.forEach((items, key) => {
+      items.sort((a, b) => {
+        // ACS (in-progress) always comes first
+        if (a.source === 'acs' && b.source !== 'acs') return -1;
+        if (a.source !== 'acs' && b.source === 'acs') return 1;
+        // Then sort by voteBefore date DESC
+        const dateA = a.voteBefore?.getTime() || 0;
+        const dateB = b.voteBefore?.getTime() || 0;
+        return dateB - dateA;
+      });
+      map.set(key, items);
+    });
+    
+    return map;
+  }, [acsVoteRequestMap, historicalVoteMap]);
+  
+  // Legacy: keep voteRequestMap for backwards compatibility with existing code
+  const voteRequestMap = acsVoteRequestMap;
   
   // Legacy CIP-only map for backwards compatibility
   const cipVoteRequestMap = useMemo(() => {
@@ -1044,16 +1215,99 @@ const GovernanceFlow = () => {
       });
   }, [filteredTopics, voteRequests]);
 
-  // Helper to render VoteRequest card with links to Governance page
+  // Helper to render unified OnChainVoteItem card with correct links
+  const renderOnChainVoteCard = (item: OnChainVoteItem) => {
+    // Determine the link based on source
+    // ACS (in-progress) → /governance?tab=acs
+    // History (completed) → /governance?tab=scan-history
+    const linkUrl = item.source === 'acs'
+      ? `/governance?tab=acs&proposal=${item.id}`
+      : `/governance?tab=scan-history&proposal=${item.id}`;
+    
+    const isExpired = item.voteBefore && item.voteBefore < new Date();
+    
+    return (
+      <a
+        key={`${item.source}-${item.id}`}
+        href={linkUrl}
+        className="block p-3 rounded-lg bg-pink-500/10 border border-pink-500/30 hover:border-pink-500/50 transition-colors"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge 
+                variant="outline" 
+                className={cn(
+                  "text-[10px] h-5",
+                  item.status === 'approved' ? 'border-green-500/50 text-green-400 bg-green-500/10' :
+                  item.status === 'rejected' || item.status === 'expired' ? 'border-red-500/50 text-red-400 bg-red-500/10' :
+                  'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
+                )}
+              >
+                {item.status === 'approved' ? '✓ Approved' : 
+                 item.status === 'rejected' ? '✗ Rejected' : 
+                 item.status === 'expired' ? '✗ Expired' : 
+                 '⏳ In Progress'}
+              </Badge>
+              <Badge variant="outline" className={cn(
+                "text-[10px] h-5",
+                item.source === 'acs' 
+                  ? 'border-blue-500/50 text-blue-400 bg-blue-500/10'
+                  : 'border-purple-500/50 text-purple-400 bg-purple-500/10'
+              )}>
+                {item.source === 'acs' ? 'Active (ACS)' : 'Scan API History'}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Vote className="h-3 w-3" />
+                {item.votesFor} for / {item.votesAgainst} against ({item.totalVotes} total)
+              </span>
+              {item.voteBefore && (
+                <span className="flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  {isExpired ? 'Ended' : `Due ${format(item.voteBefore, 'MMM d, yyyy')}`}
+                </span>
+              )}
+            </div>
+            {/* Reason section */}
+            {(item.reasonBody || item.reasonUrl) && (
+              <div className="mt-2 p-2 rounded bg-background/30 border border-border/30">
+                {item.reasonBody && (
+                  <p className="text-xs text-muted-foreground break-words whitespace-pre-wrap mb-1">
+                    {item.reasonBody}
+                  </p>
+                )}
+                {item.reasonUrl && (
+                  <a 
+                    href={item.reasonUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-xs text-primary hover:underline break-all"
+                  >
+                    {item.reasonUrl}
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="h-7 w-7 p-0 shrink-0 flex items-center justify-center text-muted-foreground">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </div>
+        </div>
+      </a>
+    );
+  };
+
+  // Legacy: Helper to render VoteRequest card (for backwards compatibility in timeline)
   const renderVoteRequestCard = (vr: VoteRequest) => {
     const payload = vr.payload;
-    const actionTag = payload?.action?.tag || 'Unknown Action';
     const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
     const isExpired = voteBefore && voteBefore < new Date();
     const votesRaw = payload?.votes || [];
     const reason = payload?.reason;
     
-    // Parse votes properly - votes can be [svName, voteData] tuples or objects
     let votesFor = 0;
     let votesAgainst = 0;
     for (const vote of votesRaw) {
@@ -1065,20 +1319,15 @@ const GovernanceFlow = () => {
     }
     const totalVotes = votesRaw.length;
     
-    // Get the proposal ID (first 12 chars of tracking CID or contract ID)
     const proposalId = payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown';
     
-    // Determine status
     const threshold = 10;
     let status: 'pending' | 'approved' | 'rejected' = 'pending';
     if (votesFor >= threshold) status = 'approved';
     else if (isExpired && votesFor < threshold) status = 'rejected';
     
-    // Link to ACS tab for in-progress votes, Scan API History tab for completed votes
-    const isInProgress = status === 'pending' && !isExpired;
-    const linkUrl = isInProgress 
-      ? `/governance?proposal=${proposalId}` 
-      : `/governance?tab=scan-history&proposal=${proposalId}`;
+    // ACS votes link to ACS tab (in-progress)
+    const linkUrl = `/governance?tab=acs&proposal=${proposalId}`;
     
     return (
       <a
@@ -1100,8 +1349,8 @@ const GovernanceFlow = () => {
               >
                 {status === 'approved' ? '✓ Approved' : status === 'rejected' ? '✗ Rejected' : '⏳ In Progress'}
               </Badge>
-              <Badge variant="outline" className="text-[10px] h-5 border-pink-500/50 text-pink-400 bg-pink-500/10">
-                {isInProgress ? 'View in ACS' : 'View History'}
+              <Badge variant="outline" className="text-[10px] h-5 border-blue-500/50 text-blue-400 bg-blue-500/10">
+                Active (ACS)
               </Badge>
             </div>
             <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
@@ -1116,7 +1365,6 @@ const GovernanceFlow = () => {
                 </span>
               )}
             </div>
-            {/* Reason section */}
             {(reason?.body || reason?.url) && (
               <div className="mt-2 p-2 rounded bg-background/30 border border-border/30">
                 {reason?.body && (
@@ -1151,15 +1399,15 @@ const GovernanceFlow = () => {
     const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
     const currentIdx = stages.indexOf(item.currentStage);
     
-    // Check if there are VoteRequests for this lifecycle item using the new unified map
-    const matchingVoteRequests = lifecycleKey ? voteRequestMap.get(lifecycleKey.toLowerCase()) || [] : [];
+    // Check combined votes (ACS + historical) for this lifecycle item
+    const matchingVotes = lifecycleKey ? combinedVoteMap.get(lifecycleKey.toLowerCase()) || [] : [];
     
     return (
       <div className="flex items-center gap-1 flex-wrap">
         {stages.map((stage, idx) => {
-          // For sv-onchain-vote stage, check VoteRequests instead of topics
+          // For sv-onchain-vote stage, check combined votes instead of topics
           const hasStage = stage === 'sv-onchain-vote' 
-            ? matchingVoteRequests.length > 0
+            ? matchingVotes.length > 0
             : item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
           const isPast = idx < currentIdx;
@@ -1169,7 +1417,7 @@ const GovernanceFlow = () => {
           
           // Count for tooltip
           const count = stage === 'sv-onchain-vote' 
-            ? matchingVoteRequests.length 
+            ? matchingVotes.length 
             : item.stages[stage]?.length || 0;
           
           return (
@@ -1180,7 +1428,7 @@ const GovernanceFlow = () => {
                     ? config.color + ' border'
                     : 'bg-muted/30 text-muted-foreground/50 border border-transparent'
                 } ${isCurrent ? 'ring-1 ring-offset-1 ring-offset-background ring-primary/50' : ''}`}
-                title={`${config.label}: ${hasStage ? count + (stage === 'sv-onchain-vote' ? ' vote request(s)' : ' topics') : 'No activity'}`}
+                title={`${config.label}: ${hasStage ? count + (stage === 'sv-onchain-vote' ? ' vote(s)' : ' topics') : 'No activity'}`}
               >
                 <Icon className="h-3 w-3" />
                 <span className="hidden sm:inline">{config.label}</span>
@@ -1822,11 +2070,11 @@ const GovernanceFlow = () => {
                                   return primaryId.toLowerCase();
                                 };
                                 const lifecycleKey = getLifecycleKey(group.type, group.primaryId, group.items[0]);
-                                const matchingVotes = lifecycleKey ? voteRequestMap.get(lifecycleKey.toLowerCase()) : undefined;
-                                const hasActiveVote = matchingVotes?.some(vr => {
-                                  const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
-                                  return !voteBefore || voteBefore > new Date();
-                                });
+                                // Check for active votes in ACS (source === 'acs')
+                                const matchingVotes = lifecycleKey ? combinedVoteMap.get(lifecycleKey.toLowerCase()) : undefined;
+                                const hasActiveVote = matchingVotes?.some(vote => 
+                                  vote.source === 'acs' && vote.status === 'pending'
+                                );
                                 return hasActiveVote ? (
                                   <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30 animate-pulse">
                                     🗳️ Active Vote
@@ -1932,7 +2180,8 @@ const GovernanceFlow = () => {
                                 return primaryId.toLowerCase();
                               };
                               const lifecycleKey = getLifecycleKey(item.type, group.primaryId, item);
-                              const matchingVoteReqs = lifecycleKey ? voteRequestMap.get(lifecycleKey.toLowerCase()) || [] : [];
+                              // Use combined map (ACS + historical votes)
+                              const matchingVotes = lifecycleKey ? combinedVoteMap.get(lifecycleKey.toLowerCase()) || [] : [];
                               
                               return (
                                 <div key={item.id} className="space-y-2 pt-3">
@@ -1950,9 +2199,9 @@ const GovernanceFlow = () => {
                                     </Badge>
                                   )}
                                   {stages.map(stage => {
-                                    // Handle sv-onchain-vote stage specially
+                                    // Handle sv-onchain-vote stage specially - use combined votes
                                     if (stage === 'sv-onchain-vote') {
-                                      if (matchingVoteReqs.length === 0) return null;
+                                      if (matchingVotes.length === 0) return null;
                                       const config = STAGE_CONFIG[stage];
                                       if (!config) return null;
                                       const Icon = config.icon;
@@ -1961,10 +2210,10 @@ const GovernanceFlow = () => {
                                         <div key={stage} className="space-y-2">
                                           <h4 className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
                                             <Icon className="h-4 w-4" />
-                                            {config.label} ({matchingVoteReqs.length})
+                                            {config.label} ({matchingVotes.length})
                                           </h4>
                                           <div className="space-y-2 pl-6">
-                                            {matchingVoteReqs.map(vr => renderVoteRequestCard(vr))}
+                                            {matchingVotes.map(vote => renderOnChainVoteCard(vote))}
                                           </div>
                                         </div>
                                       );
