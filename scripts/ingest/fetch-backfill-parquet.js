@@ -1275,7 +1275,7 @@ async function runBackfill() {
   if (TARGET_MIGRATION) {
     console.log(`   TARGET_MIGRATION: ${TARGET_MIGRATION} only`);
   }
-  console.log("   Processing: Migrations sequentially (1 → 2 → 3...) ");
+  console.log("   Processing: Migrations sequentially (0 → 1 → 2 → 3...) ");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
   console.log("=".repeat(80));
 
