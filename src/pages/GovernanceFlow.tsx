@@ -1219,10 +1219,10 @@ const GovernanceFlow = () => {
   const renderOnChainVoteCard = (item: OnChainVoteItem) => {
     // Determine the link based on source
     // ACS (in-progress) → /governance?tab=acs
-    // History (completed) → /governance?tab=scan-history
+    // History (completed) → /governance?tab=history (Scan API History)
     const linkUrl = item.source === 'acs'
       ? `/governance?tab=acs&proposal=${item.id}`
-      : `/governance?tab=scan-history&proposal=${item.id}`;
+      : `/governance?tab=history&proposal=${item.id}`;
     
     const isExpired = item.voteBefore && item.voteBefore < new Date();
     
