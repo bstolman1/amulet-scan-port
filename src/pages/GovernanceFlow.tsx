@@ -1218,11 +1218,11 @@ const GovernanceFlow = () => {
   // Helper to render unified OnChainVoteItem card with correct links
   const renderOnChainVoteCard = (item: OnChainVoteItem) => {
     // Determine the link based on source
-    // ACS (in-progress) → /governance?tab=acs
-    // History (completed) → /governance?tab=history (Scan API History)
+    // ACS (in-progress) → /governance?tab=active
+    // History (completed) → /governance?tab=scanapi (Scan API History tab)
     const linkUrl = item.source === 'acs'
-      ? `/governance?tab=acs&proposal=${item.id}`
-      : `/governance?tab=history&proposal=${item.id}`;
+      ? `/governance?tab=active&proposal=${item.id}`
+      : `/governance?tab=scanapi&proposal=${item.id}`;
     
     const isExpired = item.voteBefore && item.voteBefore < new Date();
     

@@ -39,13 +39,27 @@ const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = 
 };
 
 const Governance = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const highlightedProposalId = searchParams.get("proposal");
+  const activeTab = searchParams.get("tab") || "svnode";
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [runFullScan, setRunFullScan] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
   const [rawMode, setRawMode] = useState(false);
   const [concurrency, setConcurrency] = useState(20);
+  
+  // Handle tab changes via URL
+  const handleTabChange = (value: string) => {
+    setSearchParams((prev) => {
+      const newParams = new URLSearchParams(prev);
+      newParams.set("tab", value);
+      // Clear proposal when switching tabs
+      if (value !== activeTab) {
+        newParams.delete("proposal");
+      }
+      return newParams;
+    });
+  };
   
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
@@ -452,7 +466,7 @@ const Governance = () => {
         </Alert>
 
         {/* Proposals List */}
-        <Tabs defaultValue="svnode" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
           <TabsList className="flex-wrap">
             <TabsTrigger value="svnode" className="gap-1">
               <Server className="h-4 w-4" />

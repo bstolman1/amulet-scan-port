@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CheckCircle, XCircle, Clock, Code, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
+import { cn } from "@/lib/utils";
 
 interface GovernanceHistoryTableProps {
   limit?: number;
@@ -30,7 +33,27 @@ const truncateParty = (party: string | undefined | null, maxLen = 30) => {
 };
 
 export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTableProps) {
+  const [searchParams] = useSearchParams();
+  const highlightedProposalId = searchParams.get("proposal");
+  const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const { data: voteResults, isLoading, error } = useGovernanceVoteHistory(limit);
+
+  // Scroll to highlighted proposal when data loads
+  useEffect(() => {
+    if (highlightedProposalId && !isLoading && voteResults) {
+      const timer = setTimeout(() => {
+        const element = proposalRefs.current.get(highlightedProposalId);
+        if (element) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+          element.classList.add("ring-2", "ring-pink-500", "ring-offset-2", "ring-offset-background");
+          setTimeout(() => {
+            element.classList.remove("ring-2", "ring-pink-500", "ring-offset-2", "ring-offset-background");
+          }, 3000);
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [highlightedProposalId, isLoading, voteResults]);
 
   const getOutcomeVariant = (outcome: ParsedVoteResult["outcome"]) => {
     switch (outcome) {
@@ -130,8 +153,31 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
         ) : voteResults?.length === 0 ? (
           <p className="text-center text-muted-foreground py-8">No governance history found</p>
         ) : (
-          voteResults?.map((result, idx) => (
-            <Card key={result.trackingCid || idx} className="p-4 space-y-3">
+          voteResults?.map((result, idx) => {
+            // Use trackingCid for matching, but also try first 12 chars for short ID matching
+            const proposalKey = result.trackingCid || `idx-${idx}`;
+            const shortId = result.trackingCid?.slice(0, 12);
+            const isHighlighted = highlightedProposalId && (
+              highlightedProposalId === proposalKey ||
+              highlightedProposalId === shortId ||
+              result.trackingCid?.startsWith(highlightedProposalId)
+            );
+            
+            return (
+            <Card 
+              key={proposalKey}
+              ref={(el) => {
+                if (el && result.trackingCid) {
+                  proposalRefs.current.set(result.trackingCid, el);
+                  // Also map by short ID for matching
+                  if (shortId) proposalRefs.current.set(shortId, el);
+                }
+              }}
+              className={cn(
+                "p-4 space-y-3 transition-all",
+                isHighlighted && "ring-2 ring-pink-500 ring-offset-2 ring-offset-background"
+              )}
+            >
               <div className="flex justify-between items-start">
                 <div className="flex-1 space-y-2">
                   <div className="flex items-center gap-2">
@@ -208,7 +254,8 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                 </Badge>
               </div>
             </Card>
-          ))
+          );
+          })
         )}
       </div>
     </div>
