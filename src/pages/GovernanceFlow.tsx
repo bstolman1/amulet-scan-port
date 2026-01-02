@@ -1220,10 +1220,16 @@ const GovernanceFlow = () => {
     // Determine the link based on source
     // ACS (in-progress) → /governance?tab=active
     // History (completed) → /governance?tab=scanapi (Scan API History tab)
-    const linkUrl = item.source === 'acs'
-      ? `/governance?tab=active&proposal=${item.id}`
-      : `/governance?tab=scanapi&proposal=${item.id}`;
-    
+    const proposalParam =
+      item.source === "history"
+        ? item.historicalVote?.trackingCid?.slice(0, 12) || item.id
+        : item.id;
+
+    const linkUrl =
+      item.source === "acs"
+        ? `/governance?tab=active&proposal=${proposalParam}`
+        : `/governance?tab=scanapi&proposal=${proposalParam}`;
+
     const isExpired = item.voteBefore && item.voteBefore < new Date();
     
     return (
@@ -1326,9 +1332,9 @@ const GovernanceFlow = () => {
     if (votesFor >= threshold) status = 'approved';
     else if (isExpired && votesFor < threshold) status = 'rejected';
     
-    // ACS votes link to ACS tab (in-progress)
-    const linkUrl = `/governance?tab=acs&proposal=${proposalId}`;
-    
+    // ACS votes link to Active (ACS) tab in Governance page
+    const linkUrl = `/governance?tab=active&proposal=${proposalId}`;
+
     return (
       <a
         key={vr.contract_id}
