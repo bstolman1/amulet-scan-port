@@ -2412,7 +2412,7 @@ const GovernanceFlow = () => {
                             return (
                               <a
                                 key={`${entry.type}-${vr.contract_id}-${idx}`}
-                                href={`/governance?proposal=${proposalId}`}
+                                href={`/governance?tab=active&proposal=${proposalId}`}
                                 className={cn(
                                   "flex gap-3 p-3 rounded-lg border transition-colors",
                                   isStartEntry 
