@@ -188,19 +188,29 @@ const isMilestoneAction = (actionTag: string): boolean => {
          actionTag.includes('DistributeRewards');
 };
 
-const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping | null => {
+// Updated interface to support multiple stages for a single vote
+interface VoteRequestMappingMulti {
+  type: 'cip' | 'featured-app' | 'validator' | 'protocol-upgrade' | 'other';
+  key: string;
+  stages: Array<'sv-onchain-vote' | 'sv-milestone'>; // A vote can appear in multiple stages
+}
+
+const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMappingMulti | null => {
   const reason = voteRequest.payload?.reason;
   const actionTag = voteRequest.payload?.action?.tag || '';
   const actionValue = voteRequest.payload?.action?.value || {};
   const text = `${reason?.body || ''} ${reason?.url || ''}`;
   
-  // Determine if this is a milestone vote based on action type
-  const stage = isMilestoneAction(actionTag) ? 'sv-milestone' : 'sv-onchain-vote';
+  // Determine stages: milestone votes appear in BOTH on-chain vote AND milestone categories
+  const stages: Array<'sv-onchain-vote' | 'sv-milestone'> = ['sv-onchain-vote'];
+  if (isMilestoneAction(actionTag)) {
+    stages.push('sv-milestone');
+  }
   
   // Check for CIP references
   const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
   if (cipMatch) {
-    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stage };
+    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stages };
   }
   
   // Check for Featured App actions
@@ -213,7 +223,7 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
                    text.match(/app[:\s]+([^\s,]+)/i)?.[1];
     if (appName) {
       const normalized = appName.replace(/::/g, '::').toLowerCase();
-      return { type: 'featured-app', key: normalized, stage };
+      return { type: 'featured-app', key: normalized, stages };
     }
   }
   
@@ -223,7 +233,7 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
     const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
                          text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
     if (validatorName) {
-      return { type: 'validator', key: validatorName.toLowerCase(), stage };
+      return { type: 'validator', key: validatorName.toLowerCase(), stages };
     }
   }
   
@@ -233,24 +243,27 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
       text.toLowerCase().includes('splice')) {
     const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
                    text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
-    return { type: 'protocol-upgrade', key: version || 'upgrade', stage };
+    return { type: 'protocol-upgrade', key: version || 'upgrade', stages };
   }
   
   return null;
 };
 
 // Extract reference key from ParsedVoteResult (historical votes from Scan API)
-const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMapping | null => {
+const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappingMulti | null => {
   const actionTag = vote.actionType || '';
   const text = `${vote.reasonBody || ''} ${vote.reasonUrl || ''} ${vote.actionTitle || ''}`;
   
-  // Determine if this is a milestone vote based on action type
-  const stage = isMilestoneAction(actionTag) ? 'sv-milestone' : 'sv-onchain-vote';
+  // Determine stages: milestone votes appear in BOTH on-chain vote AND milestone categories
+  const stages: Array<'sv-onchain-vote' | 'sv-milestone'> = ['sv-onchain-vote'];
+  if (isMilestoneAction(actionTag)) {
+    stages.push('sv-milestone');
+  }
   
   // Check for CIP references
   const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
   if (cipMatch) {
-    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stage };
+    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stages };
   }
   
   // Check for Featured App actions (including milestone reward distributions)
@@ -264,7 +277,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
                    text.match(/app[:\s]+([^\s,]+)/i)?.[1];
     if (appName) {
       const normalized = appName.replace(/::/g, '::').toLowerCase();
-      return { type: 'featured-app', key: normalized, stage };
+      return { type: 'featured-app', key: normalized, stages };
     }
   }
   
@@ -275,7 +288,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
     const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
                          text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
     if (validatorName) {
-      return { type: 'validator', key: validatorName.toLowerCase(), stage };
+      return { type: 'validator', key: validatorName.toLowerCase(), stages };
     }
   }
   
@@ -285,7 +298,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
       text.toLowerCase().includes('splice')) {
     const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
                    text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
-    return { type: 'protocol-upgrade', key: version || 'upgrade', stage };
+    return { type: 'protocol-upgrade', key: version || 'upgrade', stages };
   }
   
   return null;
@@ -344,6 +357,7 @@ const GovernanceFlow = () => {
   }
   
   // Map lifecycle item keys to their in-progress VoteRequests (from ACS) with stage info
+  // A vote can appear in multiple stages (e.g., both sv-onchain-vote and sv-milestone)
   const acsVoteRequestMap = useMemo(() => {
     const map = new Map<string, Array<{ vr: VoteRequest; stage: 'sv-onchain-vote' | 'sv-milestone' }>>();
     voteRequests.forEach(vr => {
@@ -353,13 +367,17 @@ const GovernanceFlow = () => {
         if (!map.has(key)) {
           map.set(key, []);
         }
-        map.get(key)!.push({ vr, stage: mapping.stage });
+        // Add an entry for EACH stage (vote can appear in multiple categories)
+        mapping.stages.forEach(stage => {
+          map.get(key)!.push({ vr, stage });
+        });
       }
     });
     return map;
   }, [voteRequests]);
   
   // Map lifecycle item keys to their historical votes (from Scan API History) with stage info
+  // A vote can appear in multiple stages (e.g., both sv-onchain-vote and sv-milestone)
   const historicalVoteMap = useMemo(() => {
     const map = new Map<string, Array<{ vote: ParsedVoteResult; stage: 'sv-onchain-vote' | 'sv-milestone' }>>();
     historicalVotes.forEach(vote => {
@@ -369,7 +387,10 @@ const GovernanceFlow = () => {
         if (!map.has(key)) {
           map.set(key, []);
         }
-        map.get(key)!.push({ vote, stage: mapping.stage });
+        // Add an entry for EACH stage (vote can appear in multiple categories)
+        mapping.stages.forEach(stage => {
+          map.get(key)!.push({ vote, stage });
+        });
       }
     });
     return map;
@@ -1970,7 +1991,11 @@ const GovernanceFlow = () => {
                       </CardHeader>
                       {expandedIds.has('cip-00xx-section') && (
                         <CardContent className="pt-0 space-y-2">
-                          {tbdItems.flatMap(item => item.topics.map(topic => ({ topic, type: item.type }))).map(({ topic, type }) => renderTopicCard(topic, true, type))}
+                          {/* Sort TBD topics by date DESC (most recent first) */}
+                          {tbdItems
+                            .flatMap(item => item.topics.map(topic => ({ topic, type: item.type })))
+                            .sort((a, b) => new Date(b.topic.date).getTime() - new Date(a.topic.date).getTime())
+                            .map(({ topic, type }) => renderTopicCard(topic, true, type))}
                         </CardContent>
                       )}
                     </Card>
@@ -2246,7 +2271,14 @@ const GovernanceFlow = () => {
                                             {config.label} ({stageVotes.length})
                                           </h4>
                                           <div className="space-y-2 pl-6">
-                                            {stageVotes.map(vote => renderOnChainVoteCard(vote))}
+                                            {/* Sort votes by date DESC (most recent first) */}
+                                            {[...stageVotes]
+                                              .sort((a, b) => {
+                                                const dateA = a.voteBefore?.getTime() || 0;
+                                                const dateB = b.voteBefore?.getTime() || 0;
+                                                return dateB - dateA;
+                                              })
+                                              .map(vote => renderOnChainVoteCard(vote))}
                                           </div>
                                         </div>
                                       );
@@ -2259,14 +2291,19 @@ const GovernanceFlow = () => {
                                     if (!config) return null;
                                     const Icon = config.icon;
                                     
+                                    // Sort topics by date DESC (most recent first)
+                                    const sortedTopics = [...stageTopics].sort((a, b) => 
+                                      new Date(b.date).getTime() - new Date(a.date).getTime()
+                                    );
+                                    
                                     return (
                                       <div key={stage} className="space-y-2">
                                         <h4 className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
                                           <Icon className="h-4 w-4" />
-                                          {config.label} ({stageTopics.length})
+                                          {config.label} ({sortedTopics.length})
                                         </h4>
                                         <div className="space-y-2 pl-6">
-                                          {stageTopics.map(topic => renderTopicCard(topic, false, item.type))}
+                                          {sortedTopics.map(topic => renderTopicCard(topic, false, item.type))}
                                         </div>
                                       </div>
                                     );
@@ -2293,14 +2330,19 @@ const GovernanceFlow = () => {
                                       const Icon = config?.icon || FileText;
                                       const label = config?.label || stage;
                                       
+                                      // Sort topics by date DESC (most recent first)
+                                      const sortedTopics = [...topics].sort((a, b) => 
+                                        new Date(b.date).getTime() - new Date(a.date).getTime()
+                                      );
+                                      
                                       return (
                                         <div key={`extra-${stage}`} className="space-y-2">
                                           <h4 className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
                                             <Icon className="h-4 w-4" />
-                                            {label} ({topics.length})
+                                            {label} ({sortedTopics.length})
                                           </h4>
                                           <div className="space-y-2 pl-6">
-                                            {topics.map(topic => renderTopicCard(topic, false, item.type))}
+                                            {sortedTopics.map(topic => renderTopicCard(topic, false, item.type))}
                                           </div>
                                         </div>
                                       );
