@@ -116,9 +116,9 @@ interface GovernanceData {
 
 // Type-specific workflow stages
 const WORKFLOW_STAGES = {
-  cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce', 'sv-onchain-vote'],
-  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce', 'sv-onchain-vote'],
-  validator: ['tokenomics', 'sv-announce', 'sv-onchain-vote'],
+  cip: ['cip-discuss', 'cip-vote', 'cip-announce', 'sv-announce', 'sv-onchain-vote', 'sv-milestone'],
+  'featured-app': ['tokenomics', 'tokenomics-announce', 'sv-announce', 'sv-onchain-vote', 'sv-milestone'],
+  validator: ['tokenomics', 'sv-announce', 'sv-onchain-vote', 'sv-milestone'],
   'protocol-upgrade': ['tokenomics', 'sv-announce', 'sv-onchain-vote'],
   outcome: ['sv-announce'],
   other: ['tokenomics', 'sv-announce', 'sv-onchain-vote'],
@@ -132,6 +132,8 @@ const STAGE_CONFIG: Record<string, { label: string; icon: typeof FileText; color
   'cip-announce': { label: 'Announce', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
   // On-chain vote stage
   'sv-onchain-vote': { label: 'On-Chain Vote', icon: Vote, color: 'bg-pink-500/20 text-pink-400 border-pink-500/30' },
+  // Milestone reward stage
+  'sv-milestone': { label: 'Milestone', icon: CheckSquare, color: 'bg-teal-500/20 text-teal-400 border-teal-500/30' },
   // Shared stages
   'tokenomics': { label: 'Tokenomics', icon: FileText, color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
   'tokenomics-announce': { label: 'Announced', icon: CheckCircle2, color: 'bg-green-500/20 text-green-400 border-green-500/30' },
@@ -175,7 +177,16 @@ interface VoteRequest {
 interface VoteRequestMapping {
   type: 'cip' | 'featured-app' | 'validator' | 'protocol-upgrade' | 'other';
   key: string;
+  stage: 'sv-onchain-vote' | 'sv-milestone';
 }
+
+// Helper to detect if an action tag represents a milestone/reward vote
+const isMilestoneAction = (actionTag: string): boolean => {
+  return actionTag.includes('MintUnclaimedRewards') || 
+         actionTag.includes('SRARC_MintUnclaimed') ||
+         actionTag.includes('MintRewards') ||
+         actionTag.includes('DistributeRewards');
+};
 
 const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping | null => {
   const reason = voteRequest.payload?.reason;
@@ -183,22 +194,26 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
   const actionValue = voteRequest.payload?.action?.value || {};
   const text = `${reason?.body || ''} ${reason?.url || ''}`;
   
+  // Determine if this is a milestone vote based on action type
+  const stage = isMilestoneAction(actionTag) ? 'sv-milestone' : 'sv-onchain-vote';
+  
   // Check for CIP references
   const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
   if (cipMatch) {
-    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}` };
+    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stage };
   }
   
   // Check for Featured App actions
   if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
-      actionTag.includes('SetFeaturedAppRight') || text.toLowerCase().includes('featured app')) {
+      actionTag.includes('SetFeaturedAppRight') || text.toLowerCase().includes('featured app') ||
+      isMilestoneAction(actionTag)) {
     // Extract app name from action value or reason
     const appName = (actionValue as any)?.provider || (actionValue as any)?.name || 
                    text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
                    text.match(/app[:\s]+([^\s,]+)/i)?.[1];
     if (appName) {
       const normalized = appName.replace(/::/g, '::').toLowerCase();
-      return { type: 'featured-app', key: normalized };
+      return { type: 'featured-app', key: normalized, stage };
     }
   }
   
@@ -208,7 +223,7 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
     const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
                          text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
     if (validatorName) {
-      return { type: 'validator', key: validatorName.toLowerCase() };
+      return { type: 'validator', key: validatorName.toLowerCase(), stage };
     }
   }
   
@@ -218,7 +233,7 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
       text.toLowerCase().includes('splice')) {
     const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
                    text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
-    return { type: 'protocol-upgrade', key: version || 'upgrade' };
+    return { type: 'protocol-upgrade', key: version || 'upgrade', stage };
   }
   
   return null;
@@ -229,16 +244,19 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
   const actionTag = vote.actionType || '';
   const text = `${vote.reasonBody || ''} ${vote.reasonUrl || ''} ${vote.actionTitle || ''}`;
   
+  // Determine if this is a milestone vote based on action type
+  const stage = isMilestoneAction(actionTag) ? 'sv-milestone' : 'sv-onchain-vote';
+  
   // Check for CIP references
   const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
   if (cipMatch) {
-    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}` };
+    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stage };
   }
   
-  // Check for Featured App actions
+  // Check for Featured App actions (including milestone reward distributions)
   if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
       actionTag.includes('SetFeaturedAppRight') || actionTag.includes('FeaturedApp') ||
-      text.toLowerCase().includes('featured app')) {
+      text.toLowerCase().includes('featured app') || isMilestoneAction(actionTag)) {
     // Extract app name from action details or reason
     const actionValue = vote.actionDetails || {};
     const appName = (actionValue as any)?.provider || (actionValue as any)?.name || 
@@ -246,7 +264,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
                    text.match(/app[:\s]+([^\s,]+)/i)?.[1];
     if (appName) {
       const normalized = appName.replace(/::/g, '::').toLowerCase();
-      return { type: 'featured-app', key: normalized };
+      return { type: 'featured-app', key: normalized, stage };
     }
   }
   
@@ -257,7 +275,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
     const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
                          text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
     if (validatorName) {
-      return { type: 'validator', key: validatorName.toLowerCase() };
+      return { type: 'validator', key: validatorName.toLowerCase(), stage };
     }
   }
   
@@ -267,7 +285,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
       text.toLowerCase().includes('splice')) {
     const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
                    text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
-    return { type: 'protocol-upgrade', key: version || 'upgrade' };
+    return { type: 'protocol-upgrade', key: version || 'upgrade', stage };
   }
   
   return null;
@@ -312,6 +330,7 @@ const GovernanceFlow = () => {
   interface OnChainVoteItem {
     id: string;
     source: 'acs' | 'history';
+    stage: 'sv-onchain-vote' | 'sv-milestone';
     status: 'pending' | 'approved' | 'rejected' | 'expired';
     votesFor: number;
     votesAgainst: number;
@@ -324,9 +343,9 @@ const GovernanceFlow = () => {
     historicalVote?: ParsedVoteResult;
   }
   
-  // Map lifecycle item keys to their in-progress VoteRequests (from ACS)
+  // Map lifecycle item keys to their in-progress VoteRequests (from ACS) with stage info
   const acsVoteRequestMap = useMemo(() => {
-    const map = new Map<string, VoteRequest[]>();
+    const map = new Map<string, Array<{ vr: VoteRequest; stage: 'sv-onchain-vote' | 'sv-milestone' }>>();
     voteRequests.forEach(vr => {
       const mapping = extractVoteRequestMapping(vr);
       if (mapping) {
@@ -334,15 +353,15 @@ const GovernanceFlow = () => {
         if (!map.has(key)) {
           map.set(key, []);
         }
-        map.get(key)!.push(vr);
+        map.get(key)!.push({ vr, stage: mapping.stage });
       }
     });
     return map;
   }, [voteRequests]);
   
-  // Map lifecycle item keys to their historical votes (from Scan API History)
+  // Map lifecycle item keys to their historical votes (from Scan API History) with stage info
   const historicalVoteMap = useMemo(() => {
-    const map = new Map<string, ParsedVoteResult[]>();
+    const map = new Map<string, Array<{ vote: ParsedVoteResult; stage: 'sv-onchain-vote' | 'sv-milestone' }>>();
     historicalVotes.forEach(vote => {
       const mapping = extractHistoricalVoteMapping(vote);
       if (mapping) {
@@ -350,7 +369,7 @@ const GovernanceFlow = () => {
         if (!map.has(key)) {
           map.set(key, []);
         }
-        map.get(key)!.push(vote);
+        map.get(key)!.push({ vote, stage: mapping.stage });
       }
     });
     return map;
@@ -361,11 +380,11 @@ const GovernanceFlow = () => {
     const map = new Map<string, OnChainVoteItem[]>();
     
     // Add in-progress votes from ACS
-    acsVoteRequestMap.forEach((votes, key) => {
+    acsVoteRequestMap.forEach((entries, key) => {
       if (!map.has(key)) {
         map.set(key, []);
       }
-      votes.forEach(vr => {
+      entries.forEach(({ vr, stage }) => {
         const payload = vr.payload;
         const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
         const isExpired = voteBefore && voteBefore < new Date();
@@ -389,6 +408,7 @@ const GovernanceFlow = () => {
         map.get(key)!.push({
           id: payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown',
           source: 'acs',
+          stage,
           status: status === 'expired' ? 'pending' : status, // ACS votes are in-progress
           votesFor,
           votesAgainst,
@@ -402,14 +422,15 @@ const GovernanceFlow = () => {
     });
     
     // Add historical votes from Scan API
-    historicalVoteMap.forEach((votes, key) => {
+    historicalVoteMap.forEach((entries, key) => {
       if (!map.has(key)) {
         map.set(key, []);
       }
-      votes.forEach(vote => {
+      entries.forEach(({ vote, stage }) => {
         map.get(key)!.push({
           id: vote.id,
           source: 'history',
+          stage,
           status: vote.outcome === 'accepted' ? 'approved' : vote.outcome === 'rejected' ? 'rejected' : 'expired',
           votesFor: vote.votesFor,
           votesAgainst: vote.votesAgainst,
@@ -1411,9 +1432,13 @@ const GovernanceFlow = () => {
     return (
       <div className="flex items-center gap-1 flex-wrap">
         {stages.map((stage, idx) => {
-          // For sv-onchain-vote stage, check combined votes instead of topics
-          const hasStage = stage === 'sv-onchain-vote' 
-            ? matchingVotes.length > 0
+          // For vote stages, check combined votes filtered by stage type
+          const isVoteStage = stage === 'sv-onchain-vote' || stage === 'sv-milestone';
+          const stageVotes = isVoteStage 
+            ? matchingVotes.filter(v => v.stage === stage) 
+            : [];
+          const hasStage = isVoteStage
+            ? stageVotes.length > 0
             : item.stages[stage] && item.stages[stage].length > 0;
           const isCurrent = stage === item.currentStage;
           const isPast = idx < currentIdx;
@@ -1422,8 +1447,8 @@ const GovernanceFlow = () => {
           const Icon = config.icon;
           
           // Count for tooltip
-          const count = stage === 'sv-onchain-vote' 
-            ? matchingVotes.length 
+          const count = isVoteStage
+            ? stageVotes.length 
             : item.stages[stage]?.length || 0;
           
           return (
@@ -1434,7 +1459,7 @@ const GovernanceFlow = () => {
                     ? config.color + ' border'
                     : 'bg-muted/30 text-muted-foreground/50 border border-transparent'
                 } ${isCurrent ? 'ring-1 ring-offset-1 ring-offset-background ring-primary/50' : ''}`}
-                title={`${config.label}: ${hasStage ? count + (stage === 'sv-onchain-vote' ? ' vote(s)' : ' topics') : 'No activity'}`}
+                title={`${config.label}: ${hasStage ? count + (isVoteStage ? ' vote(s)' : ' topics') : 'No activity'}`}
               >
                 <Icon className="h-3 w-3" />
                 <span className="hidden sm:inline">{config.label}</span>
@@ -2205,9 +2230,11 @@ const GovernanceFlow = () => {
                                     </Badge>
                                   )}
                                   {stages.map(stage => {
-                                    // Handle sv-onchain-vote stage specially - use combined votes
-                                    if (stage === 'sv-onchain-vote') {
-                                      if (matchingVotes.length === 0) return null;
+                                    // Handle vote stages (on-chain vote and milestone) - use combined votes filtered by stage
+                                    const isVoteStage = stage === 'sv-onchain-vote' || stage === 'sv-milestone';
+                                    if (isVoteStage) {
+                                      const stageVotes = matchingVotes.filter(v => v.stage === stage);
+                                      if (stageVotes.length === 0) return null;
                                       const config = STAGE_CONFIG[stage];
                                       if (!config) return null;
                                       const Icon = config.icon;
@@ -2216,10 +2243,10 @@ const GovernanceFlow = () => {
                                         <div key={stage} className="space-y-2">
                                           <h4 className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
                                             <Icon className="h-4 w-4" />
-                                            {config.label} ({matchingVotes.length})
+                                            {config.label} ({stageVotes.length})
                                           </h4>
                                           <div className="space-y-2 pl-6">
-                                            {matchingVotes.map(vote => renderOnChainVoteCard(vote))}
+                                            {stageVotes.map(vote => renderOnChainVoteCard(vote))}
                                           </div>
                                         </div>
                                       );
