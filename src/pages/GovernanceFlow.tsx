@@ -184,6 +184,9 @@ interface VoteRequestMapping {
 // NOTE: some milestone votes don't encode “milestone” in the action tag, but do in the proposal text.
 const isMilestoneVote = (actionTag: string, text: string): boolean => {
   // We keep this intentionally broad because Scan/ACS action tags and reason text have evolved over time.
+  // Text variants we see include: "milestone", "milestones", and "milestone(s)".
+  const milestoneText = /\bmilestone(?:s|\(s\))?\b/i;
+
   return (
     /MintUnclaimedRewards/i.test(actionTag) ||
     /SRARC_MintUnclaimed/i.test(actionTag) ||
@@ -191,7 +194,7 @@ const isMilestoneVote = (actionTag: string, text: string): boolean => {
     /DistributeRewards/i.test(actionTag) ||
     /Reward/i.test(actionTag) ||
     /Coupon/i.test(actionTag) ||
-    /milestone\(s\)?/i.test(text)
+    milestoneText.test(text)
   );
 };
 
@@ -1019,22 +1022,55 @@ const GovernanceFlow = () => {
     return true;
   };
 
+  // Extract lifecycle key for VoteRequest lookup based on type
+  const getLifecycleKey = (type: LifecycleItem['type'], primaryId: string, item: LifecycleItem): string | undefined => {
+    if (type === 'cip') {
+      const cipMatch = primaryId.match(/CIP[#\-\s]?0*(\d+)/i);
+      return cipMatch ? `CIP-${cipMatch[1].padStart(4, '0')}` : undefined;
+    }
+    if (type === 'featured-app') {
+      const appName = item.topics[0]?.identifiers?.appName;
+      return appName?.toLowerCase() || primaryId.toLowerCase();
+    }
+    if (type === 'validator') {
+      const validatorName = item.topics[0]?.identifiers?.validatorName;
+      return validatorName?.toLowerCase() || primaryId.toLowerCase();
+    }
+    return primaryId.toLowerCase();
+  };
+
   // Separate CIP-00XX items from regular items
   const { tbdItems, regularItems } = useMemo(() => {
     if (!data) return { tbdItems: [], regularItems: [] };
     const allFiltered = data.lifecycleItems.filter(item => {
       if (typeFilter !== 'all' && item.type !== typeFilter) return false;
-      if (stageFilter !== 'all' && item.currentStage !== stageFilter) return false;
+
+      if (stageFilter !== 'all') {
+        const isVoteStageFilter = stageFilter === 'sv-onchain-vote' || stageFilter === 'sv-milestone';
+
+        if (!isVoteStageFilter) {
+          if (item.currentStage !== stageFilter) return false;
+        } else {
+          // For vote-stage filters, don't rely on `currentStage` (items rarely "end" on sv-milestone).
+          // Instead include any lifecycle item that has votes in that stage.
+          const lifecycleKey = getLifecycleKey(item.type, item.primaryId, item);
+          const matchingVotes = lifecycleKey ? combinedVoteMap.get(lifecycleKey.toLowerCase()) || [] : [];
+          const hasVotesInStage = matchingVotes.some(v => v.stage === stageFilter);
+          const hasTopicsInStage = (item.stages[stageFilter]?.length || 0) > 0;
+          if (!(hasVotesInStage || hasTopicsInStage || item.currentStage === stageFilter)) return false;
+        }
+      }
+
       if (!matchesSearch(item, searchQuery)) return false;
       if (!matchesDateRange(item)) return false;
       return true;
     });
-    
+
     return {
       tbdItems: allFiltered.filter(item => item.primaryId?.includes('00XX')),
       regularItems: allFiltered.filter(item => !item.primaryId?.includes('00XX')),
     };
-  }, [data, typeFilter, stageFilter, searchQuery, dateFrom, dateTo]);
+  }, [data, typeFilter, stageFilter, searchQuery, dateFrom, dateTo, combinedVoteMap]);
 
   const filteredItems = useMemo(() => {
     return [...tbdItems, ...regularItems];
