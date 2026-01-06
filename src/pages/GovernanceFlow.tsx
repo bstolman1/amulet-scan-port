@@ -182,10 +182,16 @@ interface VoteRequestMapping {
 
 // Helper to detect if an action tag represents a milestone/reward vote
 const isMilestoneAction = (actionTag: string): boolean => {
-  return actionTag.includes('MintUnclaimedRewards') || 
-         actionTag.includes('SRARC_MintUnclaimed') ||
-         actionTag.includes('MintRewards') ||
-         actionTag.includes('DistributeRewards');
+  // We keep this intentionally broad because Scan/ACS action tags have evolved over time.
+  // Milestone reward votes commonly include “Reward”, “Coupon”, “Unclaimed”, or “Distribute”.
+  return (
+    /MintUnclaimedRewards/i.test(actionTag) ||
+    /SRARC_MintUnclaimed/i.test(actionTag) ||
+    /MintRewards/i.test(actionTag) ||
+    /DistributeRewards/i.test(actionTag) ||
+    /Reward/i.test(actionTag) ||
+    /Coupon/i.test(actionTag)
+  );
 };
 
 // Updated interface to support multiple stages for a single vote
@@ -218,11 +224,16 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
       actionTag.includes('SetFeaturedAppRight') || text.toLowerCase().includes('featured app') ||
       isMilestoneAction(actionTag)) {
     // Extract app name from action value or reason
-    const appName = (actionValue as any)?.provider || (actionValue as any)?.name || 
-                   text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
-                   text.match(/app[:\s]+([^\s,]+)/i)?.[1];
+    const appName =
+      (actionValue as any)?.provider ||
+      (actionValue as any)?.featuredAppProvider ||
+      (actionValue as any)?.featuredApp ||
+      (actionValue as any)?.beneficiary ||
+      (actionValue as any)?.name ||
+      text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
+      text.match(/app[:\s]+([^\s,]+)/i)?.[1];
     if (appName) {
-      const normalized = appName.replace(/::/g, '::').toLowerCase();
+      const normalized = String(appName).replace(/::/g, '::').toLowerCase();
       return { type: 'featured-app', key: normalized, stages };
     }
   }
@@ -272,11 +283,16 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
       text.toLowerCase().includes('featured app') || isMilestoneAction(actionTag)) {
     // Extract app name from action details or reason
     const actionValue = vote.actionDetails || {};
-    const appName = (actionValue as any)?.provider || (actionValue as any)?.name || 
-                   text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
-                   text.match(/app[:\s]+([^\s,]+)/i)?.[1];
+    const appName =
+      (actionValue as any)?.provider ||
+      (actionValue as any)?.featuredAppProvider ||
+      (actionValue as any)?.featuredApp ||
+      (actionValue as any)?.beneficiary ||
+      (actionValue as any)?.name ||
+      text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
+      text.match(/app[:\s]+([^\s,]+)/i)?.[1];
     if (appName) {
-      const normalized = appName.replace(/::/g, '::').toLowerCase();
+      const normalized = String(appName).replace(/::/g, '::').toLowerCase();
       return { type: 'featured-app', key: normalized, stages };
     }
   }
