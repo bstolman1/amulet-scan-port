@@ -180,17 +180,18 @@ interface VoteRequestMapping {
   stage: 'sv-onchain-vote' | 'sv-milestone';
 }
 
-// Helper to detect if an action tag represents a milestone/reward vote
-const isMilestoneAction = (actionTag: string): boolean => {
-  // We keep this intentionally broad because Scan/ACS action tags have evolved over time.
-  // Milestone reward votes commonly include “Reward”, “Coupon”, “Unclaimed”, or “Distribute”.
+// Helper to detect if a vote represents a milestone/reward vote
+// NOTE: some milestone votes don't encode “milestone” in the action tag, but do in the proposal text.
+const isMilestoneVote = (actionTag: string, text: string): boolean => {
+  // We keep this intentionally broad because Scan/ACS action tags and reason text have evolved over time.
   return (
     /MintUnclaimedRewards/i.test(actionTag) ||
     /SRARC_MintUnclaimed/i.test(actionTag) ||
     /MintRewards/i.test(actionTag) ||
     /DistributeRewards/i.test(actionTag) ||
     /Reward/i.test(actionTag) ||
-    /Coupon/i.test(actionTag)
+    /Coupon/i.test(actionTag) ||
+    /milestone\(s\)?/i.test(text)
   );
 };
 
@@ -209,7 +210,7 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
   
   // Determine stages: milestone votes appear in BOTH on-chain vote AND milestone categories
   const stages: Array<'sv-onchain-vote' | 'sv-milestone'> = ['sv-onchain-vote'];
-  if (isMilestoneAction(actionTag)) {
+  if (isMilestoneVote(actionTag, text)) {
     stages.push('sv-milestone');
   }
   
@@ -222,7 +223,7 @@ const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMapping
   // Check for Featured App actions
   if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
       actionTag.includes('SetFeaturedAppRight') || text.toLowerCase().includes('featured app') ||
-      isMilestoneAction(actionTag)) {
+      isMilestoneVote(actionTag, text)) {
     // Extract app name from action value or reason
     const appName =
       (actionValue as any)?.provider ||
@@ -267,7 +268,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
   
   // Determine stages: milestone votes appear in BOTH on-chain vote AND milestone categories
   const stages: Array<'sv-onchain-vote' | 'sv-milestone'> = ['sv-onchain-vote'];
-  if (isMilestoneAction(actionTag)) {
+  if (isMilestoneVote(actionTag, text)) {
     stages.push('sv-milestone');
   }
   
@@ -280,7 +281,7 @@ const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappin
   // Check for Featured App actions (including milestone reward distributions)
   if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
       actionTag.includes('SetFeaturedAppRight') || actionTag.includes('FeaturedApp') ||
-      text.toLowerCase().includes('featured app') || isMilestoneAction(actionTag)) {
+      text.toLowerCase().includes('featured app') || isMilestoneVote(actionTag, text)) {
     // Extract app name from action details or reason
     const actionValue = vote.actionDetails || {};
     const appName =
