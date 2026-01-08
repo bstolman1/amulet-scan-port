@@ -24,7 +24,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
-// VoteRequestIndexBanner removed
+import { VoteRequestIndexBanner } from "@/components/VoteRequestIndexBanner";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
 // Safe date formatter that won't crash on invalid dates
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
@@ -374,7 +374,8 @@ const Governance = () => {
           </Alert>
         )}
 
-        {/* VoteRequest Index Banner - removed */}
+        {/* VoteRequest Index Banner */}
+        <VoteRequestIndexBanner />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -467,11 +468,32 @@ const Governance = () => {
         {/* Proposals List */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
           <TabsList className="flex-wrap">
+            <TabsTrigger value="svnode" className="gap-1">
+              <Server className="h-4 w-4" />
+              SV Node Live
+            </TabsTrigger>
             <TabsTrigger value="scanapi" className="gap-1">
               <Globe className="h-4 w-4" />
-              Historical Governance
+              Scan API History
             </TabsTrigger>
-            <TabsTrigger value="active">Active Governance</TabsTrigger>
+            <TabsTrigger value="active">Active (ACS)</TabsTrigger>
+            <TabsTrigger value="semantic">
+              <Link2 className="h-4 w-4 mr-1" />
+              Semantic Groups
+              {semanticProposals?.total != null && semanticProposals.total > 0 && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  {semanticProposals.total}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="unique">
+              Unique Proposals
+              {uniqueStats.total > 0 && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  {uniqueStats.total}
+                </Badge>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="fullscan" onClick={() => !runFullScan && setRunFullScan(true)}>
               <FileSearch className="h-4 w-4 mr-1" />
               Full Scan
@@ -481,6 +503,7 @@ const Governance = () => {
                 </Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="history">Governance History</TabsTrigger>
           </TabsList>
 
           {/* SV Node Live Tab - Primary source of truth */}
