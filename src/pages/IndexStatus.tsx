@@ -28,7 +28,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { checkDuckDBConnection, getDuckDBApiUrl } from "@/lib/backend-config";
 import { useState } from "react";
-import { VoteRequestDebugPanel } from "@/components/VoteRequestDebugPanel";
+// import { VoteRequestDebugPanel } from "@/components/VoteRequestDebugPanel";
 
 interface TemplateInfo {
   template_name: string;
@@ -838,84 +838,9 @@ const IndexStatus = () => {
             }
           />
 
-          {/* Vote Request Index */}
-          <IndexCard
-            title="Vote Request Index"
-            description="Persistent index for governance vote requests"
-            icon={<Vote className="w-5 h-5" />}
-            status={getVoteStatus()}
-            stats={
-              voteRequestIndex?.stats?.total > 0
-                ? [
-                    { 
-                      label: "Human Proposals", 
-                      value: voteRequestIndex.humanStats?.total?.toLocaleString() || voteRequestIndex.layers?.humanProposals?.toLocaleString() || 0 
-                    },
-                    { 
-                      label: "In Progress", 
-                      value: voteRequestIndex.humanStats?.inProgress?.toLocaleString() || 0 
-                    },
-                    { 
-                      label: "Executed", 
-                      value: voteRequestIndex.humanStats?.executed?.toLocaleString() || 0 
-                    },
-                    { 
-                      label: "Rejected", 
-                      value: voteRequestIndex.humanStats?.rejected?.toLocaleString() || 0 
-                    },
-                    { 
-                      label: "Expired", 
-                      value: voteRequestIndex.humanStats?.expired?.toLocaleString() || 0 
-                    },
-                    { 
-                      label: "Raw Events", 
-                      value: voteRequestIndex.layers?.rawEvents?.toLocaleString() || voteRequestIndex.stats.total?.toLocaleString() || 0 
-                    },
-                  ]
-                : []
-            }
-            lastUpdated={voteRequestIndex?.lastIndexedAt}
-            onRebuild={() => voteRebuildMutation.mutate()}
-            isRebuilding={voteRebuildMutation.isPending}
-            buildProgress={
-              voteRequestIndex?.isIndexing && voteRequestIndex?.progress
-                ? { current: voteRequestIndex.progress.current || 0, total: voteRequestIndex.progress.total || 1 }
-                : null
-            }
-            lastSuccessfulBuild={voteRequestIndex?.lastSuccessfulBuild}
-            onClearLock={() => clearLockMutation.mutate()}
-            isClearingLock={clearLockMutation.isPending}
-          />
-
-          {/* Reward Coupon Index */}
-          <IndexCard
-            title="Reward Coupon Index"
-            description="Pre-calculated CC rewards from App/Validator/SV coupons"
-            icon={<Coins className="w-5 h-5" />}
-            status={getRewardStatus()}
-            stats={
-              rewardCouponIndex?.stats?.total > 0
-                ? [
-                    { label: "Total Coupons", value: rewardCouponIndex.stats.total?.toLocaleString() || 0 },
-                    { label: "App", value: rewardCouponIndex.stats.app?.toLocaleString() || 0 },
-                    { label: "Validator", value: rewardCouponIndex.stats.validator?.toLocaleString() || 0 },
-                    { label: "SV", value: rewardCouponIndex.stats.sv?.toLocaleString() || 0 },
-                  ]
-                : []
-            }
-            lastUpdated={rewardCouponIndex?.lastIndexedAt}
-            onRebuild={() => rewardRebuildMutation.mutate()}
-            isRebuilding={rewardRebuildMutation.isPending}
-            buildProgress={
-              rewardCouponIndex?.isIndexing && rewardCouponIndex?.progress
-                ? { current: rewardCouponIndex.progress.current || 0, total: rewardCouponIndex.progress.total || 1 }
-                : null
-            }
-          />
-
           {/* Aggregation State */}
           <IndexCard
-            title="Aggregation State"
+            title="Aggregation Index"
             description="Tracks incremental aggregation progress"
             icon={<Layers className="w-5 h-5" />}
             status={getAggStatus()}
@@ -936,7 +861,7 @@ const IndexStatus = () => {
 
           {/* Party Index */}
           <IndexCard
-            title="Party Index"
+            title="PartyID Index"
             description="Maps party IDs to event files for instant lookups"
             icon={<Users className="w-5 h-5" />}
             status={getPartyStatus()}
@@ -955,33 +880,6 @@ const IndexStatus = () => {
             buildProgress={
               partyIndex?.indexing
                 ? { current: partyIndex.indexing.filesScanned || 0, total: partyIndex.indexing.totalFiles || 1 }
-                : null
-            }
-          />
-
-          {/* SV Membership Index */}
-          <IndexCard
-            title="SV Membership Index"
-            description="Tracks Super Validator onboard/offboard for vote thresholds"
-            icon={<UserCheck className="w-5 h-5" />}
-            status={getSvStatus()}
-            stats={
-              svIndex?.isPopulated || svIndex?.isIndexing
-                ? [
-                    { label: "Current SVs", value: svIndex.currentSvCount?.toLocaleString() || 0 },
-                    { label: "Onboard Events", value: svIndex.onboardCount?.toLocaleString() || 0 },
-                    { label: "Offboard Events", value: svIndex.offboardCount?.toLocaleString() || 0 },
-                    { label: "Total Events", value: svIndex.totalEvents?.toLocaleString() || 0 },
-                    ...(svIndex?.indexing?.phase ? [{ label: "Phase", value: svIndex.indexing.phase }] : []),
-                  ]
-                : []
-            }
-            lastUpdated={svIndex?.lastIndexedAt}
-            onRebuild={() => svRebuildMutation.mutate()}
-            isRebuilding={svRebuildMutation.isPending}
-            buildProgress={
-              svIndex?.indexing
-                ? { current: svIndex.indexing.filesScanned || 0, total: svIndex.indexing.totalFiles || 1 }
                 : null
             }
           />
@@ -1082,11 +980,6 @@ const IndexStatus = () => {
           </Card>
         )}
 
-        {/* VoteRequest Debug Panel */}
-        <section aria-labelledby="vote-request-debug" className="mt-2">
-          <h2 id="vote-request-debug" className="sr-only">VoteRequest Debug</h2>
-          <VoteRequestDebugPanel />
-        </section>
 
         {/* Info Section */}
         <Card className="bg-muted/30">

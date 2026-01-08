@@ -3,7 +3,7 @@ import { StatCard } from "@/components/StatCard";
 import { Activity, Coins, TrendingUp, Users, Zap, Package, Database, Clock, Lock, FileText } from "lucide-react";
 import { SearchBar } from "@/components/SearchBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
+// import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -141,7 +141,7 @@ const Dashboard = () => {
                   </Badge>
                 )}
               </div>
-              <TriggerACSSnapshotButton />
+              {/* <TriggerACSSnapshotButton /> */}
             </div>
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
@@ -183,7 +183,7 @@ const Dashboard = () => {
         </div>
 
         {/* Local Backfill Stats - Only shown if local API is available */}
-        {localApiAvailable && (
+        {/* {localApiAvailable && (
           <div>
             <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Database className="h-5 w-5 text-primary" />
@@ -281,10 +281,10 @@ const Dashboard = () => {
               </Card>
             )}
           </div>
-        )}
+        )} */}
 
         {/* Local ACS Snapshot Data - Only shown if ACS data is available */}
-        {acsStatus?.available && (
+        {/* {acsStatus?.available && (
           <div>
             <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <FileText className="h-5 w-5 text-primary" />
@@ -296,7 +296,6 @@ const Dashboard = () => {
               )}
             </h3>
             
-            {/* ACS Overview Stats */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-4">
               <Card className="glass-card">
                 <CardHeader className="pb-2">
@@ -371,7 +370,6 @@ const Dashboard = () => {
               </Card>
             </div>
             
-            {/* Top Templates */}
             {acsTemplates && acsTemplates.length > 0 && (
               <Card className="glass-card">
                 <CardHeader className="pb-2">
@@ -404,7 +402,7 @@ const Dashboard = () => {
               </Card>
             )}
           </div>
-        )}
+        )} */}
 
         {/* Canton Coin Price placeholder */}
         <Card className="glass-card"></Card>

@@ -468,32 +468,11 @@ const Governance = () => {
         {/* Proposals List */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
           <TabsList className="flex-wrap">
-            <TabsTrigger value="svnode" className="gap-1">
-              <Server className="h-4 w-4" />
-              SV Node Live
-            </TabsTrigger>
             <TabsTrigger value="scanapi" className="gap-1">
               <Globe className="h-4 w-4" />
-              Scan API History
+              Historical Governance
             </TabsTrigger>
-            <TabsTrigger value="active">Active (ACS)</TabsTrigger>
-            <TabsTrigger value="semantic">
-              <Link2 className="h-4 w-4 mr-1" />
-              Semantic Groups
-              {semanticProposals?.total != null && semanticProposals.total > 0 && (
-                <Badge variant="secondary" className="ml-2 text-xs">
-                  {semanticProposals.total}
-                </Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="unique">
-              Unique Proposals
-              {uniqueStats.total > 0 && (
-                <Badge variant="secondary" className="ml-2 text-xs">
-                  {uniqueStats.total}
-                </Badge>
-              )}
-            </TabsTrigger>
+            <TabsTrigger value="active">Active Governance</TabsTrigger>
             <TabsTrigger value="fullscan" onClick={() => !runFullScan && setRunFullScan(true)}>
               <FileSearch className="h-4 w-4 mr-1" />
               Full Scan
@@ -503,7 +482,6 @@ const Governance = () => {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="history">Governance History</TabsTrigger>
           </TabsList>
 
           {/* SV Node Live Tab - Primary source of truth */}
