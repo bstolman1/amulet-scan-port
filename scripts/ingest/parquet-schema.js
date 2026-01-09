@@ -73,6 +73,7 @@ export const LEDGER_EVENTS_SCHEMA = {
   unassign_id: 'STRING',
   submitter: 'STRING',
   reassignment_counter: 'INT64',
+  raw_event: 'JSON',  // Full original event as JSON string - CANONICAL SOURCE
 };
 
 // Column order for parquet files
@@ -130,6 +131,7 @@ export const EVENTS_COLUMNS = [
   'unassign_id',
   'submitter',
   'reassignment_counter',
+  'raw_event',
 ];
 
 /**
@@ -351,8 +353,8 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     unassign_id: unassignId,
     submitter: submitter,
     reassignment_counter: reassignmentCounter,
-    // CRITICAL: Store complete original event for recovery
-    raw: rawEvent || event,
+    // CRITICAL: Store complete original event for recovery (stringified for DuckDB/Parquet compatibility)
+    raw_event: JSON.stringify(rawEvent || event),
   };
 }
 
