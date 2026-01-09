@@ -99,7 +99,9 @@ export function mapEvent(r) {
     submitter: String(r.submitter ?? ''),
     reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
     // CRITICAL: Complete original event for recovery/future-proofing
-    rawJson: r.rawJson || r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
+    // Support both old (raw/raw_json) and new (raw_event) field names
+    rawJson: r.rawJson || r.raw_json || r.raw_event || (r.raw ? safeStringify(r.raw) : ''),
+    rawEvent: r.raw_event || r.rawJson || r.raw_json || (r.raw ? safeStringify(r.raw) : ''),
     // Deprecated
     party: String(r.party ?? ''),
   };

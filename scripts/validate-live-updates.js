@@ -78,6 +78,8 @@ function summarizeMissing(events, key) {
 
   // Payload sanity checks
   const payloadNonObject = events.filter((e) => e?.payload && typeof e.payload !== 'object').length;
+  // raw_event is now a JSON string, so check for non-string values (backwards compat: also check old 'raw' field)
+  const rawEventNonString = events.filter((e) => e?.raw_event && typeof e.raw_event !== 'string').length;
   const rawNonObject = events.filter((e) => e?.raw && typeof e.raw !== 'object').length;
 
   // Event ID format sanity (should often contain ':' per docs, but don't hard-fail)
