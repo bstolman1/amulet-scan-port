@@ -30,6 +30,32 @@ function convertBigInts(obj) {
   return obj;
 }
 
+/**
+ * Helper to get raw event data as an object.
+ * Handles both old format (raw as object) and new format (raw_event as JSON string).
+ * @param {object} event - The event object
+ * @returns {object} Parsed raw event data or empty object
+ */
+function getRawEvent(event) {
+  if (!event) return {};
+  // New format: raw_event is a JSON string
+  if (event.raw_event) {
+    if (typeof event.raw_event === 'string') {
+      try {
+        return JSON.parse(event.raw_event);
+      } catch {
+        return {};
+      }
+    }
+    return event.raw_event; // Already an object (shouldn't happen but safe fallback)
+  }
+  // Old format: raw as object
+  if (event.raw && typeof event.raw === 'object') {
+    return event.raw;
+  }
+  return {};
+}
+
 // VoteRequest cache - only used when index is not populated
 let voteRequestCache = null;
 let voteRequestCacheTime = 0;
@@ -2242,7 +2268,7 @@ router.get('/debug/execute-confirmed-action', async (req, res) => {
           if (samples.length < maxSamples) {
             const exerciseResult = e.exercise_result || {};
             const payload = e.payload || {};
-            const raw = e.raw || {};
+            const raw = getRawEvent(e);
             
             // Choice arguments are typically in payload or raw.choice_argument
             const choiceArg = raw.choice_argument || payload.choice_argument || payload;
@@ -2332,7 +2358,7 @@ router.get('/debug/confirm-action', async (req, res) => {
           matchCount++;
           
           const payload = e.payload || {};
-          const raw = e.raw || {};
+          const raw = getRawEvent(e);
           const choiceArg = raw.choice_argument || payload.choice_argument || payload;
           
           // Extract action tag from the Arc structure
@@ -2482,7 +2508,7 @@ router.get('/debug/vote-request-lifecycle', async (req, res) => {
           totalVoteRequestEvents++;
           
           const eventType = evt.event_type || '';
-          const raw = evt.raw || {};
+          const raw = getRawEvent(evt);
           const payload = evt.payload || {};
           
           if (eventType === 'created' && createdEvents.length < limit) {
@@ -2578,7 +2604,7 @@ router.get('/debug/cast-vote', async (req, res) => {
             matchCount++;
             
             if (samples.length < maxSamples) {
-              const raw = evt.raw || {};
+              const raw = getRawEvent(evt);
               const payload = evt.payload || {};
               const choiceArg = raw.choice_argument || payload.choice_argument || payload;
               

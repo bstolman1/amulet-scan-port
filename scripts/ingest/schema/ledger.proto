@@ -42,7 +42,9 @@ message Event {
   string submitter = 26;
   int64 reassignment_counter = 27;
   
-  string raw_json = 28;  // Complete original event as JSON - CANONICAL SOURCE
+  string raw_json = 28;  // Complete original event as JSON - CANONICAL SOURCE (legacy field name)
+  
+  string raw_event = 31;  // Complete original event as JSON - CANONICAL SOURCE (consistent with Parquet schema)
   
   // Deprecated/unused - kept for backwards compatibility
   string party = 29;
