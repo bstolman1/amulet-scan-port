@@ -184,7 +184,7 @@ const BackfillProgress = () => {
     return overallProgress >= 99.95 ? 99.9 : overallProgress;
   }, [isStillWriting, overallProgress]);
 
-  // Note: Supabase realtime removed - data auto-refreshes via react-query refetchInterval
+  // Data auto-refreshes via react-query refetchInterval
 
   
 

@@ -261,7 +261,7 @@ const LiveUpdates = () => {
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold mb-2">Transaction History</h1>
-            <p className="text-muted-foreground">Live updates from {usingDuckDB ? "DuckDB API" : "Supabase"}</p>
+            <p className="text-muted-foreground">Live updates from DuckDB API</p>
           </div>
           {/* Freshness Indicator */}
           <div className="flex items-center gap-3">
@@ -280,9 +280,9 @@ const LiveUpdates = () => {
         {/* Backend Status & Refresh Indicator */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            <Badge variant={usingDuckDB ? "default" : "secondary"} className="flex items-center gap-1">
+            <Badge variant="default" className="flex items-center gap-1">
               <Database className="w-3 h-3" />
-              {usingDuckDB ? "DuckDB" : "Supabase"}
+              DuckDB
             </Badge>
             {usingDuckDB && (
               <Badge variant={isDuckDBAvailable ? "outline" : "destructive"} className="flex items-center gap-1">
