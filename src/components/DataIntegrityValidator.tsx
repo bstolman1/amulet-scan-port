@@ -38,8 +38,10 @@ interface SampleDetail {
 interface ValidationResult {
   success: boolean;
   error?: string;
+  dataFormat?: 'parquet' | 'pb.zst';
   totalFiles: number;
-  sampledFiles: number;
+  sampledFiles?: number;
+  sampledRecords?: number;
   integrityScore: number;
   schemaComplianceScore?: number;
   eventFiles: {
@@ -191,6 +193,11 @@ export function DataIntegrityValidator() {
                     {result.integrityScore}%
                   </span>
                   <span className="text-muted-foreground">Combined Score</span>
+                  {result.dataFormat && (
+                    <Badge variant={result.dataFormat === 'parquet' ? 'default' : 'secondary'} className="ml-2">
+                      {result.dataFormat === 'parquet' ? '🚀 Parquet' : '📦 Legacy (.pb.zst)'}
+                    </Badge>
+                  )}
                   {result.schemaComplianceScore !== undefined && (
                     <Badge variant="outline" className="ml-2">
                       Schema: {result.schemaComplianceScore}%
@@ -203,7 +210,7 @@ export function DataIntegrityValidator() {
                 />
               </div>
               <div className="text-right text-sm text-muted-foreground">
-                <div>Sampled: {result.sampledFiles} files</div>
+                <div>Sampled: {result.sampledRecords || result.sampledFiles} {result.dataFormat === 'parquet' ? 'records' : 'files'}</div>
                 <div>Total: {result.totalFiles.toLocaleString()} files</div>
               </div>
             </div>

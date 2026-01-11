@@ -91,6 +91,8 @@ function countRawFiles() {
   const rawDir = join(DATA_DIR, 'raw');
   let events = 0;
   let updates = 0;
+  let parquetEvents = 0;
+  let parquetUpdates = 0;
   
   function scanDir(dir) {
     try {
@@ -101,6 +103,9 @@ function countRawFiles() {
         } else if (entry.name.endsWith('.pb.zst')) {
           if (entry.name.startsWith('events-')) events++;
           else if (entry.name.startsWith('updates-')) updates++;
+        } else if (entry.name.endsWith('.parquet')) {
+          if (entry.name.startsWith('events-')) parquetEvents++;
+          else if (entry.name.startsWith('updates-')) parquetUpdates++;
         }
       }
     } catch {}
@@ -110,7 +115,16 @@ function countRawFiles() {
     scanDir(rawDir);
   }
   
-  return { events, updates };
+  // Return combined counts - prefer Parquet if available
+  return { 
+    events: parquetEvents || events, 
+    updates: parquetUpdates || updates,
+    format: (parquetEvents > 0 || parquetUpdates > 0) ? 'parquet' : (events > 0 || updates > 0) ? 'pb.zst' : 'none',
+    parquetEvents,
+    parquetUpdates,
+    binaryEvents: events,
+    binaryUpdates: updates,
+  };
 }
 
 // GET /api/backfill/debug - Debug endpoint to check paths
@@ -562,9 +576,10 @@ router.get('/reconciliation', async (req, res) => {
 });
 
 // POST /api/backfill/validate-integrity - Validate data integrity by sampling files
-// Now checks for new schema requirements: event_type_original, root_event_ids, child_event_ids, record_time, canonical event_id
+// Supports both Parquet (preferred) and legacy .pb.zst files
+// Checks schema requirements: event_type_original, root_event_ids, child_event_ids, record_time, canonical event_id
 router.post('/validate-integrity', async (req, res) => {
-  const sampleSize = Math.min(req.body?.sampleSize || 10, 50); // Max 50 files
+  const sampleSize = Math.min(req.body?.sampleSize || 100, 500); // Sample size for DuckDB SAMPLE
   
   try {
     const rawDir = join(DATA_DIR, 'raw');
@@ -572,39 +587,29 @@ router.post('/validate-integrity', async (req, res) => {
       return res.json({ success: false, error: 'No raw data directory found' });
     }
     
-    // Find all .pb.zst files
-    const allFiles = [];
-    function scanDir(dir) {
-      try {
-        const entries = readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.isDirectory()) {
-            scanDir(join(dir, entry.name));
-          } else if (entry.name.endsWith('.pb.zst')) {
-            allFiles.push(join(dir, entry.name));
-          }
-        }
-      } catch {}
+    // Import detection functions from binary-reader
+    const { hasParquetFiles, countParquetFiles, hasBinaryFiles, countBinaryFiles } = 
+      await import('../duckdb/binary-reader.js');
+    
+    // Check for available formats
+    const hasParquetEvents = hasParquetFiles(rawDir, 'events');
+    const hasParquetUpdates = hasParquetFiles(rawDir, 'updates');
+    const hasBinaryEvts = hasBinaryFiles(rawDir, 'events');
+    const hasBinaryUpds = hasBinaryFiles(rawDir, 'updates');
+    
+    const hasParquet = hasParquetEvents || hasParquetUpdates;
+    const hasBinary = hasBinaryEvts || hasBinaryUpds;
+    
+    if (!hasParquet && !hasBinary) {
+      return res.json({ success: false, error: 'No data files found (.parquet or .pb.zst)' });
     }
-    scanDir(rawDir);
-    
-    if (allFiles.length === 0) {
-      return res.json({ success: false, error: 'No .pb.zst files found' });
-    }
-    
-    // Random sample
-    const shuffled = allFiles.sort(() => 0.5 - Math.random());
-    const sampled = shuffled.slice(0, sampleSize);
-    
-    // Import reader dynamically
-    const { readBinaryFile } = await import('../../scripts/ingest/read-binary.js');
     
     const results = {
-      totalFiles: allFiles.length,
-      sampledFiles: sampled.length,
+      dataFormat: hasParquet ? 'parquet' : 'pb.zst',
+      totalFiles: 0,
+      sampledRecords: sampleSize,
       eventFiles: { checked: 0, valid: 0, missingRawJson: 0, emptyRecords: 0 },
       updateFiles: { checked: 0, valid: 0, missingUpdateDataJson: 0, emptyRecords: 0 },
-      // New schema validation results
       schemaCompliance: {
         eventsWithTypeOriginal: 0,
         eventsWithoutTypeOriginal: 0,
@@ -615,7 +620,6 @@ router.post('/validate-integrity', async (req, res) => {
         updatesWithRecordTime: 0,
         updatesWithoutRecordTime: 0,
         eventsWithChildEventIds: 0,
-        // Contract ID tracking
         eventsWithContractId: 0,
         eventsWithoutContractId: 0,
         updatesWithContractId: 0,
@@ -625,190 +629,296 @@ router.post('/validate-integrity', async (req, res) => {
       sampleDetails: [],
     };
     
-    for (const filePath of sampled) {
-      try {
-        const basename = pathBasename(filePath);
-        const isEvents = basename.startsWith('events-');
-        const isUpdates = basename.startsWith('updates-');
-        
-        const fileData = await readBinaryFile(filePath);
-        const records = fileData.records || [];
-        
-        const detail = {
-          file: basename,
-          type: isEvents ? 'events' : 'updates',
-          recordCount: records.length,
-          hasRequiredFields: true,
-          missingFields: [],
-          schemaIssues: [],
-          sampleRecord: null, // Will be populated if there are issues
-        };
-        
-        if (records.length === 0) {
-          detail.hasRequiredFields = false;
-          detail.missingFields.push('empty_file');
-          if (isEvents) results.eventFiles.emptyRecords++;
-          else results.updateFiles.emptyRecords++;
-        } else {
-          // Sample up to 5 records from each file
-          const sampleRecords = records.slice(0, 5);
+    // ===== PARQUET VALIDATION (via DuckDB) =====
+    if (hasParquet) {
+      const normalizedRawDir = rawDir.replace(/\\/g, '/');
+      
+      // Count files
+      const eventFileCount = countParquetFiles(rawDir, 'events');
+      const updateFileCount = countParquetFiles(rawDir, 'updates');
+      results.totalFiles = eventFileCount + updateFileCount;
+      
+      // Validate events via DuckDB sampling
+      if (hasParquetEvents) {
+        try {
+          const eventGlob = `${normalizedRawDir}/**/events-*.parquet`;
           
-          if (isEvents) {
-            results.eventFiles.checked++;
-            let hasMissing = false;
-            
-            for (const r of sampleRecords) {
-              // Check for raw_json field
-              if (!r.raw_json && r.raw_json !== null) {
-                hasMissing = true;
-                if (!detail.missingFields.includes('raw_json')) {
-                  detail.missingFields.push('raw_json');
-                }
-              }
-              
-              // NEW: Check for event_type_original (new schema requirement)
-              const typeOriginal = r.event_type_original || r.typeOriginal || r.type_original;
-              if (typeOriginal) {
-                results.schemaCompliance.eventsWithTypeOriginal++;
-              } else {
-                results.schemaCompliance.eventsWithoutTypeOriginal++;
-                if (!detail.schemaIssues.includes('missing_type_original')) {
-                  detail.schemaIssues.push('missing_type_original');
-                }
-              }
-              
-              // NEW: Check for canonical event_id format (<update_id>:<event_index>)
-              const eventId = r.event_id || r.eventId;
-              if (eventId && eventId.includes(':')) {
-                results.schemaCompliance.eventsWithCanonicalId++;
-              } else if (eventId) {
-                results.schemaCompliance.eventsWithSynthesizedId++;
-                if (!detail.schemaIssues.includes('non_canonical_event_id')) {
-                  detail.schemaIssues.push('non_canonical_event_id');
-                }
-              }
-              
-              // NEW: Check for child_event_ids (for tree structure)
-              const childEventIds = r.child_event_ids || r.childEventIds;
-              if (childEventIds !== undefined) {
-                results.schemaCompliance.eventsWithChildEventIds++;
-              }
-              
-              // Check for contract_id
-              const contractId = r.contract_id || r.contractId;
-              if (contractId) {
-                results.schemaCompliance.eventsWithContractId++;
-              } else {
-                results.schemaCompliance.eventsWithoutContractId++;
-                if (!detail.schemaIssues.includes('missing_contract_id')) {
-                  detail.schemaIssues.push('missing_contract_id');
-                }
-              }
-            }
-            
-            if (hasMissing) {
-              results.eventFiles.missingRawJson++;
-              detail.hasRequiredFields = false;
-            } else {
+          // Sample events and check required fields
+          const eventSample = await db.safeQuery(`
+            SELECT 
+              event_id,
+              raw_json IS NOT NULL as has_raw_json,
+              event_type_original IS NOT NULL as has_type_original,
+              contract_id IS NOT NULL as has_contract_id,
+              child_event_ids IS NOT NULL as has_child_event_ids
+            FROM read_parquet('${eventGlob}', union_by_name=true)
+            USING SAMPLE ${sampleSize} ROWS
+          `);
+          
+          results.eventFiles.checked = eventFileCount;
+          
+          for (const row of eventSample) {
+            // Check raw_json
+            if (row.has_raw_json) {
               results.eventFiles.valid++;
-            }
-          } else if (isUpdates) {
-            results.updateFiles.checked++;
-            let hasMissing = false;
-            
-            for (const r of sampleRecords) {
-              // Check for update_data_json field
-              // NOTE: value may be null/empty string depending on encoder; presence matters here.
-              const hasUpdateDataField =
-                Object.prototype.hasOwnProperty.call(r, 'update_data_json') ||
-                Object.prototype.hasOwnProperty.call(r, 'updateDataJson') ||
-                Object.prototype.hasOwnProperty.call(r, 'update_data') ||
-                Object.prototype.hasOwnProperty.call(r, 'data');
-
-              const hasUpdateDataValue = r.update_data_json || r.updateDataJson || r.update_data || r.data;
-              if (!hasUpdateDataField && !hasUpdateDataValue) {
-                hasMissing = true;
-                if (!detail.missingFields.includes('update_data_json')) {
-                  detail.missingFields.push('update_data_json');
-                }
-              }
-
-              // NEW: Check for root_event_ids (for tree structure)
-              // root_event_ids may be null if empty; treat field presence as compliant for this check.
-              const hasRootEventIdsField =
-                Object.prototype.hasOwnProperty.call(r, 'root_event_ids') ||
-                Object.prototype.hasOwnProperty.call(r, 'rootEventIds');
-
-              if (hasRootEventIdsField) {
-                results.schemaCompliance.updatesWithRootEventIds++;
-              } else {
-                results.schemaCompliance.updatesWithoutRootEventIds++;
-                if (!detail.schemaIssues.includes('missing_root_event_ids')) {
-                  detail.schemaIssues.push('missing_root_event_ids');
-                }
-              }
-              
-              // NEW: Check for record_time (primary ordering field)
-              const recordTime = r.record_time || r.recordTime;
-              if (recordTime) {
-                results.schemaCompliance.updatesWithRecordTime++;
-              } else {
-                results.schemaCompliance.updatesWithoutRecordTime++;
-                if (!detail.schemaIssues.includes('missing_record_time')) {
-                  detail.schemaIssues.push('missing_record_time');
-                }
-              }
-              
-              // Check for contract_id in update events (from events_by_id)
-              const eventsById = r.events_by_id || r.eventsById;
-              if (eventsById && typeof eventsById === 'object') {
-                const eventValues = Object.values(eventsById);
-                const hasContractIds = eventValues.some(e => e && (e.contract_id || e.contractId));
-                if (hasContractIds) {
-                  results.schemaCompliance.updatesWithContractId++;
-                } else if (eventValues.length > 0) {
-                  results.schemaCompliance.updatesWithoutContractId++;
-                }
-              }
-            }
-            
-            if (hasMissing) {
-              results.updateFiles.missingUpdateDataJson++;
-              detail.hasRequiredFields = false;
             } else {
-              results.updateFiles.valid++;
+              results.eventFiles.missingRawJson++;
+            }
+            
+            // Check event_type_original
+            if (row.has_type_original) {
+              results.schemaCompliance.eventsWithTypeOriginal++;
+            } else {
+              results.schemaCompliance.eventsWithoutTypeOriginal++;
+            }
+            
+            // Check canonical event_id format
+            if (row.event_id && String(row.event_id).includes(':')) {
+              results.schemaCompliance.eventsWithCanonicalId++;
+            } else if (row.event_id) {
+              results.schemaCompliance.eventsWithSynthesizedId++;
+            }
+            
+            // Check contract_id
+            if (row.has_contract_id) {
+              results.schemaCompliance.eventsWithContractId++;
+            } else {
+              results.schemaCompliance.eventsWithoutContractId++;
+            }
+            
+            // Check child_event_ids
+            if (row.has_child_event_ids) {
+              results.schemaCompliance.eventsWithChildEventIds++;
             }
           }
           
-          // Add sample record if there are any issues (for debugging)
-          if (detail.missingFields.length > 0 || detail.schemaIssues.length > 0) {
-            // Get first record and sanitize (truncate large JSON fields)
-            const firstRecord = records[0];
-            if (firstRecord) {
-              const sanitized = { ...firstRecord };
-              // Truncate large fields to avoid bloating response
-              for (const key of ['raw_json', 'rawJson', 'payload_json', 'payloadJson', 'update_data_json', 'updateDataJson', 'update_data']) {
-                if (sanitized[key] && typeof sanitized[key] === 'string' && sanitized[key].length > 500) {
-                  sanitized[key] = sanitized[key].substring(0, 500) + '... [truncated]';
-                }
-              }
-              detail.sampleRecord = sanitized;
+          // Add sample detail
+          results.sampleDetails.push({
+            file: `${eventFileCount} parquet files`,
+            type: 'events',
+            recordCount: eventSample.length,
+            hasRequiredFields: results.eventFiles.missingRawJson === 0,
+            missingFields: results.eventFiles.missingRawJson > 0 ? ['raw_json'] : [],
+            schemaIssues: [],
+          });
+          
+        } catch (err) {
+          results.errors.push({ file: 'events-*.parquet', error: err.message });
+        }
+      }
+      
+      // Validate updates via DuckDB sampling
+      if (hasParquetUpdates) {
+        try {
+          const updateGlob = `${normalizedRawDir}/**/updates-*.parquet`;
+          
+          // Sample updates and check required fields
+          const updateSample = await db.safeQuery(`
+            SELECT 
+              update_id,
+              update_data_json IS NOT NULL as has_update_data,
+              root_event_ids IS NOT NULL as has_root_event_ids,
+              record_time IS NOT NULL as has_record_time
+            FROM read_parquet('${updateGlob}', union_by_name=true)
+            USING SAMPLE ${sampleSize} ROWS
+          `);
+          
+          results.updateFiles.checked = updateFileCount;
+          
+          for (const row of updateSample) {
+            // Check update_data_json
+            if (row.has_update_data) {
+              results.updateFiles.valid++;
+            } else {
+              results.updateFiles.missingUpdateDataJson++;
+            }
+            
+            // Check root_event_ids
+            if (row.has_root_event_ids) {
+              results.schemaCompliance.updatesWithRootEventIds++;
+            } else {
+              results.schemaCompliance.updatesWithoutRootEventIds++;
+            }
+            
+            // Check record_time
+            if (row.has_record_time) {
+              results.schemaCompliance.updatesWithRecordTime++;
+            } else {
+              results.schemaCompliance.updatesWithoutRecordTime++;
             }
           }
+          
+          // Add sample detail
+          results.sampleDetails.push({
+            file: `${updateFileCount} parquet files`,
+            type: 'updates',
+            recordCount: updateSample.length,
+            hasRequiredFields: results.updateFiles.missingUpdateDataJson === 0,
+            missingFields: results.updateFiles.missingUpdateDataJson > 0 ? ['update_data_json'] : [],
+            schemaIssues: [],
+          });
+          
+        } catch (err) {
+          results.errors.push({ file: 'updates-*.parquet', error: err.message });
         }
-        
-        results.sampleDetails.push(detail);
-      } catch (err) {
-        results.errors.push({ file: filePath, error: err.message });
+      }
+      
+    } else {
+      // ===== LEGACY .pb.zst VALIDATION =====
+      const allFiles = [];
+      function scanDir(dir) {
+        try {
+          const entries = readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory()) {
+              scanDir(join(dir, entry.name));
+            } else if (entry.name.endsWith('.pb.zst')) {
+              allFiles.push(join(dir, entry.name));
+            }
+          }
+        } catch {}
+      }
+      scanDir(rawDir);
+      
+      results.totalFiles = allFiles.length;
+      
+      // Random sample (limit to 50 files for legacy format)
+      const fileSampleSize = Math.min(50, allFiles.length);
+      const shuffled = allFiles.sort(() => 0.5 - Math.random());
+      const sampled = shuffled.slice(0, fileSampleSize);
+      results.sampledRecords = fileSampleSize;
+      
+      // Import reader dynamically
+      const { readBinaryFile } = await import('../../scripts/ingest/read-binary.js');
+      
+      for (const filePath of sampled) {
+        try {
+          const basename = pathBasename(filePath);
+          const isEvents = basename.startsWith('events-');
+          const isUpdates = basename.startsWith('updates-');
+          
+          const fileData = await readBinaryFile(filePath);
+          const records = fileData.records || [];
+          
+          const detail = {
+            file: basename,
+            type: isEvents ? 'events' : 'updates',
+            recordCount: records.length,
+            hasRequiredFields: true,
+            missingFields: [],
+            schemaIssues: [],
+            sampleRecord: null,
+          };
+          
+          if (records.length === 0) {
+            detail.hasRequiredFields = false;
+            detail.missingFields.push('empty_file');
+            if (isEvents) results.eventFiles.emptyRecords++;
+            else results.updateFiles.emptyRecords++;
+          } else {
+            const sampleRecords = records.slice(0, 5);
+            
+            if (isEvents) {
+              results.eventFiles.checked++;
+              let hasMissing = false;
+              
+              for (const r of sampleRecords) {
+                if (!r.raw_json && r.raw_json !== null) {
+                  hasMissing = true;
+                  if (!detail.missingFields.includes('raw_json')) {
+                    detail.missingFields.push('raw_json');
+                  }
+                }
+                
+                const typeOriginal = r.event_type_original || r.typeOriginal || r.type_original;
+                if (typeOriginal) {
+                  results.schemaCompliance.eventsWithTypeOriginal++;
+                } else {
+                  results.schemaCompliance.eventsWithoutTypeOriginal++;
+                }
+                
+                const eventId = r.event_id || r.eventId;
+                if (eventId && eventId.includes(':')) {
+                  results.schemaCompliance.eventsWithCanonicalId++;
+                } else if (eventId) {
+                  results.schemaCompliance.eventsWithSynthesizedId++;
+                }
+                
+                const childEventIds = r.child_event_ids || r.childEventIds;
+                if (childEventIds !== undefined) {
+                  results.schemaCompliance.eventsWithChildEventIds++;
+                }
+                
+                const contractId = r.contract_id || r.contractId;
+                if (contractId) {
+                  results.schemaCompliance.eventsWithContractId++;
+                } else {
+                  results.schemaCompliance.eventsWithoutContractId++;
+                }
+              }
+              
+              if (hasMissing) {
+                results.eventFiles.missingRawJson++;
+                detail.hasRequiredFields = false;
+              } else {
+                results.eventFiles.valid++;
+              }
+            } else if (isUpdates) {
+              results.updateFiles.checked++;
+              let hasMissing = false;
+              
+              for (const r of sampleRecords) {
+                const hasUpdateDataField =
+                  Object.prototype.hasOwnProperty.call(r, 'update_data_json') ||
+                  Object.prototype.hasOwnProperty.call(r, 'updateDataJson') ||
+                  Object.prototype.hasOwnProperty.call(r, 'update_data') ||
+                  Object.prototype.hasOwnProperty.call(r, 'data');
+                const hasUpdateDataValue = r.update_data_json || r.updateDataJson || r.update_data || r.data;
+                if (!hasUpdateDataField && !hasUpdateDataValue) {
+                  hasMissing = true;
+                  if (!detail.missingFields.includes('update_data_json')) {
+                    detail.missingFields.push('update_data_json');
+                  }
+                }
+
+                const hasRootEventIdsField =
+                  Object.prototype.hasOwnProperty.call(r, 'root_event_ids') ||
+                  Object.prototype.hasOwnProperty.call(r, 'rootEventIds');
+                if (hasRootEventIdsField) {
+                  results.schemaCompliance.updatesWithRootEventIds++;
+                } else {
+                  results.schemaCompliance.updatesWithoutRootEventIds++;
+                }
+                
+                const recordTime = r.record_time || r.recordTime;
+                if (recordTime) {
+                  results.schemaCompliance.updatesWithRecordTime++;
+                } else {
+                  results.schemaCompliance.updatesWithoutRecordTime++;
+                }
+              }
+              
+              if (hasMissing) {
+                results.updateFiles.missingUpdateDataJson++;
+                detail.hasRequiredFields = false;
+              } else {
+                results.updateFiles.valid++;
+              }
+            }
+          }
+          
+          results.sampleDetails.push(detail);
+        } catch (err) {
+          results.errors.push({ file: filePath, error: err.message });
+        }
       }
     }
     
-    // Calculate integrity score (now includes schema compliance)
+    // Calculate integrity score
     const totalChecked = results.eventFiles.checked + results.updateFiles.checked;
     const totalValid = results.eventFiles.valid + results.updateFiles.valid;
     const baseScore = totalChecked > 0 ? (totalValid / totalChecked) * 100 : 0;
     
-    // Penalize for schema issues (new requirements)
     const sc = results.schemaCompliance;
     const totalEvents = sc.eventsWithTypeOriginal + sc.eventsWithoutTypeOriginal;
     const totalUpdates = sc.updatesWithRecordTime + sc.updatesWithoutRecordTime;
@@ -825,7 +935,6 @@ router.post('/validate-integrity', async (req, res) => {
       schemaScore = schemaScore * (0.5 + 0.25 * recordTimeRatio + 0.25 * rootEventIdsRatio);
     }
     
-    // Combined score: 70% base integrity + 30% schema compliance
     results.integrityScore = Math.round(baseScore * 0.7 + schemaScore * 0.3);
     results.schemaComplianceScore = Math.round(schemaScore);
     results.success = true;
