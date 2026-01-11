@@ -380,11 +380,10 @@ export function getPartitionPath(timestamp, migrationId = null) {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   
-  // Include migration_id in path to keep migrations separate
-  if (migrationId) {
-    return `migration=${migrationId}/year=${year}/month=${month}/day=${day}`;
-  }
-  return `year=${year}/month=${month}/day=${day}`;
+  // Always include migration_id in path (default to 0 if not provided)
+  // This keeps partition structure consistent: migration=N/year=.../month=.../day=...
+  const mig = migrationId ?? 0;
+  return `migration=${mig}/year=${year}/month=${month}/day=${day}`;
 }
 
 /**
