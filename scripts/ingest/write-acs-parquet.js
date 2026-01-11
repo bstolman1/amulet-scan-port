@@ -1,24 +1,26 @@
 /**
  * ACS Parquet Writer Module
  * 
- * Writes ACS snapshot data directly to Parquet files using DuckDB.
+ * Writes ACS snapshot data directly to Parquet files using DuckDB Node.js bindings.
  * This eliminates the need for a separate materialization step.
  * 
  * Drop-in replacement for write-acs-jsonl.js with same API surface.
  */
 
 import { mkdirSync, existsSync, readdirSync, rmSync, statSync, writeFileSync, unlinkSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, sep, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { randomBytes } from 'crypto';
+import duckdb from 'duckdb';
 import { getACSPartitionPath } from './acs-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Configuration - Default Windows path: C:\\ledger_raw
-const WIN_DEFAULT = 'C:\\\\ledger_raw';
-const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
+const WIN_DEFAULT = 'C:\\ledger_raw';
+const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WIN_DEFAULT;
+const BASE_DATA_DIR = isAbsolute(BASE_DATA_DIR_RAW) ? resolve(BASE_DATA_DIR_RAW) : resolve(BASE_DATA_DIR_RAW);
 const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
@@ -31,12 +33,50 @@ let currentSnapshotTime = null;
 let currentMigrationId = null;
 let fileCounter = 0;
 
+// Stats tracking
+let totalContractsWritten = 0;
+let totalFilesWritten = 0;
+
+// DuckDB instance for Parquet writing
+let db = null;
+let conn = null;
+
 /**
- * Ensure directory exists
+ * Initialize DuckDB connection
+ */
+function ensureDbInitialized() {
+  if (db && conn) return;
+  
+  db = new duckdb.Database(':memory:');
+  conn = db.connect();
+  console.log(`🦆 [ACS-Parquet] DuckDB initialized for Parquet writing`);
+}
+
+/**
+ * Ensure directory exists (Windows-safe)
  */
 function ensureDir(dirPath) {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
+  const normalizedPath = dirPath.split('/').join(sep);
+  try {
+    if (!existsSync(normalizedPath)) {
+      mkdirSync(normalizedPath, { recursive: true });
+    }
+  } catch (err) {
+    if (err.code !== 'EEXIST') {
+      const parts = normalizedPath.split(sep).filter(Boolean);
+      let current = parts[0].includes(':') ? parts[0] + sep : sep;
+      
+      for (let i = parts[0].includes(':') ? 1 : 0; i < parts.length; i++) {
+        current = join(current, parts[i]);
+        try {
+          if (!existsSync(current)) {
+            mkdirSync(current);
+          }
+        } catch (e) {
+          if (e.code !== 'EEXIST') throw e;
+        }
+      }
+    }
   }
 }
 
@@ -163,32 +203,54 @@ function cleanupEmptyDirs(dirPath) {
 }
 
 /**
- * Write contracts to Parquet file via DuckDB
+ * Write contracts to Parquet file via DuckDB Node.js bindings
  */
 async function writeToParquet(contracts, filePath) {
   if (contracts.length === 0) return null;
   
-  const tempJsonlPath = filePath.replace('.parquet', '.temp.jsonl');
+  ensureDbInitialized();
+  
+  const tempJsonlPath = filePath.replace('.parquet', `.temp-${randomBytes(4).toString('hex')}.jsonl`);
+  const parquetPath = filePath.replace(/\\/g, '/');
+  const jsonlPath = tempJsonlPath.replace(/\\/g, '/');
   
   try {
+    // Write contracts to temp JSONL file
     const lines = contracts.map(c => JSON.stringify(c));
     writeFileSync(tempJsonlPath, lines.join('\n') + '\n');
     
+    // Use DuckDB Node.js bindings to convert to Parquet
     const sql = `
       COPY (
-        SELECT * FROM read_json_auto('${tempJsonlPath.replace(/\\/g, '/')}')
-      ) TO '${filePath.replace(/\\/g, '/')}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
+        SELECT * FROM read_json_auto('${jsonlPath}', ignore_errors=true)
+      ) TO '${parquetPath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
     `;
     
-    execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
+    await new Promise((resolve, reject) => {
+      conn.run(sql, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
     
-    unlinkSync(tempJsonlPath);
+    // Clean up temp file
+    if (existsSync(tempJsonlPath)) {
+      unlinkSync(tempJsonlPath);
+    }
+    
+    totalContractsWritten += contracts.length;
+    totalFilesWritten++;
     
     console.log(`📝 Wrote ${contracts.length} contracts to ${filePath}`);
     return { file: filePath, count: contracts.length };
   } catch (err) {
+    // Clean up temp file on error
     if (existsSync(tempJsonlPath)) {
-      unlinkSync(tempJsonlPath);
+      try {
+        unlinkSync(tempJsonlPath);
+      } catch {
+        // Ignore cleanup errors
+      }
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
@@ -208,6 +270,8 @@ export function setSnapshotTime(time, migrationId = null) {
  * Add contracts to buffer
  */
 export async function bufferContracts(contracts) {
+  if (!contracts || contracts.length === 0) return null;
+  
   contractsBuffer.push(...contracts);
   
   if (contractsBuffer.length >= MAX_ROWS_PER_FILE) {
@@ -223,14 +287,15 @@ export async function flushContracts() {
   if (contractsBuffer.length === 0) return null;
   
   const timestamp = currentSnapshotTime || contractsBuffer[0]?.snapshot_time || new Date();
-  const migrationId = currentMigrationId || contractsBuffer[0]?.migration_id || null;
+  const migrationId = currentMigrationId ?? contractsBuffer[0]?.migration_id ?? null;
   const partition = getACSPartitionPath(timestamp, migrationId);
   const partitionDir = join(DATA_DIR, partition);
   
   ensureDir(partitionDir);
   
   fileCounter++;
-  const fileName = `contracts-${String(fileCounter).padStart(5, '0')}.parquet`;
+  const rand = randomBytes(4).toString('hex');
+  const fileName = `contracts-${String(fileCounter).padStart(5, '0')}-${rand}.parquet`;
   const filePath = join(partitionDir, fileName);
   
   const contractsToWrite = contractsBuffer;
@@ -258,6 +323,8 @@ export function getBufferStats() {
   return {
     contracts: contractsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
+    totalContractsWritten,
+    totalFilesWritten,
   };
 }
 
@@ -287,11 +354,14 @@ export async function writeCompletionMarker(snapshotTime, migrationId, stats = {
     completed_at: new Date().toISOString(),
     snapshot_time: timestamp instanceof Date ? timestamp.toISOString() : timestamp,
     migration_id: migration,
+    files_written: totalFilesWritten,
+    contracts_written: totalContractsWritten,
     ...stats,
   };
   
   writeFileSync(markerPath, JSON.stringify(markerData, null, 2));
   console.log(`✅ Wrote completion marker to ${markerPath}`);
+  console.log(`   📊 Summary: ${totalFilesWritten} files, ${totalContractsWritten} contracts`);
   return markerPath;
 }
 
@@ -304,6 +374,29 @@ export function isSnapshotComplete(snapshotTime, migrationId) {
   return existsSync(markerPath);
 }
 
+/**
+ * Shutdown and cleanup
+ */
+export function shutdown() {
+  if (conn) {
+    try {
+      conn.close();
+    } catch {
+      // Ignore
+    }
+    conn = null;
+  }
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      // Ignore
+    }
+    db = null;
+  }
+  console.log(`🦆 [ACS-Parquet] Shutdown complete`);
+}
+
 export default {
   setSnapshotTime,
   bufferContracts,
@@ -314,4 +407,5 @@ export default {
   writeCompletionMarker,
   isSnapshotComplete,
   cleanupOldSnapshots,
+  shutdown,
 };
