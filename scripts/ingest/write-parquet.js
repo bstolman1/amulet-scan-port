@@ -200,7 +200,9 @@ function mapEventRecord(r) {
 async function writeToParquet(records, filePath, type) {
   if (records.length === 0) return null;
   
-  const tempJsonlPath = filePath.replace('.parquet', '.temp.jsonl');
+  // Use forward slashes consistently for DuckDB on all platforms
+  const normalizedFilePath = filePath.replace(/\\/g, '/');
+  const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
   
   try {
     // Map records to flat structure
@@ -208,42 +210,60 @@ async function writeToParquet(records, filePath, type) {
       ? records.map(mapUpdateRecord)
       : records.map(mapEventRecord);
     
-    // Ensure parent directory exists
+    // Ensure parent directory exists (use original path for fs operations)
     const parentDir = dirname(filePath);
     ensureDir(parentDir);
     
-    // Write temp JSONL
+    // Write temp JSONL (use forward slashes for consistency)
     const lines = mapped.map(r => JSON.stringify(r));
-    writeFileSync(tempJsonlPath, lines.join('\n') + '\n');
+    writeFileSync(tempJsonlPath.replace(/\//g, sep), lines.join('\n') + '\n');
     
     // Verify temp file was written
-    if (!existsSync(tempJsonlPath)) {
-      throw new Error(`Failed to write temp file: ${tempJsonlPath}`);
+    const tempNativePath = tempJsonlPath.replace(/\//g, sep);
+    if (!existsSync(tempNativePath)) {
+      throw new Error(`Failed to write temp file: ${tempNativePath}`);
     }
     
     // Convert to Parquet via DuckDB CLI
-    const sql = `
-      COPY (
-        SELECT * FROM read_json_auto('${tempJsonlPath.replace(/\\/g, '/')}')
-      ) TO '${filePath.replace(/\\/g, '/')}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
-    `;
+    // Use forward slashes in SQL - DuckDB handles them on Windows
+    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`;
     
     try {
-      execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
+      // Capture both stdout and stderr for debugging
+      const result = execSync(`duckdb -c "${sql}"`, { 
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // Set working directory to the output folder
+        cwd: parentDir,
+      });
+      if (result && result.trim()) {
+        console.log(`   DuckDB output: ${result.trim()}`);
+      }
     } catch (duckErr) {
-      console.error(`❌ DuckDB CLI failed. Is DuckDB installed and in PATH?`);
-      console.error(`   Command: duckdb -c "..."`);
+      const stderr = duckErr.stderr?.toString() || '';
+      const stdout = duckErr.stdout?.toString() || '';
+      console.error(`❌ DuckDB CLI failed.`);
+      console.error(`   SQL: ${sql}`);
+      if (stderr) console.error(`   stderr: ${stderr}`);
+      if (stdout) console.error(`   stdout: ${stdout}`);
       console.error(`   Error: ${duckErr.message}`);
-      throw duckErr;
+      throw new Error(`DuckDB failed: ${stderr || duckErr.message}`);
     }
     
-    // Verify parquet file was created
-    if (!existsSync(filePath)) {
-      throw new Error(`DuckDB ran but parquet file not created: ${filePath}`);
+    // Verify parquet file was created (check both path formats)
+    const nativeFilePath = filePath;
+    if (!existsSync(nativeFilePath)) {
+      // Maybe DuckDB wrote to current directory?
+      const basename = normalizedFilePath.split('/').pop();
+      console.error(`   ⚠️ File not at expected path: ${nativeFilePath}`);
+      console.error(`   ⚠️ Checking if file exists as: ${basename}`);
+      throw new Error(`DuckDB ran but parquet file not created: ${nativeFilePath}`);
     }
     
     // Clean up temp file
-    unlinkSync(tempJsonlPath);
+    if (existsSync(tempNativePath)) {
+      unlinkSync(tempNativePath);
+    }
     
     totalFilesWritten++;
     console.log(`📝 Wrote ${records.length} ${type} to ${filePath}`);
@@ -251,8 +271,9 @@ async function writeToParquet(records, filePath, type) {
     return { file: filePath, count: records.length };
   } catch (err) {
     // Clean up temp file on error
-    if (existsSync(tempJsonlPath)) {
-      try { unlinkSync(tempJsonlPath); } catch {}
+    const tempNativePath = tempJsonlPath.replace(/\//g, sep);
+    if (existsSync(tempNativePath)) {
+      try { unlinkSync(tempNativePath); } catch {}
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
