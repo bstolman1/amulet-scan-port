@@ -126,12 +126,12 @@ export async function getTemplateEventCounts(limit = 100) {
 
 /**
  * Get total record counts (efficient - uses DuckDB stats)
+ * NOTE: Sequential queries to avoid DuckDB transaction conflicts
  */
 export async function getTotalCounts() {
-  const [events, updates] = await Promise.all([
-    query('SELECT COUNT(*) as count FROM events_raw'),
-    query('SELECT COUNT(*) as count FROM updates_raw'),
-  ]);
+  // Run queries sequentially to avoid DuckDB transaction conflicts
+  const events = await query('SELECT COUNT(*) as count FROM events_raw');
+  const updates = await query('SELECT COUNT(*) as count FROM updates_raw');
   
   // Convert BigInt to Number for JSON serialization
   return {
