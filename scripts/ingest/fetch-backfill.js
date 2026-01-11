@@ -61,6 +61,20 @@ import {
 // CRITICAL FIX #2: Import atomic cursor operations
 import { AtomicCursor, loadCursorLegacy, isCursorComplete } from './atomic-cursor.js';
 
+// Structured JSON logging for long run debugging
+import {
+  log,
+  logBatch,
+  logCursor,
+  logError,
+  logFatal,
+  logTune,
+  logMetrics,
+  logMigration,
+  logSynchronizer,
+  logSummary,
+} from './structured-logger.js';
+
 // Unified writer functions that delegate to appropriate writer(s)
 async function bufferUpdates(updates) {
   if (KEEP_RAW) {
@@ -1052,32 +1066,57 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
 /**
  * Backfill a single synchronizer with parallel fetching (shard-aware)
  * Uses auto-tuning for parallel fetches and decode workers
+ * 
+ * CRITICAL FIX: Now uses AtomicCursor for crash-safe cursor management
  */
 async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime, shardIndex = null) {
   const shardLabel = shardIndex !== null ? ` [shard ${shardIndex}/${SHARD_TOTAL}]` : '';
+  
+  // Structured log: synchronizer start
+  logSynchronizer('start', {
+    migrationId,
+    synchronizerId,
+    shardIndex,
+    minTime,
+    maxTime,
+    extra: {
+      parallel_fetches: dynamicParallelFetches,
+      decode_workers: dynamicDecodeWorkers,
+    },
+  });
+  
   console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...${shardLabel}`);
   console.log(`   Range: ${minTime} to ${maxTime}`);
   console.log(`   Parallel fetches (auto-tuned): ${dynamicParallelFetches} (min=${MIN_PARALLEL_FETCHES}, max=${MAX_PARALLEL_FETCHES})`);
   console.log(`   Decode workers (auto-tuned): ${dynamicDecodeWorkers} (min=${MIN_DECODE_WORKERS}, max=${MAX_DECODE_WORKERS})`);
   
-  // Load existing cursor (shard-aware)
-  let cursor = loadCursor(migrationId, synchronizerId, shardIndex);
-  let before = cursor?.last_before || maxTime;
+  // CRITICAL FIX: Use AtomicCursor for transactional cursor management
+  const atomicCursor = new AtomicCursor(CURSOR_DIR, migrationId, synchronizerId, shardIndex);
+  
+  // Load existing cursor state
+  let cursorState = atomicCursor.load();
+  let before = cursorState?.last_before || maxTime;
   const atOrAfter = minTime;
   
   // CRITICAL: Check if cursor.last_before is already at or before minTime
   // This means we've already processed everything.
-  // HOWEVER: we must not present as "fully complete" while writes are still draining.
-  if (cursor && cursor.last_before) {
-    const lastBeforeMs = new Date(cursor.last_before).getTime();
+  if (cursorState && cursorState.last_before) {
+    const lastBeforeMs = new Date(cursorState.last_before).getTime();
     const minTimeMs = new Date(minTime).getTime();
 
     if (lastBeforeMs <= minTimeMs) {
-      console.log(`   ⚠️ Cursor last_before (${cursor.last_before}) is at or before minTime (${minTime})`);
+      log('info', 'synchronizer_already_complete', {
+        migration: migrationId,
+        synchronizer: synchronizerId.substring(0, 30),
+        shard: shardIndex,
+        last_before: cursorState.last_before,
+        min_time: minTime,
+      });
+      
+      console.log(`   ⚠️ Cursor last_before (${cursorState.last_before}) is at or before minTime (${minTime})`);
       console.log(`   ⚠️ This synchronizer appears complete. Ensuring writer queues are drained before marking complete.`);
 
       // Flush any in-memory buffers and wait for pending writes.
-      // This prevents the UI from showing 100% while data is still being written.
       try {
         await flushAll();
       } catch {}
@@ -1094,66 +1133,97 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const bufferedRecords = Number((finalStats.updatesBuffered || 0) + (finalStats.eventsBuffered || 0));
       const hasPendingWork = pendingWritesAccurate > 0 || bufferedRecords > 0;
 
-      // Mark complete, but keep pending fields accurate so UI can show "Finalizing" if needed.
-      if (!cursor.complete || hasPendingWork) {
-        saveCursor(
+      // Mark complete atomically
+      if (!cursorState.complete || hasPendingWork) {
+        atomicCursor.saveAtomic({
+          ...cursorState,
+          pending_writes: pendingWritesAccurate,
+          buffered_records: bufferedRecords,
+          complete: !hasPendingWork,
+          min_time: minTime,
+          max_time: maxTime,
+        });
+
+        logCursor('finalized', {
           migrationId,
           synchronizerId,
-          {
-            ...cursor,
-            pending_writes: pendingWritesAccurate,
-            buffered_records: bufferedRecords,
-            complete: !hasPendingWork,
-            updated_at: new Date().toISOString(),
-          },
-          minTime,
-          maxTime,
           shardIndex,
-        );
+          lastBefore: cursorState.last_before,
+          totalUpdates: cursorState.total_updates || 0,
+          totalEvents: cursorState.total_events || 0,
+          complete: !hasPendingWork,
+          pendingWrites: pendingWritesAccurate,
+        });
 
         if (hasPendingWork) {
           console.log(`   ⏳ Writes still pending (pending_writes=${pendingWritesAccurate}, buffered_records=${bufferedRecords}). Cursor left in finalizing state.`);
         }
       }
 
-      return { updates: cursor.total_updates || 0, events: cursor.total_events || 0 };
+      return { updates: cursorState.total_updates || 0, events: cursorState.total_events || 0 };
     }
 
-    // Also log cursor state for debugging
+    // Log cursor state for debugging
+    logCursor('resume', {
+      migrationId,
+      synchronizerId,
+      shardIndex,
+      lastBefore: cursorState.last_before,
+      totalUpdates: cursorState.total_updates || 0,
+      totalEvents: cursorState.total_events || 0,
+      complete: cursorState.complete || false,
+    });
+    
     console.log(
-      `   📍 Resuming from cursor: last_before=${cursor.last_before}, updates=${cursor.total_updates || 0}, complete=${cursor.complete || false}`,
+      `   📍 Resuming from cursor: last_before=${cursorState.last_before}, updates=${cursorState.total_updates || 0}, complete=${cursorState.complete || false}`,
     );
   }
   
-  let totalUpdates = cursor?.total_updates || 0;
-  let totalEvents = cursor?.total_events || 0;
+  let totalUpdates = cursorState?.total_updates || 0;
+  let totalEvents = cursorState?.total_events || 0;
   let batchCount = 0;
   const startTime = Date.now();
+  let lastMetricsLog = Date.now();
+  const METRICS_LOG_INTERVAL_MS = 60000; // Log metrics every minute
   
   // Save initial cursor only if this is a fresh start
-  if (!cursor) {
-    saveCursor(migrationId, synchronizerId, {
+  if (!cursorState) {
+    atomicCursor.saveAtomic({
       last_before: before,
       total_updates: 0,
       total_events: 0,
       started_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }, minTime, maxTime, shardIndex);
+      min_time: minTime,
+      max_time: maxTime,
+    });
+    
+    logCursor('created', {
+      migrationId,
+      synchronizerId,
+      shardIndex,
+      lastBefore: before,
+      totalUpdates: 0,
+      totalEvents: 0,
+    });
   }
   
   while (true) {
+    const batchStartTime = Date.now();
+    
     try {
       // Use current dynamic concurrency values
       const localParallel = dynamicParallelFetches;
+      const cursorBeforeBatch = before;
       
-      // Cursor callback for streaming progress updates
+      // Cursor callback for streaming progress updates (transactional)
       const cursorCallback = (streamUpdates, streamEvents, streamEarliest) => {
-        saveCursor(migrationId, synchronizerId, {
+        atomicCursor.saveAtomic({
           last_before: streamEarliest || before,
           total_updates: totalUpdates + streamUpdates,
           total_events: totalEvents + streamEvents,
-          updated_at: new Date().toISOString(),
-        }, minTime, maxTime, shardIndex);
+          min_time: minTime,
+          max_time: maxTime,
+        });
       };
       
       const fetchResult = await parallelFetchBatch(
@@ -1166,6 +1236,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents } = fetchResult;
       
       if (results.length === 0 && !batchUpdates) {
+        log('info', 'no_more_transactions', {
+          migration: migrationId,
+          synchronizer: synchronizerId.substring(0, 30),
+          shard: shardIndex,
+          batch: batchCount,
+        });
         console.log(`   ✅ No more transactions. Marking complete.${shardLabel}`);
         break;
       }
@@ -1191,26 +1267,68 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       // Calculate throughput
       const elapsed = (Date.now() - startTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
+      const batchLatency = Date.now() - batchStartTime;
       
-      // Save cursor and log progress (include pending write state)
+      // Get buffer stats
       const stats = getBufferStats();
       const pendingWritesAccurate =
         Number(stats.pendingWrites || 0) +
         Number(stats.queuedWrites ?? stats.queuedJobs ?? 0) +
         Number(stats.activeWrites ?? stats.activeWorkers ?? 0);
+      const queuedJobs = Number(stats.queuedJobs ?? 0);
+      const activeWorkers = Number(stats.activeWorkers ?? 0);
 
-      saveCursor(migrationId, synchronizerId, {
+      // CRITICAL FIX: Atomic cursor save AFTER data is confirmed buffered
+      atomicCursor.saveAtomic({
         last_before: before,
         total_updates: totalUpdates,
         total_events: totalEvents,
         pending_writes: pendingWritesAccurate,
         buffered_records: (stats.updatesBuffered || 0) + (stats.eventsBuffered || 0),
-        complete: false, // Explicitly mark as not complete during loop
-        updated_at: new Date().toISOString(),
-      }, minTime, maxTime, shardIndex);
+        complete: false,
+        min_time: minTime,
+        max_time: maxTime,
+      });
       
-      const queuedJobs = Number(stats.queuedJobs ?? 0);
-      const activeWorkers = Number(stats.activeWorkers ?? 0);
+      // Structured batch log
+      logBatch({
+        migrationId,
+        synchronizerId,
+        shardIndex,
+        batchCount,
+        updates: batchUpdates || 0,
+        events: batchEvents || 0,
+        totalUpdates,
+        totalEvents,
+        cursorBefore: cursorBeforeBatch,
+        cursorAfter: before,
+        throughput,
+        latencyMs: batchLatency,
+        parallelFetches: dynamicParallelFetches,
+        decodeWorkers: dynamicDecodeWorkers,
+        queuedJobs,
+        activeWorkers,
+      });
+      
+      // Periodic metrics log (every minute)
+      if (Date.now() - lastMetricsLog >= METRICS_LOG_INTERVAL_MS) {
+        logMetrics({
+          migrationId,
+          shardIndex,
+          elapsedSeconds: elapsed,
+          totalUpdates,
+          totalEvents,
+          avgThroughput: throughput,
+          currentThroughput: Math.round((batchUpdates || 0) / (batchLatency / 1000)),
+          parallelFetches: dynamicParallelFetches,
+          decodeWorkers: dynamicDecodeWorkers,
+          avgLatencyMs: fetchStats.avgLatency,
+          p95LatencyMs: fetchStats.p95Latency,
+          errorCount: fetchStats.errorCount || 0,
+          retryCount: fetchStats.retry503Count,
+        });
+        lastMetricsLog = Date.now();
+      }
       
       // Force flush periodically to prevent memory buildup
       if (batchCount % FLUSH_EVERY_BATCHES === 0) {
@@ -1225,6 +1343,13 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || new Date(before).getTime() <= new Date(atOrAfter).getTime()) {
+        log('info', 'reached_lower_bound', {
+          migration: migrationId,
+          synchronizer: synchronizerId.substring(0, 30),
+          shard: shardIndex,
+          before,
+          at_or_after: atOrAfter,
+        });
         console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
         break;
       }
@@ -1232,21 +1357,44 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     } catch (err) {
       const status = err.response?.status;
       const msg = err.response?.data?.error || err.message;
+      
+      logError('batch', err, {
+        migration: migrationId,
+        synchronizer: synchronizerId.substring(0, 30),
+        shard: shardIndex,
+        batch: batchCount,
+        cursor_before: before,
+      });
+      
       console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}): ${msg}${shardLabel}`);
       
       // Save cursor and retry for transient errors
       if ([429, 500, 502, 503, 504].includes(status)) {
         console.log(`   ⏳ Transient error, backing off...${shardLabel}`);
-        saveCursor(migrationId, synchronizerId, {
+        
+        atomicCursor.saveAtomic({
           last_before: before,
           total_updates: totalUpdates,
           total_events: totalEvents,
           error: msg,
-          updated_at: new Date().toISOString(),
-        }, minTime, maxTime, shardIndex);
+          error_at: new Date().toISOString(),
+          min_time: minTime,
+          max_time: maxTime,
+        });
+        
         await sleep(5000);
         continue;
       }
+      
+      // CRITICAL: Non-transient error - log fatal and throw
+      logFatal('batch', err, {
+        migration: migrationId,
+        synchronizer: synchronizerId.substring(0, 30),
+        shard: shardIndex,
+        batch: batchCount,
+        total_updates: totalUpdates,
+        total_events: totalEvents,
+      });
       
       throw err;
     }
@@ -1263,17 +1411,46 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   const finalStats = getBufferStats();
   console.log(`   ✅ All writes complete. Final queue: ${finalStats.queuedJobs || 0} pending, ${finalStats.activeWorkers || 0} active${shardLabel}`);
   
-  // Now safe to mark as complete - all data is written
-  saveCursor(migrationId, synchronizerId, {
+  const totalTime = (Date.now() - startTime) / 1000;
+  
+  // CRITICAL FIX: Atomic cursor save - mark complete ONLY after all writes confirmed
+  atomicCursor.saveAtomic({
     last_before: before,
     total_updates: totalUpdates,
     total_events: totalEvents,
     complete: true,
-    updated_at: new Date().toISOString(),
-  }, minTime, maxTime, shardIndex);
+    completed_at: new Date().toISOString(),
+    min_time: minTime,
+    max_time: maxTime,
+  });
   
-  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`   ⏱️ Completed in ${totalTime}s (${Math.round(totalUpdates / parseFloat(totalTime))}/s avg)${shardLabel}`);
+  // Structured log: synchronizer complete
+  logSynchronizer('complete', {
+    migrationId,
+    synchronizerId,
+    shardIndex,
+    minTime,
+    maxTime,
+    totalUpdates,
+    totalEvents,
+    elapsedSeconds: totalTime.toFixed(1),
+    extra: {
+      avg_throughput: Math.round(totalUpdates / totalTime),
+      batch_count: batchCount,
+    },
+  });
+  
+  logCursor('completed', {
+    migrationId,
+    synchronizerId,
+    shardIndex,
+    lastBefore: before,
+    totalUpdates,
+    totalEvents,
+    complete: true,
+  });
+  
+  console.log(`   ⏱️ Completed in ${totalTime.toFixed(1)}s (${Math.round(totalUpdates / totalTime)}/s avg)${shardLabel}`);
   
   return { updates: totalUpdates, events: totalEvents };
 }
@@ -1476,6 +1653,18 @@ async function runBackfill() {
   console.log(`   Total time: ${grandTotalTime}s`);
   console.log(`   Average throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s`);
   console.log(`${"═".repeat(80)}\n`);
+  
+  // Structured run summary
+  logSummary({
+    success: true,
+    totalUpdates: grandTotalUpdates,
+    totalEvents: grandTotalEvents,
+    totalTimeSeconds: parseFloat(grandTotalTime),
+    avgThroughput: Math.round(grandTotalUpdates / parseFloat(grandTotalTime)),
+    migrationsProcessed: processedMigrations.size,
+    allComplete: false, // Will be updated below
+    pendingCount: 0,
+  });
 
   // Check if ALL migrations are complete
   const completionStatus = await areAllMigrationsComplete();
