@@ -3,7 +3,11 @@
  * ACS Snapshot Fetcher
  * 
  * Fetches current Active Contract Set from Canton Scan API
- * and writes to local partitioned JSONL files for DuckDB.
+ * and writes directly to Parquet files (default) or JSONL with --keep-raw.
+ * 
+ * Usage:
+ *   node fetch-acs.js            # Write to Parquet (default)
+ *   node fetch-acs.js --keep-raw # Also write to .jsonl files
  */
 
 import dotenv from 'dotenv';
@@ -14,7 +18,73 @@ import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
 import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat } from './acs-schema.js';
-import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete, cleanupOldSnapshots } from './write-acs-jsonl.js';
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+
+// Use Parquet writer by default, JSONL writer only if --keep-raw
+import * as parquetWriter from './write-acs-parquet.js';
+import * as jsonlWriter from './write-acs-jsonl.js';
+
+// Unified writer functions
+function setSnapshotTime(time, migrationId = null) {
+  parquetWriter.setSnapshotTime(time, migrationId);
+  if (KEEP_RAW) {
+    jsonlWriter.setSnapshotTime(time, migrationId);
+  }
+}
+
+async function bufferContracts(contracts) {
+  if (KEEP_RAW) {
+    await jsonlWriter.bufferContracts(contracts);
+  }
+  return parquetWriter.bufferContracts(contracts);
+}
+
+async function flushAll() {
+  const results = [];
+  if (KEEP_RAW) {
+    const jsonlResults = await jsonlWriter.flushAll();
+    results.push(...jsonlResults);
+  }
+  const parquetResults = await parquetWriter.flushAll();
+  results.push(...parquetResults);
+  return results;
+}
+
+function getBufferStats() {
+  const stats = parquetWriter.getBufferStats();
+  if (KEEP_RAW) {
+    stats.jsonlContracts = jsonlWriter.getBufferStats().contracts;
+  }
+  return stats;
+}
+
+function clearBuffers() {
+  parquetWriter.clearBuffers();
+  if (KEEP_RAW) {
+    jsonlWriter.clearBuffers();
+  }
+}
+
+async function writeCompletionMarker(time, migrationId, stats) {
+  if (KEEP_RAW) {
+    await jsonlWriter.writeCompletionMarker(time, migrationId, stats);
+  }
+  return parquetWriter.writeCompletionMarker(time, migrationId, stats);
+}
+
+function isSnapshotComplete(time, migrationId) {
+  return parquetWriter.isSnapshotComplete(time, migrationId);
+}
+
+function cleanupOldSnapshots(migrationId) {
+  if (KEEP_RAW) {
+    jsonlWriter.cleanupOldSnapshots(migrationId);
+  }
+  return parquetWriter.cleanupOldSnapshots(migrationId);
+}
 
 // TLS config (secure by default)
 // Set INSECURE_TLS=1 only in controlled environments with self-signed certs.

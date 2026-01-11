@@ -2,13 +2,13 @@
 /**
  * Canton Ledger Ingestion Script - Live Updates
  * 
- * Fetches ledger updates from Canton Scan API and writes to partitioned binary files.
- * Data is stored as Protobuf + ZSTD compressed files (.pb.zst).
- * Optional: Run rotate-parquet.js to convert to actual Parquet format.
+ * Fetches ledger updates from Canton Scan API and writes directly to Parquet (default)
+ * or to binary files with --keep-raw flag.
  * 
  * Usage:
- *   node fetch-updates.js          # Resume from backfill cursor
- *   node fetch-updates.js --live   # Start from current API time (live mode)
+ *   node fetch-updates.js            # Resume from backfill cursor, write to Parquet
+ *   node fetch-updates.js --live     # Start from current API time (live mode)
+ *   node fetch-updates.js --keep-raw # Also write to .pb.zst files
  */
 
 import dotenv from 'dotenv';
@@ -17,12 +17,57 @@ dotenv.config();
 import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
-// Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
 const LIVE_MODE = args.includes('--live') || args.includes('-l');
+const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+
+// Use Parquet writer by default, binary writer only if --keep-raw
+import * as parquetWriter from './write-parquet.js';
+import * as binaryWriter from './write-binary.js';
+
+// Unified writer functions
+async function bufferUpdates(updates) {
+  if (KEEP_RAW) {
+    await binaryWriter.bufferUpdates(updates);
+  }
+  return parquetWriter.bufferUpdates(updates);
+}
+
+async function bufferEvents(events) {
+  if (KEEP_RAW) {
+    await binaryWriter.bufferEvents(events);
+  }
+  return parquetWriter.bufferEvents(events);
+}
+
+async function flushAll() {
+  const results = [];
+  if (KEEP_RAW) {
+    const binaryResults = await binaryWriter.flushAll();
+    results.push(...binaryResults);
+  }
+  const parquetResults = await parquetWriter.flushAll();
+  results.push(...parquetResults);
+  return results;
+}
+
+function getBufferStats() {
+  const stats = parquetWriter.getBufferStats();
+  if (KEEP_RAW) {
+    const binaryStats = binaryWriter.getBufferStats();
+    stats.binaryPendingWrites = binaryStats.pendingWrites;
+  }
+  return stats;
+}
+
+function setMigrationId(id) {
+  parquetWriter.setMigrationId(id);
+  if (KEEP_RAW) {
+    binaryWriter.setMigrationId(id);
+  }
+}
 
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
