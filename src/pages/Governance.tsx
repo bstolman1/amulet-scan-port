@@ -14,7 +14,7 @@ import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
 import { useGovernanceProposals } from "@/hooks/use-governance-proposals";
-import { useSVNodeAllProposals, parseAction, parseVotes } from "@/hooks/use-sv-node-proposals";
+
 import { useCanonicalProposals, useDedupeStats, parseCanonicalAction, parseCanonicalVotes } from "@/hooks/use-canonical-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -156,12 +156,6 @@ const Governance = () => {
     error: semanticError,
   } = useGovernanceProposals();
 
-  // SV Node live proposals (direct from SV node API)
-  const {
-    data: svNodeData,
-    isLoading: svNodeLoading,
-    error: svNodeError,
-  } = useSVNodeAllProposals();
 
   // Canonical proposals from DuckDB index (deduplicated by proposal_id)
   // This is the PRIMARY source for historical governance data matching explorer counts
@@ -414,12 +408,12 @@ const Governance = () => {
               <h3 className="text-sm font-medium text-muted-foreground">Total Proposals</h3>
               <Server className="h-5 w-5 text-chart-2" />
             </div>
-            {svNodeLoading ? (
+            {isLoading ? (
               <Skeleton className="h-10 w-full" />
             ) : (
               <>
-                <p className="text-3xl font-bold text-chart-2 mb-1">{svNodeData?.stats?.total || totalProposals}</p>
-                <p className="text-xs text-muted-foreground">{svNodeData ? 'SV Node' : 'Local ACS'}</p>
+                <p className="text-3xl font-bold text-chart-2 mb-1">{totalProposals}</p>
+                <p className="text-xs text-muted-foreground">Local ACS</p>
               </>
             )}
           </Card>
@@ -429,11 +423,11 @@ const Governance = () => {
               <h3 className="text-sm font-medium text-muted-foreground">Active Proposals</h3>
               <Clock className="h-5 w-5 text-warning" />
             </div>
-            {svNodeLoading ? (
+            {isLoading ? (
               <Skeleton className="h-10 w-full" />
             ) : (
               <>
-                <p className="text-3xl font-bold text-warning mb-1">{svNodeData?.stats?.in_progress || activeProposals}</p>
+                <p className="text-3xl font-bold text-warning mb-1">{activeProposals}</p>
                 <p className="text-xs text-muted-foreground">In voting</p>
               </>
             )}
