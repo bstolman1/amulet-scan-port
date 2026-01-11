@@ -92,6 +92,41 @@ export async function initEngineSchema() {
     ON aggregation_state(agg_name)
   `);
 
+  // Per-migration ingestion state tracking (Finding #2 + #4: transactional cursor safety)
+  // Each migration is an independent ingestion stream with its own cursor and completion state
+  await query(`
+    CREATE TABLE IF NOT EXISTS ingestion_state (
+      source              VARCHAR NOT NULL,
+      migration_id        INTEGER NOT NULL,
+      synchronizer_id     VARCHAR,
+      cursor              VARCHAR,
+      min_time            TIMESTAMP,
+      max_time            TIMESTAMP,
+      total_updates       BIGINT DEFAULT 0,
+      total_events        BIGINT DEFAULT 0,
+      complete            BOOLEAN DEFAULT FALSE,
+      error_count         INTEGER DEFAULT 0,
+      last_error          VARCHAR,
+      updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (source, migration_id, COALESCE(synchronizer_id, ''))
+    )
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_state_source 
+    ON ingestion_state(source)
+  `);
+  
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_state_migration 
+    ON ingestion_state(migration_id)
+  `);
+
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_state_complete 
+    ON ingestion_state(complete)
+  `);
+
   // Sequence for file IDs
   await query(`
     CREATE SEQUENCE IF NOT EXISTS raw_files_seq START 1
@@ -420,6 +455,7 @@ export async function resetEngineSchema() {
   await query('DROP TABLE IF EXISTS events_raw');
   await query('DROP TABLE IF EXISTS updates_raw');
   await query('DROP TABLE IF EXISTS aggregation_state');
+  await query('DROP TABLE IF EXISTS ingestion_state');
   await query('DROP TABLE IF EXISTS vote_requests');
   await query('DROP TABLE IF EXISTS vote_request_index_state');
   await query('DROP TABLE IF EXISTS vote_request_build_history');

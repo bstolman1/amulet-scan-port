@@ -17,6 +17,15 @@ dotenv.config();
 import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
+import { 
+  log, 
+  logBatch, 
+  logCursor, 
+  logError, 
+  logFatal,
+  logMetrics,
+  logSummary 
+} from './structured-logger.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -101,6 +110,8 @@ let lastMigrationId = null;
 let migrationId = null;
 let isRunning = true;
 let lastIndexRebuildAt = 0; // Track updates count at last index rebuild
+let sessionErrorCount = 0; // Track errors for this session
+let sessionStartTime = Date.now();
 
 // Cursor directory (same as backfill script)
 const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
@@ -142,12 +153,12 @@ function loadLiveCursor() {
     const content = fs.readFileSync(LIVE_CURSOR_FILE, 'utf8').trim();
     // Handle empty or corrupted cursor file
     if (!content || content.length === 0) {
-      console.warn(`⚠️ Live cursor file is empty, ignoring`);
+      log('warn', 'cursor_empty', { file: LIVE_CURSOR_FILE });
       return null;
     }
     const data = JSON.parse(content);
     if (!data.migration_id || !data.record_time) {
-      console.warn(`⚠️ Live cursor file is missing required fields, ignoring`);
+      log('warn', 'cursor_invalid', { file: LIVE_CURSOR_FILE, reason: 'missing_fields' });
       return null;
     }
     
@@ -155,14 +166,17 @@ function loadLiveCursor() {
     const cursorTime = new Date(data.record_time).getTime();
     const now = Date.now();
     if (cursorTime > now) {
-      console.warn(`⚠️ Live cursor has future timestamp (${data.record_time}), ignoring`);
+      log('warn', 'cursor_future', { file: LIVE_CURSOR_FILE, record_time: data.record_time });
       return null;
     }
     
-    console.log(`📍 Loaded live cursor: migration=${data.migration_id}, record_time=${data.record_time}`);
+    logCursor('loaded', { 
+      migrationId: data.migration_id, 
+      lastBefore: data.record_time 
+    });
     return data;
   } catch (err) {
-    console.warn(`⚠️ Failed to read live cursor: ${err.message}, ignoring`);
+    logError('cursor_read', err, { file: LIVE_CURSOR_FILE });
     return null;
   }
 }
@@ -615,8 +629,15 @@ async function processUpdates(items) {
  * Main ingestion loop
  */
 async function runIngestion() {
-  const modeLabel = LIVE_MODE ? '🔴 LIVE MODE' : '📜 RESUME MODE';
-  console.log(`🚀 Starting Canton ledger ingestion (v2/updates mode) - ${modeLabel}\n`);
+  const modeLabel = LIVE_MODE ? 'LIVE' : 'RESUME';
+  sessionStartTime = Date.now();
+  
+  log('info', 'ingestion_start', { 
+    mode: modeLabel,
+    scan_url: SCAN_URL,
+    batch_size: BATCH_SIZE,
+    poll_interval: POLL_INTERVAL,
+  });
   
   // Check for existing data from backfill first (sets lastMigrationId if found)
   lastTimestamp = await findLatestTimestamp();
@@ -629,18 +650,26 @@ async function runIngestion() {
   let afterRecordTime = lastTimestamp;
   
   if (afterRecordTime) {
-    console.log(`📍 ${LIVE_MODE ? 'Live ingestion' : 'Resuming'} from: migration=${afterMigrationId}, record_time=${afterRecordTime}`);
+    logCursor('resume', { 
+      migrationId: afterMigrationId, 
+      lastBefore: afterRecordTime,
+      mode: modeLabel,
+    });
   } else {
-    console.log('📍 Starting fresh (no existing data found)');
+    log('info', 'ingestion_fresh_start', { mode: modeLabel });
     afterMigrationId = null; // Start from beginning
   }
   
   let totalUpdates = 0;
   let totalEvents = 0;
   let emptyPolls = 0;
+  let batchCount = 0;
+  let lastMetricsTime = Date.now();
   
   while (isRunning) {
     try {
+      const batchStart = Date.now();
+      
       // Fetch using v2/updates with proper (migration_id, record_time) pagination
       const data = await fetchUpdates(afterMigrationId, afterRecordTime);
       
@@ -651,18 +680,34 @@ async function runIngestion() {
         if (emptyPolls === 1) {
           const flushed = await flushAll();
           if (flushed.length > 0) {
-            console.log(`💾 Flushed ${flushed.length} files`);
+            log('info', 'flush_complete', { files_written: flushed.length });
           }
           // Save live cursor after flush
           if (LIVE_MODE && afterRecordTime) {
             saveLiveCursor(afterMigrationId, afterRecordTime);
+            logCursor('saved', { 
+              migrationId: afterMigrationId, 
+              lastBefore: afterRecordTime,
+              totalUpdates,
+              totalEvents,
+            });
           }
         }
         
-        // Log status periodically
-        if (emptyPolls % 12 === 0) { // Every minute at 5s intervals
-          const stats = getBufferStats();
-          console.log(`⏳ ${LIVE_MODE ? '[LIVE]' : ''} Waiting for new updates... (buffered: ${stats.updates} updates, ${stats.events} events)`);
+        // Log metrics periodically (every 60 seconds)
+        const now = Date.now();
+        if (now - lastMetricsTime >= 60000) {
+          lastMetricsTime = now;
+          const elapsedSeconds = (now - sessionStartTime) / 1000;
+          logMetrics({
+            migrationId: afterMigrationId,
+            elapsedSeconds,
+            totalUpdates,
+            totalEvents,
+            avgThroughput: totalUpdates / Math.max(1, elapsedSeconds),
+            currentThroughput: 0,
+            errorCount: sessionErrorCount,
+          });
         }
         
         await sleep(POLL_INTERVAL);
@@ -670,10 +715,13 @@ async function runIngestion() {
       }
       
       emptyPolls = 0;
+      batchCount++;
       
       const { updates, events } = await processUpdates(data.items);
       totalUpdates += updates;
       totalEvents += events;
+      
+      const cursorBefore = afterRecordTime;
       
       // Update pagination cursor from response
       if (data.lastMigrationId !== null) {
@@ -683,8 +731,24 @@ async function runIngestion() {
         afterRecordTime = data.lastRecordTime;
       }
       
+      const batchLatency = Date.now() - batchStart;
+      
+      // Structured batch log
+      logBatch({
+        migrationId: afterMigrationId,
+        batchCount,
+        updates,
+        events,
+        totalUpdates,
+        totalEvents,
+        cursorBefore,
+        cursorAfter: afterRecordTime,
+        latencyMs: batchLatency,
+        throughput: updates / (batchLatency / 1000),
+      });
+      
       // Periodically save live cursor (every 10 batches)
-      if (LIVE_MODE && totalUpdates % (BATCH_SIZE * 10) < BATCH_SIZE) {
+      if (LIVE_MODE && batchCount % 10 === 0) {
         saveLiveCursor(afterMigrationId, afterRecordTime);
       }
       
@@ -694,15 +758,54 @@ async function runIngestion() {
         triggerIndexRebuild();
       }
       
-      const stats = getBufferStats();
-      const modePrefix = LIVE_MODE ? '🔴' : '📦';
-      console.log(`${modePrefix} Processed ${updates} updates, ${events} events | Total: ${totalUpdates} updates, ${totalEvents} events | Cursor: m${afterMigrationId}@${afterRecordTime?.substring(0, 19) || 'start'}`);
+      // Log metrics every 60 seconds
+      const now = Date.now();
+      if (now - lastMetricsTime >= 60000) {
+        lastMetricsTime = now;
+        const elapsedSeconds = (now - sessionStartTime) / 1000;
+        logMetrics({
+          migrationId: afterMigrationId,
+          elapsedSeconds,
+          totalUpdates,
+          totalEvents,
+          avgThroughput: totalUpdates / Math.max(1, elapsedSeconds),
+          currentThroughput: updates / (batchLatency / 1000),
+          errorCount: sessionErrorCount,
+        });
+      }
       
     } catch (err) {
-      console.error('❌ Error during ingestion:', err.message);
+      sessionErrorCount++;
+      logError('fetch', err, { 
+        migration: afterMigrationId, 
+        cursor: afterRecordTime,
+        error_count: sessionErrorCount,
+      });
+      
+      // Fail hard after too many consecutive errors
+      if (sessionErrorCount >= 10) {
+        logFatal('too_many_errors', err, { 
+          error_count: sessionErrorCount,
+          migration: afterMigrationId,
+        });
+        throw err;
+      }
+      
       await sleep(10000); // Wait 10s on error
     }
   }
+  
+  // Log final summary
+  const elapsedSeconds = (Date.now() - sessionStartTime) / 1000;
+  logSummary({
+    success: true,
+    totalUpdates,
+    totalEvents,
+    totalTimeSeconds: elapsedSeconds,
+    avgThroughput: totalUpdates / Math.max(1, elapsedSeconds),
+    migrationsProcessed: 1,
+    allComplete: false, // Live mode never "completes"
+  });
 }
 
 /**
@@ -736,20 +839,29 @@ function triggerIndexRebuild() {
  * Graceful shutdown
  */
 async function shutdown() {
-  console.log('\n🛑 Shutting down...');
+  log('info', 'shutdown_started', { mode: LIVE_MODE ? 'LIVE' : 'RESUME' });
   isRunning = false;
   
   // Flush remaining data
   const flushed = await flushAll();
   if (flushed.length > 0) {
-    console.log(`💾 Flushed ${flushed.length} files on shutdown`);
+    log('info', 'shutdown_flush', { files_written: flushed.length });
   }
   
   // Save final live cursor state
   if (LIVE_MODE && lastTimestamp) {
     saveLiveCursor(lastMigrationId || migrationId, lastTimestamp);
-    console.log('💾 Saved live cursor state');
+    logCursor('shutdown_saved', { 
+      migrationId: lastMigrationId || migrationId, 
+      lastBefore: lastTimestamp 
+    });
   }
+  
+  const elapsedSeconds = (Date.now() - sessionStartTime) / 1000;
+  log('info', 'shutdown_complete', { 
+    elapsed_s: elapsedSeconds,
+    error_count: sessionErrorCount,
+  });
   
   process.exit(0);
 }
