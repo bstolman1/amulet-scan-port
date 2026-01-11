@@ -2,7 +2,7 @@
 /**
  * ACS Snapshot Scheduler
  * 
- * Runs fetch-acs-parquet.js every 3 hours starting at 00:00 UTC
+ * Runs fetch-acs.js every 3 hours starting at 00:00 UTC
  * Schedule: 0 0,3,6,9,12,15,18,21 * * *
  * 
  * Usage: node acs-scheduler.js
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SCRIPT_PATH = path.join(__dirname, 'fetch-acs-parquet.js');
+const SCRIPT_PATH = path.join(__dirname, 'fetch-acs.js');
 
 // Track if a job is currently running
 let isRunning = false;

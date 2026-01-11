@@ -1,7 +1,7 @@
 /**
- * ACS Parquet Writer Module
+ * ACS JSONL Writer Module
  * 
- * Handles writing ACS snapshot data to partitioned files.
+ * Handles writing ACS snapshot data to partitioned JSONL files.
  * Uses streaming writes to avoid memory limits.
  * 
  * IMPORTANT: Each new snapshot REPLACES the previous snapshot for the same migration.

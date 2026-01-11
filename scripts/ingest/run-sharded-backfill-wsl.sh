@@ -70,7 +70,7 @@ for i in $(seq 0 $((SHARD_COUNT-1))); do
     MAX_ROWS_PER_FILE=$MAX_ROWS_PER_FILE \
     ZSTD_LEVEL=$ZSTD_LEVEL \
     CHUNK_SIZE=$CHUNK_SIZE \
-    node fetch-backfill-parquet.js >"$LOG_FILE" 2>&1 &
+    node fetch-backfill.js >"$LOG_FILE" 2>&1 &
 done
 
 echo ""

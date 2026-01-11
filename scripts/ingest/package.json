@@ -4,10 +4,10 @@
   "type": "module",
   "description": "Canton ledger ingestion scripts for Parquet/DuckDB",
   "scripts": {
-    "backfill": "node --max-old-space-size=8192 fetch-backfill-parquet.js",
-    "ingest": "node --max-old-space-size=8192 fetch-updates-parquet.js",
+    "backfill": "node --max-old-space-size=8192 fetch-backfill.js",
+    "ingest": "node --max-old-space-size=8192 fetch-updates.js",
     "rotate": "node --max-old-space-size=8192 rotate-parquet.js",
-    "acs": "node fetch-acs-parquet.js",
+    "acs": "node fetch-acs.js",
     "acs:schedule": "node acs-scheduler.js",
     "acs:schedule:now": "node acs-scheduler.js --run-now"
   },

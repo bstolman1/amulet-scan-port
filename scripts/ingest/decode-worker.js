@@ -5,7 +5,7 @@
  * in parallel worker threads for maximum throughput.
  */
 
-import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
+import { normalizeUpdate, normalizeEvent } from './data-schema.js';
 
 /**
  * Decode a single transaction into normalized update + events

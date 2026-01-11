@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Canton Ledger Ingestion Script - Parquet Version
+ * Canton Ledger Ingestion Script - Live Updates
  * 
- * Fetches ledger updates from Canton Scan API and writes to partitioned parquet files.
- * This replaces the Supabase/Postgres ingestion with local file storage.
+ * Fetches ledger updates from Canton Scan API and writes to partitioned binary files.
+ * Data is stored as Protobuf + ZSTD compressed files (.pb.zst).
+ * Optional: Run rotate-parquet.js to convert to actual Parquet format.
  * 
  * Usage:
- *   node fetch-updates-parquet.js          # Resume from backfill cursor
- *   node fetch-updates-parquet.js --live   # Start from current API time (live mode)
+ *   node fetch-updates.js          # Resume from backfill cursor
+ *   node fetch-updates.js --live   # Start from current API time (live mode)
  */
 
 import dotenv from 'dotenv';
@@ -15,7 +16,7 @@ dotenv.config();
 
 import axios from 'axios';
 import https from 'https';
-import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './parquet-schema.js';
+import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
 // Use binary writer (Protobuf + ZSTD) for consistency with backfill and to capture raw_json
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats, setMigrationId } from './write-binary.js';
 

@@ -6,14 +6,14 @@
  * - ZSTD compression in worker threads
  * - Each worker has its own heap (sidesteps 4GB limit)
  * 
- * Drop-in replacement for write-parquet.js with same API surface.
+ * Drop-in replacement for write-jsonl.js with same API surface.
  */
 
 import { mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
 import { join, dirname, sep, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import { getPartitionPath } from './parquet-schema.js';
+import { getPartitionPath } from './data-schema.js';
 import { getBinaryWriterPool, shutdownBinaryPool } from './binary-writer-pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
