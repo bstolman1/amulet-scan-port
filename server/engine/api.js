@@ -57,13 +57,12 @@ router.get('/files', async (req, res) => {
 });
 
 // GET /api/engine/stats - Get ingestion stats
+// NOTE: Sequential queries to avoid DuckDB transaction conflicts
 router.get('/stats', async (req, res) => {
   try {
-    const [ingestion, counts, timeRange] = await Promise.all([
-      getIngestionStats(),
-      getTotalCounts(),
-      getTimeRange(),
-    ]);
+    const ingestion = await getIngestionStats();
+    const counts = await getTotalCounts();
+    const timeRange = await getTimeRange();
     
     res.json({
       ingestion,
