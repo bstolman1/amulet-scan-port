@@ -44,6 +44,92 @@ const pool = [];
 const waiting = []; // Queue of pending requests for connections
 let poolInitialized = false;
 
+// ============================================================
+// POOL HEALTH METRICS
+// ============================================================
+const poolMetrics = {
+  // Counters
+  totalQueries: 0,
+  totalErrors: 0,
+  timeoutCount: 0,
+  
+  // Wait time tracking
+  totalWaitTimeMs: 0,
+  waitCount: 0, // Number of times a query had to wait
+  maxWaitTimeMs: 0,
+  
+  // Query time tracking
+  totalQueryTimeMs: 0,
+  maxQueryTimeMs: 0,
+  
+  // Peak usage
+  peakInUse: 0,
+  peakWaiting: 0,
+  
+  // Start time for uptime calculation
+  startedAt: Date.now(),
+  
+  // Recent wait times (circular buffer for percentile calculations)
+  recentWaitTimes: [],
+  recentQueryTimes: [],
+  maxRecentSamples: 1000,
+};
+
+/**
+ * Record a wait time sample
+ */
+function recordWaitTime(waitMs) {
+  poolMetrics.totalWaitTimeMs += waitMs;
+  poolMetrics.waitCount++;
+  if (waitMs > poolMetrics.maxWaitTimeMs) {
+    poolMetrics.maxWaitTimeMs = waitMs;
+  }
+  
+  // Add to circular buffer
+  poolMetrics.recentWaitTimes.push(waitMs);
+  if (poolMetrics.recentWaitTimes.length > poolMetrics.maxRecentSamples) {
+    poolMetrics.recentWaitTimes.shift();
+  }
+}
+
+/**
+ * Record a query time sample
+ */
+function recordQueryTime(queryMs) {
+  poolMetrics.totalQueryTimeMs += queryMs;
+  if (queryMs > poolMetrics.maxQueryTimeMs) {
+    poolMetrics.maxQueryTimeMs = queryMs;
+  }
+  
+  // Add to circular buffer
+  poolMetrics.recentQueryTimes.push(queryMs);
+  if (poolMetrics.recentQueryTimes.length > poolMetrics.maxRecentSamples) {
+    poolMetrics.recentQueryTimes.shift();
+  }
+}
+
+/**
+ * Calculate percentile from sorted array
+ */
+function percentile(sortedArr, p) {
+  if (sortedArr.length === 0) return 0;
+  const idx = Math.ceil((p / 100) * sortedArr.length) - 1;
+  return sortedArr[Math.max(0, idx)];
+}
+
+/**
+ * Update peak usage metrics
+ */
+function updatePeakMetrics() {
+  const inUse = pool.filter(c => c.inUse).length;
+  if (inUse > poolMetrics.peakInUse) {
+    poolMetrics.peakInUse = inUse;
+  }
+  if (waiting.length > poolMetrics.peakWaiting) {
+    poolMetrics.peakWaiting = waiting.length;
+  }
+}
+
 /**
  * Initialize the connection pool
  */
@@ -70,12 +156,15 @@ initPool();
  * Returns a promise that resolves with a connection wrapper
  */
 function acquireConnection() {
+  const acquireStart = Date.now();
+  
   return new Promise((resolve, reject) => {
     // Try to find an available connection
     const available = pool.find(c => !c.inUse);
     if (available) {
       available.inUse = true;
-      resolve(available);
+      updatePeakMetrics();
+      resolve({ connWrapper: available, waitMs: 0 });
       return;
     }
     
@@ -84,11 +173,23 @@ function acquireConnection() {
       const idx = waiting.findIndex(w => w.resolve === resolve);
       if (idx !== -1) {
         waiting.splice(idx, 1);
+        poolMetrics.timeoutCount++;
         reject(new Error(`Connection pool timeout after ${POOL_TIMEOUT_MS}ms`));
       }
     }, POOL_TIMEOUT_MS);
     
-    waiting.push({ resolve, reject, timeoutId });
+    waiting.push({ 
+      resolve: (connWrapper) => {
+        const waitMs = Date.now() - acquireStart;
+        recordWaitTime(waitMs);
+        resolve({ connWrapper, waitMs });
+      }, 
+      reject, 
+      timeoutId,
+      enqueuedAt: acquireStart,
+    });
+    
+    updatePeakMetrics();
   });
 }
 
@@ -112,16 +213,25 @@ function releaseConnection(connWrapper) {
  * Automatically acquires and releases connections
  */
 export async function query(sql, params = []) {
-  const connWrapper = await acquireConnection();
+  const { connWrapper, waitMs } = await acquireConnection();
+  const queryStart = Date.now();
   
   try {
+    poolMetrics.totalQueries++;
+    
     return await new Promise((resolve, reject) => {
       connWrapper.conn.all(sql, ...params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows);
+        if (err) {
+          poolMetrics.totalErrors++;
+          reject(err);
+        } else {
+          resolve(rows);
+        }
       });
     });
   } finally {
+    const queryMs = Date.now() - queryStart;
+    recordQueryTime(queryMs);
     releaseConnection(connWrapper);
   }
 }
@@ -143,15 +253,110 @@ export async function queryOne(sql, params = []) {
 }
 
 /**
- * Get pool statistics
+ * Get pool statistics including health metrics
  */
 export function getPoolStats() {
+  const inUse = pool.filter(c => c.inUse).length;
+  const available = pool.filter(c => !c.inUse).length;
+  const uptimeMs = Date.now() - poolMetrics.startedAt;
+  
+  // Calculate averages
+  const avgWaitTimeMs = poolMetrics.waitCount > 0 
+    ? poolMetrics.totalWaitTimeMs / poolMetrics.waitCount 
+    : 0;
+  const avgQueryTimeMs = poolMetrics.totalQueries > 0 
+    ? poolMetrics.totalQueryTimeMs / poolMetrics.totalQueries 
+    : 0;
+  
+  // Calculate percentiles from recent samples
+  const sortedWaitTimes = [...poolMetrics.recentWaitTimes].sort((a, b) => a - b);
+  const sortedQueryTimes = [...poolMetrics.recentQueryTimes].sort((a, b) => a - b);
+  
   return {
+    // Current state
     size: POOL_SIZE,
-    inUse: pool.filter(c => c.inUse).length,
-    available: pool.filter(c => !c.inUse).length,
+    inUse,
+    available,
     waiting: waiting.length,
+    timeoutMs: POOL_TIMEOUT_MS,
+    
+    // Health metrics
+    health: {
+      uptimeMs,
+      uptimeFormatted: formatDuration(uptimeMs),
+      
+      // Query stats
+      totalQueries: poolMetrics.totalQueries,
+      totalErrors: poolMetrics.totalErrors,
+      errorRate: poolMetrics.totalQueries > 0 
+        ? (poolMetrics.totalErrors / poolMetrics.totalQueries * 100).toFixed(2) + '%'
+        : '0%',
+      queriesPerSecond: uptimeMs > 0 
+        ? (poolMetrics.totalQueries / (uptimeMs / 1000)).toFixed(2)
+        : 0,
+      
+      // Wait time stats
+      timeoutCount: poolMetrics.timeoutCount,
+      waitCount: poolMetrics.waitCount,
+      avgWaitTimeMs: Math.round(avgWaitTimeMs * 100) / 100,
+      maxWaitTimeMs: poolMetrics.maxWaitTimeMs,
+      p50WaitTimeMs: percentile(sortedWaitTimes, 50),
+      p95WaitTimeMs: percentile(sortedWaitTimes, 95),
+      p99WaitTimeMs: percentile(sortedWaitTimes, 99),
+      
+      // Query time stats
+      avgQueryTimeMs: Math.round(avgQueryTimeMs * 100) / 100,
+      maxQueryTimeMs: poolMetrics.maxQueryTimeMs,
+      p50QueryTimeMs: percentile(sortedQueryTimes, 50),
+      p95QueryTimeMs: percentile(sortedQueryTimes, 95),
+      p99QueryTimeMs: percentile(sortedQueryTimes, 99),
+      
+      // Peak usage
+      peakInUse: poolMetrics.peakInUse,
+      peakWaiting: poolMetrics.peakWaiting,
+      peakUtilization: ((poolMetrics.peakInUse / POOL_SIZE) * 100).toFixed(1) + '%',
+      
+      // Sample sizes
+      recentWaitSamples: poolMetrics.recentWaitTimes.length,
+      recentQuerySamples: poolMetrics.recentQueryTimes.length,
+    },
   };
+}
+
+/**
+ * Reset pool metrics (useful for testing or after config changes)
+ */
+export function resetPoolMetrics() {
+  poolMetrics.totalQueries = 0;
+  poolMetrics.totalErrors = 0;
+  poolMetrics.timeoutCount = 0;
+  poolMetrics.totalWaitTimeMs = 0;
+  poolMetrics.waitCount = 0;
+  poolMetrics.maxWaitTimeMs = 0;
+  poolMetrics.totalQueryTimeMs = 0;
+  poolMetrics.maxQueryTimeMs = 0;
+  poolMetrics.peakInUse = 0;
+  poolMetrics.peakWaiting = 0;
+  poolMetrics.startedAt = Date.now();
+  poolMetrics.recentWaitTimes = [];
+  poolMetrics.recentQueryTimes = [];
+  
+  console.log('🦆 Pool metrics reset');
+}
+
+/**
+ * Format duration in human-readable format
+ */
+function formatDuration(ms) {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
 }
 
 // ============================================================
@@ -439,6 +644,7 @@ export default {
   queryOne,
   safeQuery, 
   getPoolStats,
+  resetPoolMetrics,
   getFileGlob, 
   getParquetGlob, 
   readJsonl, 
