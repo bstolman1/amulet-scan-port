@@ -152,7 +152,7 @@ async function retryWithBackoff(fn, maxRetries = 5) {
 async function detectMigrations() {
   console.log('🔎 Detecting migrations...');
   const migrations = [];
-  let id = 1;
+  let id = 0;
   
   while (true) {
     try {
