@@ -655,8 +655,8 @@ router.post('/validate-integrity', async (req, res) => {
             FROM read_parquet('${eventGlob}', union_by_name=true)
             USING SAMPLE ${sampleSize} ROWS
           `);
-          
-          results.eventFiles.checked = eventFileCount;
+          // For Parquet, 'checked/valid' refers to sampled records (not files)
+          results.eventFiles.checked = eventSample.length;
           
           for (const row of eventSample) {
             // Check raw_json
@@ -725,7 +725,8 @@ router.post('/validate-integrity', async (req, res) => {
             USING SAMPLE ${sampleSize} ROWS
           `);
           
-          results.updateFiles.checked = updateFileCount;
+          // For Parquet, 'checked/valid' refers to sampled records (not files)
+          results.updateFiles.checked = updateSample.length;
           
           for (const row of updateSample) {
             // Check update_data_json
