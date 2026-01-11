@@ -6,7 +6,7 @@
   "scripts": {
     "backfill": "node --max-old-space-size=8192 fetch-backfill.js",
     "ingest": "node --max-old-space-size=8192 fetch-updates.js",
-    "rotate": "node --max-old-space-size=8192 rotate-parquet.js",
+    "materialize": "node --max-old-space-size=8192 materialize-parquet.js",
     "acs": "node fetch-acs.js",
     "acs:schedule": "node acs-scheduler.js",
     "acs:schedule:now": "node acs-scheduler.js --run-now"
