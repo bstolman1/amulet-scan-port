@@ -5,12 +5,17 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envPath = path.join(__dirname, '.env');
-console.log('📁 Loading .env from:', envPath);
+
+// Load .env silently - avoid logging paths or variable names for security
 const result = dotenv.config({ path: envPath });
 if (result.error) {
-  console.error('❌ Failed to load .env:', result.error.message);
+  // Only log generic error, not the specific path or variable names
+  console.error('❌ Failed to load environment configuration');
 }
 
-console.log('📁 DATA_DIR:', process.env.DATA_DIR || 'NOT SET');
-console.log('📁 CURSOR_DIR:', process.env.CURSOR_DIR || 'NOT SET');
-console.log('🔑 GROUPS_IO_API_KEY loaded:', process.env.GROUPS_IO_API_KEY ? 'YES' : 'NO');
+// Validate required variables exist without logging their names
+const requiredVars = ['DATA_DIR'];
+const missingVars = requiredVars.filter(v => !process.env[v]);
+if (missingVars.length > 0) {
+  console.warn('⚠️ Some environment variables are not set - using defaults');
+}

@@ -12,6 +12,14 @@ import {
   getFilesForTemplate,
   isTemplateIndexPopulated,
 } from '../engine/template-file-index.js';
+import {
+  sanitizeNumber,
+  sanitizeEventType,
+  sanitizeIdentifier,
+  sanitizeTimestamp,
+  escapeLikePattern,
+  escapeString,
+} from '../lib/sql-sanitize.js';
 
 const router = Router();
 
@@ -155,8 +163,13 @@ router.get('/latest', async (req, res) => {
 router.get('/by-type/:type', async (req, res) => {
   try {
     const { type } = req.params;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const sanitizedType = sanitizeEventType(type);
+    if (!sanitizedType) {
+      return res.status(400).json({ error: 'Invalid event type' });
+    }
+    
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
@@ -166,7 +179,7 @@ router.get('/by-type/:type', async (req, res) => {
         maxDays: 30,
         maxFilesToScan: 200,
         sortBy: 'effective_at',
-        filter: (e) => e.event_type === type
+        filter: (e) => e.event_type === sanitizedType
       });
       return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
     }
@@ -174,7 +187,7 @@ router.get('/by-type/:type', async (req, res) => {
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
-      WHERE event_type = '${type}'
+      WHERE event_type = '${escapeString(sanitizedType)}'
       ORDER BY effective_at DESC
       LIMIT ${limit}
     `;
@@ -190,8 +203,13 @@ router.get('/by-type/:type', async (req, res) => {
 router.get('/by-template/:templateId', async (req, res) => {
   try {
     const { templateId } = req.params;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const sanitizedTemplateId = sanitizeIdentifier(templateId);
+    if (!sanitizedTemplateId) {
+      return res.status(400).json({ error: 'Invalid template ID format' });
+    }
+    
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
@@ -201,15 +219,16 @@ router.get('/by-template/:templateId', async (req, res) => {
         maxDays: 30,
         maxFilesToScan: 200,
         sortBy: 'effective_at',
-        filter: (e) => e.template_id?.includes(templateId)
+        filter: (e) => e.template_id?.includes(sanitizedTemplateId)
       });
       return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
     }
     
+    const escaped = escapeLikePattern(sanitizedTemplateId);
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
-      WHERE template_id LIKE '%${templateId}%'
+      WHERE template_id LIKE '%${escaped}%' ESCAPE '\\\\'
       ORDER BY effective_at DESC
       LIMIT ${limit}
     `;
@@ -225,13 +244,24 @@ router.get('/by-template/:templateId', async (req, res) => {
 router.get('/by-date', async (req, res) => {
   try {
     const { start, end } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
     const sources = getDataSources();
     
+    // Validate date parameters
+    const sanitizedStart = start ? sanitizeTimestamp(start) : null;
+    const sanitizedEnd = end ? sanitizeTimestamp(end) : null;
+    
+    if (start && !sanitizedStart) {
+      return res.status(400).json({ error: 'Invalid start date format' });
+    }
+    if (end && !sanitizedEnd) {
+      return res.status(400).json({ error: 'Invalid end date format' });
+    }
+    
     if (sources.primarySource === 'binary') {
-      const startDate = start ? new Date(start).getTime() : 0;
-      const endDate = end ? new Date(end).getTime() : Date.now();
+      const startDate = sanitizedStart ? new Date(sanitizedStart).getTime() : 0;
+      const endDate = sanitizedEnd ? new Date(sanitizedEnd).getTime() : Date.now();
       
       const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
         limit,
@@ -249,8 +279,8 @@ router.get('/by-date', async (req, res) => {
     }
     
     let whereClause = '';
-    if (start) whereClause += ` AND effective_at >= '${start}'`;
-    if (end) whereClause += ` AND effective_at <= '${end}'`;
+    if (sanitizedStart) whereClause += ` AND effective_at >= '${escapeString(sanitizedStart)}'`;
+    if (sanitizedEnd) whereClause += ` AND effective_at <= '${escapeString(sanitizedEnd)}'`;
     
     const sql = `
       SELECT *

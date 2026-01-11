@@ -3,6 +3,12 @@ import db from '../duckdb/connection.js';
 import path from 'path';
 import fs from 'fs';
 import { getCached, setCache, getCacheStats, invalidateCache } from '../cache/stats-cache.js';
+import {
+  sanitizeNumber,
+  sanitizeIdentifier,
+  escapeLikePattern,
+  escapeString,
+} from '../lib/sql-sanitize.js';
 
 const router = Router();
 
@@ -480,7 +486,7 @@ router.get('/sample', async (req, res) => {
       return res.json({ data: [], message: 'No ACS data available' });
     }
 
-    const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 100, defaultValue: 10 });
     const { snapshot, source: acsSource } = getBestSnapshotAndSource();
 
     // Get sample rows with all columns
@@ -808,7 +814,7 @@ router.get('/templates', async (req, res) => {
       return res.json({ data: [] });
     }
 
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 500, defaultValue: 100 });
     
     // Check cache
     const cacheKey = `acs:v2:templates:${limit}`;
@@ -850,6 +856,12 @@ router.get('/templates/search', async (req, res) => {
     if (!q) {
       return res.status(400).json({ error: 'Missing query parameter "q"' });
     }
+    
+    // Validate query length and characters to prevent injection
+    const query = String(q).slice(0, 500);
+    if (!/^[\w.:@-]+$/i.test(query)) {
+      return res.status(400).json({ error: 'Invalid query format. Only alphanumeric, dots, colons, underscores, hyphens and @ allowed.' });
+    }
 
     if (!hasACSData()) {
       return res.json({ data: [], found: false, query: q });
@@ -858,7 +870,6 @@ router.get('/templates/search', async (req, res) => {
     const { snapshot, source: acsSource } = getBestSnapshotAndSource();
 
     // Normalize query for flexible matching - handle all separator formats
-    const query = String(q);
     const variants = new Set([
       query,
       query.replaceAll(':', '.'),  // Splice:DsoRules:VoteRequest -> Splice.DsoRules.VoteRequest
@@ -869,7 +880,8 @@ router.get('/templates/search', async (req, res) => {
       query.replaceAll('_', '.'),  // Splice_DsoRules_VoteRequest -> Splice.DsoRules.VoteRequest
     ]);
 
-    const like = (col, v) => `${col} LIKE '%${v.replace(/'/g, "''")}%'`;
+    // Use escapeLikePattern for safe LIKE queries
+    const like = (col, v) => `${col} LIKE '%${escapeLikePattern(v)}%' ESCAPE '\\\\'`;
     const where = [...variants]
       .flatMap((v) => [
         like('tid', v),
@@ -999,49 +1011,55 @@ router.get('/contracts', async (req, res) => {
     }
 
     const { template, entity } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 100000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 100000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
 
     console.log(`[ACS] Contracts request: template=${template}, entity=${entity}, limit=${limit}`);
 
     let whereClause = '1=1';
     if (template) {
-      // Normalize template query to handle all separator formats:
-      // UI sends "Splice:DsoRules:VoteRequest" but stored format could be:
-      // - "<pkg-hash>:Splice.DsoRules:VoteRequest" (dots for module)
-      // - "<pkg-hash>_Splice_DsoRules_VoteRequest" (underscores)
-      const t = String(template);
+      // Validate template format
+      const t = String(template).slice(0, 500);
+      if (!/^[\w.:@-]+$/i.test(t)) {
+        return res.status(400).json({ error: 'Invalid template format' });
+      }
+      
+      // Normalize template query to handle all separator formats
       const parts = t.split(/[:._]/);
       const entityName = parts.pop() || t;
       const moduleName = parts.length >= 1 ? parts[parts.length - 1] : null;
       
-      // Build more precise matching patterns
-      // Format: <hash>:Module.Name:EntityName or Module.Name:EntityName
+      // Build more precise matching patterns using escaped values
       const likeClauses = [];
+      const escapedEntity = escapeLikePattern(entityName);
+      const escapedModule = moduleName ? escapeLikePattern(moduleName) : null;
       
       // Match full qualified names (ending with :EntityName or .EntityName or _EntityName)
-      if (moduleName && entityName) {
-        // Match patterns like ":ModuleName:EntityName" or ".ModuleName:EntityName"
-        likeClauses.push(`template_id ILIKE '%${moduleName}.${entityName}'`);     // hash:Module.Entity
-        likeClauses.push(`template_id ILIKE '%${moduleName}:${entityName}'`);     // hash:Module:Entity  
-        likeClauses.push(`template_id ILIKE '%.${moduleName}:${entityName}'`);    // hash:Splice.Module:Entity
-        likeClauses.push(`template_id ILIKE '%:${moduleName}:${entityName}'`);    // hash:Splice:Module:Entity
+      if (escapedModule && escapedEntity) {
+        likeClauses.push(`template_id ILIKE '%${escapedModule}.${escapedEntity}' ESCAPE '\\\\'`);
+        likeClauses.push(`template_id ILIKE '%${escapedModule}:${escapedEntity}' ESCAPE '\\\\'`);
+        likeClauses.push(`template_id ILIKE '%.${escapedModule}:${escapedEntity}' ESCAPE '\\\\'`);
+        likeClauses.push(`template_id ILIKE '%:${escapedModule}:${escapedEntity}' ESCAPE '\\\\'`);
       }
       
       // Match by entity_name column exactly (case-insensitive)
-      likeClauses.push(`LOWER(entity_name) = LOWER('${entityName.replace(/'/g, "''")}')`);
+      likeClauses.push(`LOWER(entity_name) = LOWER('${escapeString(entityName)}')`);
       
       // Match by module_name + entity_name if both available
-      if (moduleName) {
-        likeClauses.push(`(LOWER(module_name) ILIKE '%${moduleName.replace(/'/g, "''")}' AND LOWER(entity_name) = LOWER('${entityName.replace(/'/g, "''")}'))`);
+      if (escapedModule) {
+        likeClauses.push(`(LOWER(module_name) ILIKE '%${escapedModule}' ESCAPE '\\\\' AND LOWER(entity_name) = LOWER('${escapeString(entityName)}'))`);
       }
 
       whereClause = `(${likeClauses.join(' OR ')})`;
       console.log(`[ACS] Template parts: module=${moduleName}, entity=${entityName}`);
     } else if (entity) {
+      // Validate entity format
+      const e = String(entity).slice(0, 200);
+      if (!/^[\w.:@-]+$/i.test(e)) {
+        return res.status(400).json({ error: 'Invalid entity format' });
+      }
       // Match by entity_name exactly (case-insensitive)
-      const e = String(entity).replace(/'/g, "''");
-      whereClause = `LOWER(entity_name) = LOWER('${e}')`;
+      whereClause = `LOWER(entity_name) = LOWER('${escapeString(e)}')`;
     }
 
     console.log(`[ACS] WHERE clause: ${whereClause}`);
