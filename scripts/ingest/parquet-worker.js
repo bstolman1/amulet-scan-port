@@ -180,7 +180,7 @@ async function run() {
           workflow_id: 'VARCHAR',
           kind: 'VARCHAR',
           migration_id: 'BIGINT',
-          offset: 'BIGINT',
+          "offset": 'BIGINT',
           event_count: 'INTEGER',
           root_event_ids: 'VARCHAR[]',
           source_synchronizer: 'VARCHAR',

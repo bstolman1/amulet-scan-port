@@ -250,7 +250,7 @@ function writeToParquetCLI(records, filePath, type) {
       : `read_json_auto('${tempJsonlPath}', columns={
           update_id: 'VARCHAR', update_type: 'VARCHAR', synchronizer_id: 'VARCHAR', effective_at: 'VARCHAR',
           recorded_at: 'VARCHAR', record_time: 'VARCHAR', command_id: 'VARCHAR', workflow_id: 'VARCHAR', kind: 'VARCHAR',
-          migration_id: 'BIGINT', offset: 'BIGINT', event_count: 'INTEGER', root_event_ids: 'VARCHAR[]',
+          migration_id: 'BIGINT', "offset": 'BIGINT', event_count: 'INTEGER', root_event_ids: 'VARCHAR[]',
           source_synchronizer: 'VARCHAR', target_synchronizer: 'VARCHAR', unassign_id: 'VARCHAR', submitter: 'VARCHAR',
           reassignment_counter: 'BIGINT', trace_context: 'VARCHAR', update_data: 'VARCHAR'
         }, union_by_name=true)`;
