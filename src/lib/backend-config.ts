@@ -1,17 +1,10 @@
 /**
  * Backend Configuration
  * 
- * Toggle between Supabase and DuckDB API backends.
- * For internal use, prefer DuckDB for heavy ledger data queries.
+ * DuckDB API backend for all ledger data queries.
  */
 
-export type BackendType = 'supabase' | 'duckdb';
-
 interface BackendConfig {
-  /** Primary backend for ledger updates/events (heavy data) */
-  ledgerBackend: BackendType;
-  /** Backend for metadata (cursors, snapshots, etc.) */
-  metadataBackend: BackendType;
   /** DuckDB API base URL */
   duckdbApiUrl: string;
 }
@@ -48,8 +41,6 @@ function computeDuckDbApiUrl(): string {
 }
 
 const config: BackendConfig = {
-  ledgerBackend: 'duckdb',
-  metadataBackend: 'supabase',
   duckdbApiUrl: computeDuckDbApiUrl(),
 };
 
@@ -59,11 +50,7 @@ export function getBackendConfig(): BackendConfig {
 }
 
 export function useDuckDBForLedger(): boolean {
-  return config.ledgerBackend === 'duckdb';
-}
-
-export function useSupabaseForLedger(): boolean {
-  return config.ledgerBackend === 'supabase';
+  return true;
 }
 
 export function getDuckDBApiUrl(): string {

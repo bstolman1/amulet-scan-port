@@ -2,7 +2,6 @@
  * DuckDB API Client
  * 
  * Client for the local DuckDB API server.
- * Replace Supabase calls with this when using the Parquet/DuckDB backend.
  */
 
 // NOTE: In Lovable preview, localhost is not reachable. When running locally, this resolves

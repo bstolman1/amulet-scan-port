@@ -175,15 +175,7 @@ const Templates = () => {
             <AlertCircle className="h-4 w-4" />
             <AlertTitle>Data Source Unavailable</AlertTitle>
             <AlertDescription>
-              {errorMessage?.includes('exceed_db_size_quota') ? (
-                <>
-                  The Supabase database has exceeded its storage quota. Please contact support or upgrade your plan.
-                  <br />
-                  <span className="text-xs mt-1 block opacity-75">
-                    Alternatively, ensure the local DuckDB server is running at localhost:3001
-                  </span>
-                </>
-              ) : errorMessage?.includes('Failed to fetch') ? (
+              {errorMessage?.includes('Failed to fetch') ? (
                 <>
                   Unable to connect to data sources. The local server may not be running.
                   <br />
