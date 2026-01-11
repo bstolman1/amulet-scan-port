@@ -9,7 +9,7 @@ import { getFileStats, scanAndIndexFiles } from './file-index.js';
 import { getIngestionStats, ingestNewFiles } from './ingest.js';
 import { getTotalCounts, getTimeRange, getTemplateEventCounts, streamEvents } from './aggregations.js';
 import { resetEngineSchema } from './schema.js';
-import { query } from '../duckdb/connection.js';
+import { query, getPoolStats } from '../duckdb/connection.js';
 import {
   buildTemplateFileIndex,
   getTemplateIndexStats,
@@ -57,18 +57,30 @@ router.get('/files', async (req, res) => {
 });
 
 // GET /api/engine/stats - Get ingestion stats
-// NOTE: Sequential queries to avoid DuckDB transaction conflicts
+// Connection pool handles concurrent queries safely
 router.get('/stats', async (req, res) => {
   try {
-    const ingestion = await getIngestionStats();
-    const counts = await getTotalCounts();
-    const timeRange = await getTimeRange();
+    const [ingestion, counts, timeRange] = await Promise.all([
+      getIngestionStats(),
+      getTotalCounts(),
+      getTimeRange(),
+    ]);
     
     res.json({
       ingestion,
       counts,
       timeRange,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/engine/pool - Get connection pool stats
+router.get('/pool', (req, res) => {
+  try {
+    const stats = getPoolStats();
+    res.json(stats);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
