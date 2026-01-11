@@ -25,12 +25,12 @@ function serializeBigInt(obj) {
 // ACS data path - use the centralized path from duckdb connection
 const ACS_DATA_PATH = db.ACS_DATA_PATH;
 
-// Find ACS files and return their paths
+// Find ACS files and return their paths (supports both JSONL and Parquet)
 function findACSFiles() {
   try {
     if (!fs.existsSync(ACS_DATA_PATH)) {
       console.log(`[ACS] findACSFiles: ACS_DATA_PATH does not exist: ${ACS_DATA_PATH}`);
-      return [];
+      return { jsonl: [], parquet: [] };
     }
     const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
     const jsonlFiles = allFiles
@@ -38,26 +38,52 @@ function findACSFiles() {
       .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'))
       .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
     
-    if (jsonlFiles.length > 0) {
-      console.log(`[ACS] findACSFiles: Found ${jsonlFiles.length} files (first: ${jsonlFiles[0]})`);
+    const parquetFiles = allFiles
+      .map(f => String(f))
+      .filter(f => f.endsWith('.parquet'))
+      .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
+    
+    if (jsonlFiles.length > 0 || parquetFiles.length > 0) {
+      console.log(`[ACS] findACSFiles: Found ${parquetFiles.length} parquet, ${jsonlFiles.length} jsonl files`);
     }
-    return jsonlFiles;
+    return { jsonl: jsonlFiles, parquet: parquetFiles };
   } catch (err) {
     console.error(`[ACS] findACSFiles error: ${err.message}`);
-    return [];
+    return { jsonl: [], parquet: [] };
   }
 }
 
 // Helper to get ACS source - builds query from actual files found
-// IMPORTANT: Uses UNION (not UNION ALL) to prevent duplicate records
+// IMPORTANT: Prefers Parquet files for better performance, falls back to JSONL
+// Uses UNION (not UNION ALL) to prevent duplicate records
 const getACSSource = () => {
-  const files = findACSFiles();
-  if (files.length === 0) {
+  const { jsonl: jsonlFiles, parquet: parquetFiles } = findACSFiles();
+  
+  // Prefer Parquet files for faster queries
+  if (parquetFiles.length > 0) {
+    const uniqueParquet = [...new Set(parquetFiles)];
+    
+    if (uniqueParquet.length <= 100) {
+      const selects = uniqueParquet.map(f => 
+        `SELECT * FROM read_parquet('${f}')`
+      );
+      console.log(`[ACS] Using ${uniqueParquet.length} Parquet files (optimized)`);
+      return `(${selects.join(' UNION ')})`;
+    }
+    
+    // For large counts, use glob pattern
+    const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
+    console.log(`[ACS] Using Parquet glob pattern for ${uniqueParquet.length} files`);
+    return `(SELECT * FROM read_parquet('${acsPath}/**/*.parquet', union_by_name=true))`;
+  }
+  
+  // Fall back to JSONL if no Parquet files
+  if (jsonlFiles.length === 0) {
     return `(SELECT NULL as placeholder WHERE false)`;
   }
   
   // Deduplicate files to prevent double-counting
-  const uniqueFiles = [...new Set(files)];
+  const uniqueFiles = [...new Set(jsonlFiles)];
   
   // For small file counts, use explicit list with UNION to deduplicate
   if (uniqueFiles.length <= 100) {
@@ -72,12 +98,12 @@ const getACSSource = () => {
   const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
   
   // Separate files by extension type
-  const jsonlFiles = uniqueFiles.filter(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
+  const plainJsonl = uniqueFiles.filter(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
   const gzFiles = uniqueFiles.filter(f => f.endsWith('.jsonl.gz'));
   const zstFiles = uniqueFiles.filter(f => f.endsWith('.jsonl.zst'));
   
   const parts = [];
-  if (jsonlFiles.length > 0) {
+  if (plainJsonl.length > 0) {
     parts.push(`SELECT * FROM read_json_auto('${acsPath}/**/*.jsonl', union_by_name=true, ignore_errors=true)`);
   }
   if (gzFiles.length > 0) {
@@ -91,9 +117,10 @@ const getACSSource = () => {
   return parts.length > 0 ? `(${parts.join(' UNION ')})` : `(SELECT NULL as placeholder WHERE false)`;
 };
 
-// Check if ACS data exists
+// Check if ACS data exists (Parquet or JSONL)
 function hasACSData() {
-  return findACSFiles().length > 0;
+  const { jsonl, parquet } = findACSFiles();
+  return jsonl.length > 0 || parquet.length > 0;
 }
 
 // Find completion marker files to identify complete snapshots
@@ -203,14 +230,16 @@ function findAvailableSnapshots() {
             snapshotTime = `${match[1]}${match[2]}:${match[3]}:${match[4]}${match[5]}`;
           }
           
-          const snapshotPath = path.join(migrationPath, subEntry.name);
-          const files = fs.readdirSync(snapshotPath);
-          const hasData = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
-          const isComplete = files.includes('_COMPLETE');
-          
-          if (hasData) {
-            snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath });
-          }
+        const snapshotPath = path.join(migrationPath, subEntry.name);
+        const files = fs.readdirSync(snapshotPath);
+        const hasJsonl = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
+        const hasParquet = files.some(f => f.endsWith('.parquet'));
+        const hasData = hasJsonl || hasParquet;
+        const isComplete = files.includes('_COMPLETE');
+        
+        if (hasData) {
+          snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath, format: hasParquet ? 'parquet' : 'jsonl' });
+        }
         } else if (subEntry.name.startsWith('year=')) {
           // New format: migration=X/year=YYYY/month=MM/day=DD/snapshot=HHMMSS/
           const year = subEntry.name.replace('year=', '');
@@ -243,14 +272,16 @@ function findAvailableSnapshots() {
                 const ss = snapshot.substring(4, 6) || '00';
                 const snapshotTime = `${year}-${month}-${day}T${hh}:${mm}:${ss}`;
                 
-                const files = fs.readdirSync(snapshotPath);
-                const hasData = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
-                const isComplete = files.includes('_COMPLETE');
-                
-                if (hasData) {
-                  console.log(`[ACS] Found snapshot: migration=${migrationId}, time=${snapshotTime}, path=${snapshotPath}`);
-                  snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath });
-                }
+            const files = fs.readdirSync(snapshotPath);
+            const hasJsonl = files.some(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'));
+            const hasParquet = files.some(f => f.endsWith('.parquet'));
+            const hasData = hasJsonl || hasParquet;
+            const isComplete = files.includes('_COMPLETE');
+            
+            if (hasData) {
+              console.log(`[ACS] Found snapshot: migration=${migrationId}, time=${snapshotTime}, format=${hasParquet ? 'parquet' : 'jsonl'}, path=${snapshotPath}`);
+              snapshots.push({ migrationId, snapshotTime, isComplete, path: snapshotPath, format: hasParquet ? 'parquet' : 'jsonl' });
+            }
               }
             }
           }
@@ -267,6 +298,7 @@ function findAvailableSnapshots() {
 }
 
 // Get ACS source for a specific snapshot path (much more efficient than reading all files)
+// Prefers Parquet files for better query performance
 function getSnapshotFilesSource(snapshotPath) {
   if (!snapshotPath || !fs.existsSync(snapshotPath)) {
     return null;
@@ -276,10 +308,19 @@ function getSnapshotFilesSource(snapshotPath) {
   
   // Check what file types exist in this snapshot
   const files = fs.readdirSync(snapshotPath);
+  const hasParquet = files.some(f => f.endsWith('.parquet'));
   const hasJsonl = files.some(f => f.endsWith('.jsonl') && !f.endsWith('.jsonl.gz') && !f.endsWith('.jsonl.zst'));
   const hasGz = files.some(f => f.endsWith('.jsonl.gz'));
   const hasZst = files.some(f => f.endsWith('.jsonl.zst'));
   
+  // Prefer Parquet files for better performance
+  if (hasParquet) {
+    const parquetCount = files.filter(f => f.endsWith('.parquet')).length;
+    console.log(`[ACS] Using optimized Parquet source for snapshot: ${normalizedPath} (${parquetCount} files)`);
+    return `(SELECT * FROM read_parquet('${normalizedPath}/*.parquet', union_by_name=true))`;
+  }
+  
+  // Fall back to JSONL
   const parts = [];
   if (hasJsonl) {
     parts.push(`SELECT * FROM read_json_auto('${normalizedPath}/*.jsonl', union_by_name=true, ignore_errors=true)`);
@@ -293,7 +334,7 @@ function getSnapshotFilesSource(snapshotPath) {
   
   if (parts.length === 0) return null;
   
-  console.log(`[ACS] Using optimized source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl')).length} files)`);
+  console.log(`[ACS] Using JSONL source for snapshot: ${normalizedPath} (${files.filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst')).length} files)`);
   // Use UNION (not UNION ALL) to prevent duplicate records across file types
   return `(${parts.join(' UNION ')})`;
 }
