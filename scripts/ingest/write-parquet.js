@@ -238,6 +238,8 @@ async function writeToParquet(records, filePath, type) {
   
   // Normalize path for DuckDB (forward slashes work on all platforms)
   const normalizedFilePath = filePath.replace(/\\/g, '/');
+  const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
+  const tempNativePath = tempJsonlPath.replace(/\//g, sep);
   
   try {
     // Map records to flat structure
@@ -249,91 +251,23 @@ async function writeToParquet(records, filePath, type) {
     const parentDir = dirname(filePath);
     ensureDir(parentDir);
     
-    // Create a temp table name
-    const tableName = `temp_${type}_${Date.now()}_${randomBytes(4).toString('hex')}`;
+    // Write temp JSONL (fastest way to bulk load into DuckDB)
+    const lines = mapped.map(r => JSON.stringify(r));
+    writeFileSync(tempNativePath, lines.join('\n') + '\n');
     
-    // Build CREATE TABLE statement based on type
-    const columns = type === 'updates' ? [
-      'update_id VARCHAR',
-      'update_type VARCHAR',
-      'synchronizer_id VARCHAR',
-      'effective_at VARCHAR',
-      'recorded_at VARCHAR',
-      'record_time VARCHAR',
-      'command_id VARCHAR',
-      'workflow_id VARCHAR',
-      'kind VARCHAR',
-      'migration_id BIGINT',
-      '"offset" BIGINT',
-      'event_count INTEGER',
-      'root_event_ids VARCHAR',
-      'source_synchronizer VARCHAR',
-      'target_synchronizer VARCHAR',
-      'unassign_id VARCHAR',
-      'submitter VARCHAR',
-      'reassignment_counter BIGINT',
-      'trace_context VARCHAR',
-      'update_data VARCHAR',
-    ] : [
-      'event_id VARCHAR',
-      'update_id VARCHAR',
-      'event_type VARCHAR',
-      'event_type_original VARCHAR',
-      'synchronizer_id VARCHAR',
-      'effective_at VARCHAR',
-      'recorded_at VARCHAR',
-      'created_at_ts VARCHAR',
-      'contract_id VARCHAR',
-      'template_id VARCHAR',
-      'package_name VARCHAR',
-      'migration_id BIGINT',
-      'signatories VARCHAR',
-      'observers VARCHAR',
-      'acting_parties VARCHAR',
-      'witness_parties VARCHAR',
-      'payload VARCHAR',
-      'contract_key VARCHAR',
-      'choice VARCHAR',
-      'consuming BOOLEAN',
-      'interface_id VARCHAR',
-      'child_event_ids VARCHAR',
-      'exercise_result VARCHAR',
-      'source_synchronizer VARCHAR',
-      'target_synchronizer VARCHAR',
-      'unassign_id VARCHAR',
-      'submitter VARCHAR',
-      'reassignment_counter BIGINT',
-      'raw_event VARCHAR',
-    ];
+    // Use DuckDB to read JSONL and write Parquet (much faster than row-by-row INSERT)
+    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)`;
     
-    // Create temp table
-    await runExec(`CREATE TABLE ${tableName} (${columns.join(', ')})`);
-    
-    // Insert records in batches (to avoid SQL statement size limits)
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < mapped.length; i += BATCH_SIZE) {
-      const batch = mapped.slice(i, i + BATCH_SIZE);
-      
-      const valueRows = batch.map(r => {
-        if (type === 'updates') {
-          return `(${escapeStr(r.update_id)}, ${escapeStr(r.update_type)}, ${escapeStr(r.synchronizer_id)}, ${escapeStr(r.effective_at)}, ${escapeStr(r.recorded_at)}, ${escapeStr(r.record_time)}, ${escapeStr(r.command_id)}, ${escapeStr(r.workflow_id)}, ${escapeStr(r.kind)}, ${r.migration_id ?? 'NULL'}, ${r.offset ?? 'NULL'}, ${r.event_count ?? 0}, ${escapeStr(JSON.stringify(r.root_event_ids))}, ${escapeStr(r.source_synchronizer)}, ${escapeStr(r.target_synchronizer)}, ${escapeStr(r.unassign_id)}, ${escapeStr(r.submitter)}, ${r.reassignment_counter ?? 'NULL'}, ${escapeStr(r.trace_context)}, ${escapeStr(r.update_data)})`;
-        } else {
-          return `(${escapeStr(r.event_id)}, ${escapeStr(r.update_id)}, ${escapeStr(r.event_type)}, ${escapeStr(r.event_type_original)}, ${escapeStr(r.synchronizer_id)}, ${escapeStr(r.effective_at)}, ${escapeStr(r.recorded_at)}, ${escapeStr(r.created_at_ts)}, ${escapeStr(r.contract_id)}, ${escapeStr(r.template_id)}, ${escapeStr(r.package_name)}, ${r.migration_id ?? 'NULL'}, ${escapeStr(JSON.stringify(r.signatories))}, ${escapeStr(JSON.stringify(r.observers))}, ${escapeStr(JSON.stringify(r.acting_parties))}, ${escapeStr(JSON.stringify(r.witness_parties))}, ${escapeStr(r.payload)}, ${escapeStr(r.contract_key)}, ${escapeStr(r.choice)}, ${r.consuming ? 'TRUE' : 'FALSE'}, ${escapeStr(r.interface_id)}, ${escapeStr(JSON.stringify(r.child_event_ids))}, ${escapeStr(r.exercise_result)}, ${escapeStr(r.source_synchronizer)}, ${escapeStr(r.target_synchronizer)}, ${escapeStr(r.unassign_id)}, ${escapeStr(r.submitter)}, ${r.reassignment_counter ?? 'NULL'}, ${escapeStr(r.raw_event)})`;
-        }
-      });
-      
-      await runExec(`INSERT INTO ${tableName} VALUES ${valueRows.join(', ')}`);
-    }
-    
-    // Export to Parquet
-    await runExec(`COPY ${tableName} TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)`);
-    
-    // Drop temp table
-    await runExec(`DROP TABLE ${tableName}`);
+    await runExec(sql);
     
     // Verify file was created
     if (!existsSync(filePath)) {
       throw new Error(`DuckDB completed but parquet file not created: ${filePath}`);
+    }
+    
+    // Clean up temp file
+    if (existsSync(tempNativePath)) {
+      unlinkSync(tempNativePath);
     }
     
     totalFilesWritten++;
@@ -341,6 +275,10 @@ async function writeToParquet(records, filePath, type) {
     
     return { file: filePath, count: records.length };
   } catch (err) {
+    // Clean up temp file on error
+    if (existsSync(tempNativePath)) {
+      try { unlinkSync(tempNativePath); } catch {}
+    }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
   }
