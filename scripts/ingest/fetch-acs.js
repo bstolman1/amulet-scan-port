@@ -22,61 +22,77 @@ import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, v
 // Parse command line arguments
 const args = process.argv.slice(2);
 const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
+const USE_PARQUET = !RAW_ONLY;
+const USE_JSONL = KEEP_RAW || RAW_ONLY;
 
-// Use Parquet writer by default, JSONL writer only if --keep-raw
+// Use Parquet writer by default, JSONL writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-acs-parquet.js';
 import * as jsonlWriter from './write-acs-jsonl.js';
 
 // Unified writer functions
 function setSnapshotTime(time, migrationId = null) {
-  parquetWriter.setSnapshotTime(time, migrationId);
-  if (KEEP_RAW) {
+  if (USE_PARQUET) {
+    parquetWriter.setSnapshotTime(time, migrationId);
+  }
+  if (USE_JSONL) {
     jsonlWriter.setSnapshotTime(time, migrationId);
   }
 }
 
 async function bufferContracts(contracts) {
-  if (KEEP_RAW) {
+  if (USE_JSONL) {
     await jsonlWriter.bufferContracts(contracts);
   }
-  return parquetWriter.bufferContracts(contracts);
+  if (USE_PARQUET) {
+    return parquetWriter.bufferContracts(contracts);
+  }
 }
 
 async function flushAll() {
   const results = [];
-  if (KEEP_RAW) {
+  if (USE_JSONL) {
     const jsonlResults = await jsonlWriter.flushAll();
     results.push(...jsonlResults);
   }
-  const parquetResults = await parquetWriter.flushAll();
-  results.push(...parquetResults);
+  if (USE_PARQUET) {
+    const parquetResults = await parquetWriter.flushAll();
+    results.push(...parquetResults);
+  }
   return results;
 }
 
 function getBufferStats() {
-  const stats = parquetWriter.getBufferStats();
-  if (KEEP_RAW) {
+  const stats = USE_PARQUET ? parquetWriter.getBufferStats() : { contracts: 0, maxRowsPerFile: 15000 };
+  if (USE_JSONL) {
     stats.jsonlContracts = jsonlWriter.getBufferStats().contracts;
   }
   return stats;
 }
 
 function clearBuffers() {
-  parquetWriter.clearBuffers();
-  if (KEEP_RAW) {
+  if (USE_PARQUET) {
+    parquetWriter.clearBuffers();
+  }
+  if (USE_JSONL) {
     jsonlWriter.clearBuffers();
   }
 }
 
 async function writeCompletionMarker(time, migrationId, stats) {
-  if (KEEP_RAW) {
+  if (USE_JSONL) {
     await jsonlWriter.writeCompletionMarker(time, migrationId, stats);
   }
-  return parquetWriter.writeCompletionMarker(time, migrationId, stats);
+  if (USE_PARQUET) {
+    return parquetWriter.writeCompletionMarker(time, migrationId, stats);
+  }
 }
 
 function isSnapshotComplete(time, migrationId) {
-  return parquetWriter.isSnapshotComplete(time, migrationId);
+  if (USE_PARQUET) {
+    return parquetWriter.isSnapshotComplete(time, migrationId);
+  }
+  return jsonlWriter.isSnapshotComplete(time, migrationId);
 }
 
 function cleanupOldSnapshots(migrationId) {

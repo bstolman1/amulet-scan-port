@@ -42,8 +42,11 @@ import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema
 // Parse command line arguments
 const args = process.argv.slice(2);
 const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
+const USE_PARQUET = !RAW_ONLY;
+const USE_BINARY = KEEP_RAW || RAW_ONLY;
 
-// Use Parquet writer by default, binary writer only if --keep-raw
+// Use Parquet writer by default, binary writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter from './write-binary.js';
 
@@ -77,34 +80,40 @@ import {
 
 // Unified writer functions that delegate to appropriate writer(s)
 async function bufferUpdates(updates) {
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     await binaryWriter.bufferUpdates(updates);
   }
-  return parquetWriter.bufferUpdates(updates);
+  if (USE_PARQUET) {
+    return parquetWriter.bufferUpdates(updates);
+  }
 }
 
 async function bufferEvents(events) {
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     await binaryWriter.bufferEvents(events);
   }
-  return parquetWriter.bufferEvents(events);
+  if (USE_PARQUET) {
+    return parquetWriter.bufferEvents(events);
+  }
 }
 
 async function flushAll() {
   const results = [];
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     const binaryResults = await binaryWriter.flushAll();
     results.push(...binaryResults);
   }
-  const parquetResults = await parquetWriter.flushAll();
-  results.push(...parquetResults);
+  if (USE_PARQUET) {
+    const parquetResults = await parquetWriter.flushAll();
+    results.push(...parquetResults);
+  }
   return results;
 }
 
 function getBufferStats() {
-  // Return parquet stats by default, include binary if keeping raw
-  const stats = parquetWriter.getBufferStats();
-  if (KEEP_RAW) {
+  // Return parquet stats by default, include binary if using it
+  const stats = USE_PARQUET ? parquetWriter.getBufferStats() : { updates: 0, events: 0, pendingWrites: 0 };
+  if (USE_BINARY) {
     const binaryStats = binaryWriter.getBufferStats();
     stats.binaryPendingWrites = binaryStats.pendingWrites;
     stats.binaryQueuedJobs = binaryStats.queuedJobs;
@@ -113,17 +122,21 @@ function getBufferStats() {
 }
 
 async function waitForWrites() {
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     await binaryWriter.waitForWrites();
   }
-  await parquetWriter.waitForWrites();
+  if (USE_PARQUET) {
+    await parquetWriter.waitForWrites();
+  }
 }
 
 async function shutdown() {
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     await binaryWriter.shutdown();
   }
-  await parquetWriter.shutdown();
+  if (USE_PARQUET) {
+    await parquetWriter.shutdown();
+  }
 }
 
 // Import bulletproof components for zero data loss
