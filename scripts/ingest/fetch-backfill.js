@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * Canton Ledger Backfill Script - Optimized Binary Version
+ * Canton Ledger Backfill Script - Direct Parquet Version
  * 
  * Fetches historical ledger data using the backfilling API
- * and writes to partitioned binary files (Protobuf + ZSTD).
- * Optional: Run rotate-parquet.js to convert to actual Parquet format.
+ * and writes directly to Parquet files (default) or binary (--keep-raw).
+ * 
+ * Usage:
+ *   node fetch-backfill.js              # Writes directly to Parquet (default)
+ *   node fetch-backfill.js --keep-raw   # Also writes to .pb.zst files
  * 
  * Optimizations:
  * - Parallel API fetching (configurable concurrency)
@@ -26,8 +29,64 @@ import os from 'os';
 import Piscina from 'piscina';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
 
-// Use binary writer (Protobuf + ZSTD) instead of JSONL
-import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, shutdown } from './write-binary.js';
+// Parse command line arguments
+const args = process.argv.slice(2);
+const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+
+// Use Parquet writer by default, binary writer only if --keep-raw
+import * as parquetWriter from './write-parquet.js';
+import * as binaryWriter from './write-binary.js';
+
+// Unified writer functions that delegate to appropriate writer(s)
+async function bufferUpdates(updates) {
+  if (KEEP_RAW) {
+    await binaryWriter.bufferUpdates(updates);
+  }
+  return parquetWriter.bufferUpdates(updates);
+}
+
+async function bufferEvents(events) {
+  if (KEEP_RAW) {
+    await binaryWriter.bufferEvents(events);
+  }
+  return parquetWriter.bufferEvents(events);
+}
+
+async function flushAll() {
+  const results = [];
+  if (KEEP_RAW) {
+    const binaryResults = await binaryWriter.flushAll();
+    results.push(...binaryResults);
+  }
+  const parquetResults = await parquetWriter.flushAll();
+  results.push(...parquetResults);
+  return results;
+}
+
+function getBufferStats() {
+  // Return parquet stats by default, include binary if keeping raw
+  const stats = parquetWriter.getBufferStats();
+  if (KEEP_RAW) {
+    const binaryStats = binaryWriter.getBufferStats();
+    stats.binaryPendingWrites = binaryStats.pendingWrites;
+    stats.binaryQueuedJobs = binaryStats.queuedJobs;
+  }
+  return stats;
+}
+
+async function waitForWrites() {
+  if (KEEP_RAW) {
+    await binaryWriter.waitForWrites();
+  }
+  await parquetWriter.waitForWrites();
+}
+
+async function shutdown() {
+  if (KEEP_RAW) {
+    await binaryWriter.shutdown();
+  }
+  await parquetWriter.shutdown();
+}
 
 // Import bulletproof components for zero data loss
 import {
