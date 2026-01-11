@@ -8,7 +8,7 @@
  */
 
 import { mkdirSync, existsSync, readdirSync, rmSync, statSync, writeFileSync, unlinkSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import duckdb from 'duckdb';
@@ -188,62 +188,46 @@ function escapeStr(val) {
 }
 
 /**
- * Write contracts to Parquet file via DuckDB Node.js library
+ * Write contracts to Parquet file via DuckDB Node.js library (optimized with temp JSONL)
  */
 async function writeToParquet(contracts, filePath) {
   if (contracts.length === 0) return null;
   
   // Normalize path for DuckDB (forward slashes work on all platforms)
   const normalizedFilePath = filePath.replace(/\\/g, '/');
+  const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
+  const tempNativePath = tempJsonlPath.replace(/\//g, sep);
   const parentDir = dirname(filePath);
   
   try {
     // Ensure parent directory exists
     ensureDir(parentDir);
     
-    // Create a temp table name
-    const tableName = `temp_acs_${Date.now()}_${randomBytes(4).toString('hex')}`;
+    // Write temp JSONL (fastest way to bulk load into DuckDB)
+    const lines = contracts.map(c => JSON.stringify(c));
+    writeFileSync(tempNativePath, lines.join('\n') + '\n');
     
-    // Get column names from first contract (dynamic schema)
-    const firstContract = contracts[0];
-    const columnNames = Object.keys(firstContract);
-    
-    // Create table with VARCHAR columns (simple approach)
-    const columns = columnNames.map(name => `"${name}" VARCHAR`);
-    await runExec(`CREATE TABLE ${tableName} (${columns.join(', ')})`);
-    
-    // Insert records in batches
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < contracts.length; i += BATCH_SIZE) {
-      const batch = contracts.slice(i, i + BATCH_SIZE);
-      
-      const valueRows = batch.map(c => {
-        const values = columnNames.map(name => {
-          const val = c[name];
-          if (val === null || val === undefined) return 'NULL';
-          if (typeof val === 'object') return escapeStr(JSON.stringify(val));
-          return escapeStr(val);
-        });
-        return `(${values.join(', ')})`;
-      });
-      
-      await runExec(`INSERT INTO ${tableName} VALUES ${valueRows.join(', ')}`);
-    }
-    
-    // Export to Parquet
-    await runExec(`COPY ${tableName} TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)`);
-    
-    // Drop temp table
-    await runExec(`DROP TABLE ${tableName}`);
+    // Use DuckDB to read JSONL and write Parquet
+    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)`;
+    await runExec(sql);
     
     // Verify file was created
     if (!existsSync(filePath)) {
       throw new Error(`DuckDB completed but parquet file not created: ${filePath}`);
     }
     
+    // Clean up temp file
+    if (existsSync(tempNativePath)) {
+      unlinkSync(tempNativePath);
+    }
+    
     console.log(`📝 Wrote ${contracts.length} contracts to ${filePath}`);
     return { file: filePath, count: contracts.length };
   } catch (err) {
+    // Clean up temp file on error
+    if (existsSync(tempNativePath)) {
+      try { unlinkSync(tempNativePath); } catch {}
+    }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
   }
