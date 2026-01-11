@@ -1,14 +1,14 @@
 /**
- * Parquet Writer Module - DuckDB Node.js Library Version
+ * Parquet Writer Module - Direct DuckDB Version
  * 
- * Writes ledger data directly to Parquet files using DuckDB Node.js library.
+ * Writes ledger data directly to Parquet files using DuckDB.
  * This eliminates the need for a separate materialization step.
  * 
  * Drop-in replacement for write-binary.js with same API surface.
  * 
  * How it works:
  * 1. Buffer records in memory (same as binary writer)
- * 2. On flush: Create in-memory DuckDB table, insert records, COPY TO parquet
+ * 2. On flush: Write temp JSONL, convert to Parquet via DuckDB, delete temp
  * 3. DuckDB handles Parquet + ZSTD compression natively
  */
 
@@ -16,7 +16,7 @@ import { mkdirSync, existsSync, rmSync, readdirSync, writeFileSync, unlinkSync }
 import { join, dirname, sep, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import duckdb from 'duckdb';
+import { execSync } from 'child_process';
 import { getPartitionPath } from './data-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -37,9 +37,6 @@ const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 
 // Log the output directory on module load
 console.log(`📂 [write-parquet] Output directory: ${DATA_DIR}`);
-
-// Create a single DuckDB instance for the module (in-memory, just for writing)
-const db = new duckdb.Database(':memory:');
 
 // In-memory buffers
 let updatesBuffer = [];
@@ -198,48 +195,14 @@ function mapEventRecord(r) {
 }
 
 /**
- * Run a DuckDB query and return results as a promise
- */
-function runQuery(sql) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-}
-
-/**
- * Run a DuckDB exec (no results) as a promise
- */
-function runExec(sql) {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-/**
- * Escape a string value for SQL
- */
-function escapeStr(val) {
-  if (val === null || val === undefined) return 'NULL';
-  const str = String(val).replace(/'/g, "''");
-  return `'${str}'`;
-}
-
-/**
- * Write records to Parquet file via DuckDB Node.js library
+ * Write records to Parquet file via DuckDB
  */
 async function writeToParquet(records, filePath, type) {
   if (records.length === 0) return null;
   
-  // Normalize path for DuckDB (forward slashes work on all platforms)
+  // Use forward slashes consistently for DuckDB on all platforms
   const normalizedFilePath = filePath.replace(/\\/g, '/');
   const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
-  const tempNativePath = tempJsonlPath.replace(/\//g, sep);
   
   try {
     // Map records to flat structure
@@ -247,22 +210,54 @@ async function writeToParquet(records, filePath, type) {
       ? records.map(mapUpdateRecord)
       : records.map(mapEventRecord);
     
-    // Ensure parent directory exists
+    // Ensure parent directory exists (use original path for fs operations)
     const parentDir = dirname(filePath);
     ensureDir(parentDir);
     
-    // Write temp JSONL (fastest way to bulk load into DuckDB)
+    // Write temp JSONL (use forward slashes for consistency)
     const lines = mapped.map(r => JSON.stringify(r));
-    writeFileSync(tempNativePath, lines.join('\n') + '\n');
+    writeFileSync(tempJsonlPath.replace(/\//g, sep), lines.join('\n') + '\n');
     
-    // Use DuckDB to read JSONL and write Parquet (much faster than row-by-row INSERT)
-    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)`;
+    // Verify temp file was written
+    const tempNativePath = tempJsonlPath.replace(/\//g, sep);
+    if (!existsSync(tempNativePath)) {
+      throw new Error(`Failed to write temp file: ${tempNativePath}`);
+    }
     
-    await runExec(sql);
+    // Convert to Parquet via DuckDB CLI
+    // Use forward slashes in SQL - DuckDB handles them on Windows
+    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`;
     
-    // Verify file was created
-    if (!existsSync(filePath)) {
-      throw new Error(`DuckDB completed but parquet file not created: ${filePath}`);
+    try {
+      // Capture both stdout and stderr for debugging
+      const result = execSync(`duckdb -c "${sql}"`, { 
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // Set working directory to the output folder
+        cwd: parentDir,
+      });
+      if (result && result.trim()) {
+        console.log(`   DuckDB output: ${result.trim()}`);
+      }
+    } catch (duckErr) {
+      const stderr = duckErr.stderr?.toString() || '';
+      const stdout = duckErr.stdout?.toString() || '';
+      console.error(`❌ DuckDB CLI failed.`);
+      console.error(`   SQL: ${sql}`);
+      if (stderr) console.error(`   stderr: ${stderr}`);
+      if (stdout) console.error(`   stdout: ${stdout}`);
+      console.error(`   Error: ${duckErr.message}`);
+      throw new Error(`DuckDB failed: ${stderr || duckErr.message}`);
+    }
+    
+    // Verify parquet file was created (check both path formats)
+    const nativeFilePath = filePath;
+    if (!existsSync(nativeFilePath)) {
+      // Maybe DuckDB wrote to current directory?
+      const basename = normalizedFilePath.split('/').pop();
+      console.error(`   ⚠️ File not at expected path: ${nativeFilePath}`);
+      console.error(`   ⚠️ Checking if file exists as: ${basename}`);
+      throw new Error(`DuckDB ran but parquet file not created: ${nativeFilePath}`);
     }
     
     // Clean up temp file
@@ -276,6 +271,7 @@ async function writeToParquet(records, filePath, type) {
     return { file: filePath, count: records.length };
   } catch (err) {
     // Clean up temp file on error
+    const tempNativePath = tempJsonlPath.replace(/\//g, sep);
     if (existsSync(tempNativePath)) {
       try { unlinkSync(tempNativePath); } catch {}
     }

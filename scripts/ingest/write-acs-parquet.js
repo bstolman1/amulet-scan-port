@@ -1,33 +1,29 @@
 /**
  * ACS Parquet Writer Module
  * 
- * Writes ACS snapshot data directly to Parquet files using DuckDB Node.js library.
+ * Writes ACS snapshot data directly to Parquet files using DuckDB.
  * This eliminates the need for a separate materialization step.
  * 
  * Drop-in replacement for write-acs-jsonl.js with same API surface.
  */
 
 import { mkdirSync, existsSync, readdirSync, rmSync, statSync, writeFileSync, unlinkSync } from 'fs';
-import { join, dirname, sep } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { randomBytes } from 'crypto';
-import duckdb from 'duckdb';
+import { execSync } from 'child_process';
 import { getACSPartitionPath } from './acs-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default Windows path: C:\ledger_raw
-const WIN_DEFAULT = 'C:\\ledger_raw';
+// Configuration - Default Windows path: C:\\ledger_raw
+const WIN_DEFAULT = 'C:\\\\ledger_raw';
 const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
 const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
 // Keep at least 2 snapshots per migration
 const MAX_SNAPSHOTS_PER_MIGRATION = parseInt(process.env.MAX_SNAPSHOTS_PER_MIGRATION) || 2;
-
-// Create a single DuckDB instance for the module (in-memory, just for writing)
-const db = new duckdb.Database(':memory:');
 
 // In-memory buffer for batching
 let contractsBuffer = [];
@@ -167,66 +163,32 @@ function cleanupEmptyDirs(dirPath) {
 }
 
 /**
- * Run a DuckDB exec (no results) as a promise
- */
-function runExec(sql) {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-/**
- * Escape a string value for SQL
- */
-function escapeStr(val) {
-  if (val === null || val === undefined) return 'NULL';
-  const str = String(val).replace(/'/g, "''");
-  return `'${str}'`;
-}
-
-/**
- * Write contracts to Parquet file via DuckDB Node.js library (optimized with temp JSONL)
+ * Write contracts to Parquet file via DuckDB
  */
 async function writeToParquet(contracts, filePath) {
   if (contracts.length === 0) return null;
   
-  // Normalize path for DuckDB (forward slashes work on all platforms)
-  const normalizedFilePath = filePath.replace(/\\/g, '/');
-  const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
-  const tempNativePath = tempJsonlPath.replace(/\//g, sep);
-  const parentDir = dirname(filePath);
+  const tempJsonlPath = filePath.replace('.parquet', '.temp.jsonl');
   
   try {
-    // Ensure parent directory exists
-    ensureDir(parentDir);
-    
-    // Write temp JSONL (fastest way to bulk load into DuckDB)
     const lines = contracts.map(c => JSON.stringify(c));
-    writeFileSync(tempNativePath, lines.join('\n') + '\n');
+    writeFileSync(tempJsonlPath, lines.join('\n') + '\n');
     
-    // Use DuckDB to read JSONL and write Parquet
-    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)`;
-    await runExec(sql);
+    const sql = `
+      COPY (
+        SELECT * FROM read_json_auto('${tempJsonlPath.replace(/\\/g, '/')}')
+      ) TO '${filePath.replace(/\\/g, '/')}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
+    `;
     
-    // Verify file was created
-    if (!existsSync(filePath)) {
-      throw new Error(`DuckDB completed but parquet file not created: ${filePath}`);
-    }
+    execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
     
-    // Clean up temp file
-    if (existsSync(tempNativePath)) {
-      unlinkSync(tempNativePath);
-    }
+    unlinkSync(tempJsonlPath);
     
     console.log(`📝 Wrote ${contracts.length} contracts to ${filePath}`);
     return { file: filePath, count: contracts.length };
   } catch (err) {
-    // Clean up temp file on error
-    if (existsSync(tempNativePath)) {
-      try { unlinkSync(tempNativePath); } catch {}
+    if (existsSync(tempJsonlPath)) {
+      unlinkSync(tempJsonlPath);
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;

@@ -572,7 +572,7 @@ router.post('/validate-integrity', async (req, res) => {
       return res.json({ success: false, error: 'No raw data directory found' });
     }
     
-    // Find all data files (.pb.zst or .parquet)
+    // Find all .pb.zst files
     const allFiles = [];
     function scanDir(dir) {
       try {
@@ -580,7 +580,7 @@ router.post('/validate-integrity', async (req, res) => {
         for (const entry of entries) {
           if (entry.isDirectory()) {
             scanDir(join(dir, entry.name));
-          } else if (entry.name.endsWith('.pb.zst') || entry.name.endsWith('.parquet')) {
+          } else if (entry.name.endsWith('.pb.zst')) {
             allFiles.push(join(dir, entry.name));
           }
         }
@@ -589,36 +589,15 @@ router.post('/validate-integrity', async (req, res) => {
     scanDir(rawDir);
     
     if (allFiles.length === 0) {
-      return res.json({ success: false, error: 'No data files found (.pb.zst or .parquet)' });
+      return res.json({ success: false, error: 'No .pb.zst files found' });
     }
     
     // Random sample
     const shuffled = allFiles.sort(() => 0.5 - Math.random());
     const sampled = shuffled.slice(0, sampleSize);
     
-    // Import readers dynamically
+    // Import reader dynamically
     const { readBinaryFile } = await import('../../scripts/ingest/read-binary.js');
-    const { query: duckQuery } = await import('../duckdb/connection.js');
-    
-    // Helper to read a parquet file via DuckDB
-    async function readParquetFile(filePath) {
-      const normalizedPath = filePath.replace(/\\/g, '/');
-      const basename = pathBasename(filePath);
-      const isEvents = basename.startsWith('events-');
-      
-      try {
-        const sql = `SELECT * FROM read_parquet('${normalizedPath}') LIMIT 100`;
-        const rows = await duckQuery(sql);
-        return {
-          type: isEvents ? 'events' : 'updates',
-          count: rows.length,
-          records: rows,
-        };
-      } catch (err) {
-        console.error(`Failed to read parquet ${filePath}:`, err.message);
-        return { type: isEvents ? 'events' : 'updates', count: 0, records: [] };
-      }
-    }
     
     const results = {
       totalFiles: allFiles.length,
@@ -651,12 +630,8 @@ router.post('/validate-integrity', async (req, res) => {
         const basename = pathBasename(filePath);
         const isEvents = basename.startsWith('events-');
         const isUpdates = basename.startsWith('updates-');
-        const isParquet = filePath.endsWith('.parquet');
         
-        // Read file based on format
-        const fileData = isParquet 
-          ? await readParquetFile(filePath)
-          : await readBinaryFile(filePath);
+        const fileData = await readBinaryFile(filePath);
         const records = fileData.records || [];
         
         const detail = {
