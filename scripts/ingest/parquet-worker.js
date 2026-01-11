@@ -226,10 +226,16 @@ async function run() {
       }
       
       // 2. Verify required columns exist based on type
+      // DuckDB versions differ in parquet_schema() output; use DESCRIBE for portability.
       const schemaResult = await allQuery(`
-        SELECT column_name FROM parquet_schema('${normalizedFilePath}')
+        DESCRIBE SELECT * FROM read_parquet('${normalizedFilePath}')
       `);
-      const columns = new Set(schemaResult.map(r => r.column_name));
+      const columns = new Set(
+        schemaResult
+          .map((r) => r.column_name ?? r.name ?? r.column ?? r[Object.keys(r)[0]])
+          .filter(Boolean)
+          .map((c) => String(c))
+      );
       
       const requiredColumns = type === 'events'
         ? ['event_id', 'event_type', 'raw_event']
@@ -297,8 +303,6 @@ async function run() {
       bytes,
       validation,
     });
-
-    process.exit(0);
 
     process.exit(0);
 
