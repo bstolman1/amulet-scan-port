@@ -4,9 +4,12 @@
  * Maintains aggregate tables based on ingested data,
  * tracking last-processed file to avoid reprocessing.
  * Uses streaming queries with LIMIT/OFFSET for large result sets.
+ * 
+ * NOTE: The connection pool in connection.js now handles concurrent queries safely.
+ * Each query gets its own connection, so parallel queries are now supported.
  */
 
-import { query } from '../duckdb/connection.js';
+import { query, queryParallel } from '../duckdb/connection.js';
 
 const STREAM_PAGE_SIZE = 10000; // Max rows per query page
 
@@ -126,12 +129,13 @@ export async function getTemplateEventCounts(limit = 100) {
 
 /**
  * Get total record counts (efficient - uses DuckDB stats)
- * NOTE: Sequential queries to avoid DuckDB transaction conflicts
+ * Uses parallel queries via the connection pool for performance
  */
 export async function getTotalCounts() {
-  // Run queries sequentially to avoid DuckDB transaction conflicts
-  const events = await query('SELECT COUNT(*) as count FROM events_raw');
-  const updates = await query('SELECT COUNT(*) as count FROM updates_raw');
+  const [events, updates] = await queryParallel([
+    { sql: 'SELECT COUNT(*) as count FROM events_raw' },
+    { sql: 'SELECT COUNT(*) as count FROM updates_raw' },
+  ]);
   
   // Convert BigInt to Number for JSON serialization
   return {

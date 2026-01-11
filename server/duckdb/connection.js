@@ -27,8 +27,136 @@ const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 // Persistent DuckDB instance (survives restarts, shareable between processes)
 const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
+
+// ============================================================
+// CONNECTION POOL
+// DuckDB supports multiple connections from the same Database instance.
+// Each connection has its own transaction context, allowing safe concurrent queries.
+// ============================================================
+
+const POOL_SIZE = parseInt(process.env.DUCKDB_POOL_SIZE || '4', 10);
+const POOL_TIMEOUT_MS = parseInt(process.env.DUCKDB_POOL_TIMEOUT_MS || '30000', 10);
+
 const db = new duckdb.Database(DB_FILE);
-const conn = db.connect();
+
+// Pool of connections
+const pool = [];
+const waiting = []; // Queue of pending requests for connections
+let poolInitialized = false;
+
+/**
+ * Initialize the connection pool
+ */
+function initPool() {
+  if (poolInitialized) return;
+  
+  for (let i = 0; i < POOL_SIZE; i++) {
+    pool.push({
+      id: i,
+      conn: db.connect(),
+      inUse: false,
+    });
+  }
+  
+  console.log(`🦆 DuckDB connection pool initialized: ${POOL_SIZE} connections`);
+  poolInitialized = true;
+}
+
+// Initialize pool on module load
+initPool();
+
+/**
+ * Acquire a connection from the pool
+ * Returns a promise that resolves with a connection wrapper
+ */
+function acquireConnection() {
+  return new Promise((resolve, reject) => {
+    // Try to find an available connection
+    const available = pool.find(c => !c.inUse);
+    if (available) {
+      available.inUse = true;
+      resolve(available);
+      return;
+    }
+    
+    // No available connection, add to waiting queue with timeout
+    const timeoutId = setTimeout(() => {
+      const idx = waiting.findIndex(w => w.resolve === resolve);
+      if (idx !== -1) {
+        waiting.splice(idx, 1);
+        reject(new Error(`Connection pool timeout after ${POOL_TIMEOUT_MS}ms`));
+      }
+    }, POOL_TIMEOUT_MS);
+    
+    waiting.push({ resolve, reject, timeoutId });
+  });
+}
+
+/**
+ * Release a connection back to the pool
+ */
+function releaseConnection(connWrapper) {
+  connWrapper.inUse = false;
+  
+  // If there are waiting requests, give them this connection
+  if (waiting.length > 0) {
+    const next = waiting.shift();
+    clearTimeout(next.timeoutId);
+    connWrapper.inUse = true;
+    next.resolve(connWrapper);
+  }
+}
+
+/**
+ * Execute a query using a pooled connection
+ * Automatically acquires and releases connections
+ */
+export async function query(sql, params = []) {
+  const connWrapper = await acquireConnection();
+  
+  try {
+    return await new Promise((resolve, reject) => {
+      connWrapper.conn.all(sql, ...params, (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+  } finally {
+    releaseConnection(connWrapper);
+  }
+}
+
+/**
+ * Execute multiple queries in parallel safely
+ * Each query gets its own connection from the pool
+ */
+export async function queryParallel(queries) {
+  return Promise.all(queries.map(({ sql, params = [] }) => query(sql, params)));
+}
+
+/**
+ * Execute a query and return a single row
+ */
+export async function queryOne(sql, params = []) {
+  const rows = await query(sql, params);
+  return rows[0] || null;
+}
+
+/**
+ * Get pool statistics
+ */
+export function getPoolStats() {
+  return {
+    size: POOL_SIZE,
+    inUse: pool.filter(c => c.inUse).length,
+    available: pool.filter(c => !c.inUse).length,
+    waiting: waiting.length,
+  };
+}
+
+// ============================================================
+// FILE DETECTION UTILITIES
+// ============================================================
 
 /**
  * Check if any files of a given extension exist for a type (lazy check, no memory accumulation)
@@ -105,32 +233,9 @@ function hasParquetFiles(type = 'events') {
   return hasFileType(type, '.parquet');
 }
 
-// Simple global queue to serialize DuckDB queries.
-// DuckDB's Node bindings can behave unpredictably when a single connection is used concurrently.
-let _queryQueue = Promise.resolve();
-
-function _enqueue(fn) {
-  const next = _queryQueue.then(fn, fn);
-  // Keep the chain alive even if a query fails
-  _queryQueue = next.catch(() => {});
-  return next;
-}
-
-// Helper to run queries (serialized)
-export function query(sql, params = []) {
-  return _enqueue(() => new Promise((resolve, reject) => {
-    conn.all(sql, ...params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  }));
-}
-
-// Helper to get a single row
-export async function queryOne(sql, params = []) {
-  const rows = await query(sql, params);
-  return rows[0] || null;
-}
+// ============================================================
+// QUERY HELPERS
+// ============================================================
 
 // Helper to get file glob pattern (supports both jsonl and parquet)
 export function getFileGlob(type = 'events', dateFilter = null, format = 'jsonl') {
@@ -252,6 +357,10 @@ export function readParquet(globPattern) {
   return `read_parquet('${globPattern}', union_by_name=true)`;
 }
 
+// ============================================================
+// VIEW INITIALIZATION
+// ============================================================
+
 // Initialize views for common queries
 // For large datasets, we skip view creation and use direct queries instead
 export async function initializeViews() {
@@ -324,4 +433,25 @@ initializeViews();
 
 export { hasFileType, countDataFiles, hasDataFiles, hasParquetFiles, DATA_PATH, ACS_DATA_PATH };
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquetGlob, readDataGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, hasParquetFiles, DATA_PATH, ACS_DATA_PATH };
+export default { 
+  query, 
+  queryParallel,
+  queryOne,
+  safeQuery, 
+  getPoolStats,
+  getFileGlob, 
+  getParquetGlob, 
+  readJsonl, 
+  readJsonlFiles, 
+  readJsonlGlob, 
+  readParquetGlob, 
+  readDataGlob, 
+  readParquet, 
+  findDataFiles, 
+  hasFileType, 
+  countDataFiles, 
+  hasDataFiles, 
+  hasParquetFiles, 
+  DATA_PATH, 
+  ACS_DATA_PATH 
+};

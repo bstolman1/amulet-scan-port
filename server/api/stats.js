@@ -84,12 +84,14 @@ router.get('/overview', async (req, res) => {
     const sources = getDataSources();
     
     // Use engine aggregations when engine is enabled
-    // NOTE: Sequential queries to avoid DuckDB transaction conflicts
+    // Connection pool now handles concurrent queries safely
     if (sources.primarySource === 'engine') {
       try {
-        const counts = await getTotalCounts();
-        const timeRange = await getTimeRange();
-        const ingestionStats = await getIngestionStats();
+        const [counts, timeRange, ingestionStats] = await Promise.all([
+          getTotalCounts(),
+          getTimeRange(),
+          getIngestionStats(),
+        ]);
         
         return res.json({
           total_events: counts.events,
