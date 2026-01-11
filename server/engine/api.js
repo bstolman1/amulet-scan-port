@@ -9,7 +9,7 @@ import { getFileStats, scanAndIndexFiles } from './file-index.js';
 import { getIngestionStats, ingestNewFiles } from './ingest.js';
 import { getTotalCounts, getTimeRange, getTemplateEventCounts, streamEvents } from './aggregations.js';
 import { resetEngineSchema } from './schema.js';
-import { query, getPoolStats } from '../duckdb/connection.js';
+import { query, getPoolStats, resetPoolMetrics } from '../duckdb/connection.js';
 import {
   buildTemplateFileIndex,
   getTemplateIndexStats,
@@ -76,11 +76,21 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// GET /api/engine/pool - Get connection pool stats
+// GET /api/engine/pool - Get connection pool stats and health metrics
 router.get('/pool', (req, res) => {
   try {
     const stats = getPoolStats();
     res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/engine/pool/reset - Reset pool metrics
+router.post('/pool/reset', (req, res) => {
+  try {
+    resetPoolMetrics();
+    res.json({ success: true, message: 'Pool metrics reset' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
