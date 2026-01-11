@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Canton Ledger Backfill Script - OPTIMIZED Parquet Version
+ * Canton Ledger Backfill Script - Optimized Binary Version
  * 
  * Fetches historical ledger data using the backfilling API
- * and writes to partitioned parquet files.
+ * and writes to partitioned binary files (Protobuf + ZSTD).
+ * Optional: Run rotate-parquet.js to convert to actual Parquet format.
  * 
  * Optimizations:
  * - Parallel API fetching (configurable concurrency)
@@ -23,7 +24,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import os from 'os';
 import Piscina from 'piscina';
-import { normalizeUpdate, normalizeEvent, getPartitionPath } from './parquet-schema.js';
+import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
 
 // Use binary writer (Protobuf + ZSTD) instead of JSONL
 import { bufferUpdates, bufferEvents, flushAll, getBufferStats, waitForWrites, shutdown } from './write-binary.js';
@@ -1407,7 +1408,7 @@ async function runBackfill() {
  */
 async function startLiveUpdates() {
   const { spawn } = await import('child_process');
-  const liveUpdatesScript = join(__dirname, 'fetch-updates-parquet.js');
+  const liveUpdatesScript = join(__dirname, 'fetch-updates.js');
   
   console.log(`\n${"═".repeat(80)}`);
   console.log(`🔄 Starting live updates ingestion...`);

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * ACS Snapshot Fetcher - Parquet Version
+ * ACS Snapshot Fetcher
  * 
  * Fetches current Active Contract Set from Canton Scan API
- * and writes to local partitioned files for DuckDB.
+ * and writes to local partitioned JSONL files for DuckDB.
  */
 
 import dotenv from 'dotenv';
@@ -14,7 +14,7 @@ import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
 import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat } from './acs-schema.js';
-import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete, cleanupOldSnapshots } from './write-acs-parquet.js';
+import { setSnapshotTime, bufferContracts, flushAll, getBufferStats, clearBuffers, writeCompletionMarker, isSnapshotComplete, cleanupOldSnapshots } from './write-acs-jsonl.js';
 
 // TLS config (secure by default)
 // Set INSECURE_TLS=1 only in controlled environments with self-signed certs.

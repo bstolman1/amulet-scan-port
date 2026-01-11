@@ -32,7 +32,7 @@ for ($i = 0; $i -lt $ShardCount; $i++) {
     
     $envString = "set SHARD_INDEX=$i && set SHARD_TOTAL=$ShardCount && set TARGET_MIGRATION=$TargetMigration"
     
-    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot`" && $envString && node fetch-backfill-parquet.js" -WindowStyle Normal
+    Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot`" && $envString && node fetch-backfill.js" -WindowStyle Normal
     
     Start-Sleep -Seconds 2
 }

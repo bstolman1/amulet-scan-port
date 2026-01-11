@@ -28,7 +28,7 @@ import { Agent as HttpsAgent } from 'https';
 import fs from 'fs';
 import Piscina from 'piscina';
 import { readBinaryFile } from './read-binary.js';
-import { normalizeUpdate, normalizeEvent } from './parquet-schema.js';
+import { normalizeUpdate, normalizeEvent } from './data-schema.js';
 import { bufferUpdates, bufferEvents, flushAll, waitForWrites, shutdown } from './write-binary.js';
 
 // TLS config (secure by default)

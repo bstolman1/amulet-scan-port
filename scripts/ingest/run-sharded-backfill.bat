@@ -53,7 +53,7 @@ REM Launch each shard in a new window with all env vars
 for /L %%i in (0,1,%SHARD_COUNT%) do (
     if %%i lss %SHARD_COUNT% (
         echo Starting Shard %%i of %SHARD_COUNT%...
-        start "Shard %%i" cmd /k "set SHARD_INDEX=%%i&&set SHARD_TOTAL=%SHARD_COUNT%&&set TARGET_MIGRATION=%TARGET_MIGRATION%&&set %ENV_VARS%&&node fetch-backfill-parquet.js"
+        start "Shard %%i" cmd /k "set SHARD_INDEX=%%i&&set SHARD_TOTAL=%SHARD_COUNT%&&set TARGET_MIGRATION=%TARGET_MIGRATION%&&set %ENV_VARS%&&node fetch-backfill.js"
         timeout /t 2 /nobreak >nul
     )
 )

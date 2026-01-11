@@ -19,7 +19,7 @@ const rangeMs = args.includes('--range')
   : 3600000; // 1 hour default
 
 /**
- * Calculate time slice for a shard (copied from fetch-backfill-parquet.js)
+ * Calculate time slice for a shard (copied from fetch-backfill.js)
  */
 function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
   const minMs = new Date(minTime).getTime();

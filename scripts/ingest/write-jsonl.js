@@ -1,7 +1,10 @@
 /**
- * Parquet Writer Module - WORKER THREAD VERSION
+ * JSONL Writer Module - WORKER THREAD VERSION
  * 
- * Handles writing ledger data to partitioned parquet files.
+ * Handles writing ledger data to partitioned JSONL files with ZSTD compression.
+ * 
+ * Note: For production backfills, prefer write-binary.js (Protobuf + ZSTD)
+ * which is more memory-efficient. This module is kept for compatibility.
  * 
  * Optimizations:
  * - Worker thread pool for CPU-intensive compression
@@ -16,7 +19,7 @@ import { writeFile } from 'fs/promises';
 import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import { getPartitionPath } from './parquet-schema.js';
+import { getPartitionPath } from './data-schema.js';
 import { getWorkerPool, shutdownPool } from './worker-pool.js';
 
 const __filename = fileURLToPath(import.meta.url);

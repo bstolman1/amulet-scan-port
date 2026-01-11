@@ -93,7 +93,7 @@ for ((i=0; i<SHARD_COUNT; i++)); do
     (
         cd "$SCRIPT_DIR"
         SHARD_INDEX=$i SHARD_TOTAL=$SHARD_COUNT TARGET_MIGRATION=$TARGET_MIGRATION \
-            node fetch-backfill-parquet.js 2>&1 | tee "$LOG_FILE"
+            node fetch-backfill.js 2>&1 | tee "$LOG_FILE"
     ) &
     
     PIDS+=($!)
