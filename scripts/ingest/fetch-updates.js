@@ -31,40 +31,49 @@ import {
 const args = process.argv.slice(2);
 const LIVE_MODE = args.includes('--live') || args.includes('-l');
 const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
+const USE_PARQUET = !RAW_ONLY;
+const USE_BINARY = KEEP_RAW || RAW_ONLY;
 
-// Use Parquet writer by default, binary writer only if --keep-raw
+// Use Parquet writer by default, binary writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter from './write-binary.js';
 
 // Unified writer functions
 async function bufferUpdates(updates) {
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     await binaryWriter.bufferUpdates(updates);
   }
-  return parquetWriter.bufferUpdates(updates);
+  if (USE_PARQUET) {
+    return parquetWriter.bufferUpdates(updates);
+  }
 }
 
 async function bufferEvents(events) {
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     await binaryWriter.bufferEvents(events);
   }
-  return parquetWriter.bufferEvents(events);
+  if (USE_PARQUET) {
+    return parquetWriter.bufferEvents(events);
+  }
 }
 
 async function flushAll() {
   const results = [];
-  if (KEEP_RAW) {
+  if (USE_BINARY) {
     const binaryResults = await binaryWriter.flushAll();
     results.push(...binaryResults);
   }
-  const parquetResults = await parquetWriter.flushAll();
-  results.push(...parquetResults);
+  if (USE_PARQUET) {
+    const parquetResults = await parquetWriter.flushAll();
+    results.push(...parquetResults);
+  }
   return results;
 }
 
 function getBufferStats() {
-  const stats = parquetWriter.getBufferStats();
-  if (KEEP_RAW) {
+  const stats = USE_PARQUET ? parquetWriter.getBufferStats() : { updates: 0, events: 0, pendingWrites: 0 };
+  if (USE_BINARY) {
     const binaryStats = binaryWriter.getBufferStats();
     stats.binaryPendingWrites = binaryStats.pendingWrites;
   }
@@ -72,8 +81,10 @@ function getBufferStats() {
 }
 
 function setMigrationId(id) {
-  parquetWriter.setMigrationId(id);
-  if (KEEP_RAW) {
+  if (USE_PARQUET) {
+    parquetWriter.setMigrationId(id);
+  }
+  if (USE_BINARY) {
     binaryWriter.setMigrationId(id);
   }
 }
