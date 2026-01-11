@@ -35,6 +35,9 @@ const BASE_DATA_DIR = resolve(BASE_DATA_DIR_RAW);
 const DATA_DIR = join(BASE_DATA_DIR, 'raw'); // Parquet files go in raw/ subdirectory
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 
+// Log the output directory on module load
+console.log(`📂 [write-parquet] Output directory: ${DATA_DIR}`);
+
 // In-memory buffers
 let updatesBuffer = [];
 let eventsBuffer = [];
@@ -205,30 +208,51 @@ async function writeToParquet(records, filePath, type) {
       ? records.map(mapUpdateRecord)
       : records.map(mapEventRecord);
     
+    // Ensure parent directory exists
+    const parentDir = dirname(filePath);
+    ensureDir(parentDir);
+    
     // Write temp JSONL
     const lines = mapped.map(r => JSON.stringify(r));
     writeFileSync(tempJsonlPath, lines.join('\n') + '\n');
     
-    // Convert to Parquet via DuckDB
+    // Verify temp file was written
+    if (!existsSync(tempJsonlPath)) {
+      throw new Error(`Failed to write temp file: ${tempJsonlPath}`);
+    }
+    
+    // Convert to Parquet via DuckDB CLI
     const sql = `
       COPY (
         SELECT * FROM read_json_auto('${tempJsonlPath.replace(/\\/g, '/')}')
       ) TO '${filePath.replace(/\\/g, '/')}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
     `;
     
-    execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
+    try {
+      execSync(`duckdb -c "${sql}"`, { stdio: 'pipe' });
+    } catch (duckErr) {
+      console.error(`❌ DuckDB CLI failed. Is DuckDB installed and in PATH?`);
+      console.error(`   Command: duckdb -c "..."`);
+      console.error(`   Error: ${duckErr.message}`);
+      throw duckErr;
+    }
+    
+    // Verify parquet file was created
+    if (!existsSync(filePath)) {
+      throw new Error(`DuckDB ran but parquet file not created: ${filePath}`);
+    }
     
     // Clean up temp file
     unlinkSync(tempJsonlPath);
     
     totalFilesWritten++;
-    console.log(`📝 Wrote ${records.length} ${type} to ${filePath.split(/[\\/]/).pop()}`);
+    console.log(`📝 Wrote ${records.length} ${type} to ${filePath}`);
     
     return { file: filePath, count: records.length };
   } catch (err) {
     // Clean up temp file on error
     if (existsSync(tempJsonlPath)) {
-      unlinkSync(tempJsonlPath);
+      try { unlinkSync(tempJsonlPath); } catch {}
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
