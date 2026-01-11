@@ -1,42 +1,49 @@
 /**
- * Parquet Writer Module - Direct DuckDB Version
+ * Parquet Writer Module - Parallel DuckDB Version
  * 
- * Writes ledger data directly to Parquet files using DuckDB.
- * This eliminates the need for a separate materialization step.
+ * Writes ledger data to Parquet files using a worker pool with DuckDB.
+ * Each worker has its own in-memory DuckDB instance for parallel writes.
  * 
- * Drop-in replacement for write-binary.js with same API surface.
+ * Drop-in replacement for the original synchronous CLI-based version.
  * 
  * How it works:
- * 1. Buffer records in memory (same as binary writer)
- * 2. On flush: Write temp JSONL, convert to Parquet via DuckDB, delete temp
- * 3. DuckDB handles Parquet + ZSTD compression natively
+ * 1. Buffer records in memory (same as before)
+ * 2. On flush: Enqueue job to worker pool (non-blocking)
+ * 3. Worker writes Parquet with ZSTD via DuckDB Node.js bindings
+ * 
+ * Configuration:
+ * - PARQUET_WORKERS: Number of parallel writers (default: CPU-1)
+ * - MAX_ROWS_PER_FILE: Records per Parquet file (default: 5000)
+ * - PARQUET_USE_CLI=true: Fall back to synchronous CLI approach
  */
 
-import { mkdirSync, existsSync, rmSync, readdirSync, writeFileSync, unlinkSync } from 'fs';
+import { mkdirSync, existsSync, rmSync, readdirSync, writeFileSync, unlinkSync, statSync } from 'fs';
 import { join, dirname, sep, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { execSync } from 'child_process';
 import { getPartitionPath } from './data-schema.js';
+import { getParquetWriterPool, shutdownParquetPool } from './parquet-writer-pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default Windows path: C:\ledger_raw
+// Configuration
 const WIN_DEFAULT = 'C:\\ledger_raw';
 const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WIN_DEFAULT;
 
-// Safety: require an absolute path
 if (process.env.DATA_DIR && !isAbsolute(process.env.DATA_DIR)) {
   throw new Error(`[write-parquet] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
 }
 
 const BASE_DATA_DIR = resolve(BASE_DATA_DIR_RAW);
-const DATA_DIR = join(BASE_DATA_DIR, 'raw'); // Parquet files go in raw/ subdirectory
+const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
+const USE_CLI = process.env.PARQUET_USE_CLI === 'true';
 
-// Log the output directory on module load
+// Log configuration on module load
 console.log(`📂 [write-parquet] Output directory: ${DATA_DIR}`);
+console.log(`📂 [write-parquet] Mode: ${USE_CLI ? 'CLI (synchronous)' : 'Worker Pool (parallel)'}`);
 
 // In-memory buffers
 let updatesBuffer = [];
@@ -48,8 +55,25 @@ let totalUpdatesWritten = 0;
 let totalEventsWritten = 0;
 let totalFilesWritten = 0;
 
+// Pending write promises (for tracking parallel writes)
+const pendingWrites = new Set();
+
+// Pool initialization flag
+let poolInitialized = false;
+
 /**
- * Ensure directory exists (Windows-safe with race condition handling)
+ * Initialize the writer pool (called automatically on first write)
+ */
+async function ensurePoolInitialized() {
+  if (poolInitialized || USE_CLI) return;
+  
+  const pool = getParquetWriterPool();
+  await pool.init();
+  poolInitialized = true;
+}
+
+/**
+ * Ensure directory exists (Windows-safe)
  */
 function ensureDir(dirPath) {
   const normalizedPath = dirPath.split('/').join(sep);
@@ -195,72 +219,34 @@ function mapEventRecord(r) {
 }
 
 /**
- * Write records to Parquet file via DuckDB
+ * Write records to Parquet via CLI (synchronous fallback)
  */
-async function writeToParquet(records, filePath, type) {
+function writeToParquetCLI(records, filePath, type) {
   if (records.length === 0) return null;
   
-  // Use forward slashes consistently for DuckDB on all platforms
   const normalizedFilePath = filePath.replace(/\\/g, '/');
   const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
   
   try {
-    // Map records to flat structure
     const mapped = type === 'updates' 
       ? records.map(mapUpdateRecord)
       : records.map(mapEventRecord);
     
-    // Ensure parent directory exists (use original path for fs operations)
     const parentDir = dirname(filePath);
     ensureDir(parentDir);
     
-    // Write temp JSONL (use forward slashes for consistency)
     const lines = mapped.map(r => JSON.stringify(r));
     writeFileSync(tempJsonlPath.replace(/\//g, sep), lines.join('\n') + '\n');
     
-    // Verify temp file was written
-    const tempNativePath = tempJsonlPath.replace(/\//g, sep);
-    if (!existsSync(tempNativePath)) {
-      throw new Error(`Failed to write temp file: ${tempNativePath}`);
-    }
-    
-    // Convert to Parquet via DuckDB CLI
-    // Use forward slashes in SQL - DuckDB handles them on Windows
     const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`;
     
-    try {
-      // Capture both stdout and stderr for debugging
-      const result = execSync(`duckdb -c "${sql}"`, { 
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        // Set working directory to the output folder
-        cwd: parentDir,
-      });
-      if (result && result.trim()) {
-        console.log(`   DuckDB output: ${result.trim()}`);
-      }
-    } catch (duckErr) {
-      const stderr = duckErr.stderr?.toString() || '';
-      const stdout = duckErr.stdout?.toString() || '';
-      console.error(`❌ DuckDB CLI failed.`);
-      console.error(`   SQL: ${sql}`);
-      if (stderr) console.error(`   stderr: ${stderr}`);
-      if (stdout) console.error(`   stdout: ${stdout}`);
-      console.error(`   Error: ${duckErr.message}`);
-      throw new Error(`DuckDB failed: ${stderr || duckErr.message}`);
-    }
+    execSync(`duckdb -c "${sql}"`, { 
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: parentDir,
+    });
     
-    // Verify parquet file was created (check both path formats)
-    const nativeFilePath = filePath;
-    if (!existsSync(nativeFilePath)) {
-      // Maybe DuckDB wrote to current directory?
-      const basename = normalizedFilePath.split('/').pop();
-      console.error(`   ⚠️ File not at expected path: ${nativeFilePath}`);
-      console.error(`   ⚠️ Checking if file exists as: ${basename}`);
-      throw new Error(`DuckDB ran but parquet file not created: ${nativeFilePath}`);
-    }
-    
-    // Clean up temp file
+    const tempNativePath = tempJsonlPath.replace(/\//g, sep);
     if (existsSync(tempNativePath)) {
       unlinkSync(tempNativePath);
     }
@@ -270,13 +256,50 @@ async function writeToParquet(records, filePath, type) {
     
     return { file: filePath, count: records.length };
   } catch (err) {
-    // Clean up temp file on error
     const tempNativePath = tempJsonlPath.replace(/\//g, sep);
     if (existsSync(tempNativePath)) {
       try { unlinkSync(tempNativePath); } catch {}
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
+  }
+}
+
+/**
+ * Write records to Parquet via worker pool (parallel)
+ */
+async function writeToParquetPool(records, filePath, type) {
+  if (records.length === 0) return null;
+  
+  await ensurePoolInitialized();
+  
+  // Map records before sending to worker
+  const mapped = type === 'updates' 
+    ? records.map(mapUpdateRecord)
+    : records.map(mapEventRecord);
+  
+  // Ensure parent directory exists
+  const parentDir = dirname(filePath);
+  ensureDir(parentDir);
+  
+  // Enqueue job to pool
+  const pool = getParquetWriterPool();
+  const writePromise = pool.writeJob({
+    type,
+    filePath,
+    records: mapped,
+  });
+  
+  // Track pending write
+  pendingWrites.add(writePromise);
+  
+  try {
+    const result = await writePromise;
+    totalFilesWritten++;
+    console.log(`📝 Wrote ${records.length} ${type} to ${filePath} (${(result.bytes / 1024).toFixed(1)}KB)`);
+    return { file: filePath, count: records.length, bytes: result.bytes };
+  } finally {
+    pendingWrites.delete(writePromise);
   }
 }
 
@@ -310,7 +333,6 @@ export async function bufferEvents(events) {
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
   
-  // Use effective_at for partitioning
   const firstRecord = updatesBuffer[0];
   const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
@@ -325,7 +347,10 @@ export async function flushUpdates() {
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
-  const result = await writeToParquet(rowsToWrite, filePath, 'updates');
+  const result = USE_CLI 
+    ? writeToParquetCLI(rowsToWrite, filePath, 'updates')
+    : await writeToParquetPool(rowsToWrite, filePath, 'updates');
+  
   totalUpdatesWritten += rowsToWrite.length;
   
   return result;
@@ -337,7 +362,6 @@ export async function flushUpdates() {
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
   
-  // Use effective_at for partitioning
   const firstRecord = eventsBuffer[0];
   const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
@@ -352,7 +376,10 @@ export async function flushEvents() {
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
-  const result = await writeToParquet(rowsToWrite, filePath, 'events');
+  const result = USE_CLI
+    ? writeToParquetCLI(rowsToWrite, filePath, 'events')
+    : await writeToParquetPool(rowsToWrite, filePath, 'events');
+  
   totalEventsWritten += rowsToWrite.length;
   
   return result;
@@ -374,37 +401,66 @@ export async function flushAll() {
 }
 
 /**
- * Get buffer and stats
+ * Get buffer and pool stats
  */
 export function getBufferStats() {
+  const poolStats = poolInitialized && !USE_CLI 
+    ? getParquetWriterPool().getStats() 
+    : null;
+  
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
     updatesBuffered: updatesBuffer.length,
     eventsBuffered: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
-    queuedJobs: 0,
-    activeWorkers: 0,
-    pendingWrites: 0,
+    mode: USE_CLI ? 'cli' : 'pool',
+    queuedJobs: poolStats?.queuedJobs || 0,
+    activeWorkers: poolStats?.activeWorkers || 0,
+    pendingWrites: pendingWrites.size,
     totalUpdatesWritten,
     totalEventsWritten,
     totalFilesWritten,
+    // Pool-specific stats
+    ...(poolStats && {
+      poolCompletedJobs: poolStats.completedJobs,
+      poolFailedJobs: poolStats.failedJobs,
+      poolMbWritten: poolStats.mbWritten,
+      poolMbPerSec: poolStats.mbPerSec,
+      poolFilesPerSec: poolStats.filesPerSec,
+    }),
   };
 }
 
 /**
- * Wait for writes (no-op for synchronous Parquet writes)
+ * Wait for all pending writes to complete
  */
 export async function waitForWrites() {
-  // Parquet writes are synchronous via DuckDB CLI
-  return;
+  if (USE_CLI) return;
+  
+  // Wait for any pending write promises
+  if (pendingWrites.size > 0) {
+    await Promise.allSettled([...pendingWrites]);
+  }
+  
+  // Drain the pool
+  if (poolInitialized) {
+    const pool = getParquetWriterPool();
+    await pool.drain();
+  }
 }
 
 /**
- * Shutdown (no-op for synchronous writes)
+ * Shutdown writer pool
  */
 export async function shutdown() {
   await flushAll();
+  await waitForWrites();
+  
+  if (!USE_CLI) {
+    await shutdownParquetPool();
+    poolInitialized = false;
+  }
 }
 
 /**
