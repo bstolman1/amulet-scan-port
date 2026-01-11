@@ -98,7 +98,7 @@ export async function initEngineSchema() {
     CREATE TABLE IF NOT EXISTS ingestion_state (
       source              VARCHAR NOT NULL,
       migration_id        INTEGER NOT NULL,
-      synchronizer_id     VARCHAR,
+      synchronizer_id     VARCHAR NOT NULL DEFAULT '',
       cursor              VARCHAR,
       min_time            TIMESTAMP,
       max_time            TIMESTAMP,
@@ -108,7 +108,7 @@ export async function initEngineSchema() {
       error_count         INTEGER DEFAULT 0,
       last_error          VARCHAR,
       updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (source, migration_id, COALESCE(synchronizer_id, ''))
+      PRIMARY KEY (source, migration_id, synchronizer_id)
     )
   `);
 
