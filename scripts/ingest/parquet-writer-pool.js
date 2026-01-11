@@ -55,6 +55,9 @@ export class ParquetWriterPool {
       failedJobs: 0,
       totalRecords: 0,
       totalBytes: 0,
+      validatedFiles: 0,
+      validationFailures: 0,
+      validationIssues: [],
     };
     this.initialized = false;
   }
@@ -112,6 +115,23 @@ export class ParquetWriterPool {
           this.stats.completedJobs++;
           this.stats.totalRecords += msg.count || 0;
           this.stats.totalBytes += msg.bytes || 0;
+          
+          // Track validation results
+          if (msg.validation) {
+            this.stats.validatedFiles++;
+            if (!msg.validation.valid) {
+              this.stats.validationFailures++;
+              // Keep last 10 validation issues for debugging
+              if (this.stats.validationIssues.length < 10) {
+                this.stats.validationIssues.push({
+                  file: path.basename(job.filePath),
+                  issues: msg.validation.issues,
+                });
+              }
+              console.warn(`⚠️ Parquet validation failed: ${path.basename(job.filePath)} - ${msg.validation.issues.join(', ')}`);
+            }
+          }
+          
           resolve(msg);
         } else {
           this.stats.failedJobs++;
@@ -153,7 +173,17 @@ export class ParquetWriterPool {
       mbPerSec,
       filesPerSec,
       elapsedSec: elapsed.toFixed(1),
+      validationRate: this.stats.validatedFiles > 0 
+        ? ((this.stats.validatedFiles - this.stats.validationFailures) / this.stats.validatedFiles * 100).toFixed(1) + '%'
+        : 'N/A',
     };
+  }
+
+  /**
+   * Get recent validation issues (for debugging)
+   */
+  getValidationIssues() {
+    return this.stats.validationIssues;
   }
 
   async drain() {
