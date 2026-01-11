@@ -238,7 +238,24 @@ function writeToParquetCLI(records, filePath, type) {
     const lines = mapped.map(r => JSON.stringify(r));
     writeFileSync(tempJsonlPath.replace(/\//g, sep), lines.join('\n') + '\n');
     
-    const sql = `COPY (SELECT * FROM read_json_auto('${tempJsonlPath}')) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`;
+    const readFn = type === 'events'
+      ? `read_json_auto('${tempJsonlPath}', columns={
+          event_id: 'VARCHAR', update_id: 'VARCHAR', event_type: 'VARCHAR', event_type_original: 'VARCHAR',
+          synchronizer_id: 'VARCHAR', effective_at: 'VARCHAR', recorded_at: 'VARCHAR', created_at_ts: 'VARCHAR',
+          contract_id: 'VARCHAR', template_id: 'VARCHAR', package_name: 'VARCHAR', migration_id: 'BIGINT',
+          signatories: 'VARCHAR[]', observers: 'VARCHAR[]', acting_parties: 'VARCHAR[]', witness_parties: 'VARCHAR[]',
+          child_event_ids: 'VARCHAR[]', consuming: 'BOOLEAN', reassignment_counter: 'BIGINT',
+          payload: 'VARCHAR', contract_key: 'VARCHAR', exercise_result: 'VARCHAR', raw_event: 'VARCHAR', trace_context: 'VARCHAR'
+        }, union_by_name=true)`
+      : `read_json_auto('${tempJsonlPath}', columns={
+          update_id: 'VARCHAR', update_type: 'VARCHAR', synchronizer_id: 'VARCHAR', effective_at: 'VARCHAR',
+          recorded_at: 'VARCHAR', record_time: 'VARCHAR', command_id: 'VARCHAR', workflow_id: 'VARCHAR', kind: 'VARCHAR',
+          migration_id: 'BIGINT', offset: 'BIGINT', event_count: 'INTEGER', root_event_ids: 'VARCHAR[]',
+          source_synchronizer: 'VARCHAR', target_synchronizer: 'VARCHAR', unassign_id: 'VARCHAR', submitter: 'VARCHAR',
+          reassignment_counter: 'BIGINT', trace_context: 'VARCHAR', update_data: 'VARCHAR'
+        }, union_by_name=true)`;
+
+    const sql = `COPY (SELECT * FROM ${readFn}) TO '${normalizedFilePath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`;
     
     execSync(`duckdb -c "${sql}"`, { 
       encoding: 'utf8',

@@ -105,14 +105,25 @@ function hasParquetFiles(type = 'events') {
   return hasFileType(type, '.parquet');
 }
 
-// Helper to run queries
+// Simple global queue to serialize DuckDB queries.
+// DuckDB's Node bindings can behave unpredictably when a single connection is used concurrently.
+let _queryQueue = Promise.resolve();
+
+function _enqueue(fn) {
+  const next = _queryQueue.then(fn, fn);
+  // Keep the chain alive even if a query fails
+  _queryQueue = next.catch(() => {});
+  return next;
+}
+
+// Helper to run queries (serialized)
 export function query(sql, params = []) {
-  return new Promise((resolve, reject) => {
+  return _enqueue(() => new Promise((resolve, reject) => {
     conn.all(sql, ...params, (err, rows) => {
       if (err) reject(err);
       else resolve(rows);
     });
-  });
+  }));
 }
 
 // Helper to get a single row
