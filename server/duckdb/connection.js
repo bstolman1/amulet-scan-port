@@ -73,9 +73,10 @@ function countDataFiles(type = 'events', maxScan = 10000) {
           (entry.name.endsWith('.jsonl') || 
            entry.name.endsWith('.jsonl.gz') || 
            entry.name.endsWith('.jsonl.zst') ||
-           entry.name.endsWith('.pb.zst'))
+           entry.name.endsWith('.pb.zst') ||
+           entry.name.endsWith('.parquet'))
         ) {
-          count++;  // Fixed: was missing this increment
+          count++;
           if (count >= maxScan) break;
         }
       }
@@ -93,10 +94,15 @@ function findDataFiles(type = 'events') {
 }
 
 function hasDataFiles(type = 'events') {
-  return hasFileType(type, '.jsonl') || 
+  return hasFileType(type, '.parquet') ||
+         hasFileType(type, '.jsonl') || 
          hasFileType(type, '.jsonl.gz') || 
          hasFileType(type, '.jsonl.zst') ||
          hasFileType(type, '.pb.zst');
+}
+
+function hasParquetFiles(type = 'events') {
+  return hasFileType(type, '.parquet');
 }
 
 // Helper to run queries
@@ -146,6 +152,17 @@ export async function safeQuery(sql) {
   }
 }
 
+// Read from Parquet files (preferred format)
+export function readParquetGlob(type = 'events') {
+  const basePath = DATA_PATH.replace(/\\/g, '/');
+  
+  if (!hasParquetFiles(type)) {
+    return `(SELECT NULL as placeholder WHERE false)`;
+  }
+  
+  return `read_parquet('${basePath}/**/${type}-*.parquet', union_by_name=true)`;
+}
+
 // Read JSON-lines files using DuckDB glob patterns (more efficient for large datasets)
 // Uses forward slashes which DuckDB handles on all platforms
 // Uses lazy file detection to avoid memory issues with large file counts
@@ -173,6 +190,16 @@ export function readJsonlGlob(type = 'events') {
   }
   
   return `(${queries.join(' UNION ALL ')})`;
+}
+
+// Auto-detect best format and return appropriate read expression
+export function readDataGlob(type = 'events') {
+  // Prefer Parquet (fastest)
+  if (hasParquetFiles(type)) {
+    return readParquetGlob(type);
+  }
+  // Fall back to JSONL
+  return readJsonlGlob(type);
 }
 
 // Read from explicit file list - use only for small lists (<100 files)
@@ -245,12 +272,14 @@ export async function initializeViews() {
   
   try {
     // For small datasets, create views using glob patterns (no file list accumulation)
+    // Prefer Parquet format when available
     if (eventCount > 0 && eventCount <= MAX_FILES_FOR_VIEWS) {
       await query(`
         CREATE OR REPLACE VIEW all_events AS
-        SELECT * FROM ${readJsonlGlob('events')}
+        SELECT * FROM ${readDataGlob('events')}
       `);
-      console.log(`✅ Created events view (~${eventCount} files)`);
+      const format = hasParquetFiles('events') ? 'Parquet' : 'JSONL';
+      console.log(`✅ Created events view (~${eventCount} ${format} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_events AS SELECT NULL as placeholder WHERE false`);
     }
@@ -258,9 +287,10 @@ export async function initializeViews() {
     if (updateCount > 0 && updateCount <= MAX_FILES_FOR_VIEWS) {
       await query(`
         CREATE OR REPLACE VIEW all_updates AS
-        SELECT * FROM ${readJsonlGlob('updates')}
+        SELECT * FROM ${readDataGlob('updates')}
       `);
-      console.log(`✅ Created updates view (~${updateCount} files)`);
+      const format = hasParquetFiles('updates') ? 'Parquet' : 'JSONL';
+      console.log(`✅ Created updates view (~${updateCount} ${format} files)`);
     } else {
       await query(`CREATE OR REPLACE VIEW all_updates AS SELECT NULL as placeholder WHERE false`);
     }
@@ -281,6 +311,6 @@ export async function initializeViews() {
 // Initialize on import
 initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
+export { hasFileType, countDataFiles, hasDataFiles, hasParquetFiles, DATA_PATH, ACS_DATA_PATH };
 
-export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, DATA_PATH, ACS_DATA_PATH };
+export default { query, safeQuery, getFileGlob, getParquetGlob, readJsonl, readJsonlFiles, readJsonlGlob, readParquetGlob, readDataGlob, readParquet, findDataFiles, hasFileType, countDataFiles, hasDataFiles, hasParquetFiles, DATA_PATH, ACS_DATA_PATH };
