@@ -313,8 +313,19 @@ async function writeToParquetPool(records, filePath, type) {
   try {
     const result = await writePromise;
     totalFilesWritten++;
-    console.log(`📝 Wrote ${records.length} ${type} to ${filePath} (${(result.bytes / 1024).toFixed(1)}KB)`);
-    return { file: filePath, count: records.length, bytes: result.bytes };
+    
+    // Log with validation status
+    const validationStatus = result.validation 
+      ? (result.validation.valid ? '✅' : `⚠️ ${result.validation.issues.length} issues`)
+      : '';
+    console.log(`📝 Wrote ${records.length} ${type} to ${filePath} (${(result.bytes / 1024).toFixed(1)}KB) ${validationStatus}`);
+    
+    return { 
+      file: filePath, 
+      count: records.length, 
+      bytes: result.bytes,
+      validation: result.validation,
+    };
   } finally {
     pendingWrites.delete(writePromise);
   }
@@ -445,6 +456,11 @@ export function getBufferStats() {
       poolMbWritten: poolStats.mbWritten,
       poolMbPerSec: poolStats.mbPerSec,
       poolFilesPerSec: poolStats.filesPerSec,
+      // Validation stats
+      validatedFiles: poolStats.validatedFiles,
+      validationFailures: poolStats.validationFailures,
+      validationRate: poolStats.validationRate,
+      validationIssues: poolStats.validationIssues,
     }),
   };
 }

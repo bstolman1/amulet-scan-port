@@ -209,6 +209,77 @@ async function run() {
     const stats = fs.statSync(nativeFilePath);
     const bytes = stats.size;
 
+    // ========== POST-WRITE VALIDATION ==========
+    // Immediately validate the written Parquet file to catch schema issues early
+    let validation = { valid: true, rowCount: 0, issues: [] };
+    
+    try {
+      // 1. Verify file is readable and get row count
+      const countResult = await allQuery(`
+        SELECT COUNT(*) as cnt FROM read_parquet('${normalizedFilePath}')
+      `);
+      validation.rowCount = Number(countResult[0]?.cnt || 0);
+      
+      // Check row count matches expected
+      if (validation.rowCount !== records.length) {
+        validation.issues.push(`Row count mismatch: expected ${records.length}, got ${validation.rowCount}`);
+      }
+      
+      // 2. Verify required columns exist based on type
+      const schemaResult = await allQuery(`
+        SELECT column_name FROM parquet_schema('${normalizedFilePath}')
+      `);
+      const columns = new Set(schemaResult.map(r => r.column_name));
+      
+      const requiredColumns = type === 'events'
+        ? ['event_id', 'event_type', 'raw_event']
+        : ['update_id', 'update_type', 'update_data'];
+      
+      for (const col of requiredColumns) {
+        if (!columns.has(col)) {
+          validation.issues.push(`Missing required column: ${col}`);
+        }
+      }
+      
+      // 3. Sample check: verify key columns have data
+      if (type === 'events' && validation.rowCount > 0) {
+        const sampleCheck = await allQuery(`
+          SELECT 
+            COUNT(*) FILTER (WHERE raw_event IS NOT NULL) as has_raw,
+            COUNT(*) FILTER (WHERE event_type IS NOT NULL) as has_type
+          FROM read_parquet('${normalizedFilePath}')
+          LIMIT 100
+        `);
+        const sample = sampleCheck[0] || {};
+        if (Number(sample.has_raw || 0) === 0) {
+          validation.issues.push('No rows have raw_event data');
+        }
+      } else if (type === 'updates' && validation.rowCount > 0) {
+        const sampleCheck = await allQuery(`
+          SELECT 
+            COUNT(*) FILTER (WHERE update_data IS NOT NULL) as has_data,
+            COUNT(*) FILTER (WHERE record_time IS NOT NULL) as has_time
+          FROM read_parquet('${normalizedFilePath}')
+          LIMIT 100
+        `);
+        const sample = sampleCheck[0] || {};
+        if (Number(sample.has_data || 0) === 0) {
+          validation.issues.push('No rows have update_data');
+        }
+      }
+      
+      validation.valid = validation.issues.length === 0;
+      
+      if (!validation.valid) {
+        console.warn(`[PARQUET-WORKER] ⚠️ Validation issues in ${path.basename(filePath)}:`, validation.issues);
+      }
+      
+    } catch (valErr) {
+      validation.valid = false;
+      validation.issues.push(`Validation query failed: ${valErr.message}`);
+      console.error(`[PARQUET-WORKER] ❌ Validation failed for ${path.basename(filePath)}: ${valErr.message}`);
+    }
+
     // Clean up temp file
     if (fs.existsSync(tempNativePath)) {
       fs.unlinkSync(tempNativePath);
@@ -218,13 +289,16 @@ async function run() {
     conn.close();
     db.close();
 
-    // Report success
+    // Report success with validation results
     parentPort.postMessage({
       ok: true,
       filePath,
       count: records.length,
       bytes,
+      validation,
     });
+
+    process.exit(0);
 
     process.exit(0);
 
