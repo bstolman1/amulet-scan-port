@@ -2119,9 +2119,9 @@ const GovernanceFlow = () => {
                                 </span>
                               </div>
                               
-                              {/* Title */}
+                              {/* Title - Use first topic subject to include "Vote proposal:" prefix */}
                               <CardTitle className="text-base leading-normal break-words">
-                                {group.primaryId}
+                                {group.items[0]?.topics[0]?.subject || group.primaryId}
                               </CardTitle>
                               
                               {/* Date Range */}
