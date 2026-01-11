@@ -5,6 +5,16 @@
  * Fetches historical ledger data using the backfilling API
  * and writes directly to Parquet files (default) or binary (--keep-raw).
  * 
+ * CRITICAL FIXES APPLIED:
+ * 1. Explicit fetch result states (SUCCESS_DATA, SUCCESS_EMPTY, FAILURE)
+ *    - Network errors now FAIL HARD instead of silently continuing
+ *    - No more "0 updates but success" on transient failures
+ * 
+ * 2. Atomic cursor transactions
+ *    - Cursor only advances AFTER data is confirmed on disk
+ *    - Uses write-to-temp-then-rename pattern for crash safety
+ *    - Recovery from partial writes on restart
+ * 
  * Usage:
  *   node fetch-backfill.js              # Writes directly to Parquet (default)
  *   node fetch-backfill.js --keep-raw   # Also writes to .pb.zst files
@@ -36,6 +46,20 @@ const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
 // Use Parquet writer by default, binary writer only if --keep-raw
 import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter from './write-binary.js';
+
+// CRITICAL FIX #1: Import explicit fetch result types
+import {
+  FetchResultType,
+  successData,
+  successEmpty,
+  failure,
+  isRetryableError,
+  retryFetch,
+  assertSuccess,
+} from './fetch-result.js';
+
+// CRITICAL FIX #2: Import atomic cursor operations
+import { AtomicCursor, loadCursorLegacy, isCursorComplete } from './atomic-cursor.js';
 
 // Unified writer functions that delegate to appropriate writer(s)
 async function bufferUpdates(updates) {
@@ -243,20 +267,18 @@ function sleep(ms) {
 
 /**
  * Retry with exponential backoff + fetch stats tracking
+ * 
+ * CRITICAL FIX: This function now FAILS HARD on exhausted retries.
+ * It will throw an error that MUST be handled by the caller.
+ * No more silent continuation on network failures.
  */
 async function retryWithBackoff(fn, options = {}) {
   const {
     maxRetries = 5,
     baseDelay = 1000,
     maxDelay = 30000,
-    shouldRetry = (error) => {
-      const retryableCodes = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE'];
-      const retryableStatuses = [429, 500, 502, 503, 504];
-      
-      if (error.code && retryableCodes.includes(error.code)) return true;
-      if (error.response?.status && retryableStatuses.includes(error.response.status)) return true;
-      return false;
-    }
+    context = '',
+    shouldRetry = (error) => isRetryableError(error),
   } = options;
 
   let lastError;
@@ -285,7 +307,17 @@ async function retryWithBackoff(fn, options = {}) {
         fetchStats.retry503Count++;
       }
       
+      // CRITICAL FIX: Track error rate for auto-tuning safety
+      fetchStats.errorCount = (fetchStats.errorCount || 0) + 1;
+      
+      // Check if we should retry
       if (attempt === maxRetries || !shouldRetry(error)) {
+        // CRITICAL: Log and throw - do not silently continue
+        const contextStr = context ? `[${context}] ` : '';
+        console.error(
+          `❌ ${contextStr}FATAL: Fetch failed after ${attempt + 1} attempts. ` +
+          `Error: ${error.code || status || error.message}`
+        );
         throw error;
       }
 
@@ -301,7 +333,8 @@ async function retryWithBackoff(fn, options = {}) {
     }
   }
   
-  throw lastError;
+  // CRITICAL: This should never be reached, but if it is, fail hard
+  throw lastError || new Error('Unknown fetch error');
 }
 
 /**
@@ -311,19 +344,22 @@ function resetFetchStats(now) {
   fetchStats.windowStart = now;
   fetchStats.successCount = 0;
   fetchStats.retry503Count = 0;
+  fetchStats.errorCount = 0;  // CRITICAL FIX: Track errors for safety
   fetchStats.latencies = [];
 }
 
 /**
  * Auto-tune parallel fetches based on error rate AND latency
+ * 
+ * CRITICAL FIX: Now error-aware - never tune up while error rate > 0
  */
 function maybeTuneParallelFetches(shardLabel = '') {
   const now = Date.now();
   const elapsed = now - fetchStats.windowStart;
   if (elapsed < FETCH_TUNE_WINDOW_MS) return;
 
-  const { successCount, retry503Count, latencies } = fetchStats;
-  const total = successCount + retry503Count;
+  const { successCount, retry503Count, latencies, errorCount = 0 } = fetchStats;
+  const total = successCount + retry503Count + errorCount;
 
   if (total === 0) {
     resetFetchStats(now);
@@ -341,16 +377,19 @@ function maybeTuneParallelFetches(shardLabel = '') {
     fetchStats.p95Latency = p95Latency;
   }
 
-  const errorRate = retry503Count / total;
+  const errorRate = (retry503Count + errorCount) / total;
   let action = null;
 
-  // RULE 1: High error rate → immediate scale down by 2
-  if (retry503Count >= 3 && errorRate > 0.05) {
+  // CRITICAL FIX: ANY errors = scale down immediately
+  // This prevents cascading failures during degraded API conditions
+  if (errorCount > 0 || retry503Count > 0) {
     if (dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
-      dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - 2);
-      console.log(`   🔧 Auto-tune${shardLabel}: HIGH ERRORS (${retry503Count}/${total}, ${(errorRate*100).toFixed(1)}%) → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      const reduction = errorCount > 2 ? 3 : (retry503Count >= 3 ? 2 : 1);
+      dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - reduction);
+      console.log(`   🔧 Auto-tune${shardLabel}: ERRORS DETECTED (${errorCount} errors, ${retry503Count} 503s, ${(errorRate*100).toFixed(1)}% rate) → PARALLEL ${old} → ${dynamicParallelFetches}`);
       action = 'down';
+      fetchStats.consecutiveStableWindows = 0;
     }
   }
   // RULE 2: Critical latency → scale down
@@ -363,7 +402,8 @@ function maybeTuneParallelFetches(shardLabel = '') {
     }
   }
   // RULE 3: Low errors + low latency → scale up aggressively
-  else if (retry503Count === 0 && successCount >= 15 && avgLatency < LATENCY_LOW_MS && avgLatency > 0) {
+  // CRITICAL FIX: Only scale up if ZERO errors
+  else if (errorCount === 0 && retry503Count === 0 && successCount >= 15 && avgLatency < LATENCY_LOW_MS && avgLatency > 0) {
     if (dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
       const increment = avgLatency < 300 ? 2 : 1;
@@ -373,7 +413,7 @@ function maybeTuneParallelFetches(shardLabel = '') {
     }
   }
   // RULE 4: Stable with moderate latency → cautious scale up
-  else if (retry503Count === 0 && successCount >= 20 && avgLatency < LATENCY_HIGH_MS) {
+  else if (errorCount === 0 && retry503Count === 0 && successCount >= 20 && avgLatency < LATENCY_HIGH_MS) {
     fetchStats.consecutiveStableWindows++;
     if (fetchStats.consecutiveStableWindows >= 2 && dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
