@@ -1,5 +1,13 @@
 import { Router } from 'express';
 import db from '../duckdb/connection.js';
+import { 
+  sanitizeNumber, 
+  sanitizeIdentifier, 
+  sanitizeEventType,
+  escapeLikePattern,
+  buildLikeCondition,
+  buildEqualCondition,
+} from '../lib/sql-sanitize.js';
 
 const router = Router();
 
@@ -18,28 +26,45 @@ const getUpdatesSource = () => `(
 router.get('/', async (req, res) => {
   try {
     const { q, type, template, party } = req.query;
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
     
     let conditions = [];
     
-    if (q) {
+    // Validate and sanitize search query
+    if (q && typeof q === 'string' && q.length <= 500) {
+      const escaped = escapeLikePattern(q);
       conditions.push(`(
-        contract_id LIKE '%${q}%' 
-        OR template_id LIKE '%${q}%'
-        OR CAST(payload AS VARCHAR) LIKE '%${q}%'
+        contract_id LIKE '%${escaped}%' ESCAPE '\\\\'
+        OR template_id LIKE '%${escaped}%' ESCAPE '\\\\'
+        OR CAST(payload AS VARCHAR) LIKE '%${escaped}%' ESCAPE '\\\\'
       )`);
     }
     
+    // Validate event type
     if (type) {
-      conditions.push(`event_type = '${type}'`);
+      const sanitizedType = sanitizeEventType(type);
+      if (sanitizedType) {
+        conditions.push(buildEqualCondition('event_type', sanitizedType));
+      }
     }
     
+    // Validate template filter
     if (template) {
-      conditions.push(`template_id LIKE '%${template}%'`);
+      const sanitizedTemplate = sanitizeIdentifier(template);
+      if (sanitizedTemplate) {
+        conditions.push(buildLikeCondition('template_id', sanitizedTemplate));
+      }
     }
     
-    if (party) {
-      conditions.push(`(list_contains(signatories, '${party}') OR list_contains(observers, '${party}'))`);
+    // Validate party filter (party IDs are typically alphanumeric with some special chars)
+    if (party && typeof party === 'string' && party.length <= 500) {
+      const escaped = escapeLikePattern(party);
+      // Use array_to_string for safer party matching
+      conditions.push(`(
+        array_to_string(signatories, ',') LIKE '%${escaped}%' ESCAPE '\\\\'
+        OR array_to_string(observers, ',') LIKE '%${escaped}%' ESCAPE '\\\\'
+      )`);
     }
     
     const whereClause = conditions.length > 0 
@@ -52,6 +77,7 @@ router.get('/', async (req, res) => {
       ${whereClause}
       ORDER BY timestamp DESC
       LIMIT ${limit}
+      OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
@@ -66,10 +92,17 @@ router.get('/contract/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
+    // Validate contract ID format (hex characters, dashes allowed)
+    if (!id || typeof id !== 'string' || id.length > 200 || !/^[a-fA-F0-9:-]+$/.test(id)) {
+      return res.status(400).json({ error: 'Invalid contract ID format' });
+    }
+    
+    const escaped = escapeLikePattern(id);
+    
     const sql = `
       SELECT DISTINCT contract_id, template_id, MIN(timestamp) as created_at
       FROM ${getUpdatesSource()}
-      WHERE contract_id LIKE '${id}%'
+      WHERE contract_id LIKE '${escaped}%' ESCAPE '\\\\'
       GROUP BY contract_id, template_id
       ORDER BY created_at DESC
       LIMIT 50
