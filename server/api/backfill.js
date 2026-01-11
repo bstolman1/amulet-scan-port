@@ -644,10 +644,11 @@ router.post('/validate-integrity', async (req, res) => {
           const eventGlob = `${normalizedRawDir}/**/events-*.parquet`;
           
           // Sample events and check required fields
+          // Note: Column is 'raw_event' in Parquet files (not 'raw_json')
           const eventSample = await db.safeQuery(`
             SELECT 
               event_id,
-              raw_json IS NOT NULL as has_raw_json,
+              raw_event IS NOT NULL as has_raw_json,
               event_type_original IS NOT NULL as has_type_original,
               contract_id IS NOT NULL as has_contract_id,
               child_event_ids IS NOT NULL as has_child_event_ids
@@ -713,10 +714,11 @@ router.post('/validate-integrity', async (req, res) => {
           const updateGlob = `${normalizedRawDir}/**/updates-*.parquet`;
           
           // Sample updates and check required fields
+          // Note: Column is 'update_data' in Parquet files (not 'update_data_json')
           const updateSample = await db.safeQuery(`
             SELECT 
               update_id,
-              update_data_json IS NOT NULL as has_update_data,
+              update_data IS NOT NULL as has_update_data,
               root_event_ids IS NOT NULL as has_root_event_ids,
               record_time IS NOT NULL as has_record_time
             FROM read_parquet('${updateGlob}', union_by_name=true)
