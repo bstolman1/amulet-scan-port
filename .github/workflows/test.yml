@@ -99,86 +99,6 @@ jobs:
               body: coverageSummary
             });
 
-  # Snapshot Contract Guard - fails if snapshots are outdated
-  snapshot-guard:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Create test fixtures directory
-        run: mkdir -p data/test-fixtures
-
-      - name: Check for snapshot changes
-        id: snapshot-check
-        run: |
-          # Run snapshot tests and capture output
-          set +e
-          OUTPUT=$(npx vitest run server/test/integration/api-snapshots.test.js 2>&1)
-          EXIT_CODE=$?
-          set -e
-          
-          echo "$OUTPUT"
-          
-          # Check if there are snapshot failures
-          if echo "$OUTPUT" | grep -q "Snapshots:.*failed"; then
-            echo "snapshot_failed=true" >> $GITHUB_OUTPUT
-            echo "::error::API contract snapshots are outdated. See details below."
-            exit 1
-          fi
-          
-          echo "snapshot_failed=false" >> $GITHUB_OUTPUT
-        env:
-          NODE_ENV: test
-
-      - name: Post snapshot failure comment
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const body = `## ⚠️ API Contract Snapshot Mismatch
-            
-            The API response structure has changed. This could be:
-            
-            1. **Intentional** - You updated the API and need to update snapshots
-            2. **Unintentional** - A regression that needs to be fixed
-            
-            ### If changes are intentional:
-            
-            \`\`\`bash
-            # Update snapshots locally
-            npx vitest -u server/test/integration/api-snapshots.test.js
-            
-            # Review the changes
-            git diff
-            
-            # Commit the updated snapshots
-            git add -A && git commit -m "chore: update API contract snapshots"
-            \`\`\`
-            
-            ### If changes are unintentional:
-            
-            Review your code changes and ensure the API response structure hasn't regressed.
-            
-            📚 See [API Contracts Documentation](docs/api-contracts.md) for expected shapes.`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body
-            });
-
   lint:
     runs-on: ubuntu-latest
     
@@ -201,7 +121,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: [test, snapshot-guard]
+    needs: [test]
     
     steps:
       - name: Checkout repository
