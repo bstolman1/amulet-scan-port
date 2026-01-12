@@ -8,6 +8,7 @@ import {
   sanitizeIdentifier,
   escapeLikePattern,
   escapeString,
+  containsDangerousPatterns,
 } from '../lib/sql-sanitize.js';
 
 const router = Router();
@@ -1265,7 +1266,7 @@ router.get('/rich-list', async (req, res) => {
         GROUP BY owner
       )
       SELECT * FROM aggregated
-      ${search ? `WHERE owner ILIKE '%${search.replace(/'/g, "''")}%'` : ''}
+      ${search && !containsDangerousPatterns(search) ? `WHERE owner ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'` : ''}
       ORDER BY total_balance DESC
       LIMIT ${limit}
     `;
@@ -1407,8 +1408,8 @@ router.get('/allocations', async (req, res) => {
       return res.json({ data: [], totalCount: 0, totalAmount: 0 });
     }
 
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     const search = (req.query.search || '').trim();
 
     // Use optimized snapshot source
@@ -1439,10 +1440,10 @@ router.get('/allocations', async (req, res) => {
         payload
       FROM ${acsSource}
       WHERE (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
-        ${search ? `AND (
-          json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
-          OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${search.replace(/'/g, "''")}%'
-          OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${search.replace(/'/g, "''")}%'
+        ${search && !containsDangerousPatterns(search) ? `AND (
+          json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
+          OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
+          OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
         )` : ''}
       ORDER BY amount DESC
       LIMIT ${limit} OFFSET ${offset}
@@ -1462,10 +1463,10 @@ router.get('/allocations', async (req, res) => {
           COUNT(DISTINCT json_extract_string(payload, '$.allocation.settlement.executor')) as unique_executors
         FROM ${acsSource}
         WHERE (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
-          ${search ? `AND (
-            json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${search.replace(/'/g, "''")}%'
-            OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${search.replace(/'/g, "''")}%'
-            OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${search.replace(/'/g, "''")}%'
+          ${search && !containsDangerousPatterns(search) ? `AND (
+            json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
+            OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
+            OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
           )` : ''}
       `;
 
@@ -2147,7 +2148,13 @@ router.get('/aggregate', async (req, res) => {
       return res.status(400).json({ error: 'template parameter required' });
     }
 
-    const cacheKey = `acs:aggregate:${template}:${mode}`;
+    // Validate template to prevent SQL injection
+    const sanitizedTemplate = sanitizeIdentifier(template);
+    if (!sanitizedTemplate) {
+      return res.status(400).json({ error: 'Invalid template format' });
+    }
+
+    const cacheKey = `acs:aggregate:${sanitizedTemplate}:${mode}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
 
@@ -2168,7 +2175,7 @@ router.get('/aggregate', async (req, res) => {
         SELECT 
           ${amountField} as amount
         FROM ${acsSource}
-        WHERE template_id LIKE '%${template.replace(/'/g, "''")}'
+        WHERE template_id LIKE '%${escapeLikePattern(sanitizedTemplate)}%' ESCAPE '\\\\'
       )
       SELECT 
         SUM(amount) as sum,
