@@ -3083,11 +3083,6 @@ router.get('/governance/proposals/stream', async (req, res) => {
     const sources = getDataSources();
     console.log(`[SCAN] Data sources: ${JSON.stringify(sources)}`);
     
-    if (sources.primarySource !== 'binary') {
-      console.log(`[SCAN] ERROR: Binary files required, got ${sources.primarySource}`);
-      return res.status(400).json({ error: 'Binary files required' });
-    }
-
     // Set up SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -3099,6 +3094,20 @@ router.get('/governance/proposals/stream', async (req, res) => {
     const sendEvent = (type, data) => {
       res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
     };
+    
+    // Use Parquet fallback if no binary files available
+    if (sources.primarySource === 'parquet') {
+      console.log(`[SCAN] Using Parquet fallback for governance proposals scan`);
+      await scanGovernanceProposalsFromParquet(req, res, sendEvent, scanStartTime);
+      return;
+    }
+    
+    if (!sources.hasBinaryEvents) {
+      console.log(`[SCAN] ERROR: No event files found (binary or parquet)`);
+      sendEvent('error', { error: 'No event files found' });
+      res.end();
+      return;
+    }
 
     console.log(`[SCAN] Finding binary files in ${db.DATA_PATH}...`);
     const findFilesStart = Date.now();
@@ -3318,101 +3327,25 @@ router.get('/governance/proposals/stream', async (req, res) => {
     console.log(`[SCAN] Results: ${totalVoteRequests} VoteRequests -> ${proposalMap.size} unique proposals`);
     console.log(`[SCAN] Exercised events collected: ${exercisedEventsMap.size} for status determination`);
     
-    // Convert to array and sort by latest timestamp (newest first)
-    const proposals = Array.from(proposalMap.values())
-      .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
-    
-    // Calculate vote statistics using LEDGER MODEL (not vote thresholds)
-    // Status is determined by:
-    // - finalized (executed/rejected/expired): Has consuming exercised event
-    // - in_progress: No consuming exercise, before deadline  
-    // - expired_unfinalized: No consuming exercise, after deadline
-    const stats = {
-      total: proposals.length,
-      byActionType: {},
-      byStatus: { executed: 0, rejected: 0, expired: 0, in_progress: 0 },
-    };
-    
-    const nowMs = Date.now();
-    for (const p of proposals) {
-      stats.byActionType[p.actionType] = (stats.byActionType[p.actionType] || 0) + 1;
-      
-      // Check if this proposal has a consuming exercised event (ledger model)
-      const exercisedEvent = exercisedEventsMap.get(p.latestContractId);
-      const voteBefore = p.voteBeforeTimestamp || 0;
-      const isExpired = voteBefore && voteBefore < nowMs;
-      
-      let status;
-      if (exercisedEvent) {
-        // Finalized - determine outcome from choice
-        const choice = String(exercisedEvent.choice || '').toLowerCase();
-        if (choice.includes('accept') && !choice.includes('reject')) {
-          status = 'executed';
-        } else if (choice.includes('reject')) {
-          status = 'rejected';
-        } else if (choice.includes('expire')) {
-          status = 'expired';
-        } else {
-          // Unknown choice - default to executed (it was finalized)
-          status = 'executed';
-        }
-      } else {
-        // Not finalized - check deadline
-        if (isExpired) {
-          status = 'expired';
-        } else {
-          status = 'in_progress';
-        }
-      }
-      
-      // Add status to proposal object for UI
-      p.status = status;
-      stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
-    }
-    
-    // Analyze merge patterns
-    const byKeySource = { trackingCid: 0, composite: 0 };
-    const highMergeProposals = [];
-    for (const p of proposals) {
-      byKeySource[p.keySource] = (byKeySource[p.keySource] || 0) + 1;
-      if (p.mergeCount > 5) {
-        highMergeProposals.push({
-          key: p.proposalKey.slice(0, 80),
-          keySource: p.keySource,
-          mergeCount: p.mergeCount,
-          actionType: p.actionType,
-          requester: p.requester,
-          reasonUrl: (p.reasonUrl || '').slice(0, 60),
-        });
-      }
-    }
+    // Finalize proposals with status
+    const proposals = finalizeProposalsWithStatus(proposalMap, exercisedEventsMap, debug, dedupLog, rawMode, allRawVoteRequests);
     
     // Send final result
-    console.log(`[SCAN] Sending complete event with ${proposals.length} proposals...`);
+    console.log(`[SCAN] Sending complete event with ${proposals.proposals.length} proposals...`);
     sendEvent('complete', {
       summary: {
         filesScanned,
         totalFilesInDataset: allFiles.length,
         totalVoteRequests,
-        uniqueProposals: proposals.length,
+        uniqueProposals: proposals.proposals.length,
         rawMode: rawMode,
         scanTimeMs: totalScanTime,
+        source: 'binary',
       },
-      stats,
-      proposals,
-      // Raw mode: include all vote requests without deduplication
-      rawVoteRequests: rawMode ? allRawVoteRequests : undefined,
-      debug: debug ? {
-        dedupLog: dedupLog.slice(-500), // Last 500 dedup events
-        byKeySource,
-        highMergeProposals: highMergeProposals.slice(0, 50),
-        sampleKeys: proposals.slice(0, 20).map(p => ({
-          key: p.proposalKey.slice(0, 100),
-          keySource: p.keySource,
-          mergeCount: p.mergeCount,
-          actionType: p.actionType,
-        })),
-      } : undefined,
+      stats: proposals.stats,
+      proposals: proposals.proposals,
+      rawVoteRequests: proposals.rawVoteRequests,
+      debug: proposals.debug,
     });
     
     console.log(`[SCAN] === Scan complete, closing connection ===`);
@@ -3424,6 +3357,270 @@ router.get('/governance/proposals/stream', async (req, res) => {
     res.end();
   }
 });
+
+// Parquet-based governance proposals scan (fallback when no binary files)
+async function scanGovernanceProposalsFromParquet(req, res, sendEvent, scanStartTime) {
+  const debug = req.query.debug === 'true';
+  const rawMode = req.query.raw === 'true';
+  
+  try {
+    sendEvent('start', { source: 'parquet', message: 'Scanning Parquet files for VoteRequest events...' });
+    
+    const eventsSource = getEventsSource();
+    console.log(`[SCAN-PARQUET] Querying VoteRequest created events...`);
+    
+    // Query VoteRequest created events from Parquet
+    const createdSql = `
+      SELECT 
+        event_id,
+        contract_id,
+        template_id,
+        event_type,
+        timestamp,
+        effective_at,
+        payload
+      FROM ${eventsSource}
+      WHERE template_id LIKE '%VoteRequest%'
+        AND event_type = 'created'
+      ORDER BY effective_at DESC
+    `;
+    
+    const createdEvents = await db.safeQuery(createdSql);
+    console.log(`[SCAN-PARQUET] Found ${createdEvents.length} VoteRequest created events`);
+    
+    sendEvent('progress', { 
+      phase: 'created', 
+      count: createdEvents.length,
+      percent: 50 
+    });
+    
+    // Query exercised events for status determination
+    console.log(`[SCAN-PARQUET] Querying VoteRequest exercised events...`);
+    const exercisedSql = `
+      SELECT 
+        contract_id,
+        choice,
+        template_id,
+        timestamp
+      FROM ${eventsSource}
+      WHERE template_id LIKE '%VoteRequest%'
+        AND event_type = 'exercised'
+    `;
+    
+    const exercisedEvents = await db.safeQuery(exercisedSql);
+    console.log(`[SCAN-PARQUET] Found ${exercisedEvents.length} VoteRequest exercised events`);
+    
+    sendEvent('progress', { 
+      phase: 'exercised', 
+      count: exercisedEvents.length,
+      percent: 75 
+    });
+    
+    // Build exercised events map
+    const exercisedEventsMap = new Map();
+    for (const evt of exercisedEvents) {
+      const existing = exercisedEventsMap.get(evt.contract_id);
+      if (!existing || new Date(evt.timestamp) > new Date(existing.timestamp)) {
+        exercisedEventsMap.set(evt.contract_id, {
+          contract_id: evt.contract_id,
+          choice: evt.choice || '',
+          template_id: evt.template_id,
+          timestamp: evt.timestamp,
+        });
+      }
+    }
+    
+    // Process created events into proposals
+    const proposalMap = new Map();
+    const dedupLog = [];
+    const allRawVoteRequests = rawMode ? [] : null;
+    let totalVoteRequests = 0;
+    
+    for (const evt of createdEvents) {
+      let payload = evt.payload;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          continue;
+        }
+      }
+      if (!payload) continue;
+      
+      let proposal;
+      try {
+        proposal = parseVoteRequestPayload(payload);
+      } catch (parseErr) {
+        continue;
+      }
+      if (!proposal) continue;
+      
+      totalVoteRequests++;
+      
+      // Generate unique proposal key
+      let proposalKey;
+      let keySource;
+      if (proposal.trackingCid) {
+        proposalKey = `cid::${proposal.trackingCid}`;
+        keySource = 'trackingCid';
+      } else {
+        const actionSpecific = extractActionSpecificKey(proposal.actionDetails);
+        proposalKey = `${proposal.actionType}::${proposal.requester}::${proposal.reasonUrl || 'no-url'}::${actionSpecific}`;
+        keySource = 'composite';
+      }
+      
+      if (rawMode) {
+        allRawVoteRequests.push({
+          contractId: evt.contract_id,
+          eventId: evt.event_id,
+          timestamp: evt.timestamp,
+          proposalKey,
+          keySource,
+          ...proposal,
+        });
+      }
+      
+      const existing = proposalMap.get(proposalKey);
+      const eventTimestamp = new Date(evt.timestamp).getTime();
+      
+      if (debug && existing) {
+        dedupLog.push({
+          key: proposalKey.slice(0, 100),
+          keySource,
+          action: 'merged',
+          existingTs: existing.rawTimestamp,
+          newTs: evt.timestamp,
+          kept: eventTimestamp > existing.latestTimestamp ? 'new' : 'existing',
+          actionType: proposal.actionType,
+          requester: proposal.requester,
+          reasonUrl: (proposal.reasonUrl || '').slice(0, 80),
+        });
+      }
+      
+      if (!existing || eventTimestamp > existing.latestTimestamp) {
+        proposalMap.set(proposalKey, {
+          proposalKey,
+          keySource,
+          latestTimestamp: eventTimestamp,
+          latestContractId: evt.contract_id,
+          ...proposal,
+          rawTimestamp: evt.timestamp,
+          mergeCount: existing ? (existing.mergeCount || 1) + 1 : 1,
+        });
+      }
+    }
+    
+    const totalScanTime = Date.now() - scanStartTime;
+    console.log(`[SCAN-PARQUET] Processed ${totalVoteRequests} VoteRequests -> ${proposalMap.size} unique proposals in ${totalScanTime}ms`);
+    
+    // Finalize proposals with status
+    const proposals = finalizeProposalsWithStatus(proposalMap, exercisedEventsMap, debug, dedupLog, rawMode, allRawVoteRequests);
+    
+    // Send complete event
+    sendEvent('complete', {
+      summary: {
+        totalVoteRequests,
+        uniqueProposals: proposals.proposals.length,
+        exercisedEvents: exercisedEvents.length,
+        rawMode,
+        scanTimeMs: totalScanTime,
+        source: 'parquet',
+      },
+      stats: proposals.stats,
+      proposals: proposals.proposals,
+      rawVoteRequests: proposals.rawVoteRequests,
+      debug: proposals.debug,
+    });
+    
+    console.log(`[SCAN-PARQUET] === Scan complete ===`);
+    res.end();
+  } catch (err) {
+    console.error(`[SCAN-PARQUET] Error:`, err);
+    sendEvent('error', { error: err.message });
+    res.end();
+  }
+}
+
+// Helper to finalize proposals with status determination
+function finalizeProposalsWithStatus(proposalMap, exercisedEventsMap, debug, dedupLog, rawMode, allRawVoteRequests) {
+  // Convert to array and sort by latest timestamp (newest first)
+  const proposals = Array.from(proposalMap.values())
+    .sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+  
+  // Calculate vote statistics using LEDGER MODEL
+  const stats = {
+    total: proposals.length,
+    byActionType: {},
+    byStatus: { executed: 0, rejected: 0, expired: 0, in_progress: 0 },
+  };
+  
+  const nowMs = Date.now();
+  for (const p of proposals) {
+    stats.byActionType[p.actionType] = (stats.byActionType[p.actionType] || 0) + 1;
+    
+    // Check if this proposal has a consuming exercised event
+    const exercisedEvent = exercisedEventsMap.get(p.latestContractId);
+    const voteBefore = p.voteBeforeTimestamp || 0;
+    const isExpired = voteBefore && voteBefore < nowMs;
+    
+    let status;
+    if (exercisedEvent) {
+      const choice = String(exercisedEvent.choice || '').toLowerCase();
+      if (choice.includes('accept') && !choice.includes('reject')) {
+        status = 'executed';
+      } else if (choice.includes('reject')) {
+        status = 'rejected';
+      } else if (choice.includes('expire')) {
+        status = 'expired';
+      } else {
+        status = 'executed';
+      }
+    } else {
+      if (isExpired) {
+        status = 'expired';
+      } else {
+        status = 'in_progress';
+      }
+    }
+    
+    p.status = status;
+    stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
+  }
+  
+  // Analyze merge patterns
+  const byKeySource = { trackingCid: 0, composite: 0 };
+  const highMergeProposals = [];
+  for (const p of proposals) {
+    byKeySource[p.keySource] = (byKeySource[p.keySource] || 0) + 1;
+    if (p.mergeCount > 5) {
+      highMergeProposals.push({
+        key: p.proposalKey.slice(0, 80),
+        keySource: p.keySource,
+        mergeCount: p.mergeCount,
+        actionType: p.actionType,
+        requester: p.requester,
+        reasonUrl: (p.reasonUrl || '').slice(0, 60),
+      });
+    }
+  }
+  
+  return {
+    proposals,
+    stats,
+    rawVoteRequests: rawMode ? allRawVoteRequests : undefined,
+    debug: debug ? {
+      dedupLog: dedupLog.slice(-500),
+      byKeySource,
+      highMergeProposals: highMergeProposals.slice(0, 50),
+      sampleKeys: proposals.slice(0, 20).map(p => ({
+        key: p.proposalKey.slice(0, 100),
+        keySource: p.keySource,
+        mergeCount: p.mergeCount,
+        actionType: p.actionType,
+      })),
+    } : undefined,
+  };
+}
 
 // Helper function to parse VoteRequest payload (handles both old and new formats)
 function parseVoteRequestPayload(payload) {
