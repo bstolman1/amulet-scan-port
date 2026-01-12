@@ -30,7 +30,8 @@ export default defineConfig({
     },
     // Frontend tests need jsdom for React Testing Library
     environmentMatchGlobs: [
-      ['**/src/**', 'jsdom'],
+      ['src/**/*.test.ts', 'jsdom'],
+      ['src/**/*.test.tsx', 'jsdom'],
     ],
   },
   resolve: {
