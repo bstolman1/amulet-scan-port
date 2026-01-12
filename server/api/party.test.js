@@ -11,7 +11,7 @@ describe('Party API', () => {
   describe('Party search validation', () => {
     it('should validate search query', () => {
       expect(sanitizeSearchQuery('alice')).toBe('alice');
-      expect(sanitizeSearchQuery('party::alice')).toBe(null); // Contains ::
+      expect(sanitizeSearchQuery('party::alice')).toBe('party::alice'); // :: is valid in party identifiers
       expect(sanitizeSearchQuery('Digital Asset')).toBe('Digital Asset');
       expect(sanitizeSearchQuery("'; DROP TABLE")).toBe(null);
     });
@@ -31,8 +31,9 @@ describe('Party API', () => {
 
   describe('Party matching logic', () => {
     const partyMatches = (event, partyId) => {
-      return (event.signatories && event.signatories.includes(partyId)) ||
-             (event.observers && event.observers.includes(partyId));
+      const signatoryMatch = event.signatories && event.signatories.includes(partyId);
+      const observerMatch = event.observers && event.observers.includes(partyId);
+      return !!(signatoryMatch || observerMatch);
     };
     
     it('should match by signatory', () => {

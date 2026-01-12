@@ -17,6 +17,10 @@ vi.mock('fs', () => ({
   },
 }));
 
+vi.mock('url', () => ({
+  fileURLToPath: vi.fn((url) => '/mock/path/decoder.js'),
+}));
+
 vi.mock('@mongodb-js/zstd', () => ({
   decompress: vi.fn(() => Buffer.from([])),
 }));
