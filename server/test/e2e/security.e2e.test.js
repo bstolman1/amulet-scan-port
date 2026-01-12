@@ -6,8 +6,11 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import request from 'supertest';
+import { createRequire } from 'module';
 import { createTestApp } from '../app.js';
+
+const require = createRequire(import.meta.url);
+const request = require('supertest');
 
 describe('Security E2E Tests', () => {
   let app;
