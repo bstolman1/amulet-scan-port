@@ -661,11 +661,12 @@ export function LearnFromCorrectionsPanel() {
           <Accordion type="single" collapsible className="w-full">
             <AccordionItem value="patterns" className="border-0">
               <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
-                <AccordionTrigger className="hover:no-underline py-0">
-                  <div className="flex items-center justify-between w-full pr-2">
-                    <span className="text-sm font-medium flex items-center gap-2">
+                {/* Header with Rollback Button */}
+                <div className="flex items-center justify-between mb-2">
+                  <AccordionTrigger className="hover:no-underline py-0 flex-1">
+                    <div className="flex items-center gap-2">
                       <GitBranch className="h-4 w-4 text-muted-foreground" />
-                      Current Learned Patterns
+                      <span className="text-sm font-medium">Current Learned Patterns</span>
                       <Badge variant="outline" className="text-xs font-mono">
                         v{currentPatterns.version}
                       </Badge>
@@ -674,18 +675,21 @@ export function LearnFromCorrectionsPanel() {
                           (from v{currentPatterns.previousVersion})
                         </span>
                       )}
-                    </span>
-                    <Badge variant="outline" className="text-xs mr-2">
+                    </div>
+                  </AccordionTrigger>
+                  
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">
                       {currentPatterns.generatedAt 
                         ? new Date(currentPatterns.generatedAt).toLocaleDateString() 
                         : 'Not generated yet'}
                     </Badge>
-                    {/* Rollback Button */}
-                    {currentPatterns.canRollback && currentPatterns.previousVersion && (
+                    {/* Rollback Button - Always show if previousVersion exists */}
+                    {currentPatterns.previousVersion && (
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-6 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                        className="h-7 text-xs gap-1 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
                         onClick={(e) => {
                           e.stopPropagation();
                           rollbackToVersion(currentPatterns.previousVersion!);
@@ -701,7 +705,7 @@ export function LearnFromCorrectionsPanel() {
                       </Button>
                     )}
                   </div>
-                </AccordionTrigger>
+                </div>
                 
                 {/* Summary Stats - Clean Grid */}
                 <div className="grid grid-cols-6 gap-2 text-xs mt-2">
