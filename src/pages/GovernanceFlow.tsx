@@ -55,6 +55,7 @@ import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { cn } from "@/lib/utils";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 import { LearnFromCorrectionsPanel } from "@/components/LearnFromCorrectionsPanel";
+import { GoldenSetManagementPanel } from "@/components/GoldenSetManagementPanel";
 
 
 interface TopicIdentifiers {
@@ -2636,7 +2637,8 @@ const GovernanceFlow = () => {
           </TabsContent>
           
           {/* Learn from Corrections View */}
-          <TabsContent value="learn" className="mt-4">
+          <TabsContent value="learn" className="mt-4 space-y-6">
+            <GoldenSetManagementPanel />
             <LearnFromCorrectionsPanel />
           </TabsContent>
         </Tabs>
