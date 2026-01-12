@@ -10,7 +10,7 @@ import { createRequire } from 'module';
 import { createTestApp } from '../app.js';
 
 const require = createRequire(import.meta.url);
-const request = require('supertest');
+const request = require(require.resolve('supertest', { paths: [process.cwd()] }));
 
 describe('Governance Flow E2E', () => {
   let app;

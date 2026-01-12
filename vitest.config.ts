@@ -29,9 +29,9 @@ export default defineConfig({
         '**/node_modules/**',
       ],
     },
-    // Frontend tests need a DOM
+    // Frontend tests need a DOM (use broad globs that work cross-platform on Windows)
     environmentMatchGlobs: [
-      ['src/**/*.{test,spec}.{js,ts,tsx}', 'jsdom'],
+      ['src/**', 'jsdom'],
     ],
   },
   resolve: {
