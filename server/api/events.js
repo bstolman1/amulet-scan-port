@@ -1157,7 +1157,6 @@ router.get('/vote-requests', async (req, res) => {
         contract_id,
         template_id,
         effective_at,
-        timestamp,
         payload
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%VoteRequest%'
@@ -1174,7 +1173,7 @@ router.get('/vote-requests', async (req, res) => {
       contract_id: row.contract_id,
       template_id: row.template_id,
       effective_at: row.effective_at,
-      timestamp: row.timestamp,
+      timestamp: row.effective_at, // Use effective_at as timestamp
       action_tag: row.payload?.action?.tag || null,
       action_value: row.payload?.action?.value || null,
       requester: row.payload?.requester || null,
