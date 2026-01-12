@@ -10,7 +10,8 @@ export default defineConfig({
       'src/**/*.{test,spec}.{js,ts,tsx}',
       'server/**/*.{test,spec}.{js,ts}',
     ],
-    exclude: ['node_modules', 'dist', 'scripts'],
+    // Important: avoid accidentally running dependency test suites (e.g. server/node_modules/**)
+    exclude: ['**/node_modules/**', 'dist', 'scripts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

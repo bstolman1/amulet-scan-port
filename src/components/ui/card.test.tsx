@@ -25,7 +25,7 @@ describe('Card', () => {
   it('applies base card styles', () => {
     const { container } = render(<Card>Content</Card>);
     const card = container.firstChild as HTMLElement;
-    expect(card.className).toContain('rounded-xl');
+    expect(card.className).toContain('rounded-lg');
     expect(card.className).toContain('border');
     expect(card.className).toContain('bg-card');
   });
