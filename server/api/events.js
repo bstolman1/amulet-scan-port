@@ -859,7 +859,6 @@ router.get('/governance-history', async (req, res) => {
         contract_id,
         template_id,
         effective_at,
-        timestamp,
         payload
       FROM ${getEventsSource()}
       WHERE (${templateFilter}) OR (${choiceFilter}) OR template_id LIKE '%DsoRules%'
