@@ -50,7 +50,6 @@ interface ProposedImprovement {
   examples?: string[];
   reason: string;
   evidenceCount?: number;
-  // Enhanced fields
   confidence?: {
     level: 'general' | 'contextual' | 'edge-case';
     description: string;
@@ -73,6 +72,41 @@ interface ProposedImprovement {
   promptType?: 'example_injection' | 'definition_clarification';
 }
 
+interface PatternKeyword {
+  keyword: string;
+  confidence: number;
+  createdAt: string;
+  lastReinforced: string;
+  matchCount: number;
+  sourceCount: number;
+}
+
+interface ConfidenceStats {
+  active: number;
+  decaying: number;
+  archived: number;
+  avgConfidence: string;
+}
+
+interface RollbackVersion {
+  version: string;
+  timestamp: string;
+  description: string;
+}
+
+interface ChangelogEntry {
+  timestamp: string;
+  action: 'apply' | 'rollback';
+  version: string;
+  from: string | null;
+  summary?: {
+    correctionsApplied: number;
+    acceptedProposals: number | string;
+    patternsAdded: Record<string, number>;
+  };
+  reason?: string;
+}
+
 interface LearnedPatterns {
   version: string;
   previousVersion: string | null;
@@ -81,11 +115,11 @@ interface LearnedPatterns {
   learningMode: boolean;
   learningModeChangedAt?: string;
   patterns: {
-    validatorKeywords: string[];
-    featuredAppKeywords: string[];
-    cipKeywords: string[];
-    protocolUpgradeKeywords: string[];
-    outcomeKeywords: string[];
+    validatorKeywords: (string | PatternKeyword)[];
+    featuredAppKeywords: (string | PatternKeyword)[];
+    cipKeywords: (string | PatternKeyword)[];
+    protocolUpgradeKeywords: (string | PatternKeyword)[];
+    outcomeKeywords: (string | PatternKeyword)[];
     entityNameMappings: Record<string, string>;
   };
   history?: {
@@ -94,6 +128,26 @@ interface LearnedPatterns {
     correctionsApplied: number;
     acceptedProposals: number | string;
   }[];
+  confidenceStats?: Record<string, ConfidenceStats>;
+  changelog?: ChangelogEntry[];
+  canRollback?: boolean;
+  rollbackVersions?: RollbackVersion[];
+}
+
+interface ImpactPreview {
+  total: number;
+  changedCount: number;
+  changedPercent: string;
+  before: Record<string, number>;
+  after: Record<string, number>;
+  transitions: Record<string, { count: number; examples: string[]; improvements: number; degradations: number }>;
+  improvements: number;
+  degradations: number;
+  sample: {
+    improvements: Array<{ id: string; subject: string; before: string; after: string }>;
+    degradations: Array<{ id: string; subject: string; before: string; after: string }>;
+    neutral: Array<{ id: string; subject: string; before: string; after: string }>;
+  };
 }
 
 interface ProposalDecision {
@@ -128,6 +182,8 @@ export function LearnFromCorrectionsPanel() {
   const [isApplying, setIsApplying] = useState(false);
   const [isTogglingMode, setIsTogglingMode] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
+  const [isPreviewingImpact, setIsPreviewingImpact] = useState(false);
   const [proposals, setProposals] = useState<ProposedImprovement[]>([]);
   const [decisions, setDecisions] = useState<Record<string, ProposalDecision>>({});
   const [currentPatterns, setCurrentPatterns] = useState<LearnedPatterns | null>(null);
@@ -135,6 +191,8 @@ export function LearnFromCorrectionsPanel() {
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
   const [learningMode, setLearningMode] = useState(true);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [impactPreview, setImpactPreview] = useState<ImpactPreview | null>(null);
+  const [showChangelog, setShowChangelog] = useState(false);
 
   // Fetch current learned patterns status on mount
   useEffect(() => {
@@ -158,6 +216,10 @@ export function LearnFromCorrectionsPanel() {
             learningModeChangedAt: data.learningModeChangedAt,
             patterns: data.patterns,
             history: data.history,
+            confidenceStats: data.confidenceStats,
+            changelog: data.changelog,
+            canRollback: data.canRollback,
+            rollbackVersions: data.rollbackVersions,
           });
           setLearningMode(data.learningMode ?? true);
         } else {
@@ -166,6 +228,94 @@ export function LearnFromCorrectionsPanel() {
       }
     } catch (error) {
       console.error('Failed to fetch current patterns:', error);
+    }
+  };
+
+  // Rollback to previous version
+  const rollbackToVersion = async (targetVersion: string) => {
+    setIsRollingBack(true);
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetVersion }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        toast({
+          title: "Rollback Successful",
+          description: data.message,
+        });
+        await fetchCurrentPatterns();
+      } else {
+        const error = await response.json();
+        toast({
+          title: "Rollback Failed",
+          description: error.error,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Rollback Failed",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRollingBack(false);
+    }
+  };
+
+  // Fetch impact preview
+  const fetchImpactPreview = async () => {
+    setIsPreviewingImpact(true);
+    setImpactPreview(null);
+    
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const acceptedProposals = proposals.filter(p => decisions[p.id]?.decision === 'accept');
+      
+      const proposedPatterns = {
+        validatorKeywords: [] as string[],
+        featuredAppKeywords: [] as string[],
+        cipKeywords: [] as string[],
+        protocolUpgradeKeywords: [] as string[],
+        outcomeKeywords: [] as string[],
+        entityNameMappings: {} as Record<string, string>,
+      };
+      
+      for (const proposal of acceptedProposals) {
+        if (proposal.codeChange?.target && proposal.keywords) {
+          const target = proposal.codeChange.target.toLowerCase();
+          if (target.includes('validator')) {
+            proposedPatterns.validatorKeywords.push(...proposal.keywords);
+          } else if (target.includes('featured') || target.includes('app')) {
+            proposedPatterns.featuredAppKeywords.push(...proposal.keywords);
+          } else if (target.includes('cip')) {
+            proposedPatterns.cipKeywords.push(...proposal.keywords);
+          } else if (target.includes('protocol') || target.includes('upgrade')) {
+            proposedPatterns.protocolUpgradeKeywords.push(...proposal.keywords);
+          } else if (target.includes('outcome')) {
+            proposedPatterns.outcomeKeywords.push(...proposal.keywords);
+          }
+        }
+      }
+      
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/impact-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposedPatterns }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setImpactPreview(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch impact preview:', error);
+    } finally {
+      setIsPreviewingImpact(false);
     }
   };
 
@@ -543,25 +693,67 @@ export function LearnFromCorrectionsPanel() {
                 </div>
                 
                 <AccordionContent className="pt-3 pb-0">
-                  {/* Detailed Keywords */}
+                  {/* Detailed Keywords with Confidence */}
                   <div className="space-y-3 text-xs">
                     {currentPatterns.patterns.validatorKeywords?.length > 0 && (
                       <div>
-                        <div className="font-medium text-muted-foreground mb-1">Validator Keywords</div>
+                        <div className="font-medium text-muted-foreground mb-1 flex items-center gap-2">
+                          Validator Keywords
+                          {currentPatterns.confidenceStats?.validator && (
+                            <span className="text-[10px] text-muted-foreground/60">
+                              ({currentPatterns.confidenceStats.validator.active} active, 
+                              {currentPatterns.confidenceStats.validator.decaying} decaying)
+                            </span>
+                          )}
+                        </div>
                         <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.validatorKeywords.map((kw, i) => (
-                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
-                          ))}
+                          {currentPatterns.patterns.validatorKeywords.map((kw, i) => {
+                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                            const confidence = typeof kw === 'object' ? kw.confidence : 1;
+                            return (
+                              <Badge 
+                                key={i} 
+                                variant="secondary" 
+                                className={cn(
+                                  "text-[10px]",
+                                  confidence < 0.5 && "opacity-50"
+                                )}
+                                title={typeof kw === 'object' ? `Confidence: ${(confidence * 100).toFixed(0)}%, Matches: ${kw.matchCount || 0}` : undefined}
+                              >
+                                {keyword}
+                                {typeof kw === 'object' && confidence < 0.7 && (
+                                  <span className="ml-1 text-yellow-400">⚠</span>
+                                )}
+                              </Badge>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
                     {currentPatterns.patterns.featuredAppKeywords?.length > 0 && (
                       <div>
-                        <div className="font-medium text-muted-foreground mb-1">Featured App Keywords</div>
+                        <div className="font-medium text-muted-foreground mb-1 flex items-center gap-2">
+                          Featured App Keywords
+                          {currentPatterns.confidenceStats?.featuredApp && (
+                            <span className="text-[10px] text-muted-foreground/60">
+                              ({currentPatterns.confidenceStats.featuredApp.active} active)
+                            </span>
+                          )}
+                        </div>
                         <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.featuredAppKeywords.map((kw, i) => (
-                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
-                          ))}
+                          {currentPatterns.patterns.featuredAppKeywords.map((kw, i) => {
+                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                            const confidence = typeof kw === 'object' ? kw.confidence : 1;
+                            return (
+                              <Badge 
+                                key={i} 
+                                variant="secondary" 
+                                className={cn("text-[10px]", confidence < 0.5 && "opacity-50")}
+                              >
+                                {keyword}
+                              </Badge>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -569,9 +761,10 @@ export function LearnFromCorrectionsPanel() {
                       <div>
                         <div className="font-medium text-muted-foreground mb-1">CIP Keywords</div>
                         <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.cipKeywords.map((kw, i) => (
-                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
-                          ))}
+                          {currentPatterns.patterns.cipKeywords.map((kw, i) => {
+                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                            return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                          })}
                         </div>
                       </div>
                     )}
@@ -579,9 +772,10 @@ export function LearnFromCorrectionsPanel() {
                       <div>
                         <div className="font-medium text-muted-foreground mb-1">Protocol Upgrade Keywords</div>
                         <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.protocolUpgradeKeywords.map((kw, i) => (
-                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
-                          ))}
+                          {currentPatterns.patterns.protocolUpgradeKeywords.map((kw, i) => {
+                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                            return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                          })}
                         </div>
                       </div>
                     )}
@@ -589,9 +783,10 @@ export function LearnFromCorrectionsPanel() {
                       <div>
                         <div className="font-medium text-muted-foreground mb-1">Outcome Keywords</div>
                         <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.outcomeKeywords.map((kw, i) => (
-                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
-                          ))}
+                          {currentPatterns.patterns.outcomeKeywords.map((kw, i) => {
+                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                            return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                          })}
                         </div>
                       </div>
                     )}
@@ -601,7 +796,7 @@ export function LearnFromCorrectionsPanel() {
                         <div className="flex flex-wrap gap-1">
                           {Object.entries(currentPatterns.patterns.entityNameMappings).map(([key, val], i) => (
                             <Badge key={i} variant="secondary" className="text-[10px]">
-                              {key} → {val}
+                              {key} → {typeof val === 'object' ? (val as any).type : val}
                             </Badge>
                           ))}
                         </div>

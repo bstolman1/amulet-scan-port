@@ -58,8 +58,34 @@ const router = express.Router();
 
 // ========== LEARNED PATTERNS SYSTEM ==========
 // Load patterns learned from manual corrections
+// Enhanced with confidence decay and reinforcement tracking
 let _learnedPatternsCache = null;
 let _learnedPatternsMtime = 0;
+
+// Confidence decay settings
+const DECAY_HALF_LIFE_DAYS = 30; // Confidence halves every 30 days without reinforcement
+const MIN_CONFIDENCE = 0.1; // Minimum confidence before pattern is archived
+const REINFORCEMENT_BOOST = 0.2; // How much a successful match boosts confidence
+
+// Calculate current confidence for a pattern with decay
+function calculatePatternConfidence(pattern) {
+  if (!pattern.createdAt) return 1.0;
+  
+  const createdAt = new Date(pattern.createdAt).getTime();
+  const lastReinforced = pattern.lastReinforced ? new Date(pattern.lastReinforced).getTime() : createdAt;
+  const now = Date.now();
+  
+  const daysSinceReinforcement = (now - lastReinforced) / (1000 * 60 * 60 * 24);
+  const decayFactor = Math.pow(0.5, daysSinceReinforcement / DECAY_HALF_LIFE_DAYS);
+  
+  const baseConfidence = pattern.confidence || 1.0;
+  return Math.max(MIN_CONFIDENCE, baseConfidence * decayFactor);
+}
+
+// Check if a pattern should be archived (too low confidence)
+function shouldArchivePattern(pattern) {
+  return calculatePatternConfidence(pattern) < MIN_CONFIDENCE * 2;
+}
 
 function getLearnedPatterns() {
   try {
@@ -72,17 +98,65 @@ function getLearnedPatterns() {
       const data = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, 'utf8'));
       _learnedPatternsCache = data.patterns || null;
       _learnedPatternsMtime = stats.mtimeMs;
+      
+      // Calculate active patterns vs archived
+      const countActive = (patterns) => {
+        if (!patterns) return 0;
+        if (Array.isArray(patterns)) return patterns.filter(p => !shouldArchivePattern(p)).length;
+        return Object.values(patterns).filter(p => !shouldArchivePattern(p)).length;
+      };
+      
       console.log('📚 Loaded learned patterns:', {
         validators: _learnedPatternsCache?.validatorKeywords?.length || 0,
         apps: _learnedPatternsCache?.featuredAppKeywords?.length || 0,
         cips: _learnedPatternsCache?.cipKeywords?.length || 0,
         entities: Object.keys(_learnedPatternsCache?.entityNameMappings || {}).length,
+        version: data.version || 'unknown',
       });
     }
     return _learnedPatternsCache;
   } catch (e) {
     console.error('Failed to load learned patterns:', e.message);
     return null;
+  }
+}
+
+// Reinforce a pattern after a successful match
+function reinforcePattern(patternType, keyword) {
+  try {
+    if (!fs.existsSync(LEARNED_PATTERNS_FILE)) return;
+    
+    const data = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, 'utf8'));
+    const patterns = data.patterns;
+    
+    if (!patterns) return;
+    
+    // Find and update the pattern
+    const keywordArrays = {
+      validator: 'validatorKeywords',
+      'featured-app': 'featuredAppKeywords',
+      cip: 'cipKeywords',
+      'protocol-upgrade': 'protocolUpgradeKeywords',
+      outcome: 'outcomeKeywords',
+    };
+    
+    const arrayKey = keywordArrays[patternType];
+    if (!arrayKey || !patterns[arrayKey]) return;
+    
+    const pattern = patterns[arrayKey].find(p => 
+      (typeof p === 'string' ? p : p.keyword) === keyword
+    );
+    
+    if (pattern && typeof pattern === 'object') {
+      pattern.lastReinforced = new Date().toISOString();
+      pattern.matchCount = (pattern.matchCount || 0) + 1;
+      pattern.confidence = Math.min(1.0, (pattern.confidence || 0.8) + REINFORCEMENT_BOOST);
+      
+      fs.writeFileSync(LEARNED_PATTERNS_FILE, JSON.stringify(data, null, 2));
+      _learnedPatternsMtime = 0; // Force reload
+    }
+  } catch (e) {
+    console.error('Failed to reinforce pattern:', e.message);
   }
 }
 
@@ -3723,7 +3797,28 @@ router.post('/apply-improvements', async (req, res) => {
     newVersion = `${major}.${minor}.${patch + 1}`;
   }
   
-  // Build data with versioning and provenance
+  // Build changelog entry
+  const changelogEntry = {
+    timestamp: new Date().toISOString(),
+    action: 'apply',
+    version: newVersion,
+    from: existingData?.version || null,
+    summary: {
+      correctionsApplied: corrections.length,
+      acceptedProposals: acceptedProposals?.length || 'all',
+      patternsAdded: {
+        validator: learnedPatterns.validatorKeywords?.length || 0,
+        featuredApp: learnedPatterns.featuredAppKeywords?.length || 0,
+        cip: learnedPatterns.cipKeywords?.length || 0,
+        protocolUpgrade: learnedPatterns.protocolUpgradeKeywords?.length || 0,
+        outcome: learnedPatterns.outcomeKeywords?.length || 0,
+        entities: Object.keys(learnedPatterns.entityNameMappings || {}).length,
+      },
+    },
+    changes: acceptedProposals?.slice(0, 10) || [],
+  };
+
+  // Build data with versioning, provenance, and changelog
   const newData = {
     version: newVersion,
     previousVersion: existingData?.version || null,
@@ -3738,19 +3833,31 @@ router.post('/apply-improvements', async (req, res) => {
         timestamp: new Date().toISOString(),
         correctionsApplied: corrections.length,
         acceptedProposals: acceptedProposals?.length || 'all',
-        patternsAdded: {
-          validator: learnedPatterns.validatorKeywords?.length || 0,
-          featuredApp: learnedPatterns.featuredAppKeywords?.length || 0,
-          cip: learnedPatterns.cipKeywords?.length || 0,
-          protocolUpgrade: learnedPatterns.protocolUpgradeKeywords?.length || 0,
-          outcome: learnedPatterns.outcomeKeywords?.length || 0,
-          entities: Object.keys(learnedPatterns.entityNameMappings || {}).length,
-        },
+        patternsAdded: changelogEntry.summary.patternsAdded,
       },
+    ],
+    changelog: [
+      ...(existingData?.changelog || []).slice(-19), // Keep last 20 entries
+      changelogEntry,
     ],
   };
   
   if (!dryRun) {
+    // Create backup before overwriting
+    const backupDir = path.join(CACHE_DIR, 'pattern-backups');
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    
+    // Backup current version if exists
+    if (existingData?.version) {
+      const backupFile = path.join(backupDir, `learned-patterns-v${existingData.version}.json`);
+      if (!fs.existsSync(backupFile)) {
+        fs.writeFileSync(backupFile, JSON.stringify(existingData, null, 2));
+        console.log(`📦 Backed up patterns v${existingData.version}`);
+      }
+    }
+    
     fs.writeFileSync(LEARNED_PATTERNS_FILE, JSON.stringify(newData, null, 2));
     // Clear cache so new patterns are loaded
     _learnedPatternsCache = null;
@@ -3768,6 +3875,8 @@ router.post('/apply-improvements', async (req, res) => {
     previousVersion: existingData?.version || null,
     patternsGenerated: learnedPatterns,
     savedTo: dryRun ? null : LEARNED_PATTERNS_FILE,
+    changelog: changelogEntry,
+    backupCreated: !dryRun && existingData?.version ? `v${existingData.version}` : null,
   });
 });
 
@@ -4004,16 +4113,20 @@ function simulateClassification(subject, patterns) {
   return 'other';
 }
 
-// Generate learned patterns from corrections
-function generateLearnedPatterns(corrections, cached) {
-  const patterns = {
-    validatorKeywords: new Set(),
-    featuredAppKeywords: new Set(),
-    cipKeywords: new Set(),
-    protocolUpgradeKeywords: new Set(),
-    outcomeKeywords: new Set(),
-    entityNameMappings: {},  // entityName -> correctType
+// Generate learned patterns from corrections with confidence tracking
+function generateLearnedPatterns(corrections, cached, existingPatterns = null) {
+  const now = new Date().toISOString();
+  
+  // Track word frequency for confidence scoring
+  const wordCounts = {
+    validator: {},
+    'featured-app': {},
+    cip: {},
+    'protocol-upgrade': {},
+    outcome: {},
   };
+  
+  const entityMappings = {};
   
   for (const correction of corrections) {
     const { label, originalType, correctedType } = correction;
@@ -4025,43 +4138,74 @@ function generateLearnedPatterns(corrections, cached) {
       .split(/\s+/)
       .filter(w => w.length > 2 && !['the', 'and', 'for', 'new', 'vote', 'proposal'].includes(w));
     
-    // Add words to appropriate keyword set based on corrected type
-    switch (correctedType) {
-      case 'validator':
-        words.forEach(w => patterns.validatorKeywords.add(w));
-        break;
-      case 'featured-app':
-        words.forEach(w => patterns.featuredAppKeywords.add(w));
-        break;
-      case 'cip':
-        words.forEach(w => patterns.cipKeywords.add(w));
-        break;
-      case 'protocol-upgrade':
-        words.forEach(w => patterns.protocolUpgradeKeywords.add(w));
-        break;
-      case 'outcome':
-        words.forEach(w => patterns.outcomeKeywords.add(w));
-        break;
+    // Count words for each type
+    if (wordCounts[correctedType]) {
+      words.forEach(w => {
+        wordCounts[correctedType][w] = (wordCounts[correctedType][w] || 0) + 1;
+      });
     }
     
     // Track entity name -> type mappings
     const entityMatch = label?.match(/^([A-Z][A-Za-z0-9\s-]+?)(?:\s*[-:]|$)/);
     if (entityMatch) {
-      const entityName = entityMatch[1].trim();
+      const entityName = entityMatch[1].trim().toLowerCase();
       if (entityName.length > 2) {
-        patterns.entityNameMappings[entityName.toLowerCase()] = correctedType;
+        entityMappings[entityName] = {
+          type: correctedType,
+          confidence: 1.0,
+          createdAt: now,
+          lastReinforced: now,
+          sourceCount: 1,
+        };
       }
     }
   }
   
-  // Convert sets to arrays
+  // Convert to pattern arrays with metadata
+  const createPatternArray = (type) => {
+    const counts = wordCounts[type] || {};
+    const totalCorrections = corrections.filter(c => c.correctedType === type).length;
+    
+    return Object.entries(counts).map(([keyword, count]) => ({
+      keyword,
+      confidence: Math.min(1.0, count / Math.max(1, totalCorrections) + 0.5),
+      createdAt: now,
+      lastReinforced: now,
+      matchCount: 0,
+      sourceCount: count,
+    }));
+  };
+  
+  // Merge with existing patterns, preserving reinforcement data
+  const mergePatterns = (newPatterns, existingArray) => {
+    if (!existingArray) return newPatterns;
+    
+    const existingMap = new Map(
+      existingArray.map(p => [typeof p === 'string' ? p : p.keyword, p])
+    );
+    
+    for (const newPattern of newPatterns) {
+      const existing = existingMap.get(newPattern.keyword);
+      if (existing && typeof existing === 'object') {
+        // Boost confidence and preserve history
+        newPattern.confidence = Math.min(1.0, (existing.confidence || 0.8) + 0.1);
+        newPattern.createdAt = existing.createdAt || now;
+        newPattern.matchCount = existing.matchCount || 0;
+        newPattern.lastReinforced = now; // Re-derived from correction = reinforcement
+      }
+      existingMap.set(newPattern.keyword, newPattern);
+    }
+    
+    return Array.from(existingMap.values());
+  };
+  
   return {
-    validatorKeywords: [...patterns.validatorKeywords],
-    featuredAppKeywords: [...patterns.featuredAppKeywords],
-    cipKeywords: [...patterns.cipKeywords],
-    protocolUpgradeKeywords: [...patterns.protocolUpgradeKeywords],
-    outcomeKeywords: [...patterns.outcomeKeywords],
-    entityNameMappings: patterns.entityNameMappings,
+    validatorKeywords: mergePatterns(createPatternArray('validator'), existingPatterns?.validatorKeywords),
+    featuredAppKeywords: mergePatterns(createPatternArray('featured-app'), existingPatterns?.featuredAppKeywords),
+    cipKeywords: mergePatterns(createPatternArray('cip'), existingPatterns?.cipKeywords),
+    protocolUpgradeKeywords: mergePatterns(createPatternArray('protocol-upgrade'), existingPatterns?.protocolUpgradeKeywords),
+    outcomeKeywords: mergePatterns(createPatternArray('outcome'), existingPatterns?.outcomeKeywords),
+    entityNameMappings: { ...(existingPatterns?.entityNameMappings || {}), ...entityMappings },
   };
 }
 
@@ -4079,7 +4223,7 @@ function loadLearnedPatterns() {
   return null;
 }
 
-// Get learned patterns status (enhanced with versioning and history)
+// Get learned patterns status (enhanced with versioning, history, and confidence decay)
 router.get('/learned-patterns', (req, res) => {
   const learnedPatternsFile = path.join(CACHE_DIR, 'learned-patterns.json');
   
@@ -4094,6 +4238,37 @@ router.get('/learned-patterns', (req, res) => {
     
     const data = JSON.parse(fs.readFileSync(learnedPatternsFile, 'utf8'));
     const patterns = data.patterns || {};
+    
+    // Calculate confidence stats for each pattern type
+    const calculateConfidenceStats = (patternArray) => {
+      if (!patternArray || !Array.isArray(patternArray)) return { active: 0, decaying: 0, archived: 0, avgConfidence: 0 };
+      
+      let active = 0, decaying = 0, archived = 0, totalConfidence = 0;
+      
+      for (const p of patternArray) {
+        const conf = typeof p === 'object' ? calculatePatternConfidence(p) : 1.0;
+        totalConfidence += conf;
+        
+        if (conf >= 0.7) active++;
+        else if (conf >= MIN_CONFIDENCE * 2) decaying++;
+        else archived++;
+      }
+      
+      return {
+        active,
+        decaying,
+        archived,
+        avgConfidence: patternArray.length > 0 ? (totalConfidence / patternArray.length).toFixed(2) : 0,
+      };
+    };
+    
+    const confidenceStats = {
+      validator: calculateConfidenceStats(patterns.validatorKeywords),
+      featuredApp: calculateConfidenceStats(patterns.featuredAppKeywords),
+      cip: calculateConfidenceStats(patterns.cipKeywords),
+      protocolUpgrade: calculateConfidenceStats(patterns.protocolUpgradeKeywords),
+      outcome: calculateConfidenceStats(patterns.outcomeKeywords),
+    };
     
     res.json({
       exists: true,
@@ -4112,11 +4287,20 @@ router.get('/learned-patterns', (req, res) => {
         outcomeKeywords: patterns.outcomeKeywords?.length || 0,
         entityMappings: Object.keys(patterns.entityNameMappings || {}).length,
       },
+      confidenceStats,
       history: data.history || [],
+      changelog: data.changelog || [],
       // Calculate pending changes indicator
       pendingChanges: data.history?.length > 0 
         ? `v${data.version} has ${data.basedOnCorrections} learned corrections`
         : null,
+      // Rollback availability
+      canRollback: (data.history || []).length > 1,
+      rollbackVersions: (data.history || []).slice(0, -1).map(h => ({
+        version: h.version,
+        timestamp: h.timestamp,
+        description: `${h.correctionsApplied} corrections`,
+      })),
     });
   } catch (e) {
     console.error('Failed to load learned patterns:', e.message);
@@ -4125,6 +4309,178 @@ router.get('/learned-patterns', (req, res) => {
       error: e.message,
     });
   }
+});
+
+// Rollback to a previous version
+router.post('/rollback', (req, res) => {
+  const { targetVersion } = req.body;
+  
+  if (!targetVersion) {
+    return res.status(400).json({ error: 'targetVersion is required' });
+  }
+  
+  try {
+    const backupDir = path.join(CACHE_DIR, 'pattern-backups');
+    const backupFile = path.join(backupDir, `learned-patterns-v${targetVersion}.json`);
+    
+    if (!fs.existsSync(backupFile)) {
+      return res.status(404).json({ 
+        error: `No backup found for version ${targetVersion}`,
+        availableVersions: fs.existsSync(backupDir) 
+          ? fs.readdirSync(backupDir).map(f => f.replace('learned-patterns-v', '').replace('.json', ''))
+          : [],
+      });
+    }
+    
+    // Load the backup
+    const backupData = JSON.parse(fs.readFileSync(backupFile, 'utf8'));
+    
+    // Get current data for changelog
+    let currentVersion = '0.0.0';
+    if (fs.existsSync(LEARNED_PATTERNS_FILE)) {
+      const currentData = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, 'utf8'));
+      currentVersion = currentData.version || '0.0.0';
+    }
+    
+    // Add rollback entry to changelog
+    backupData.changelog = backupData.changelog || [];
+    backupData.changelog.push({
+      timestamp: new Date().toISOString(),
+      action: 'rollback',
+      from: currentVersion,
+      to: targetVersion,
+      reason: 'User-initiated rollback',
+    });
+    
+    // Update version to indicate rollback
+    const [major, minor, patch] = targetVersion.split('.').map(Number);
+    backupData.version = `${major}.${minor}.${patch + 1}-rollback`;
+    backupData.previousVersion = currentVersion;
+    backupData.rolledBackAt = new Date().toISOString();
+    backupData.rolledBackFrom = currentVersion;
+    
+    // Save
+    fs.writeFileSync(LEARNED_PATTERNS_FILE, JSON.stringify(backupData, null, 2));
+    _learnedPatternsMtime = 0; // Force reload
+    
+    res.json({
+      success: true,
+      message: `Rolled back from v${currentVersion} to v${targetVersion}`,
+      newVersion: backupData.version,
+      restoredPatterns: {
+        validator: backupData.patterns?.validatorKeywords?.length || 0,
+        featuredApp: backupData.patterns?.featuredAppKeywords?.length || 0,
+        cip: backupData.patterns?.cipKeywords?.length || 0,
+      },
+    });
+  } catch (e) {
+    console.error('Rollback failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get impact preview before applying patterns
+router.post('/impact-preview', async (req, res) => {
+  const { proposedPatterns } = req.body;
+  
+  const cached = readCache();
+  const overrides = readOverrides();
+  const currentPatterns = getLearnedPatterns() || {};
+  
+  if (!cached?.lifecycleItems) {
+    return res.json({
+      success: false,
+      message: 'No historical data for impact preview',
+    });
+  }
+  
+  const allItems = cached.lifecycleItems || [];
+  
+  // Merge proposed with current
+  const testPatterns = {
+    validatorKeywords: [...new Set([
+      ...(currentPatterns.validatorKeywords || []).map(p => typeof p === 'object' ? p.keyword : p),
+      ...(proposedPatterns?.validatorKeywords || []),
+    ])],
+    featuredAppKeywords: [...new Set([
+      ...(currentPatterns.featuredAppKeywords || []).map(p => typeof p === 'object' ? p.keyword : p),
+      ...(proposedPatterns?.featuredAppKeywords || []),
+    ])],
+    cipKeywords: [...new Set([
+      ...(currentPatterns.cipKeywords || []).map(p => typeof p === 'object' ? p.keyword : p),
+      ...(proposedPatterns?.cipKeywords || []),
+    ])],
+    protocolUpgradeKeywords: [...new Set([
+      ...(currentPatterns.protocolUpgradeKeywords || []).map(p => typeof p === 'object' ? p.keyword : p),
+      ...(proposedPatterns?.protocolUpgradeKeywords || []),
+    ])],
+    outcomeKeywords: [...new Set([
+      ...(currentPatterns.outcomeKeywords || []).map(p => typeof p === 'object' ? p.keyword : p),
+      ...(proposedPatterns?.outcomeKeywords || []),
+    ])],
+    entityNameMappings: {
+      ...(currentPatterns.entityNameMappings || {}),
+      ...(proposedPatterns?.entityNameMappings || {}),
+    },
+  };
+  
+  // Calculate before/after stats
+  const beforeStats = { cip: 0, validator: 0, 'featured-app': 0, 'protocol-upgrade': 0, outcome: 0, other: 0 };
+  const afterStats = { cip: 0, validator: 0, 'featured-app': 0, 'protocol-upgrade': 0, outcome: 0, other: 0 };
+  const changes = [];
+  
+  for (const item of allItems) {
+    const subject = item.primaryId || '';
+    const currentType = simulateClassification(subject, currentPatterns);
+    const proposedType = simulateClassification(subject, testPatterns);
+    
+    beforeStats[currentType] = (beforeStats[currentType] || 0) + 1;
+    afterStats[proposedType] = (afterStats[proposedType] || 0) + 1;
+    
+    if (currentType !== proposedType) {
+      const trueType = overrides.itemOverrides?.[item.primaryId]?.type;
+      changes.push({
+        id: item.primaryId,
+        subject: subject.slice(0, 60),
+        before: currentType,
+        after: proposedType,
+        isImprovement: trueType ? proposedType === trueType : null,
+        isDegradation: trueType ? currentType === trueType && proposedType !== trueType : false,
+      });
+    }
+  }
+  
+  // Group changes by type transition
+  const transitions = {};
+  for (const change of changes) {
+    const key = `${change.before} → ${change.after}`;
+    if (!transitions[key]) {
+      transitions[key] = { count: 0, examples: [], improvements: 0, degradations: 0 };
+    }
+    transitions[key].count++;
+    if (transitions[key].examples.length < 3) {
+      transitions[key].examples.push(change.subject);
+    }
+    if (change.isImprovement) transitions[key].improvements++;
+    if (change.isDegradation) transitions[key].degradations++;
+  }
+  
+  res.json({
+    success: true,
+    total: allItems.length,
+    changedCount: changes.length,
+    changedPercent: ((changes.length / allItems.length) * 100).toFixed(1),
+    before: beforeStats,
+    after: afterStats,
+    transitions,
+    improvements: changes.filter(c => c.isImprovement).length,
+    degradations: changes.filter(c => c.isDegradation).length,
+    sample: {
+      improvements: changes.filter(c => c.isImprovement).slice(0, 5),
+      degradations: changes.filter(c => c.isDegradation).slice(0, 5),
+      neutral: changes.filter(c => c.isImprovement === null && !c.isDegradation).slice(0, 5),
+    },
+  });
 });
 
 // Export training data for potential model fine-tuning
