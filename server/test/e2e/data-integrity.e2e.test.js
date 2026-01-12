@@ -122,8 +122,12 @@ describe('Data Integrity E2E Tests', () => {
 
       if (response.status === 200 && response.body.data.length > 0) {
         for (const event of response.body.data) {
-          if (event.effective_at || event.timestamp) {
-            const eventDate = new Date(event.effective_at || event.timestamp);
+          const dateStr = event.effective_at || event.timestamp;
+          if (dateStr) {
+            const eventDate = new Date(dateStr);
+            // Skip invalid dates (NaN)
+            if (isNaN(eventDate.getTime())) continue;
+            
             const startDate = new Date(start);
             const endDate = new Date(end + 'T23:59:59Z');
 
