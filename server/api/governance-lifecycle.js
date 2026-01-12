@@ -3347,126 +3347,203 @@ function analyzeCorrections(corrections, cached) {
 
 // Generate specific improvement suggestions based on patterns
 // FOCUSED ON ACTIVE CLASSIFIERS: governance-lifecycle.js + llm-classifier.js
+// NOW INCLUDES: provenance, scope, confidence scoring, and versioning
 function generateImprovementSuggestions(analysis) {
   const suggestions = [];
+  
+  // Load current patterns to check for duplicates
+  const currentPatterns = getLearnedPatterns();
   
   for (const pattern of analysis.patterns) {
     const [origType, corrType] = pattern.transition.split(' → ');
     const keywords = pattern.keywords.map(k => k.word);
     
-    // Generate regex pattern - escape special chars and join with |
-    const regexWords = keywords
-      .slice(0, 5)
-      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-      .join('|');
+    // Calculate confidence/generality score
+    const confidence = calculateConfidence(pattern, analysis);
+    
+    // Determine scope
+    const scope = {
+      applies: 'future_only', // future_only | reclassify_on_demand
+      retroactive: false,
+      description: 'Applies to future classifications only. Existing items unchanged.',
+    };
+    
+    // Build provenance
+    const provenance = {
+      sourceCorrections: pattern.transitionCount,
+      affectedEntities: pattern.examples.slice(0, 5),
+      transition: pattern.transition,
+      avgKeywordFrequency: pattern.keywords.reduce((sum, k) => sum + k.frequency, 0) / pattern.keywords.length,
+    };
     
     if (pattern.transitionCount >= 1) {
       // === RULE-BASED PATTERN SUGGESTIONS (governance-lifecycle.js) ===
       
       if (corrType === 'validator' && origType !== 'validator') {
-        suggestions.push({
-          file: 'governance-lifecycle.js',
-          location: 'extractIdentifiers/isValidator regex',
-          type: 'add_keyword',
-          priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
-          description: `Add keywords to validator detection: ${keywords.slice(0, 3).join(', ')}`,
-          keywords,
-          codeChange: {
-            target: 'VALIDATOR_KEYWORDS',
-            action: 'add',
-            values: keywords.filter(k => !['validator', 'operator', 'node', 'the', 'and', 'for'].includes(k)),
-          },
-          examples: pattern.examples,
-          reason: `${pattern.transitionCount} items misclassified as ${origType} were actually validators`,
-        });
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.validatorKeywords, ['validator', 'operator', 'node', 'the', 'and', 'for']);
+        if (newKeywords.length > 0) {
+          suggestions.push({
+            file: 'governance-lifecycle.js',
+            location: 'extractIdentifiers/isValidator regex',
+            type: 'add_keyword',
+            priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
+            description: `Add keywords to validator detection: ${newKeywords.slice(0, 3).join(', ')}`,
+            keywords: newKeywords,
+            codeChange: {
+              target: 'VALIDATOR_KEYWORDS',
+              action: 'add',
+              values: newKeywords,
+            },
+            examples: pattern.examples,
+            reason: `${pattern.transitionCount} items misclassified as ${origType} were actually validators`,
+            confidence,
+            scope,
+            provenance,
+            learningLayer: 'pattern', // pattern | instructional
+          });
+        }
       }
       
       if (corrType === 'featured-app' && origType !== 'featured-app') {
-        suggestions.push({
-          file: 'governance-lifecycle.js',
-          location: 'extractIdentifiers/isFeaturedApp regex',
-          type: 'add_keyword',
-          priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
-          description: `Add keywords to featured-app detection: ${keywords.slice(0, 3).join(', ')}`,
-          keywords,
-          codeChange: {
-            target: 'FEATURED_APP_KEYWORDS',
-            action: 'add',
-            values: keywords.filter(k => !['featured', 'app', 'application', 'the', 'and', 'for'].includes(k)),
-          },
-          examples: pattern.examples,
-          reason: `${pattern.transitionCount} items misclassified as ${origType} were actually featured apps`,
-        });
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.featuredAppKeywords, ['featured', 'app', 'application', 'the', 'and', 'for']);
+        if (newKeywords.length > 0) {
+          suggestions.push({
+            file: 'governance-lifecycle.js',
+            location: 'extractIdentifiers/isFeaturedApp regex',
+            type: 'add_keyword',
+            priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
+            description: `Add keywords to featured-app detection: ${newKeywords.slice(0, 3).join(', ')}`,
+            keywords: newKeywords,
+            codeChange: {
+              target: 'FEATURED_APP_KEYWORDS',
+              action: 'add',
+              values: newKeywords,
+            },
+            examples: pattern.examples,
+            reason: `${pattern.transitionCount} items misclassified as ${origType} were actually featured apps`,
+            confidence,
+            scope,
+            provenance,
+            learningLayer: 'pattern',
+          });
+        }
       }
       
       if (corrType === 'cip' && origType !== 'cip') {
-        suggestions.push({
-          file: 'governance-lifecycle.js',
-          location: 'extractIdentifiers/cipNumber detection',
-          type: 'add_keyword',
-          priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
-          description: `Add CIP-related keywords: ${keywords.slice(0, 3).join(', ')}`,
-          keywords,
-          codeChange: {
-            target: 'CIP_KEYWORDS',
-            action: 'add',
-            values: keywords.filter(k => !['cip', 'proposal', 'the', 'and', 'for'].includes(k)),
-          },
-          examples: pattern.examples,
-          reason: `${pattern.transitionCount} items misclassified as ${origType} were actually CIPs`,
-        });
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.cipKeywords, ['cip', 'proposal', 'the', 'and', 'for']);
+        if (newKeywords.length > 0) {
+          suggestions.push({
+            file: 'governance-lifecycle.js',
+            location: 'extractIdentifiers/cipNumber detection',
+            type: 'add_keyword',
+            priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
+            description: `Add CIP-related keywords: ${newKeywords.slice(0, 3).join(', ')}`,
+            keywords: newKeywords,
+            codeChange: {
+              target: 'CIP_KEYWORDS',
+              action: 'add',
+              values: newKeywords,
+            },
+            examples: pattern.examples,
+            reason: `${pattern.transitionCount} items misclassified as ${origType} were actually CIPs`,
+            confidence,
+            scope,
+            provenance,
+            learningLayer: 'pattern',
+          });
+        }
       }
       
       if (corrType === 'protocol-upgrade') {
-        suggestions.push({
-          file: 'governance-lifecycle.js',
-          location: 'correlateTopics/type detection',
-          type: 'add_keyword',
-          priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
-          description: `Add protocol-upgrade keywords: ${keywords.slice(0, 3).join(', ')}`,
-          keywords,
-          codeChange: {
-            target: 'PROTOCOL_UPGRADE_KEYWORDS',
-            action: 'add',
-            values: keywords.filter(k => !['upgrade', 'splice', 'migration', 'the', 'and', 'for'].includes(k)),
-          },
-          examples: pattern.examples,
-          reason: `${pattern.transitionCount} items were manually reclassified to protocol-upgrade`,
-        });
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.protocolUpgradeKeywords, ['upgrade', 'splice', 'migration', 'the', 'and', 'for']);
+        if (newKeywords.length > 0) {
+          suggestions.push({
+            file: 'governance-lifecycle.js',
+            location: 'correlateTopics/type detection',
+            type: 'add_keyword',
+            priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
+            description: `Add protocol-upgrade keywords: ${newKeywords.slice(0, 3).join(', ')}`,
+            keywords: newKeywords,
+            codeChange: {
+              target: 'PROTOCOL_UPGRADE_KEYWORDS',
+              action: 'add',
+              values: newKeywords,
+            },
+            examples: pattern.examples,
+            reason: `${pattern.transitionCount} items were manually reclassified to protocol-upgrade`,
+            confidence,
+            scope,
+            provenance,
+            learningLayer: 'pattern',
+          });
+        }
       }
       
       if (corrType === 'outcome') {
-        suggestions.push({
-          file: 'governance-lifecycle.js',
-          location: 'correlateTopics/type detection',
-          type: 'add_keyword',
-          priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
-          description: `Add outcome keywords: ${keywords.slice(0, 3).join(', ')}`,
-          keywords,
-          codeChange: {
-            target: 'OUTCOME_KEYWORDS',
-            action: 'add',
-            values: keywords.filter(k => !['outcome', 'tokenomics', 'report', 'the', 'and', 'for'].includes(k)),
-          },
-          examples: pattern.examples,
-          reason: `${pattern.transitionCount} items were manually reclassified to outcome`,
-        });
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.outcomeKeywords, ['outcome', 'tokenomics', 'report', 'the', 'and', 'for']);
+        if (newKeywords.length > 0) {
+          suggestions.push({
+            file: 'governance-lifecycle.js',
+            location: 'correlateTopics/type detection',
+            type: 'add_keyword',
+            priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
+            description: `Add outcome keywords: ${newKeywords.slice(0, 3).join(', ')}`,
+            keywords: newKeywords,
+            codeChange: {
+              target: 'OUTCOME_KEYWORDS',
+              action: 'add',
+              values: newKeywords,
+            },
+            examples: pattern.examples,
+            reason: `${pattern.transitionCount} items were manually reclassified to outcome`,
+            confidence,
+            scope,
+            provenance,
+            learningLayer: 'pattern',
+          });
+        }
       }
       
       // === LLM PROMPT SUGGESTIONS (llm-classifier.js) ===
+      // Split into two layers: instructional (definitions) vs pattern (examples)
       
       if (pattern.transitionCount >= 2) {
+        // Pattern layer: add specific examples and keywords
         suggestions.push({
           file: 'llm-classifier.js',
           location: 'CLASSIFICATION_PROMPT',
           type: 'prompt_enhancement',
           priority: pattern.transitionCount >= 4 ? 'high' : 'medium',
-          description: `Enhance ${corrType} detection in LLM prompt`,
+          description: `Add ${corrType} disambiguation examples to LLM prompt`,
           keywords,
-          promptAddition: generatePromptAddition(origType, corrType, keywords, pattern.examples),
+          promptAddition: generatePatternPromptAddition(origType, corrType, keywords, pattern.examples),
           examples: pattern.examples,
           reason: `${pattern.transitionCount} items misclassified as ${origType} were actually ${corrType}`,
+          confidence,
+          scope,
+          provenance,
+          learningLayer: 'pattern',
+          promptType: 'example_injection', // example_injection | definition_clarification
         });
+        
+        // If high volume corrections, also suggest instructional improvements
+        if (pattern.transitionCount >= 4) {
+          suggestions.push({
+            file: 'llm-classifier.js',
+            location: 'CLASSIFICATION_PROMPT definitions',
+            type: 'prompt_enhancement',
+            priority: 'medium',
+            description: `Clarify ${corrType} vs ${origType} definition boundary`,
+            promptAddition: generateInstructionalPromptAddition(origType, corrType),
+            examples: pattern.examples,
+            reason: `High volume of ${origType} → ${corrType} corrections suggests unclear definition`,
+            confidence: { ...confidence, level: 'contextual' }, // Definition changes are always contextual
+            scope,
+            provenance,
+            learningLayer: 'instructional',
+            promptType: 'definition_clarification',
+          });
+        }
       }
     }
   }
@@ -3476,34 +3553,106 @@ function generateImprovementSuggestions(analysis) {
   suggestions.sort((a, b) => {
     const pDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
     if (pDiff !== 0) return pDiff;
-    return (b.transitionCount || 0) - (a.transitionCount || 0);
+    return (b.provenance?.sourceCorrections || 0) - (a.provenance?.sourceCorrections || 0);
   });
   
   return suggestions;
 }
 
-// Generate a specific prompt addition for the LLM classifier
-function generatePromptAddition(origType, corrType, keywords, examples) {
+// Calculate confidence/generality score for a pattern
+function calculateConfidence(pattern, analysis) {
+  const count = pattern.transitionCount;
+  const avgFreq = pattern.keywords.reduce((sum, k) => sum + k.frequency, 0) / pattern.keywords.length;
+  
+  // Check if pattern appears across multiple entity types
+  const uniqueEntities = new Set(pattern.examples.map(e => 
+    e.toLowerCase().replace(/[^a-z]/g, '').slice(0, 20)
+  )).size;
+  
+  let level = 'edge-case';
+  let description = 'Rare pattern, may be brittle';
+  
+  if (count >= 5 && avgFreq > 0.7 && uniqueEntities >= 3) {
+    level = 'general';
+    description = 'Strong pattern seen across multiple entities/flows';
+  } else if (count >= 2 && avgFreq > 0.5) {
+    level = 'contextual';
+    description = 'Pattern specific to certain lifecycle types';
+  }
+  
+  return {
+    level,
+    description,
+    sourceCount: count,
+    avgKeywordMatch: avgFreq,
+    uniqueEntities,
+  };
+}
+
+// Filter out keywords that already exist in current patterns
+function filterNewKeywords(keywords, existingKeywords, excludeList) {
+  const existing = new Set([...(existingKeywords || []), ...excludeList].map(k => k.toLowerCase()));
+  return keywords.filter(k => !existing.has(k.toLowerCase()));
+}
+
+// Generate pattern-layer prompt addition (examples and keywords)
+function generatePatternPromptAddition(origType, corrType, keywords, examples) {
   const exampleText = examples.slice(0, 2).map(e => `"${e}"`).join(', ');
   
   return `
-**Common ${corrType} misclassification pattern:**
-- Topics containing keywords like: ${keywords.slice(0, 5).join(', ')}
-- Often incorrectly classified as ${origType}
-- Examples: ${exampleText}
-- These should be classified as **${corrType}**`;
+**Disambiguation: ${origType} vs ${corrType}**
+- When subject contains: ${keywords.slice(0, 5).join(', ')}
+- And the context suggests ${corrType}-specific governance
+- Classify as **${corrType}**, not ${origType}
+- Examples: ${exampleText}`;
+}
+
+// Generate instructional-layer prompt addition (definition clarification)
+function generateInstructionalPromptAddition(origType, corrType) {
+  const definitions = {
+    'validator': 'entities operating network infrastructure (nodes, validators, super validators)',
+    'featured-app': 'applications seeking or maintaining featured status on the network',
+    'cip': 'Canton Improvement Proposals (CIP-XXXX format) for protocol changes',
+    'protocol-upgrade': 'network-wide upgrades, migrations, or infrastructure changes',
+    'outcome': 'monthly reports, tokenomics outcomes, or periodic summaries',
+    'other': 'items that do not fit any specific governance category',
+  };
+  
+  return `
+**Definition clarification for ${corrType}:**
+${corrType}: ${definitions[corrType] || 'See category definition'}
+
+Key distinction from ${origType}: Focus on the primary governance action, not incidental mentions.`;
 }
 
 // ========== APPLY IMPROVEMENTS ==========
 // Endpoint to apply learned patterns to the classification system
 
 router.post('/apply-improvements', async (req, res) => {
-  const { suggestionIds, dryRun = true } = req.body;
+  const { acceptedProposals, dryRun = true } = req.body;
   
   // Get current improvements
   const auditLog = readAuditLog();
   const overrides = readOverrides();
   const cached = readCache();
+  
+  // Load existing patterns for versioning
+  let existingData = null;
+  try {
+    if (fs.existsSync(LEARNED_PATTERNS_FILE)) {
+      existingData = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, 'utf8'));
+    }
+  } catch (e) {}
+  
+  // Check learning mode (if disabled, reject)
+  const learningMode = existingData?.learningMode ?? true;
+  if (!learningMode && !dryRun) {
+    return res.json({
+      success: false,
+      message: 'Learning mode is disabled. Enable it to apply improvements.',
+      learningMode: false,
+    });
+  }
   
   // Collect corrections
   const corrections = [];
@@ -3514,6 +3663,7 @@ router.post('/apply-improvements', async (req, res) => {
         label: entry.targetLabel || entry.targetId,
         originalType: entry.originalValue,
         correctedType: entry.newValue,
+        timestamp: entry.timestamp,
       });
     }
   }
@@ -3525,6 +3675,7 @@ router.post('/apply-improvements', async (req, res) => {
         label: key,
         originalType: override.originalType,
         correctedType: override.type,
+        timestamp: override.createdAt,
       });
     }
   }
@@ -3539,16 +3690,60 @@ router.post('/apply-improvements', async (req, res) => {
   // Generate learned patterns
   const learnedPatterns = generateLearnedPatterns(corrections, cached);
   
-  // Save learned patterns to a config file
-  const learnedPatternsFile = path.join(CACHE_DIR, 'learned-patterns.json');
+  // Calculate version (semantic versioning)
+  const currentVersion = existingData?.version || '1.0.0';
+  const [major, minor, patch] = currentVersion.split('.').map(Number);
+  
+  // Increment patch for additive changes, minor for structural changes
+  const newPatternCount = Object.values(learnedPatterns).reduce((sum, arr) => 
+    sum + (Array.isArray(arr) ? arr.length : Object.keys(arr).length), 0
+  );
+  const oldPatternCount = existingData?.patterns 
+    ? Object.values(existingData.patterns).reduce((sum, arr) => 
+        sum + (Array.isArray(arr) ? arr.length : Object.keys(arr).length), 0)
+    : 0;
+  
+  let newVersion;
+  if (newPatternCount > oldPatternCount * 1.5) {
+    // Significant change - minor version bump
+    newVersion = `${major}.${minor + 1}.0`;
+  } else {
+    // Additive change - patch version bump  
+    newVersion = `${major}.${minor}.${patch + 1}`;
+  }
+  
+  // Build data with versioning and provenance
+  const newData = {
+    version: newVersion,
+    previousVersion: existingData?.version || null,
+    generatedAt: new Date().toISOString(),
+    basedOnCorrections: corrections.length,
+    learningMode: true,
+    patterns: learnedPatterns,
+    history: [
+      ...(existingData?.history || []).slice(-9), // Keep last 10 entries
+      {
+        version: newVersion,
+        timestamp: new Date().toISOString(),
+        correctionsApplied: corrections.length,
+        acceptedProposals: acceptedProposals?.length || 'all',
+        patternsAdded: {
+          validator: learnedPatterns.validatorKeywords?.length || 0,
+          featuredApp: learnedPatterns.featuredAppKeywords?.length || 0,
+          cip: learnedPatterns.cipKeywords?.length || 0,
+          protocolUpgrade: learnedPatterns.protocolUpgradeKeywords?.length || 0,
+          outcome: learnedPatterns.outcomeKeywords?.length || 0,
+          entities: Object.keys(learnedPatterns.entityNameMappings || {}).length,
+        },
+      },
+    ],
+  };
   
   if (!dryRun) {
-    fs.writeFileSync(learnedPatternsFile, JSON.stringify({
-      version: 1,
-      generatedAt: new Date().toISOString(),
-      basedOnCorrections: corrections.length,
-      patterns: learnedPatterns,
-    }, null, 2));
+    fs.writeFileSync(LEARNED_PATTERNS_FILE, JSON.stringify(newData, null, 2));
+    // Clear cache so new patterns are loaded
+    _learnedPatternsCache = null;
+    _learnedPatternsMtime = 0;
   }
   
   res.json({
@@ -3556,11 +3751,44 @@ router.post('/apply-improvements', async (req, res) => {
     dryRun,
     message: dryRun 
       ? 'Dry run - patterns generated but not saved. Set dryRun=false to apply.'
-      : 'Learned patterns saved. They will be used in future classifications.',
+      : `Learned patterns v${newVersion} saved. Future classifications will use these patterns.`,
     correctionsAnalyzed: corrections.length,
+    version: newVersion,
+    previousVersion: existingData?.version || null,
     patternsGenerated: learnedPatterns,
-    savedTo: dryRun ? null : learnedPatternsFile,
+    savedTo: dryRun ? null : LEARNED_PATTERNS_FILE,
   });
+});
+
+// Toggle learning mode
+router.post('/learning-mode', (req, res) => {
+  const { enabled } = req.body;
+  
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be a boolean' });
+  }
+  
+  try {
+    let data = { learningMode: enabled, patterns: {}, version: '1.0.0' };
+    if (fs.existsSync(LEARNED_PATTERNS_FILE)) {
+      data = JSON.parse(fs.readFileSync(LEARNED_PATTERNS_FILE, 'utf8'));
+    }
+    
+    data.learningMode = enabled;
+    data.learningModeChangedAt = new Date().toISOString();
+    
+    fs.writeFileSync(LEARNED_PATTERNS_FILE, JSON.stringify(data, null, 2));
+    
+    res.json({
+      success: true,
+      learningMode: enabled,
+      message: enabled 
+        ? 'Learning mode enabled. Corrections will be analyzed for proposals.'
+        : 'Learning mode disabled. Corrections apply locally only.',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Generate learned patterns from corrections
@@ -3638,41 +3866,52 @@ function loadLearnedPatterns() {
   return null;
 }
 
-// Get learned patterns status
+// Get learned patterns status (enhanced with versioning and history)
 router.get('/learned-patterns', (req, res) => {
-  const patterns = loadLearnedPatterns();
   const learnedPatternsFile = path.join(CACHE_DIR, 'learned-patterns.json');
   
-  if (!patterns) {
-    return res.json({
-      exists: false,
-      message: 'No learned patterns. Use POST /apply-improvements to generate.',
-    });
-  }
-  
-  let metadata = {};
   try {
+    if (!fs.existsSync(learnedPatternsFile)) {
+      return res.json({
+        exists: false,
+        learningMode: true,
+        message: 'No learned patterns. Use POST /apply-improvements to generate.',
+      });
+    }
+    
     const data = JSON.parse(fs.readFileSync(learnedPatternsFile, 'utf8'));
-    metadata = {
-      version: data.version,
+    const patterns = data.patterns || {};
+    
+    res.json({
+      exists: true,
+      version: data.version || '1.0.0',
+      previousVersion: data.previousVersion || null,
       generatedAt: data.generatedAt,
       basedOnCorrections: data.basedOnCorrections,
-    };
-  } catch (e) {}
-  
-  res.json({
-    exists: true,
-    ...metadata,
-    patterns,
-    stats: {
-      validatorKeywords: patterns.validatorKeywords?.length || 0,
-      featuredAppKeywords: patterns.featuredAppKeywords?.length || 0,
-      cipKeywords: patterns.cipKeywords?.length || 0,
-      protocolUpgradeKeywords: patterns.protocolUpgradeKeywords?.length || 0,
-      outcomeKeywords: patterns.outcomeKeywords?.length || 0,
-      entityMappings: Object.keys(patterns.entityNameMappings || {}).length,
-    },
-  });
+      learningMode: data.learningMode ?? true,
+      learningModeChangedAt: data.learningModeChangedAt,
+      patterns,
+      stats: {
+        validatorKeywords: patterns.validatorKeywords?.length || 0,
+        featuredAppKeywords: patterns.featuredAppKeywords?.length || 0,
+        cipKeywords: patterns.cipKeywords?.length || 0,
+        protocolUpgradeKeywords: patterns.protocolUpgradeKeywords?.length || 0,
+        outcomeKeywords: patterns.outcomeKeywords?.length || 0,
+        entityMappings: Object.keys(patterns.entityNameMappings || {}).length,
+      },
+      history: data.history || [],
+      // Calculate pending changes indicator
+      pendingChanges: data.history?.length > 0 
+        ? `v${data.version} has ${data.basedOnCorrections} learned corrections`
+        : null,
+    });
+  } catch (e) {
+    console.error('Failed to load learned patterns:', e.message);
+    res.json({
+      exists: false,
+      error: e.message,
+    });
+  }
 });
 
 // Export training data for potential model fine-tuning
