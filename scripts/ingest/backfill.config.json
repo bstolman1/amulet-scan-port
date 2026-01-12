@@ -22,9 +22,10 @@
   "targetMigration": 3,
 
   "dirs": {
-    "data": "C:\\ledger_raw",
-    "cursor": "C:\\ledger_raw\\cursors",
-    "logs": "C:\\ledger_raw\\logs"
+    "_comment": "These are fallback defaults. Override with DATA_DIR and CURSOR_DIR environment variables.",
+    "data": "${DATA_DIR:-/home/user/ledger_data}",
+    "cursor": "${CURSOR_DIR:-/home/user/ledger_data/cursors}",
+    "logs": "${DATA_DIR:-/home/user/ledger_data}/logs"
   },
 
   "scanApi": {
