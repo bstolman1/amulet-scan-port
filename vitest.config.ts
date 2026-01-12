@@ -27,6 +27,16 @@ export default defineConfig({
         '**/node_modules/**',
       ],
     },
+    // Server-side tests need node environment
+    environmentMatchGlobs: [
+      ['server/**/*.test.js', 'node'],
+      ['server/**/*.integration.test.js', 'node'],
+      ['server/**/*.e2e.test.js', 'node'],
+    ],
+    deps: {
+      // Allow supertest and other node modules to be resolved
+      inline: [/supertest/],
+    },
   },
   resolve: {
     alias: {
