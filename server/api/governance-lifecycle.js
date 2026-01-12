@@ -53,6 +53,7 @@ import {
   getGoldenSetSummary,
   getEvaluationHistory,
   importFromCorrections,
+  clearGoldenSet,
 } from '../inference/golden-set.js';
 // Per-decision explainability - audit-grade classification traces
 import {
@@ -4692,6 +4693,13 @@ router.post('/golden-set', (req, res) => {
 // Remove item from golden set
 router.delete('/golden-set/:id', (req, res) => {
   const result = removeGoldenItem(req.params.id, req.body.reason || 'Removed via API');
+  res.json(result);
+});
+
+// Clear entire golden set and optionally evaluation history
+router.delete('/golden-set', (req, res) => {
+  const clearHistory = req.query.clearHistory !== 'false';
+  const result = clearGoldenSet(clearHistory);
   res.json(result);
 });
 

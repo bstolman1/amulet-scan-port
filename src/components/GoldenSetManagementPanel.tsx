@@ -465,33 +465,35 @@ export function GoldenSetManagementPanel() {
   };
 
   const clearGoldenSet = async () => {
-    if (!fullSet?.items.length) return;
+    const hasItems = (fullSet?.items.length || 0) > 0;
+    const hasEvaluations = (summary?.evaluationCount || 0) > 0;
     
-    const confirmed = window.confirm(`Are you sure you want to remove all ${fullSet.items.length} items from the golden set? This cannot be undone.`);
+    if (!hasItems && !hasEvaluations) return;
+    
+    const message = hasItems && hasEvaluations
+      ? `Clear all ${fullSet?.items.length} items AND ${summary?.evaluationCount} evaluation(s)? This cannot be undone.`
+      : hasItems
+        ? `Clear all ${fullSet?.items.length} items? This cannot be undone.`
+        : `Clear ${summary?.evaluationCount} evaluation(s)? This cannot be undone.`;
+    
+    const confirmed = window.confirm(message);
     if (!confirmed) return;
 
     try {
       const baseUrl = getDuckDBApiUrl();
-      let removed = 0;
-      
-      for (const item of fullSet.items) {
-        try {
-          const response = await fetch(`${baseUrl}/api/governance-lifecycle/golden-set/${item.id}`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reason: 'Bulk clear' }),
-          });
-          if (response.ok) removed++;
-        } catch {
-          // continue
-        }
-      }
-      
-      toast({
-        title: "Golden Set Cleared",
-        description: `Removed ${removed} items`,
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/golden-set?clearHistory=true`, {
+        method: 'DELETE',
       });
-      await fetchData();
+      
+      if (response.ok) {
+        toast({
+          title: "Golden Set Cleared",
+          description: "All items and evaluation history removed",
+        });
+        await fetchData();
+      } else {
+        throw new Error('Failed to clear');
+      }
     } catch (error) {
       toast({
         title: "Failed to Clear",
@@ -552,7 +554,7 @@ export function GoldenSetManagementPanel() {
             <CardTitle className="text-lg">Golden Evaluation Set</CardTitle>
           </div>
           <div className="flex items-center gap-2">
-            {(fullSet?.items.length || 0) > 0 && (
+            {((fullSet?.items.length || 0) > 0 || (summary?.evaluationCount || 0) > 0) && (
               <Button 
                 size="sm" 
                 variant="ghost" 
@@ -560,7 +562,7 @@ export function GoldenSetManagementPanel() {
                 onClick={clearGoldenSet}
               >
                 <Trash2 className="h-4 w-4" />
-                Clear
+                Clear All
               </Button>
             )}
             
