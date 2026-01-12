@@ -1,9 +1,9 @@
 import duckdb from 'duckdb';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Use process.cwd() for Vitest compatibility (fileURLToPath breaks under Vite SSR)
+const __dirname = path.join(process.cwd(), 'server', 'duckdb');
 
 // Prefer the repository-local data directory if it exists (common in Lovable + WSL setups)
 // Repo layout: server/duckdb/connection.js -> ../../data
