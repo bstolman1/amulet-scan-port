@@ -39,8 +39,8 @@ function inferProposalStage(state: ProposalState, now: Date = new Date()): Stage
     return 'rejected';
   }
   
-  // Check if expired
-  if (now > expiresAt) {
+  // Check if expired (treat equality as expired)
+  if (now >= expiresAt) {
     // Even if expired, check if it had enough votes (should have been executed)
     if (state.acceptedWeight >= state.requiredWeight) {
       return 'approved'; // Had enough votes but wasn't executed yet

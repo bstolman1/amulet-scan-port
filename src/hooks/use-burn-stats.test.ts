@@ -175,7 +175,7 @@ describe('Burn Stats Calculations', () => {
       
       const result = calculateBurnFromEvent(event, {});
       
-      expect(result.preapprovalBurn).toBe(5.65); // 5.0 + 0.5 + 0.1 + 0.05
+      expect(result.preapprovalBurn).toBeCloseTo(5.65, 2); // 5.0 + 0.5 + 0.1 + 0.05
     });
 
     it('handles missing summary gracefully', () => {

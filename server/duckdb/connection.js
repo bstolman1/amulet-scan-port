@@ -34,7 +34,10 @@ const DATA_PATH = IS_TEST ? TEST_FIXTURES_PATH : path.join(BASE_DATA_DIR, 'raw')
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
 // Persistent DuckDB instance (survives restarts, shareable between processes)
-const DB_FILE = process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb');
+// In test mode, always use an in-memory DB to avoid file locking / cross-test interference.
+const DB_FILE = IS_TEST
+  ? ':memory:'
+  : (process.env.DUCKDB_FILE || path.join(BASE_DATA_DIR, 'canton-explorer.duckdb'));
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
 
 // ============================================================
@@ -43,7 +46,7 @@ console.log(`🦆 DuckDB database: ${DB_FILE}`);
 // Each connection has its own transaction context, allowing safe concurrent queries.
 // ============================================================
 
-const POOL_SIZE = parseInt(process.env.DUCKDB_POOL_SIZE || '4', 10);
+const POOL_SIZE = IS_TEST ? 1 : parseInt(process.env.DUCKDB_POOL_SIZE || '4', 10);
 const POOL_TIMEOUT_MS = parseInt(process.env.DUCKDB_POOL_TIMEOUT_MS || '30000', 10);
 
 const db = new duckdb.Database(DB_FILE);
