@@ -31,7 +31,10 @@ import {
   BarChart3,
   Shield,
   Sparkles,
+  Shuffle,
+  Download,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface GoldenItem {
   id: string;
@@ -142,6 +145,19 @@ export function GoldenSetManagementPanel() {
     notes: '',
     category: 'standard' as 'standard' | 'edge_case' | 'boundary',
   });
+  
+  // Sample from existing state
+  const [showSampleDialog, setShowSampleDialog] = useState(false);
+  const [sampledItems, setSampledItems] = useState<Array<{
+    id: string;
+    subject: string;
+    body?: string;
+    type?: string;
+    selected: boolean;
+    trueType: string;
+  }>>([]);
+  const [isSampling, setIsSampling] = useState(false);
+  const [isAddingSamples, setIsAddingSamples] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -282,6 +298,130 @@ export function GoldenSetManagementPanel() {
     }
   };
 
+  const sampleFromExisting = async (count: number = 20) => {
+    setIsSampling(true);
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/proposals?limit=200`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const items = data.items || data.proposals || data || [];
+        
+        // Filter out items already in golden set
+        const existingIds = new Set(fullSet?.items.map(i => i.id) || []);
+        const available = items.filter((item: any) => !existingIds.has(item.id || item.contractId));
+        
+        // Randomly sample
+        const shuffled = available.sort(() => Math.random() - 0.5);
+        const sampled = shuffled.slice(0, count).map((item: any) => ({
+          id: item.id || item.contractId || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          subject: item.subject || item.title || item.payload?.action?.summary || 'Unknown',
+          body: item.body || item.description || item.payload?.action?.url || '',
+          type: item.type || item.classificationType || 'unknown',
+          selected: true,
+          trueType: item.type || item.classificationType || '',
+        }));
+        
+        setSampledItems(sampled);
+        setShowSampleDialog(true);
+      } else {
+        toast({
+          title: "Failed to Sample",
+          description: "Could not fetch governance items",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to Sample",
+        description: error instanceof Error ? error.message : "Network error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSampling(false);
+    }
+  };
+
+  const addSampledItems = async () => {
+    const selected = sampledItems.filter(item => item.selected && item.trueType);
+    if (selected.length === 0) {
+      toast({
+        title: "No Items Selected",
+        description: "Select at least one item with a true type assigned",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsAddingSamples(true);
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      let added = 0;
+      let failed = 0;
+
+      for (const item of selected) {
+        try {
+          const response = await fetch(`${baseUrl}/api/governance-lifecycle/golden-set`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: item.id,
+              subject: item.subject,
+              body: item.body || '',
+              trueType: item.trueType,
+              category: 'standard',
+              notes: 'Sampled from existing governance items',
+            }),
+          });
+          
+          if (response.ok) {
+            added++;
+          } else {
+            failed++;
+          }
+        } catch {
+          failed++;
+        }
+      }
+
+      toast({
+        title: `Added ${added} Items`,
+        description: failed > 0 ? `${failed} items failed to add` : 'All items added successfully',
+        className: failed === 0 
+          ? "bg-green-900/90 border-green-500/50 text-green-100"
+          : "bg-yellow-900/90 border-yellow-500/50 text-yellow-100",
+      });
+
+      setShowSampleDialog(false);
+      setSampledItems([]);
+      await fetchData();
+    } catch (error) {
+      toast({
+        title: "Failed to Add Items",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAddingSamples(false);
+    }
+  };
+
+  const toggleSampleItem = (index: number) => {
+    setSampledItems(prev => prev.map((item, i) => 
+      i === index ? { ...item, selected: !item.selected } : item
+    ));
+  };
+
+  const updateSampleTrueType = (index: number, trueType: string) => {
+    setSampledItems(prev => prev.map((item, i) => 
+      i === index ? { ...item, trueType } : item
+    ));
+  };
+
+  const selectAllSamples = (selected: boolean) => {
+    setSampledItems(prev => prev.map(item => ({ ...item, selected })));
+  };
+
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('en-US', {
       month: 'short',
@@ -334,6 +474,21 @@ export function GoldenSetManagementPanel() {
             <CardTitle className="text-lg">Golden Evaluation Set</CardTitle>
           </div>
           <div className="flex items-center gap-2">
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="gap-1"
+              onClick={() => sampleFromExisting(20)}
+              disabled={isSampling}
+            >
+              {isSampling ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Shuffle className="h-4 w-4" />
+              )}
+              Sample 20
+            </Button>
+            
             <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
               <DialogTrigger asChild>
                 <Button size="sm" variant="outline" className="gap-1">
@@ -430,6 +585,114 @@ export function GoldenSetManagementPanel() {
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setShowAddDialog(false)}>Cancel</Button>
                   <Button onClick={addItem}>Add to Golden Set</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            
+            {/* Sample from Existing Dialog */}
+            <Dialog open={showSampleDialog} onOpenChange={setShowSampleDialog}>
+              <DialogContent className="max-w-4xl max-h-[80vh]">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Shuffle className="h-5 w-5" />
+                    Sample from Existing Items
+                  </DialogTitle>
+                  <DialogDescription>
+                    {sampledItems.length} items sampled. Select items and assign their true type for the golden set.
+                  </DialogDescription>
+                </DialogHeader>
+                
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div className="flex items-center gap-2">
+                    <Checkbox 
+                      checked={sampledItems.every(i => i.selected)}
+                      onCheckedChange={(checked) => selectAllSamples(!!checked)}
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      {sampledItems.filter(i => i.selected).length} selected
+                    </span>
+                  </div>
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    onClick={() => sampleFromExisting(20)}
+                    disabled={isSampling}
+                  >
+                    {isSampling ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Shuffle className="h-4 w-4" />}
+                    Resample
+                  </Button>
+                </div>
+                
+                <ScrollArea className="h-[400px] pr-4">
+                  <div className="space-y-2">
+                    {sampledItems.map((item, index) => (
+                      <div 
+                        key={item.id} 
+                        className={cn(
+                          "p-3 rounded-lg border transition-colors",
+                          item.selected 
+                            ? "bg-primary/5 border-primary/30" 
+                            : "bg-muted/30 border-border opacity-60"
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <Checkbox 
+                            checked={item.selected}
+                            onCheckedChange={() => toggleSampleItem(index)}
+                            className="mt-1"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{item.subject}</p>
+                            {item.body && (
+                              <p className="text-xs text-muted-foreground truncate mt-0.5">
+                                {item.body.slice(0, 100)}...
+                              </p>
+                            )}
+                            <div className="flex items-center gap-2 mt-2">
+                              <Badge variant="outline" className="text-xs">
+                                Current: {item.type || 'unknown'}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">→</span>
+                              <Select 
+                                value={item.trueType} 
+                                onValueChange={(v) => updateSampleTrueType(index, v)}
+                              >
+                                <SelectTrigger className="h-7 w-40 text-xs">
+                                  <SelectValue placeholder="True type..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {GOVERNANCE_TYPES.map((type) => (
+                                    <SelectItem key={type} value={type} className="text-xs">
+                                      {type}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+                
+                <DialogFooter>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground mr-auto">
+                    <Info className="h-3.5 w-3.5" />
+                    Items without a true type assigned will be skipped
+                  </div>
+                  <Button variant="outline" onClick={() => setShowSampleDialog(false)}>Cancel</Button>
+                  <Button 
+                    onClick={addSampledItems} 
+                    disabled={isAddingSamples || sampledItems.filter(i => i.selected && i.trueType).length === 0}
+                  >
+                    {isAddingSamples ? (
+                      <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <Download className="h-4 w-4 mr-2" />
+                    )}
+                    Add {sampledItems.filter(i => i.selected && i.trueType).length} Items
+                  </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
