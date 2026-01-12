@@ -18,10 +18,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
 const CONTENT_CACHE_DIR = path.join(BASE_DATA_DIR, 'cache', 'post-content');
 const CONTENT_INDEX_FILE = path.join(CONTENT_CACHE_DIR, 'index.json');
 

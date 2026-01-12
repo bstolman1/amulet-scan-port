@@ -20,10 +20,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
 const GOLDEN_SET_DIR = path.join(BASE_DATA_DIR, 'cache', 'golden-set');
 const GOLDEN_SET_FILE = path.join(GOLDEN_SET_DIR, 'golden-items.json');
 const EVALUATION_HISTORY_FILE = path.join(GOLDEN_SET_DIR, 'evaluation-history.json');

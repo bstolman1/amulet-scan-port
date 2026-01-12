@@ -1,14 +1,13 @@
 import { Router } from 'express';
 import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
-import { join, dirname, basename as pathBasename } from 'path';
-import { fileURLToPath } from 'url';
+import { join, basename as pathBasename } from 'path';
 import db from '../duckdb/connection.js';
 import { getLastGapDetection } from '../engine/gap-detector.js';
 import { triggerGapDetection } from '../engine/worker.js';
 import { decodeFile, getFileType } from '../engine/decoder.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Use process.cwd() for Vitest/Vite SSR compatibility
+const __dirname = join(process.cwd(), 'server', 'api');
 
 const router = Router();
 

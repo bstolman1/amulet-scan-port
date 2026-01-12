@@ -6,7 +6,6 @@ import cors from 'cors';
 import cron from 'node-cron';
 import { spawn } from 'child_process';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import eventsRouter from './api/events.js';
 import updatesRouter from './api/updates.js';
 import partyRouter from './api/party.js';
@@ -26,8 +25,8 @@ import { getCacheStats } from './cache/stats-cache.js';
 import { startEngineWorker, getEngineStatus } from './engine/worker.js';
 import engineRouter from './engine/api.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Use process.cwd() for Vitest/Vite SSR compatibility
+const __dirname = path.join(process.cwd(), 'server');
 
 const app = express();
 const PORT = process.env.PORT || 3001;

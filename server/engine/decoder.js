@@ -7,15 +7,11 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { decompress } from '@mongodb-js/zstd';
 import protobuf from 'protobufjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Schema path relative to this file
-const SCHEMA_PATH = path.resolve(__dirname, '../../scripts/ingest/schema/ledger.proto');
+// Resolve schema path from project root for Vitest/Vite SSR compatibility
+const SCHEMA_PATH = path.resolve(process.cwd(), 'scripts', 'ingest', 'schema', 'ledger.proto');
 
 let cachedRoot = null;
 

@@ -14,12 +14,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { Worker } from 'worker_threads';
-import { fileURLToPath } from 'url';
 import { query, queryOne, DATA_PATH } from '../duckdb/connection.js';
 import { readBinaryFile, findBinaryFiles } from '../duckdb/binary-reader.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKER_SCRIPT = path.join(__dirname, 'template-index-worker.js');
+// Use process.cwd() for Vitest/Vite SSR compatibility
+const WORKER_SCRIPT = path.join(process.cwd(), 'server', 'engine', 'template-index-worker.js');
 
 // Worker pool size - default to CPU cores - 1, min 2, max 8
 const WORKER_POOL_SIZE = Math.min(8, Math.max(2, parseInt(process.env.TEMPLATE_INDEX_WORKERS) || os.cpus().length - 1));
