@@ -3791,6 +3791,208 @@ router.post('/learning-mode', (req, res) => {
   }
 });
 
+// ========== TEST AGAINST HISTORY ==========
+// Validate proposals against historical classifications to prevent drift
+router.post('/test-proposals', async (req, res) => {
+  const { proposedPatterns, sampleSize = 50 } = req.body;
+  
+  const cached = readCache();
+  const overrides = readOverrides();
+  
+  if (!cached?.lifecycleItems || cached.lifecycleItems.length === 0) {
+    return res.json({
+      success: false,
+      message: 'No historical data available for testing',
+    });
+  }
+  
+  // Get a sample of historical items
+  const allItems = cached.lifecycleItems || [];
+  const sampleItems = allItems
+    .filter(item => item.type && item.primaryId)
+    .slice(0, Math.min(sampleSize, allItems.length));
+  
+  // Load current patterns for comparison
+  const currentPatterns = getLearnedPatterns() || {};
+  
+  // Merge proposed patterns with current patterns (simulating what would happen)
+  const testPatterns = {
+    validatorKeywords: [...new Set([
+      ...(currentPatterns.validatorKeywords || []),
+      ...(proposedPatterns?.validatorKeywords || []),
+    ])],
+    featuredAppKeywords: [...new Set([
+      ...(currentPatterns.featuredAppKeywords || []),
+      ...(proposedPatterns?.featuredAppKeywords || []),
+    ])],
+    cipKeywords: [...new Set([
+      ...(currentPatterns.cipKeywords || []),
+      ...(proposedPatterns?.cipKeywords || []),
+    ])],
+    protocolUpgradeKeywords: [...new Set([
+      ...(currentPatterns.protocolUpgradeKeywords || []),
+      ...(proposedPatterns?.protocolUpgradeKeywords || []),
+    ])],
+    outcomeKeywords: [...new Set([
+      ...(currentPatterns.outcomeKeywords || []),
+      ...(proposedPatterns?.outcomeKeywords || []),
+    ])],
+    entityNameMappings: {
+      ...(currentPatterns.entityNameMappings || {}),
+      ...(proposedPatterns?.entityNameMappings || {}),
+    },
+  };
+  
+  // Test each item with current vs proposed patterns
+  const results = {
+    unchanged: [],
+    improved: [],
+    changed: [],
+    degraded: [],
+  };
+  
+  for (const item of sampleItems) {
+    const subject = item.primaryId || '';
+    const currentType = item.type;
+    
+    // Get the "true" type from overrides if available (human-verified)
+    const overrideKey = item.primaryId;
+    const trueType = overrides.itemOverrides?.[overrideKey]?.type || currentType;
+    
+    // Simulate classification with current patterns
+    const currentResult = simulateClassification(subject, currentPatterns);
+    
+    // Simulate classification with proposed patterns
+    const proposedResult = simulateClassification(subject, testPatterns);
+    
+    if (currentResult === proposedResult) {
+      results.unchanged.push({
+        id: item.primaryId,
+        subject: subject.slice(0, 80),
+        type: currentResult,
+      });
+    } else if (proposedResult === trueType && currentResult !== trueType) {
+      // Proposed result matches the verified type - improvement
+      results.improved.push({
+        id: item.primaryId,
+        subject: subject.slice(0, 80),
+        currentType: currentResult,
+        proposedType: proposedResult,
+        trueType,
+        reason: 'Proposed matches verified type',
+      });
+    } else if (currentResult === trueType && proposedResult !== trueType) {
+      // Current was correct, proposed would break it - degradation
+      results.degraded.push({
+        id: item.primaryId,
+        subject: subject.slice(0, 80),
+        currentType: currentResult,
+        proposedType: proposedResult,
+        trueType,
+        reason: 'Proposed would change correct classification',
+      });
+    } else {
+      // Changed but unclear if better or worse
+      results.changed.push({
+        id: item.primaryId,
+        subject: subject.slice(0, 80),
+        currentType: currentResult,
+        proposedType: proposedResult,
+      });
+    }
+  }
+  
+  // Calculate summary metrics
+  const total = sampleItems.length;
+  const summary = {
+    total,
+    unchanged: results.unchanged.length,
+    improved: results.improved.length,
+    changed: results.changed.length,
+    degraded: results.degraded.length,
+    unchangedPercent: ((results.unchanged.length / total) * 100).toFixed(1),
+    improvedPercent: ((results.improved.length / total) * 100).toFixed(1),
+    degradedPercent: ((results.degraded.length / total) * 100).toFixed(1),
+    safeToApply: results.degraded.length === 0,
+    recommendation: results.degraded.length === 0 
+      ? (results.improved.length > 0 ? 'Safe to apply - improvements detected' : 'Safe to apply - no regressions')
+      : `Caution: ${results.degraded.length} items would regress`,
+  };
+  
+  res.json({
+    success: true,
+    summary,
+    results: {
+      improved: results.improved.slice(0, 10),
+      degraded: results.degraded,
+      changed: results.changed.slice(0, 10),
+    },
+    testedPatterns: {
+      current: {
+        validator: currentPatterns.validatorKeywords?.length || 0,
+        featuredApp: currentPatterns.featuredAppKeywords?.length || 0,
+        cip: currentPatterns.cipKeywords?.length || 0,
+      },
+      proposed: {
+        validator: testPatterns.validatorKeywords?.length || 0,
+        featuredApp: testPatterns.featuredAppKeywords?.length || 0,
+        cip: testPatterns.cipKeywords?.length || 0,
+      },
+    },
+  });
+});
+
+// Simulate classification based on patterns (simplified version of correlateTopics logic)
+function simulateClassification(subject, patterns) {
+  if (!subject) return 'other';
+  const textLower = subject.toLowerCase();
+  
+  // Check for CIP pattern
+  if (/CIP\s*[-#]?\s*\d+/i.test(subject) || /^\s*0*\d{4}\s+/.test(subject)) {
+    return 'cip';
+  }
+  
+  // Check learned keywords
+  if (patterns?.validatorKeywords?.some(kw => textLower.includes(kw.toLowerCase()))) {
+    return 'validator';
+  }
+  if (patterns?.featuredAppKeywords?.some(kw => textLower.includes(kw.toLowerCase()))) {
+    return 'featured-app';
+  }
+  if (patterns?.cipKeywords?.some(kw => textLower.includes(kw.toLowerCase()))) {
+    return 'cip';
+  }
+  if (patterns?.protocolUpgradeKeywords?.some(kw => textLower.includes(kw.toLowerCase()))) {
+    return 'protocol-upgrade';
+  }
+  if (patterns?.outcomeKeywords?.some(kw => textLower.includes(kw.toLowerCase()))) {
+    return 'outcome';
+  }
+  
+  // Check entity mappings
+  for (const [entity, type] of Object.entries(patterns?.entityNameMappings || {})) {
+    if (textLower.includes(entity.toLowerCase())) {
+      return type;
+    }
+  }
+  
+  // Built-in patterns
+  if (/validator\s*(?:approved|operator|onboarding|license)|super\s*validator|node\s+as\s+a\s+service/i.test(subject)) {
+    return 'validator';
+  }
+  if (/featured\s*app|featured\s*application|app\s+(?:listing|request|tokenomics)/i.test(subject)) {
+    return 'featured-app';
+  }
+  if (/splice\s+\d|upgrade|migration/i.test(subject)) {
+    return 'protocol-upgrade';
+  }
+  if (/tokenomics\s+outcome|monthly\s+report/i.test(subject)) {
+    return 'outcome';
+  }
+  
+  return 'other';
+}
+
 // Generate learned patterns from corrections
 function generateLearnedPatterns(corrections, cached) {
   const patterns = {

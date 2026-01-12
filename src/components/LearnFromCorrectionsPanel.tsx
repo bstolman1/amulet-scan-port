@@ -26,6 +26,11 @@ import {
   GitBranch,
   Target,
   Info,
+  FlaskConical,
+  ArrowRight,
+  Check,
+  X,
+  Minus,
 } from "lucide-react";
 
 interface ProposedImprovement {
@@ -97,17 +102,39 @@ interface ProposalDecision {
   decidedAt?: string;
 }
 
+interface TestResult {
+  summary: {
+    total: number;
+    unchanged: number;
+    improved: number;
+    changed: number;
+    degraded: number;
+    unchangedPercent: string;
+    improvedPercent: string;
+    degradedPercent: string;
+    safeToApply: boolean;
+    recommendation: string;
+  };
+  results: {
+    improved: Array<{ id: string; subject: string; currentType: string; proposedType: string; trueType: string }>;
+    degraded: Array<{ id: string; subject: string; currentType: string; proposedType: string; trueType: string }>;
+    changed: Array<{ id: string; subject: string; currentType: string; proposedType: string }>;
+  };
+}
+
 export function LearnFromCorrectionsPanel() {
   const { toast } = useToast();
   const [isGenerating, setIsGenerating] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [isTogglingMode, setIsTogglingMode] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
   const [proposals, setProposals] = useState<ProposedImprovement[]>([]);
   const [decisions, setDecisions] = useState<Record<string, ProposalDecision>>({});
   const [currentPatterns, setCurrentPatterns] = useState<LearnedPatterns | null>(null);
   const [correctionsCount, setCorrectionsCount] = useState(0);
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
   const [learningMode, setLearningMode] = useState(true);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
 
   // Fetch current learned patterns status on mount
   useEffect(() => {
@@ -272,7 +299,74 @@ export function LearnFromCorrectionsPanel() {
     setDecisions(prev => ({ ...prev, ...updates }));
   };
 
-  // Apply accepted proposals
+  // Test proposals against historical data
+  const testProposals = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+    
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      
+      // Collect keywords from accepted proposals
+      const acceptedProposals = proposals.filter(p => decisions[p.id]?.decision === 'accept');
+      
+      // Build proposed patterns from accepted proposals
+      const proposedPatterns = {
+        validatorKeywords: [] as string[],
+        featuredAppKeywords: [] as string[],
+        cipKeywords: [] as string[],
+        protocolUpgradeKeywords: [] as string[],
+        outcomeKeywords: [] as string[],
+        entityNameMappings: {} as Record<string, string>,
+      };
+      
+      for (const proposal of acceptedProposals) {
+        if (proposal.codeChange?.target && proposal.keywords) {
+          const target = proposal.codeChange.target.toLowerCase();
+          if (target.includes('validator')) {
+            proposedPatterns.validatorKeywords.push(...proposal.keywords);
+          } else if (target.includes('featured') || target.includes('app')) {
+            proposedPatterns.featuredAppKeywords.push(...proposal.keywords);
+          } else if (target.includes('cip')) {
+            proposedPatterns.cipKeywords.push(...proposal.keywords);
+          } else if (target.includes('protocol') || target.includes('upgrade')) {
+            proposedPatterns.protocolUpgradeKeywords.push(...proposal.keywords);
+          } else if (target.includes('outcome')) {
+            proposedPatterns.outcomeKeywords.push(...proposal.keywords);
+          }
+        }
+      }
+      
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/test-proposals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proposedPatterns,
+          sampleSize: 100,
+        }),
+      });
+      
+      if (!response.ok) throw new Error('Failed to test proposals');
+      const result = await response.json();
+      
+      setTestResult(result);
+      
+      toast({
+        title: result.summary.safeToApply ? "Test Passed" : "Test Warning",
+        description: result.summary.recommendation,
+        variant: result.summary.safeToApply ? "default" : "destructive",
+      });
+    } catch (error) {
+      console.error('Error testing proposals:', error);
+      toast({
+        title: "Test Failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
   const applyAccepted = async () => {
     const acceptedIds = Object.entries(decisions)
       .filter(([, d]) => d.decision === 'accept')
@@ -501,6 +595,21 @@ export function LearnFromCorrectionsPanel() {
                   Accept High Priority
                 </Button>
                 <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={testProposals}
+                  disabled={acceptedCount === 0 || isTesting}
+                  className="gap-1"
+                  title="Test accepted proposals against historical data before applying"
+                >
+                  {isTesting ? (
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <FlaskConical className="h-3 w-3" />
+                  )}
+                  Test
+                </Button>
+                <Button
                   onClick={applyAccepted}
                   disabled={acceptedCount === 0 || isApplying}
                   size="sm"
@@ -515,6 +624,97 @@ export function LearnFromCorrectionsPanel() {
                 </Button>
               </div>
             </div>
+            
+            {/* Test Results */}
+            {testResult && (
+              <div className={cn(
+                "p-3 rounded-lg border",
+                testResult.summary.safeToApply 
+                  ? "bg-green-500/10 border-green-500/30" 
+                  : "bg-red-500/10 border-red-500/30"
+              )}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <FlaskConical className="h-4 w-4" />
+                    Test Results
+                  </span>
+                  <Badge 
+                    variant="outline" 
+                    className={cn(
+                      "text-xs",
+                      testResult.summary.safeToApply 
+                        ? "border-green-500/40 text-green-400" 
+                        : "border-red-500/40 text-red-400"
+                    )}
+                  >
+                    {testResult.summary.safeToApply ? '✓ Safe to Apply' : '⚠ Review Required'}
+                  </Badge>
+                </div>
+                
+                {/* Summary Stats */}
+                <div className="grid grid-cols-4 gap-2 text-xs mb-3">
+                  <div className="flex items-center gap-1 text-muted-foreground">
+                    <Minus className="h-3 w-3" />
+                    {testResult.summary.unchanged} unchanged ({testResult.summary.unchangedPercent}%)
+                  </div>
+                  <div className="flex items-center gap-1 text-green-400">
+                    <TrendingUp className="h-3 w-3" />
+                    {testResult.summary.improved} improved ({testResult.summary.improvedPercent}%)
+                  </div>
+                  <div className="flex items-center gap-1 text-yellow-400">
+                    <ArrowRight className="h-3 w-3" />
+                    {testResult.summary.changed} changed
+                  </div>
+                  <div className="flex items-center gap-1 text-red-400">
+                    <X className="h-3 w-3" />
+                    {testResult.summary.degraded} degraded ({testResult.summary.degradedPercent}%)
+                  </div>
+                </div>
+                
+                <p className="text-xs text-muted-foreground">{testResult.summary.recommendation}</p>
+                
+                {/* Degraded Items (show all) */}
+                {testResult.results.degraded.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-border/30">
+                    <div className="text-xs font-medium text-red-400 mb-1 flex items-center gap-1">
+                      <AlertTriangle className="h-3 w-3" />
+                      Degraded Classifications (Would Break)
+                    </div>
+                    <ul className="text-xs space-y-1">
+                      {testResult.results.degraded.map((item, i) => (
+                        <li key={i} className="flex items-center gap-2 text-red-300">
+                          <span className="truncate max-w-[200px]">{item.subject}</span>
+                          <Badge variant="outline" className="text-[10px]">{item.currentType}</Badge>
+                          <ArrowRight className="h-2.5 w-2.5" />
+                          <Badge variant="outline" className="text-[10px] text-red-400">{item.proposedType}</Badge>
+                          <span className="text-muted-foreground">(correct: {item.trueType})</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {/* Improved Items (show sample) */}
+                {testResult.results.improved.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-border/30">
+                    <div className="text-xs font-medium text-green-400 mb-1 flex items-center gap-1">
+                      <Check className="h-3 w-3" />
+                      Improved Classifications ({testResult.results.improved.length} total)
+                    </div>
+                    <ul className="text-xs space-y-1">
+                      {testResult.results.improved.slice(0, 3).map((item, i) => (
+                        <li key={i} className="flex items-center gap-2 text-green-300">
+                          <span className="truncate max-w-[200px]">{item.subject}</span>
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">{item.currentType}</Badge>
+                          <ArrowRight className="h-2.5 w-2.5" />
+                          <Badge variant="outline" className="text-[10px] text-green-400">{item.proposedType}</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             
             {/* Proposal List */}
             <ScrollArea className="h-[400px]">
