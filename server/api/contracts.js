@@ -23,7 +23,7 @@ router.get('/:contractId', async (req, res) => {
       SELECT *
       FROM ${getUpdatesSource()}
       WHERE contract_id = '${contractId}'
-      ORDER BY timestamp ASC
+      ORDER BY effective_at ASC
     `;
     
     const rows = await db.safeQuery(sql);
@@ -42,7 +42,7 @@ router.get('/active/by-template/:templateSuffix', async (req, res) => {
     // Find contracts that have been created but not archived
     const sql = `
       WITH created AS (
-        SELECT contract_id, template_id, timestamp as created_at, payload
+        SELECT contract_id, template_id, effective_at as created_at, payload
         FROM ${getUpdatesSource()}
         WHERE event_type = 'created' AND template_id LIKE '%${templateSuffix}'
       ),

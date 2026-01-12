@@ -212,8 +212,8 @@ router.get('/overview', async (req, res) => {
         COUNT(*) as total_events,
         COUNT(DISTINCT contract_id) as unique_contracts,
         COUNT(DISTINCT template_id) as unique_templates,
-        MIN(timestamp) as earliest_event,
-        MAX(timestamp) as latest_event
+        MIN(effective_at) as earliest_event,
+        MAX(effective_at) as latest_event
       FROM ${getEventsSource()}
     `;
     
@@ -273,12 +273,12 @@ router.get('/daily', async (req, res) => {
     
     const sql = `
       SELECT 
-        DATE_TRUNC('day', timestamp) as date,
+        DATE_TRUNC('day', effective_at) as date,
         COUNT(*) as event_count,
         COUNT(DISTINCT contract_id) as contract_count
       FROM ${getEventsSource()}
-      WHERE timestamp >= NOW() - INTERVAL '${days} days'
-      GROUP BY DATE_TRUNC('day', timestamp)
+      WHERE effective_at >= NOW() - INTERVAL '${days} days'
+      GROUP BY DATE_TRUNC('day', effective_at)
       ORDER BY date DESC
     `;
     
@@ -404,8 +404,8 @@ router.get('/by-template', async (req, res) => {
         template_id,
         COUNT(*) as event_count,
         COUNT(DISTINCT contract_id) as contract_count,
-        MIN(timestamp) as first_seen,
-        MAX(timestamp) as last_seen
+        MIN(effective_at) as first_seen,
+        MAX(effective_at) as last_seen
       FROM ${getEventsSource()}
       WHERE template_id IS NOT NULL
       GROUP BY template_id
@@ -458,11 +458,11 @@ router.get('/hourly', async (req, res) => {
     
     const sql = `
       SELECT 
-        DATE_TRUNC('hour', timestamp) as hour,
+        DATE_TRUNC('hour', effective_at) as hour,
         COUNT(*) as event_count
       FROM ${getEventsSource()}
-      WHERE timestamp >= NOW() - INTERVAL '24 hours'
-      GROUP BY DATE_TRUNC('hour', timestamp)
+      WHERE effective_at >= NOW() - INTERVAL '24 hours'
+      GROUP BY DATE_TRUNC('hour', effective_at)
       ORDER BY hour DESC
     `;
     
@@ -511,11 +511,11 @@ router.get('/burn', async (req, res) => {
     
     const sql = `
       SELECT 
-        DATE_TRUNC('day', timestamp) as date,
+        DATE_TRUNC('day', effective_at) as date,
         SUM(CAST(json_extract(payload, '$.amount.amount') AS DOUBLE)) as burn_amount
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%BurnMintSummary%'
-      GROUP BY DATE_TRUNC('day', timestamp)
+      GROUP BY DATE_TRUNC('day', effective_at)
       ORDER BY date DESC
       LIMIT 30
     `;
