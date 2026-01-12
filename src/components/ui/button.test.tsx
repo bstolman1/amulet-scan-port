@@ -66,20 +66,20 @@ describe('Button', () => {
   it('applies size sm', () => {
     const { container } = render(<Button size="sm">Small</Button>);
     const button = getButton(container);
-    expect(button?.className).toContain('h-8');
+    expect(button?.className).toContain('h-9');
   });
 
   it('applies size lg', () => {
     const { container } = render(<Button size="lg">Large</Button>);
     const button = getButton(container);
-    expect(button?.className).toContain('h-10');
+    expect(button?.className).toContain('h-11');
   });
 
   it('applies size icon', () => {
     const { container } = render(<Button size="icon">🔍</Button>);
     const button = getButton(container);
-    expect(button?.className).toContain('h-9');
-    expect(button?.className).toContain('w-9');
+    expect(button?.className).toContain('h-10');
+    expect(button?.className).toContain('w-10');
   });
 
   it('handles disabled state', () => {

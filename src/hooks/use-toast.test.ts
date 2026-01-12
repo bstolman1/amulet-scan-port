@@ -76,21 +76,21 @@ describe('useToast', () => {
       });
     });
 
+    // This project intentionally limits visible toasts to 1.
+    // The latest toast should replace the previous one.
     const toasts = result.current.toasts;
-    expect(toasts.length).toBe(2);
-    expect(toasts.find(t => t.title === 'Destructive Toast')?.variant).toBe('destructive');
+    expect(toasts.length).toBe(1);
+    expect(toasts[0].title).toBe('Destructive Toast');
+    expect(toasts[0].variant).toBe('destructive');
   });
 
   it('should generate unique IDs for each toast', () => {
-    const { result } = renderHook(() => useToast());
+    // ID generation should be unique even if the UI limits visible toasts.
+    const t1 = toast({ title: 'Toast 1' });
+    const t2 = toast({ title: 'Toast 2' });
+    const t3 = toast({ title: 'Toast 3' });
 
-    act(() => {
-      result.current.toast({ title: 'Toast 1' });
-      result.current.toast({ title: 'Toast 2' });
-      result.current.toast({ title: 'Toast 3' });
-    });
-
-    const ids = result.current.toasts.map(t => t.id);
+    const ids = [t1.id, t2.id, t3.id];
     const uniqueIds = new Set(ids);
     expect(uniqueIds.size).toBe(ids.length);
   });

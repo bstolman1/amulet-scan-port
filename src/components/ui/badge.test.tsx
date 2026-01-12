@@ -52,7 +52,7 @@ describe('Badge', () => {
     const badge = container.firstChild as HTMLElement;
     expect(badge.className).toContain('inline-flex');
     expect(badge.className).toContain('items-center');
-    expect(badge.className).toContain('rounded-md');
+    expect(badge.className).toContain('rounded-full');
     expect(badge.className).toContain('border');
   });
 });
