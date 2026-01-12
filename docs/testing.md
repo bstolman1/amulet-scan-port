@@ -39,9 +39,9 @@ npm test -- src/
 │           └── badge.test.tsx        # Badge component tests
 └── server/
     ├── api/
-    │   ├── stats.test.js             # Stats API integration tests
-    │   ├── events.test.js            # Events API integration tests
-    │   ├── search.test.js            # Search API integration tests
+    │   ├── stats.test.js             # Stats API unit tests
+    │   ├── events.test.js            # Events API unit tests
+    │   ├── search.test.js            # Search API unit tests
     │   ├── rewards.test.js           # Rewards API tests
     │   ├── party.test.js             # Party API tests
     │   └── governance-lifecycle.test.js  # Governance lifecycle tests
@@ -52,10 +52,21 @@ npm test -- src/
     ├── lib/
     │   └── sql-sanitize.test.js      # SQL injection prevention tests
     └── test/
-        └── fixtures/
-            ├── mock-data.js          # Mock data fixtures
-            ├── mock-db.js            # Mock database connection
-            └── mock-binary-reader.js # Mock binary reader
+        ├── app.js                    # Test app factory for integration tests
+        ├── fixtures/
+        │   ├── mock-data.js          # Mock data fixtures
+        │   ├── mock-db.js            # Mock database connection
+        │   └── mock-binary-reader.js # Mock binary reader
+        ├── integration/              # Supertest integration tests
+        │   ├── health.integration.test.js    # Health endpoint tests
+        │   ├── search.integration.test.js    # Search API integration tests
+        │   ├── events.integration.test.js    # Events API integration tests
+        │   ├── stats.integration.test.js     # Stats API integration tests
+        │   └── party.integration.test.js     # Party API integration tests
+        └── e2e/                      # End-to-end tests
+            ├── governance-flow.e2e.test.js   # Governance workflow E2E
+            ├── security.e2e.test.js          # Security attack vector tests
+            └── data-integrity.e2e.test.js    # Data consistency E2E tests
 ```
 
 ## Test Categories
@@ -238,6 +249,68 @@ After each CI run, coverage reports are available as downloadable artifacts:
 ### PR Coverage Comments
 
 PRs automatically receive a comment with coverage metrics (lines, statements, functions, branches).
+
+## Integration Tests (Supertest)
+
+Integration tests use **supertest** to test actual HTTP endpoints with the Express app:
+
+```javascript
+import { describe, it, expect, beforeAll } from 'vitest';
+import request from 'supertest';
+import { createTestApp } from '../app.js';
+
+describe('API Integration', () => {
+  let app;
+  
+  beforeAll(() => {
+    app = createTestApp();
+  });
+  
+  it('should return health status', async () => {
+    const response = await request(app)
+      .get('/health')
+      .expect('Content-Type', /json/)
+      .expect(200);
+    
+    expect(response.body.status).toBe('ok');
+  });
+});
+```
+
+### Running Integration Tests
+
+```bash
+# Run all integration tests
+npm test -- server/test/integration/
+
+# Run specific integration test
+npm test -- server/test/integration/search.integration.test.js
+```
+
+## E2E Tests
+
+End-to-end tests simulate complete user workflows:
+
+1. **governance-flow.e2e.test.js**: Tests governance query workflows
+2. **security.e2e.test.js**: Tests attack vectors (SQL injection, parameter tampering)
+3. **data-integrity.e2e.test.js**: Tests response consistency and pagination
+
+### Running E2E Tests
+
+```bash
+# Run all E2E tests
+npm test -- server/test/e2e/
+
+# Run security E2E tests
+npm test -- server/test/e2e/security.e2e.test.js
+```
+
+### E2E Test Guidelines
+
+- E2E tests accept 200 or 500 responses (graceful handling when no data)
+- Focus on testing complete workflows, not individual functions
+- Security tests verify rejection of malicious input
+- Data integrity tests verify response structure consistency
 
 ## API Integration Tests
 
