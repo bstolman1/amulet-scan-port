@@ -4,8 +4,8 @@ import path from 'path';
 export default defineConfig({
   test: {
     globals: true,
-    // Default to node for server tests (duckdb, fs, fileURLToPath, etc.)
-    environment: 'node',
+    // Default to jsdom for React component tests
+    environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: [
       'src/**/*.{test,spec}.{js,ts,tsx}',
@@ -28,23 +28,17 @@ export default defineConfig({
         '**/node_modules/**',
       ],
     },
-    // Frontend tests need jsdom for React Testing Library
+    // Server tests need node environment for DuckDB, fs, etc.
     environmentMatchGlobs: [
-      ['src/**/*.test.ts', 'jsdom'],
-      ['src/**/*.test.tsx', 'jsdom'],
+      ['server/**/*.test.js', 'node'],
+      ['server/**/*.spec.js', 'node'],
     ],
+    // Increase timeout for slow database queries
+    testTimeout: 15000,
   },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
-  },
-  // SSR settings for server-side module resolution
-  ssr: {
-    noExternal: ['supertest'],
-  },
-  // Optimizations for node modules
-  optimizeDeps: {
-    include: ['supertest'],
   },
 });
