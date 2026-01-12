@@ -302,36 +302,54 @@ export function GoldenSetManagementPanel() {
     setIsSampling(true);
     try {
       const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/proposals?limit=200`);
+      // Try multiple endpoints in order of preference
+      const endpoints = [
+        '/api/governance-lifecycle/items',
+        '/api/events/governance',
+        '/api/events/governance/combined',
+      ];
       
-      if (response.ok) {
-        const data = await response.json();
-        const items = data.items || data.proposals || data || [];
-        
-        // Filter out items already in golden set
-        const existingIds = new Set(fullSet?.items.map(i => i.id) || []);
-        const available = items.filter((item: any) => !existingIds.has(item.id || item.contractId));
-        
-        // Randomly sample
-        const shuffled = available.sort(() => Math.random() - 0.5);
-        const sampled = shuffled.slice(0, count).map((item: any) => ({
-          id: item.id || item.contractId || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          subject: item.subject || item.title || item.payload?.action?.summary || 'Unknown',
-          body: item.body || item.description || item.payload?.action?.url || '',
-          type: item.type || item.classificationType || 'unknown',
-          selected: true,
-          trueType: item.type || item.classificationType || '',
-        }));
-        
-        setSampledItems(sampled);
-        setShowSampleDialog(true);
-      } else {
+      let items: any[] = [];
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(`${baseUrl}${endpoint}?limit=200`);
+          if (response.ok) {
+            const data = await response.json();
+            items = data.items || data.events || data.proposals || data || [];
+            if (items.length > 0) break;
+          }
+        } catch {
+          continue;
+        }
+      }
+      
+      if (items.length === 0) {
         toast({
-          title: "Failed to Sample",
-          description: "Could not fetch governance items",
+          title: "No Items Found",
+          description: "No governance items available to sample from",
           variant: "destructive",
         });
+        setIsSampling(false);
+        return;
       }
+      
+      // Filter out items already in golden set
+      const existingIds = new Set(fullSet?.items.map(i => i.id) || []);
+      const available = items.filter((item: any) => !existingIds.has(item.id || item.contractId));
+      
+      // Randomly sample
+      const shuffled = available.sort(() => Math.random() - 0.5);
+      const sampled = shuffled.slice(0, count).map((item: any) => ({
+        id: item.id || item.contractId || item.semanticKey || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        subject: item.subject || item.title || item.summary || item.payload?.action?.summary || 'Unknown',
+        body: item.body || item.description || item.url || item.payload?.action?.url || '',
+        type: item.type || item.classificationType || item.actionType || 'unknown',
+        selected: true,
+        trueType: item.type || item.classificationType || '',
+      }));
+        
+      setSampledItems(sampled);
+      setShowSampleDialog(true);
     } catch (error) {
       toast({
         title: "Failed to Sample",
