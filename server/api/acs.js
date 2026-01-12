@@ -882,7 +882,7 @@ router.get('/templates/search', async (req, res) => {
     ]);
 
     // Use escapeLikePattern for safe LIKE queries
-    const like = (col, v) => `${col} LIKE '%${escapeLikePattern(v)}%' ESCAPE '\\\\'`;
+    const like = (col, v) => `${col} LIKE '%${escapeLikePattern(v)}%' ESCAPE '\\'`;
     const where = [...variants]
       .flatMap((v) => [
         like('tid', v),
@@ -1037,10 +1037,10 @@ router.get('/contracts', async (req, res) => {
       
       // Match full qualified names (ending with :EntityName or .EntityName or _EntityName)
       if (escapedModule && escapedEntity) {
-        likeClauses.push(`template_id ILIKE '%${escapedModule}.${escapedEntity}' ESCAPE '\\\\'`);
-        likeClauses.push(`template_id ILIKE '%${escapedModule}:${escapedEntity}' ESCAPE '\\\\'`);
-        likeClauses.push(`template_id ILIKE '%.${escapedModule}:${escapedEntity}' ESCAPE '\\\\'`);
-        likeClauses.push(`template_id ILIKE '%:${escapedModule}:${escapedEntity}' ESCAPE '\\\\'`);
+        likeClauses.push(`template_id ILIKE '%${escapedModule}.${escapedEntity}' ESCAPE '\\'`);
+        likeClauses.push(`template_id ILIKE '%${escapedModule}:${escapedEntity}' ESCAPE '\\'`);
+        likeClauses.push(`template_id ILIKE '%.${escapedModule}:${escapedEntity}' ESCAPE '\\'`);
+        likeClauses.push(`template_id ILIKE '%:${escapedModule}:${escapedEntity}' ESCAPE '\\'`);
       }
       
       // Match by entity_name column exactly (case-insensitive)
@@ -1048,7 +1048,7 @@ router.get('/contracts', async (req, res) => {
       
       // Match by module_name + entity_name if both available
       if (escapedModule) {
-        likeClauses.push(`(LOWER(module_name) ILIKE '%${escapedModule}' ESCAPE '\\\\' AND LOWER(entity_name) = LOWER('${escapeString(entityName)}'))`);
+        likeClauses.push(`(LOWER(module_name) ILIKE '%${escapedModule}' ESCAPE '\\' AND LOWER(entity_name) = LOWER('${escapeString(entityName)}'))`);
       }
 
       whereClause = `(${likeClauses.join(' OR ')})`;
@@ -1266,7 +1266,7 @@ router.get('/rich-list', async (req, res) => {
         GROUP BY owner
       )
       SELECT * FROM aggregated
-      ${search && !containsDangerousPatterns(search) ? `WHERE owner ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'` : ''}
+      ${search && !containsDangerousPatterns(search) ? `WHERE owner ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'` : ''}
       ORDER BY total_balance DESC
       LIMIT ${limit}
     `;
@@ -1441,9 +1441,9 @@ router.get('/allocations', async (req, res) => {
       FROM ${acsSource}
       WHERE (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
         ${search && !containsDangerousPatterns(search) ? `AND (
-          json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
-          OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
-          OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
+          json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'
+          OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'
+          OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'
         )` : ''}
       ORDER BY amount DESC
       LIMIT ${limit} OFFSET ${offset}
@@ -1464,9 +1464,9 @@ router.get('/allocations', async (req, res) => {
         FROM ${acsSource}
         WHERE (entity_name = 'AmuletAllocation' OR template_id LIKE '%:AmuletAllocation:%' OR template_id LIKE '%:AmuletAllocation')
           ${search && !containsDangerousPatterns(search) ? `AND (
-            json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
-            OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
-            OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\\\'
+            json_extract_string(payload, '$.allocation.settlement.executor') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'
+            OR json_extract_string(payload, '$.allocation.transferLeg.sender') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'
+            OR json_extract_string(payload, '$.allocation.transferLeg.receiver') ILIKE '%${escapeLikePattern(search)}%' ESCAPE '\\'
           )` : ''}
       `;
 
@@ -2175,7 +2175,7 @@ router.get('/aggregate', async (req, res) => {
         SELECT 
           ${amountField} as amount
         FROM ${acsSource}
-        WHERE template_id LIKE '%${escapeLikePattern(sanitizedTemplate)}%' ESCAPE '\\\\'
+        WHERE template_id LIKE '%${escapeLikePattern(sanitizedTemplate)}%' ESCAPE '\\'
       )
       SELECT 
         SUM(amount) as sum,
