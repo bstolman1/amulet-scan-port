@@ -315,7 +315,14 @@ export function GoldenSetManagementPanel() {
           const response = await fetch(`${baseUrl}${endpoint}?limit=200`);
           if (response.ok) {
             const data = await response.json();
-            items = data.items || data.events || data.proposals || data || [];
+            // Handle various response structures - ensure we get an array
+            let extracted = data.items || data.events || data.proposals || data;
+            if (Array.isArray(extracted)) {
+              items = extracted;
+            } else if (extracted && typeof extracted === 'object') {
+              // Maybe it's an object with items as values
+              items = Object.values(extracted).filter(v => v && typeof v === 'object');
+            }
             if (items.length > 0) break;
           }
         } catch {
