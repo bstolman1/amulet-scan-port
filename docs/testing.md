@@ -38,8 +38,17 @@ npm test -- src/
 │           ├── card.test.tsx         # Card component tests
 │           └── badge.test.tsx        # Badge component tests
 └── server/
-    └── lib/
-        └── sql-sanitize.test.js      # SQL injection prevention tests
+    ├── api/
+    │   ├── stats.test.js             # Stats API integration tests
+    │   ├── events.test.js            # Events API integration tests
+    │   └── search.test.js            # Search API integration tests
+    ├── lib/
+    │   └── sql-sanitize.test.js      # SQL injection prevention tests
+    └── test/
+        └── fixtures/
+            ├── mock-data.js          # Mock data fixtures
+            ├── mock-db.js            # Mock database connection
+            └── mock-binary-reader.js # Mock binary reader
 ```
 
 ## Test Categories
@@ -188,3 +197,54 @@ vi.mock('./my-module', () => ({
 6. **Mock external dependencies**: API calls, timers, random values
 
 7. **Security tests are mandatory**: All SQL-related code must have injection tests
+
+## CI/CD Integration
+
+Tests run automatically on every PR via GitHub Actions (`.github/workflows/test.yml`):
+
+1. **Test job**: Runs `vitest run --coverage` and uploads coverage artifacts
+2. **Lint job**: Runs ESLint checks
+3. **Build job**: Verifies the project builds successfully
+
+### Coverage Artifacts
+
+After each CI run, coverage reports are available as downloadable artifacts:
+- Download from the Actions tab → Select workflow run → Artifacts section
+
+### PR Coverage Comments
+
+PRs automatically receive a comment with coverage metrics (lines, statements, functions, branches).
+
+## API Integration Tests
+
+The server API tests use mocked dependencies to test endpoint logic without a real database:
+
+```javascript
+// Example: Mock database in test
+vi.mock('../duckdb/connection.js', () => ({
+  default: {
+    safeQuery: vi.fn().mockResolvedValue([{ count: 100n }]),
+    hasFileType: vi.fn().mockReturnValue(false),
+  },
+}));
+```
+
+### Fixtures
+
+Mock data and helpers are in `server/test/fixtures/`:
+
+- **mock-data.js**: Sample events, governance data, stats responses
+- **mock-db.js**: Stubbed database connection
+- **mock-binary-reader.js**: Stubbed binary file reader
+
+### Running API Tests
+
+```bash
+# Run all server tests
+npm test -- server/
+
+# Run specific API tests
+npm test -- server/api/stats.test.js
+npm test -- server/api/events.test.js
+npm test -- server/api/search.test.js
+```
