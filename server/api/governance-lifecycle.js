@@ -3380,128 +3380,125 @@ function generateImprovementSuggestions(analysis) {
       // === RULE-BASED PATTERN SUGGESTIONS (governance-lifecycle.js) ===
       
       if (corrType === 'validator' && origType !== 'validator') {
-        const newKeywords = filterNewKeywords(keywords, currentPatterns?.validatorKeywords, ['validator', 'operator', 'node', 'the', 'and', 'for']);
-        if (newKeywords.length > 0) {
-          suggestions.push({
-            file: 'governance-lifecycle.js',
-            location: 'extractIdentifiers/isValidator regex',
-            type: 'add_keyword',
-            priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
-            description: `Add keywords to validator detection: ${newKeywords.slice(0, 3).join(', ')}`,
-            keywords: newKeywords,
-            codeChange: {
-              target: 'VALIDATOR_KEYWORDS',
-              action: 'add',
-              values: newKeywords,
-            },
-            examples: pattern.examples,
-            reason: `${pattern.transitionCount} items misclassified as ${origType} were actually validators`,
-            confidence,
-            scope,
-            provenance,
-            learningLayer: 'pattern', // pattern | instructional
-          });
-        }
+        // Only exclude the most generic words - keep specific validator terms
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.validatorKeywords, ['validator', 'operator']);
+        // Always suggest if we have patterns, even if keyword filtering is aggressive
+        const keywordsToUse = newKeywords.length > 0 ? newKeywords : keywords.slice(0, 5);
+        suggestions.push({
+          file: 'governance-lifecycle.js',
+          location: 'extractIdentifiers/isValidator regex',
+          type: 'add_keyword',
+          priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
+          description: `Add keywords to validator detection: ${keywordsToUse.slice(0, 3).join(', ')}`,
+          keywords: keywordsToUse,
+          codeChange: {
+            target: 'VALIDATOR_KEYWORDS',
+            action: 'add',
+            values: keywordsToUse,
+          },
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items misclassified as ${origType} were actually validators`,
+          confidence,
+          scope,
+          provenance,
+          learningLayer: 'pattern', // pattern | instructional
+        });
       }
       
       if (corrType === 'featured-app' && origType !== 'featured-app') {
-        const newKeywords = filterNewKeywords(keywords, currentPatterns?.featuredAppKeywords, ['featured', 'app', 'application', 'the', 'and', 'for']);
-        if (newKeywords.length > 0) {
-          suggestions.push({
-            file: 'governance-lifecycle.js',
-            location: 'extractIdentifiers/isFeaturedApp regex',
-            type: 'add_keyword',
-            priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
-            description: `Add keywords to featured-app detection: ${newKeywords.slice(0, 3).join(', ')}`,
-            keywords: newKeywords,
-            codeChange: {
-              target: 'FEATURED_APP_KEYWORDS',
-              action: 'add',
-              values: newKeywords,
-            },
-            examples: pattern.examples,
-            reason: `${pattern.transitionCount} items misclassified as ${origType} were actually featured apps`,
-            confidence,
-            scope,
-            provenance,
-            learningLayer: 'pattern',
-          });
-        }
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.featuredAppKeywords, ['featured', 'app', 'application']);
+        const keywordsToUse = newKeywords.length > 0 ? newKeywords : keywords.slice(0, 5);
+        suggestions.push({
+          file: 'governance-lifecycle.js',
+          location: 'extractIdentifiers/isFeaturedApp regex',
+          type: 'add_keyword',
+          priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
+          description: `Add keywords to featured-app detection: ${keywordsToUse.slice(0, 3).join(', ')}`,
+          keywords: keywordsToUse,
+          codeChange: {
+            target: 'FEATURED_APP_KEYWORDS',
+            action: 'add',
+            values: keywordsToUse,
+          },
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items misclassified as ${origType} were actually featured apps`,
+          confidence,
+          scope,
+          provenance,
+          learningLayer: 'pattern',
+        });
       }
       
       if (corrType === 'cip' && origType !== 'cip') {
-        const newKeywords = filterNewKeywords(keywords, currentPatterns?.cipKeywords, ['cip', 'proposal', 'the', 'and', 'for']);
-        if (newKeywords.length > 0) {
-          suggestions.push({
-            file: 'governance-lifecycle.js',
-            location: 'extractIdentifiers/cipNumber detection',
-            type: 'add_keyword',
-            priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
-            description: `Add CIP-related keywords: ${newKeywords.slice(0, 3).join(', ')}`,
-            keywords: newKeywords,
-            codeChange: {
-              target: 'CIP_KEYWORDS',
-              action: 'add',
-              values: newKeywords,
-            },
-            examples: pattern.examples,
-            reason: `${pattern.transitionCount} items misclassified as ${origType} were actually CIPs`,
-            confidence,
-            scope,
-            provenance,
-            learningLayer: 'pattern',
-          });
-        }
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.cipKeywords, ['cip', 'proposal']);
+        const keywordsToUse = newKeywords.length > 0 ? newKeywords : keywords.slice(0, 5);
+        suggestions.push({
+          file: 'governance-lifecycle.js',
+          location: 'extractIdentifiers/cipNumber detection',
+          type: 'add_keyword',
+          priority: pattern.transitionCount >= 3 ? 'high' : 'medium',
+          description: `Add CIP-related keywords: ${keywordsToUse.slice(0, 3).join(', ')}`,
+          keywords: keywordsToUse,
+          codeChange: {
+            target: 'CIP_KEYWORDS',
+            action: 'add',
+            values: keywordsToUse,
+          },
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items misclassified as ${origType} were actually CIPs`,
+          confidence,
+          scope,
+          provenance,
+          learningLayer: 'pattern',
+        });
       }
       
       if (corrType === 'protocol-upgrade') {
-        const newKeywords = filterNewKeywords(keywords, currentPatterns?.protocolUpgradeKeywords, ['upgrade', 'splice', 'migration', 'the', 'and', 'for']);
-        if (newKeywords.length > 0) {
-          suggestions.push({
-            file: 'governance-lifecycle.js',
-            location: 'correlateTopics/type detection',
-            type: 'add_keyword',
-            priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
-            description: `Add protocol-upgrade keywords: ${newKeywords.slice(0, 3).join(', ')}`,
-            keywords: newKeywords,
-            codeChange: {
-              target: 'PROTOCOL_UPGRADE_KEYWORDS',
-              action: 'add',
-              values: newKeywords,
-            },
-            examples: pattern.examples,
-            reason: `${pattern.transitionCount} items were manually reclassified to protocol-upgrade`,
-            confidence,
-            scope,
-            provenance,
-            learningLayer: 'pattern',
-          });
-        }
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.protocolUpgradeKeywords, ['upgrade', 'splice', 'migration']);
+        const keywordsToUse = newKeywords.length > 0 ? newKeywords : keywords.slice(0, 5);
+        suggestions.push({
+          file: 'governance-lifecycle.js',
+          location: 'correlateTopics/type detection',
+          type: 'add_keyword',
+          priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
+          description: `Add protocol-upgrade keywords: ${keywordsToUse.slice(0, 3).join(', ')}`,
+          keywords: keywordsToUse,
+          codeChange: {
+            target: 'PROTOCOL_UPGRADE_KEYWORDS',
+            action: 'add',
+            values: keywordsToUse,
+          },
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified to protocol-upgrade`,
+          confidence,
+          scope,
+          provenance,
+          learningLayer: 'pattern',
+        });
       }
       
       if (corrType === 'outcome') {
-        const newKeywords = filterNewKeywords(keywords, currentPatterns?.outcomeKeywords, ['outcome', 'tokenomics', 'report', 'the', 'and', 'for']);
-        if (newKeywords.length > 0) {
-          suggestions.push({
-            file: 'governance-lifecycle.js',
-            location: 'correlateTopics/type detection',
-            type: 'add_keyword',
-            priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
-            description: `Add outcome keywords: ${newKeywords.slice(0, 3).join(', ')}`,
-            keywords: newKeywords,
-            codeChange: {
-              target: 'OUTCOME_KEYWORDS',
-              action: 'add',
-              values: newKeywords,
-            },
-            examples: pattern.examples,
-            reason: `${pattern.transitionCount} items were manually reclassified to outcome`,
-            confidence,
-            scope,
-            provenance,
-            learningLayer: 'pattern',
-          });
-        }
+        const newKeywords = filterNewKeywords(keywords, currentPatterns?.outcomeKeywords, ['outcome', 'tokenomics', 'report']);
+        const keywordsToUse = newKeywords.length > 0 ? newKeywords : keywords.slice(0, 5);
+        suggestions.push({
+          file: 'governance-lifecycle.js',
+          location: 'correlateTopics/type detection',
+          type: 'add_keyword',
+          priority: pattern.transitionCount >= 2 ? 'high' : 'medium',
+          description: `Add outcome keywords: ${keywordsToUse.slice(0, 3).join(', ')}`,
+          keywords: keywordsToUse,
+          codeChange: {
+            target: 'OUTCOME_KEYWORDS',
+            action: 'add',
+            values: keywordsToUse,
+          },
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified to outcome`,
+          confidence,
+          scope,
+          provenance,
+          learningLayer: 'pattern',
+        });
       }
       
       // === LLM PROMPT SUGGESTIONS (llm-classifier.js) ===
@@ -3590,9 +3587,23 @@ function calculateConfidence(pattern, analysis) {
 }
 
 // Filter out keywords that already exist in current patterns
+// Reduced exclude lists to be less aggressive - only filter truly generic words
 function filterNewKeywords(keywords, existingKeywords, excludeList) {
-  const existing = new Set([...(existingKeywords || []), ...excludeList].map(k => k.toLowerCase()));
-  return keywords.filter(k => !existing.has(k.toLowerCase()));
+  // Only filter absolute generic words that would cause false positives everywhere
+  const genericWords = ['the', 'and', 'for', 'new', 'this', 'that', 'with', 'from', 'have', 'has', 'are', 'was', 'were', 'been'];
+  const existing = new Set([...(existingKeywords || []), ...excludeList, ...genericWords].map(k => k.toLowerCase()));
+  const filtered = keywords.filter(k => !existing.has(k.toLowerCase()));
+  
+  // Debug logging
+  if (keywords.length > 0 && filtered.length === 0) {
+    console.log('⚠️ All keywords filtered out:', { 
+      original: keywords.slice(0, 5), 
+      excludeList: excludeList.slice(0, 5),
+      existingCount: existingKeywords?.length || 0 
+    });
+  }
+  
+  return filtered;
 }
 
 // Generate pattern-layer prompt addition (examples and keywords)
