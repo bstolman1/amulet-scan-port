@@ -12,10 +12,10 @@ import fs from 'fs';
 import path from 'path';
 import protobuf from 'protobufjs';
 import { decompress } from '@mongodb-js/zstd';
-import { fileURLToPath } from 'url';
 import duckdb from 'duckdb';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Use process.cwd() for Vitest/Vite SSR compatibility (fileURLToPath can break under SSR)
+const __dirname = path.join(process.cwd(), 'server', 'duckdb');
 
 // DATA_DIR configuration (matches write-parquet.js)
 const WIN_DEFAULT = 'C:\\ledger_raw';

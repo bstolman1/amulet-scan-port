@@ -21,11 +21,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { generateContentHash } from './post-content-cache.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
 const LLM_CACHE_DIR = path.join(BASE_DATA_DIR, 'cache', 'llm-classifications');
 const LLM_INDEX_FILE = path.join(LLM_CACHE_DIR, 'index.json');
 

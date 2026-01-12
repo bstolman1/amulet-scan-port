@@ -7,11 +7,9 @@
 
 import { spawn } from 'child_process';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createInterface } from 'readline';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PYTHON_SCRIPT = path.resolve(__dirname, '../../scripts/ingest/infer_stage.py');
+const PYTHON_SCRIPT = path.resolve(process.cwd(), 'scripts', 'ingest', 'infer_stage.py');
 
 // Python executable - configurable via env
 const PYTHON_EXECUTABLE = process.env.INFERENCE_PYTHON || 'python3';

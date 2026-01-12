@@ -1,10 +1,8 @@
 // Load environment variables BEFORE any other imports
 import dotenv from 'dotenv';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const envPath = path.join(__dirname, '.env');
+const envPath = path.join(process.cwd(), 'server', '.env');
 
 // Load .env silently - avoid logging paths or variable names for security
 const result = dotenv.config({ path: envPath });

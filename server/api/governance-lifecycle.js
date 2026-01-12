@@ -1,7 +1,6 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { inferStagesBatch } from '../inference/inferStage.js';
 import { 
   classifyTopicsBatch, 
@@ -65,7 +64,8 @@ import {
   explainDecision,
 } from '../inference/decision-explainability.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Use process.cwd() for Vitest/Vite SSR compatibility
+const __dirname = path.join(process.cwd(), 'server', 'api');
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
 const BASE_DATA_DIR = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
 const CACHE_DIR = path.join(BASE_DATA_DIR, 'cache');
