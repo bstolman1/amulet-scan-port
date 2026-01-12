@@ -391,15 +391,23 @@ export function LearnFromCorrectionsPanel() {
       // Fetch current patterns for comparison
       await fetchCurrentPatterns();
       
-      toast({
-        title: "Proposals Generated",
-        description: `Found ${newProposals.length} improvement suggestions from ${dryRunData.correctionsAnalyzed} corrections`,
-      });
+      if (newProposals.length === 0) {
+        toast({
+          title: "✓ Analysis Complete",
+          description: "No new improvements detected. Patterns are up to date!",
+          className: "bg-green-900/90 border-green-500/50 text-green-100",
+        });
+      } else {
+        toast({
+          title: "Proposals Generated",
+          description: `Found ${newProposals.length} improvement suggestions from ${dryRunData.correctionsAnalyzed} corrections`,
+        });
+      }
     } catch (error) {
       console.error('Error generating proposals:', error);
       toast({
         title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Unknown error",
+        description: error instanceof Error ? error.message : "Failed to analyze corrections",
         variant: "destructive",
       });
     } finally {
