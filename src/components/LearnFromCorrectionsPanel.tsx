@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
@@ -19,6 +20,12 @@ import {
   Sparkles,
   History,
   ChevronRight,
+  Shield,
+  TrendingUp,
+  Zap,
+  GitBranch,
+  Target,
+  Info,
 } from "lucide-react";
 
 interface ProposedImprovement {
@@ -38,12 +45,36 @@ interface ProposedImprovement {
   examples?: string[];
   reason: string;
   evidenceCount?: number;
+  // Enhanced fields
+  confidence?: {
+    level: 'general' | 'contextual' | 'edge-case';
+    description: string;
+    sourceCount: number;
+    avgKeywordMatch: number;
+    uniqueEntities: number;
+  };
+  scope?: {
+    applies: 'future_only' | 'reclassify_on_demand';
+    retroactive: boolean;
+    description: string;
+  };
+  provenance?: {
+    sourceCorrections: number;
+    affectedEntities: string[];
+    transition: string;
+    avgKeywordFrequency: number;
+  };
+  learningLayer?: 'pattern' | 'instructional';
+  promptType?: 'example_injection' | 'definition_clarification';
 }
 
 interface LearnedPatterns {
-  version: number;
+  version: string;
+  previousVersion: string | null;
   generatedAt: string;
   basedOnCorrections: number;
+  learningMode: boolean;
+  learningModeChangedAt?: string;
   patterns: {
     validatorKeywords: string[];
     featuredAppKeywords: string[];
@@ -52,6 +83,12 @@ interface LearnedPatterns {
     outcomeKeywords: string[];
     entityNameMappings: Record<string, string>;
   };
+  history?: {
+    version: string;
+    timestamp: string;
+    correctionsApplied: number;
+    acceptedProposals: number | string;
+  }[];
 }
 
 interface ProposalDecision {
@@ -64,11 +101,18 @@ export function LearnFromCorrectionsPanel() {
   const { toast } = useToast();
   const [isGenerating, setIsGenerating] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
+  const [isTogglingMode, setIsTogglingMode] = useState(false);
   const [proposals, setProposals] = useState<ProposedImprovement[]>([]);
   const [decisions, setDecisions] = useState<Record<string, ProposalDecision>>({});
   const [currentPatterns, setCurrentPatterns] = useState<LearnedPatterns | null>(null);
   const [correctionsCount, setCorrectionsCount] = useState(0);
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
+  const [learningMode, setLearningMode] = useState(true);
+
+  // Fetch current learned patterns status on mount
+  useEffect(() => {
+    fetchCurrentPatterns();
+  }, []);
 
   // Fetch current learned patterns status
   const fetchCurrentPatterns = async () => {
@@ -80,14 +124,51 @@ export function LearnFromCorrectionsPanel() {
         if (data.exists) {
           setCurrentPatterns({
             version: data.version,
+            previousVersion: data.previousVersion,
             generatedAt: data.generatedAt,
             basedOnCorrections: data.basedOnCorrections,
+            learningMode: data.learningMode ?? true,
+            learningModeChangedAt: data.learningModeChangedAt,
             patterns: data.patterns,
+            history: data.history,
           });
+          setLearningMode(data.learningMode ?? true);
+        } else {
+          setLearningMode(data.learningMode ?? true);
         }
       }
     } catch (error) {
       console.error('Failed to fetch current patterns:', error);
+    }
+  };
+
+  // Toggle learning mode
+  const toggleLearningMode = async () => {
+    setIsTogglingMode(true);
+    try {
+      const baseUrl = getDuckDBApiUrl();
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/learning-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !learningMode }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setLearningMode(data.learningMode);
+        toast({
+          title: data.learningMode ? "Learning Mode Enabled" : "Learning Mode Disabled",
+          description: data.message,
+        });
+        await fetchCurrentPatterns();
+      }
+    } catch (error) {
+      toast({
+        title: "Failed to toggle learning mode",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTogglingMode(false);
     }
   };
 
@@ -116,7 +197,7 @@ export function LearnFromCorrectionsPanel() {
       const newProposals: ProposedImprovement[] = (improvementsData.suggestions || []).map((s: any, i: number) => ({
         id: `prop-${i}-${Date.now()}`,
         ...s,
-        evidenceCount: s.transitionCount || (s.examples?.length || 0),
+        evidenceCount: s.provenance?.sourceCorrections || s.transitionCount || (s.examples?.length || 0),
       }));
       
       setProposals(newProposals);
@@ -176,6 +257,21 @@ export function LearnFromCorrectionsPanel() {
     setDecisions(prev => ({ ...prev, ...updates }));
   };
 
+  // Accept all general confidence proposals
+  const acceptAllGeneral = () => {
+    const updates: Record<string, ProposalDecision> = {};
+    proposals.forEach(p => {
+      if (p.confidence?.level === 'general') {
+        updates[p.id] = {
+          proposalId: p.id,
+          decision: 'accept',
+          decidedAt: new Date().toISOString(),
+        };
+      }
+    });
+    setDecisions(prev => ({ ...prev, ...updates }));
+  };
+
   // Apply accepted proposals
   const applyAccepted = async () => {
     const acceptedIds = Object.entries(decisions)
@@ -212,7 +308,7 @@ export function LearnFromCorrectionsPanel() {
       await fetchCurrentPatterns();
       
       toast({
-        title: "Patterns Applied",
+        title: `Patterns Applied (v${result.version})`,
         description: `Learned patterns saved from ${result.correctionsAnalyzed} corrections. Future classifications will use these patterns.`,
       });
       
@@ -241,6 +337,18 @@ export function LearnFromCorrectionsPanel() {
     low: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   };
 
+  const confidenceColor = {
+    'general': 'bg-green-500/20 text-green-400 border-green-500/30',
+    'contextual': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+    'edge-case': 'bg-red-500/20 text-red-400 border-red-500/30',
+  };
+
+  const confidenceIcon = {
+    'general': <TrendingUp className="h-3 w-3" />,
+    'contextual': <Target className="h-3 w-3" />,
+    'edge-case': <AlertTriangle className="h-3 w-3" />,
+  };
+
   const typeIcon = {
     add_keyword: <Code className="h-4 w-4" />,
     add_regex: <FileText className="h-4 w-4" />,
@@ -261,48 +369,94 @@ export function LearnFromCorrectionsPanel() {
               Generate improvement proposals from manual classification corrections
             </CardDescription>
           </div>
-          <Button
-            onClick={generateProposals}
-            disabled={isGenerating}
-            variant="outline"
-            className="gap-2"
-          >
-            {isGenerating ? (
-              <>
-                <RefreshCw className="h-4 w-4 animate-spin" />
-                Analyzing...
-              </>
-            ) : (
-              <>
-                <Lightbulb className="h-4 w-4" />
-                Generate Proposals
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-3">
+            {/* Learning Mode Toggle */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Learning Mode</span>
+              <Switch
+                checked={learningMode}
+                onCheckedChange={toggleLearningMode}
+                disabled={isTogglingMode}
+              />
+            </div>
+            <Button
+              onClick={generateProposals}
+              disabled={isGenerating || !learningMode}
+              variant="outline"
+              className="gap-2"
+            >
+              {isGenerating ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  <Lightbulb className="h-4 w-4" />
+                  Generate Proposals
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       
       <CardContent className="space-y-4">
+        {/* Learning Mode Disabled Banner */}
+        {!learningMode && (
+          <div className="p-3 bg-muted/30 border border-border/50 rounded-lg">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Shield className="h-4 w-4" />
+              <span>Learning mode is disabled. Corrections apply locally only and won't generate proposals.</span>
+            </div>
+          </div>
+        )}
+
         {/* Current Patterns Status */}
         {currentPatterns && (
           <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium flex items-center gap-2">
-                <History className="h-4 w-4 text-muted-foreground" />
-                Current Learned Patterns (v{currentPatterns.version})
+                <GitBranch className="h-4 w-4 text-muted-foreground" />
+                Current Learned Patterns
+                <Badge variant="outline" className="text-xs font-mono">
+                  v{currentPatterns.version}
+                </Badge>
+                {currentPatterns.previousVersion && (
+                  <span className="text-xs text-muted-foreground">
+                    (from v{currentPatterns.previousVersion})
+                  </span>
+                )}
               </span>
               <Badge variant="outline" className="text-xs">
                 {new Date(currentPatterns.generatedAt).toLocaleDateString()}
               </Badge>
             </div>
             <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-              <div>Validator: {currentPatterns.patterns.validatorKeywords.length} keywords</div>
-              <div>Featured App: {currentPatterns.patterns.featuredAppKeywords.length} keywords</div>
-              <div>CIP: {currentPatterns.patterns.cipKeywords.length} keywords</div>
-              <div>Protocol: {currentPatterns.patterns.protocolUpgradeKeywords.length} keywords</div>
-              <div>Outcome: {currentPatterns.patterns.outcomeKeywords.length} keywords</div>
-              <div>Entity Mappings: {Object.keys(currentPatterns.patterns.entityNameMappings).length}</div>
+              <div>Validator: {currentPatterns.patterns.validatorKeywords?.length || 0} keywords</div>
+              <div>Featured App: {currentPatterns.patterns.featuredAppKeywords?.length || 0} keywords</div>
+              <div>CIP: {currentPatterns.patterns.cipKeywords?.length || 0} keywords</div>
+              <div>Protocol: {currentPatterns.patterns.protocolUpgradeKeywords?.length || 0} keywords</div>
+              <div>Outcome: {currentPatterns.patterns.outcomeKeywords?.length || 0} keywords</div>
+              <div>Entity Mappings: {Object.keys(currentPatterns.patterns.entityNameMappings || {}).length}</div>
             </div>
+            
+            {/* Version History */}
+            {currentPatterns.history && currentPatterns.history.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-border/30">
+                <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                  <History className="h-3 w-3" />
+                  Recent History
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {currentPatterns.history.slice(-3).reverse().map((h, i) => (
+                    <Badge key={i} variant="outline" className="text-[10px] font-mono">
+                      v{h.version} • {h.correctionsApplied} corrections
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         
@@ -331,10 +485,20 @@ export function LearnFromCorrectionsPanel() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  onClick={acceptAllGeneral}
+                  className="text-xs gap-1"
+                  title="Accept proposals with high confidence across multiple entities"
+                >
+                  <TrendingUp className="h-3 w-3" />
+                  Accept General
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={acceptAllHighPriority}
                   className="text-xs"
                 >
-                  Accept All High Priority
+                  Accept High Priority
                 </Button>
                 <Button
                   onClick={applyAccepted}
@@ -375,11 +539,26 @@ export function LearnFromCorrectionsPanel() {
                             {typeIcon[proposal.type] || <Code className="h-4 w-4" />}
                           </div>
                           <div className="flex-1 text-left">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-medium text-sm">{proposal.description}</span>
                               <Badge variant="outline" className={cn("text-[10px]", priorityColor[proposal.priority])}>
                                 {proposal.priority}
                               </Badge>
+                              {proposal.confidence && (
+                                <Badge 
+                                  variant="outline" 
+                                  className={cn("text-[10px] gap-1", confidenceColor[proposal.confidence.level])}
+                                >
+                                  {confidenceIcon[proposal.confidence.level]}
+                                  {proposal.confidence.level}
+                                </Badge>
+                              )}
+                              {proposal.learningLayer && (
+                                <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-400 border-purple-500/30">
+                                  {proposal.learningLayer === 'pattern' ? <Zap className="h-2.5 w-2.5 mr-1" /> : <Info className="h-2.5 w-2.5 mr-1" />}
+                                  {proposal.learningLayer}
+                                </Badge>
+                              )}
                             </div>
                             <div className="text-xs text-muted-foreground mt-0.5">
                               {proposal.file} → {proposal.location}
@@ -414,6 +593,56 @@ export function LearnFromCorrectionsPanel() {
                             <p className="text-sm">{proposal.reason}</p>
                           </div>
                           
+                          {/* Confidence Details */}
+                          {proposal.confidence && (
+                            <div className="p-2 bg-muted/20 rounded-lg">
+                              <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                                {confidenceIcon[proposal.confidence.level]}
+                                Confidence Analysis
+                              </div>
+                              <p className="text-xs text-muted-foreground">{proposal.confidence.description}</p>
+                              <div className="flex gap-3 mt-1 text-xs">
+                                <span>Sources: {proposal.confidence.sourceCount}</span>
+                                <span>Entities: {proposal.confidence.uniqueEntities}</span>
+                                <span>Match: {(proposal.confidence.avgKeywordMatch * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Scope */}
+                          {proposal.scope && (
+                            <div>
+                              <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                                <Shield className="h-3 w-3" />
+                                Scope
+                              </div>
+                              <p className="text-xs text-muted-foreground">{proposal.scope.description}</p>
+                            </div>
+                          )}
+                          
+                          {/* Provenance */}
+                          {proposal.provenance && (
+                            <div>
+                              <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                                <History className="h-3 w-3" />
+                                Provenance
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                Derived from {proposal.provenance.sourceCorrections} corrections affecting:
+                              </div>
+                              <ul className="text-xs mt-1 space-y-0.5">
+                                {proposal.provenance.affectedEntities.slice(0, 3).map((e, i) => (
+                                  <li key={i} className="text-muted-foreground truncate">• {e}</li>
+                                ))}
+                                {proposal.provenance.affectedEntities.length > 3 && (
+                                  <li className="text-muted-foreground">
+                                    +{proposal.provenance.affectedEntities.length - 3} more
+                                  </li>
+                                )}
+                              </ul>
+                            </div>
+                          )}
+                          
                           {/* Keywords */}
                           {proposal.keywords && proposal.keywords.length > 0 && (
                             <div>
@@ -442,7 +671,15 @@ export function LearnFromCorrectionsPanel() {
                           {/* Prompt Addition */}
                           {proposal.promptAddition && (
                             <div>
-                              <div className="text-xs font-medium text-muted-foreground mb-1">LLM Prompt Enhancement</div>
+                              <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                                <Sparkles className="h-3 w-3" />
+                                LLM Prompt Enhancement
+                                {proposal.promptType && (
+                                  <Badge variant="outline" className="text-[10px] ml-1">
+                                    {proposal.promptType === 'example_injection' ? 'Examples' : 'Definition'}
+                                  </Badge>
+                                )}
+                              </div>
                               <pre className="text-xs bg-muted/50 p-2 rounded whitespace-pre-wrap max-h-32 overflow-auto">
                                 {proposal.promptAddition}
                               </pre>
@@ -516,9 +753,20 @@ export function LearnFromCorrectionsPanel() {
         <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
           <div className="flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="text-xs text-yellow-200/80">
-              <strong>How it works:</strong> Corrections generate suggestions → You review and accept/reject → 
-              Accepted patterns are saved and used in future classifications. No automatic changes to classification logic.
+            <div className="text-xs text-yellow-200/80 space-y-1">
+              <p>
+                <strong>How it works:</strong> Corrections generate suggestions → You review and accept/reject → 
+                Accepted patterns are saved and used in future classifications.
+              </p>
+              <p>
+                <strong>Confidence levels:</strong>{' '}
+                <span className="text-green-400">🟢 General</span> (seen across multiple entities) •{' '}
+                <span className="text-yellow-400">🟡 Contextual</span> (specific to certain flows) •{' '}
+                <span className="text-red-400">🔴 Edge-case</span> (rare, may be brittle)
+              </p>
+              <p>
+                <strong>Non-retroactive:</strong> Changes apply to future classifications only. Existing items unchanged.
+              </p>
             </div>
           </div>
         </div>
