@@ -151,8 +151,9 @@ export function GoldenSetManagementPanel() {
   const [sampledItems, setSampledItems] = useState<Array<{
     id: string;
     subject: string;
-    body?: string;
-    type?: string;
+    excerpt?: string;
+    sourceUrl?: string;
+    stage?: string;
     selected: boolean;
     trueType: string;
   }>>([]);
@@ -361,12 +362,14 @@ export function GoldenSetManagementPanel() {
       const shuffled = available.sort(() => Math.random() - 0.5);
       const sampled = shuffled.slice(0, count).map((item: any) => ({
         id: item.id || item.contractId || item.permalink || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        // Topics have: subject, sourceUrl, groupName, postedStage, inferredStage, effectiveStage
+        // Topics have: subject, sourceUrl, postedStage, inferredStage, effectiveStage
         subject: item.subject || item.title || item.name || 'Unknown',
-        body: item.sourceUrl || item.excerpt || item.content || '',
-        type: item.effectiveStage || item.postedStage || item.type || 'unknown',
+        excerpt: item.excerpt || item.content || '',
+        sourceUrl: item.sourceUrl || item.url || '',
+        stage: item.effectiveStage || item.postedStage || item.stage || item.type || 'unknown',
         selected: true,
-        trueType: item.effectiveStage || item.postedStage || item.type || '',
+        // Ground truth should be chosen by the user; do not auto-fill from stage
+        trueType: '',
       }));
         
       setSampledItems(sampled);
@@ -407,7 +410,7 @@ export function GoldenSetManagementPanel() {
             body: JSON.stringify({
               id: item.id,
               subject: item.subject,
-              body: item.body || '',
+              body: item.excerpt || '',
               trueType: item.trueType,
               category: 'standard',
               notes: 'Sampled from existing governance items',
@@ -682,22 +685,35 @@ export function GoldenSetManagementPanel() {
                           />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium truncate">{item.subject}</p>
-                            {item.body && (
+
+                            {item.sourceUrl && (
+                              <a
+                                href={item.sourceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-muted-foreground underline underline-offset-2 block truncate mt-0.5"
+                              >
+                                {item.sourceUrl}
+                              </a>
+                            )}
+
+                            {item.excerpt && (
                               <p className="text-xs text-muted-foreground truncate mt-0.5">
-                                {item.body.slice(0, 100)}...
+                                {item.excerpt.slice(0, 120)}...
                               </p>
                             )}
-                            <div className="flex items-center gap-2 mt-2">
+
+                            <div className="flex items-center gap-2 mt-2 flex-wrap">
                               <Badge variant="outline" className="text-xs">
-                                Current: {item.type || 'unknown'}
+                                Stage: {item.stage || 'unknown'}
                               </Badge>
-                              <span className="text-xs text-muted-foreground">→</span>
+                              <span className="text-xs text-muted-foreground">Ground truth:</span>
                               <Select 
                                 value={item.trueType} 
                                 onValueChange={(v) => updateSampleTrueType(index, v)}
                               >
-                                <SelectTrigger className="h-7 w-40 text-xs">
-                                  <SelectValue placeholder="True type..." />
+                                <SelectTrigger className="h-7 w-44 text-xs">
+                                  <SelectValue placeholder="Select type..." />
                                 </SelectTrigger>
                                 <SelectContent>
                                   {GOVERNANCE_TYPES.map((type) => (
