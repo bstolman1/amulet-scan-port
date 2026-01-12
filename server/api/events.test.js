@@ -71,14 +71,24 @@ describe('Events API', () => {
     });
 
     describe('contract ID validation', () => {
-      it('should accept valid hex contract IDs', () => {
-        // Only hex chars, dashes, and colons allowed
-        expect(sanitizeContractId('00abc123')).toBe('00abc123');
-        expect(sanitizeContractId('00ab-cd12:ef34')).toBe('00ab-cd12:ef34');
+      it('should accept valid Daml contract IDs', () => {
+        // Real Daml contract ID formats
+        expect(sanitizeContractId('00abc123::Splice.Amulet:Amulet')).toBe('00abc123::Splice.Amulet:Amulet');
+        expect(sanitizeContractId('00def456::Splice.ValidatorLicense:ValidatorLicense')).toBe('00def456::Splice.ValidatorLicense:ValidatorLicense');
+        expect(sanitizeContractId('00aabbcc')).toBe('00aabbcc'); // Just hex prefix
+        expect(sanitizeContractId('00abc123::Module:Template#suffix')).toBe('00abc123::Module:Template#suffix');
       });
 
-      it('should reject invalid contract IDs', () => {
-        expect(sanitizeContractId("'; DELETE FROM")).toBeNull();
+      it('should reject contract IDs with SQL injection attempts', () => {
+        expect(sanitizeContractId("00abc'; DROP TABLE--")).toBeNull();
+        expect(sanitizeContractId('00abc UNION SELECT * FROM users')).toBeNull();
+        expect(sanitizeContractId("00abc' OR 1=1--")).toBeNull();
+      });
+
+      it('should reject malformed contract IDs', () => {
+        expect(sanitizeContractId('')).toBeNull();
+        expect(sanitizeContractId('not-a-valid-id!')).toBeNull();
+        expect(sanitizeContractId('SELECT * FROM contracts')).toBeNull();
       });
     });
 

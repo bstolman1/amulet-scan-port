@@ -50,6 +50,20 @@ describe('containsDangerousPatterns', () => {
     expect(containsDangerousPatterns("UNION ALL SELECT")).toBe(true);
   });
 
+  it('detects tautology-based SQL injection', () => {
+    // Classic always-true conditions used to bypass authentication
+    expect(containsDangerousPatterns("admin' OR 1=1--")).toBe(true);
+    expect(containsDangerousPatterns("' OR 1=1")).toBe(true);
+    expect(containsDangerousPatterns("x' OR 'a'='a")).toBe(true);
+    expect(containsDangerousPatterns("1=1 OR something")).toBe(true);
+    expect(containsDangerousPatterns("' OR true")).toBe(true);
+  });
+
+  it('detects comment-based bypass attempts', () => {
+    expect(containsDangerousPatterns("admin/*bypass*/password")).toBe(true);
+    expect(containsDangerousPatterns("query--")).toBe(true);
+  });
+
   it('detects file operations', () => {
     expect(containsDangerousPatterns("INTO OUTFILE '/tmp/data'")).toBe(true);
     expect(containsDangerousPatterns("LOAD_FILE('/etc/passwd')")).toBe(true);
@@ -197,15 +211,24 @@ describe('sanitizeIdentifier', () => {
 });
 
 describe('sanitizeContractId', () => {
-  it('accepts valid hex contract IDs', () => {
+  it('accepts valid Daml contract IDs', () => {
+    // Real Daml contract ID formats: hex::Package.Module:Template
     expect(sanitizeContractId('00abc123def')).toBe('00abc123def');
     expect(sanitizeContractId('AABBCC')).toBe('AABBCC');
-    expect(sanitizeContractId('00-12-34')).toBe('00-12-34');
+    expect(sanitizeContractId('00abc123::Splice.Amulet:Amulet')).toBe('00abc123::Splice.Amulet:Amulet');
+    expect(sanitizeContractId('00def456::Splice.ValidatorLicense:ValidatorLicense')).toBe('00def456::Splice.ValidatorLicense:ValidatorLicense');
+    expect(sanitizeContractId('00abc123::Module:Template#suffix')).toBe('00abc123::Module:Template#suffix');
   });
 
-  it('rejects invalid contract IDs', () => {
-    expect(sanitizeContractId('not-hex!')).toBe(null);
-    expect(sanitizeContractId("'; DROP")).toBe(null);
+  it('rejects SQL injection attempts in contract IDs', () => {
+    expect(sanitizeContractId("00abc'; DROP TABLE--")).toBe(null);
+    expect(sanitizeContractId('00abc UNION SELECT * FROM')).toBe(null);
+    expect(sanitizeContractId("00abc' OR 1=1")).toBe(null);
+  });
+
+  it('rejects malformed contract IDs', () => {
+    expect(sanitizeContractId('')).toBe(null);
+    expect(sanitizeContractId('not-a-valid-id!')).toBe(null);
     expect(sanitizeContractId('abc xyz')).toBe(null);
   });
 });

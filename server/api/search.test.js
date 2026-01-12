@@ -19,16 +19,32 @@ import {
 
 describe('Search API', () => {
   describe('Query validation', () => {
-    it('should reject queries with dangerous patterns', () => {
-      expect(containsDangerousPatterns("'; DROP TABLE--")).toBe(true);
-      expect(containsDangerousPatterns("'; DELETE FROM")).toBe(true);
-      expect(containsDangerousPatterns('UNION SELECT * FROM')).toBe(true);
+    it('should accept safe search queries', () => {
+      expect(containsDangerousPatterns('simple search')).toBe(false);
+      expect(containsDangerousPatterns('Splice.Amulet:Amulet')).toBe(false);
+      expect(containsDangerousPatterns('validator123')).toBe(false);
     });
 
-    it('should accept safe queries', () => {
-      expect(containsDangerousPatterns('amulet')).toBe(false);
-      expect(containsDangerousPatterns('Splice.Amulet:Amulet')).toBe(false);
-      expect(containsDangerousPatterns('00abc123::contract1')).toBe(false);
+    it('should detect statement injection attacks', () => {
+      expect(containsDangerousPatterns("'; DROP TABLE users--")).toBe(true);
+      expect(containsDangerousPatterns("'; DELETE FROM accounts--")).toBe(true);
+      expect(containsDangerousPatterns("admin'; TRUNCATE TABLE--")).toBe(true);
+    });
+
+    it('should detect UNION-based injection', () => {
+      expect(containsDangerousPatterns('UNION SELECT password FROM users')).toBe(true);
+      expect(containsDangerousPatterns('UNION ALL SELECT * FROM')).toBe(true);
+    });
+
+    it('should detect tautology-based injection', () => {
+      expect(containsDangerousPatterns("admin' OR 1=1--")).toBe(true);
+      expect(containsDangerousPatterns("x' OR 'a'='a")).toBe(true);
+      expect(containsDangerousPatterns('1=1 OR true')).toBe(true);
+    });
+
+    it('should detect comment-based bypass attempts', () => {
+      expect(containsDangerousPatterns('admin/*comment*/password')).toBe(true);
+      expect(containsDangerousPatterns('query--')).toBe(true);
     });
 
     it('should enforce query length limits', () => {
@@ -102,15 +118,21 @@ describe('Search API', () => {
   });
 
   describe('Contract ID search', () => {
-    it('should validate hex contract ID', () => {
-      // Only hex chars, dashes, and colons allowed
-      const validId = '00abc123';
-      expect(sanitizeContractId(validId)).toBe(validId);
+    it('should accept valid Daml contract IDs', () => {
+      expect(sanitizeContractId('00abc123::Splice.Amulet:Amulet')).toBe('00abc123::Splice.Amulet:Amulet');
+      expect(sanitizeContractId('00def456::Splice.Round:OpenMiningRound')).toBe('00def456::Splice.Round:OpenMiningRound');
+      expect(sanitizeContractId('00aabbccdd')).toBe('00aabbccdd');
+    });
+
+    it('should reject SQL injection in contract search', () => {
+      expect(sanitizeContractId("00abc' OR 1=1--")).toBeNull();
+      expect(sanitizeContractId('00abc UNION SELECT * FROM')).toBeNull();
+      expect(sanitizeContractId("'; DROP TABLE contracts--")).toBeNull();
     });
 
     it('should reject invalid contract ID formats', () => {
-      expect(sanitizeContractId("'; DROP TABLE")).toBeNull();
       expect(sanitizeContractId('')).toBeNull();
+      expect(sanitizeContractId('not!valid@id')).toBeNull();
     });
 
     it('should escape contract ID for LIKE query', () => {
