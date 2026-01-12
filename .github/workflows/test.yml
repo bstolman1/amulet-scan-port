@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,12 +32,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Create test fixtures directory
+        run: mkdir -p data/test-fixtures
+
       - name: Run type check
         run: npx tsc --noEmit
         continue-on-error: true
 
       - name: Run tests with coverage
         run: npx vitest run --coverage --reporter=verbose
+        env:
+          NODE_ENV: test
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -46,7 +56,7 @@ jobs:
         uses: codecov/codecov-action@v4
         if: always()
         with:
-          files: ./coverage/coverage-final.json
+          files: ./coverage/lcov.info
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false

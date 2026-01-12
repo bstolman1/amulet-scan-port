@@ -13,20 +13,35 @@ export default defineConfig({
     ],
     // Important: avoid accidentally running dependency test suites (e.g. server/node_modules/**)
     exclude: ['**/node_modules/**', 'dist', 'scripts'],
-    coverage: {
+coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json', 'json-summary', 'html', 'lcov'],
+      reportsDirectory: './coverage',
       include: [
         'src/lib/**/*.ts',
         'src/hooks/**/*.ts',
+        'src/components/**/*.tsx',
         'server/lib/**/*.js',
+        'server/api/**/*.js',
         'server/duckdb/**/*.js',
+        'server/engine/**/*.js',
       ],
       exclude: [
         '**/*.test.ts',
+        '**/*.test.tsx',
         '**/*.spec.ts',
+        '**/*.test.js',
+        '**/*.spec.js',
         '**/node_modules/**',
+        'src/components/ui/**', // shadcn components
       ],
+      // Thresholds for CI enforcement
+      thresholds: {
+        statements: 20,
+        branches: 15,
+        functions: 20,
+        lines: 20,
+      },
     },
     // Server tests need node environment for DuckDB, fs, etc.
     environmentMatchGlobs: [
