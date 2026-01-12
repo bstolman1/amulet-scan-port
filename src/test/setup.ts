@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
 
 // Only run React Testing Library cleanup in DOM-like environments
 let cleanup: undefined | (() => void);
@@ -39,4 +39,9 @@ if (typeof globalThis !== 'undefined') {
     unobserve() {}
     disconnect() {}
   };
+}
+
+// Mock scrollIntoView for cmdk and other components that use it
+if (typeof Element !== 'undefined') {
+  Element.prototype.scrollIntoView = vi.fn();
 }
