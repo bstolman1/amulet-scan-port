@@ -230,7 +230,7 @@ router.get('/by-template/:templateId', async (req, res) => {
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
-      WHERE template_id LIKE '%${escaped}%' ESCAPE '\\\\'
+      WHERE template_id LIKE '%${escaped}%' ESCAPE '\\'
       ORDER BY effective_at DESC
       LIMIT ${limit}
     `;

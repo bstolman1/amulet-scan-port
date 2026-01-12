@@ -43,9 +43,9 @@ router.get('/', async (req, res) => {
         return res.status(400).json({ error: 'Invalid search query' });
       }
       conditions.push(`(
-        contract_id LIKE '%${escaped}%' ESCAPE '\\\\'
-        OR template_id LIKE '%${escaped}%' ESCAPE '\\\\'
-        OR CAST(payload AS VARCHAR) LIKE '%${escaped}%' ESCAPE '\\\\'
+        contract_id LIKE '%${escaped}%' ESCAPE '\\'
+        OR template_id LIKE '%${escaped}%' ESCAPE '\\'
+        OR CAST(payload AS VARCHAR) LIKE '%${escaped}%' ESCAPE '\\'
       )`);
     }
     
@@ -78,8 +78,8 @@ router.get('/', async (req, res) => {
       }
       // Use array_to_string for safer party matching
       conditions.push(`(
-        array_to_string(signatories, ',') LIKE '%${escaped}%' ESCAPE '\\\\'
-        OR array_to_string(observers, ',') LIKE '%${escaped}%' ESCAPE '\\\\'
+        array_to_string(signatories, ',') LIKE '%${escaped}%' ESCAPE '\\'
+        OR array_to_string(observers, ',') LIKE '%${escaped}%' ESCAPE '\\'
       )`);
     }
     
@@ -122,7 +122,7 @@ router.get('/contract/:id', async (req, res) => {
     const sql = `
       SELECT DISTINCT contract_id, template_id, MIN(timestamp) as created_at
       FROM ${getUpdatesSource()}
-      WHERE contract_id LIKE '${escaped}%' ESCAPE '\\\\'
+      WHERE contract_id LIKE '${escaped}%' ESCAPE '\\'
       GROUP BY contract_id, template_id
       ORDER BY created_at DESC
       LIMIT 50
