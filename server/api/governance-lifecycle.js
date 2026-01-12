@@ -3111,5 +3111,375 @@ router.post('/reverify/:itemId', async (req, res) => {
   });
 });
 
+// ========== CLASSIFICATION IMPROVEMENT ANALYSIS ==========
+// Analyzes audit log to generate suggestions for improving classification rules
+
+router.get('/classification-improvements', (req, res) => {
+  const auditLog = readAuditLog();
+  const overrides = readOverrides();
+  const cached = readCache();
+  
+  if (auditLog.length === 0 && Object.keys(overrides.itemOverrides || {}).length === 0) {
+    return res.json({
+      message: 'No manual corrections found. Classification system appears accurate.',
+      suggestions: [],
+      stats: { totalCorrections: 0 },
+    });
+  }
+  
+  // Collect all corrections with context
+  const corrections = [];
+  
+  // From audit log (includes reclassifications with subject/label)
+  for (const entry of auditLog) {
+    if (entry.actionType === 'reclassify_item' || entry.actionType === 'reclassify_topic') {
+      corrections.push({
+        source: 'audit',
+        targetId: entry.targetId,
+        label: entry.targetLabel || entry.targetId,
+        originalType: entry.originalValue,
+        correctedType: entry.newValue,
+        reason: entry.reason,
+        timestamp: entry.timestamp,
+      });
+    }
+  }
+  
+  // From overrides (in case some weren't logged)
+  for (const [key, override] of Object.entries(overrides.itemOverrides || {})) {
+    if (!corrections.find(c => c.targetId === key)) {
+      corrections.push({
+        source: 'override',
+        targetId: key,
+        label: key,
+        originalType: override.originalType,
+        correctedType: override.type,
+        reason: override.reason,
+        timestamp: override.createdAt,
+      });
+    }
+  }
+  
+  for (const [key, override] of Object.entries(overrides.topicOverrides || {})) {
+    if (!corrections.find(c => c.targetId === key)) {
+      // Find topic subject from cache
+      let subject = key;
+      if (cached?.lifecycleItems) {
+        for (const item of cached.lifecycleItems) {
+          const topic = (item.topics || []).find(t => String(t.id) === String(key));
+          if (topic) {
+            subject = topic.subject || key;
+            break;
+          }
+        }
+      }
+      corrections.push({
+        source: 'override',
+        targetId: key,
+        label: subject,
+        originalType: override.originalParentType || 'unknown',
+        correctedType: override.type,
+        reason: override.reason,
+        timestamp: override.createdAt,
+      });
+    }
+  }
+  
+  // Analyze patterns
+  const patternAnalysis = analyzeCorrections(corrections, cached);
+  
+  // Generate improvement suggestions
+  const suggestions = generateImprovementSuggestions(patternAnalysis);
+  
+  res.json({
+    stats: {
+      totalCorrections: corrections.length,
+      byOriginalType: patternAnalysis.byOriginalType,
+      byCorrectedType: patternAnalysis.byCorrectedType,
+      typeTransitions: patternAnalysis.typeTransitions,
+    },
+    patterns: patternAnalysis.patterns,
+    suggestions,
+    corrections: corrections.slice(0, 50), // Sample of corrections
+  });
+});
+
+// Analyze correction patterns to identify systematic issues
+function analyzeCorrections(corrections, cached) {
+  const byOriginalType = {};
+  const byCorrectedType = {};
+  const typeTransitions = {};
+  const patterns = [];
+  
+  // Collect word frequencies by transition type
+  const wordsByTransition = {};
+  
+  for (const correction of corrections) {
+    const orig = correction.originalType || 'unknown';
+    const corr = correction.correctedType;
+    const label = correction.label || '';
+    
+    byOriginalType[orig] = (byOriginalType[orig] || 0) + 1;
+    byCorrectedType[corr] = (byCorrectedType[corr] || 0) + 1;
+    
+    const transition = `${orig} → ${corr}`;
+    if (!typeTransitions[transition]) {
+      typeTransitions[transition] = { count: 0, examples: [] };
+    }
+    typeTransitions[transition].count++;
+    if (typeTransitions[transition].examples.length < 5) {
+      typeTransitions[transition].examples.push(label.slice(0, 100));
+    }
+    
+    // Extract keywords from label for pattern detection
+    const words = label.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2);
+    
+    if (!wordsByTransition[transition]) {
+      wordsByTransition[transition] = {};
+    }
+    for (const word of words) {
+      wordsByTransition[transition][word] = (wordsByTransition[transition][word] || 0) + 1;
+    }
+  }
+  
+  // Identify significant word patterns per transition
+  for (const [transition, wordCounts] of Object.entries(wordsByTransition)) {
+    const totalTransitions = typeTransitions[transition]?.count || 1;
+    const significantWords = Object.entries(wordCounts)
+      .filter(([word, count]) => {
+        // Word appears in >50% of this transition type
+        return count >= Math.max(2, totalTransitions * 0.5);
+      })
+      .map(([word, count]) => ({ word, frequency: count / totalTransitions }))
+      .sort((a, b) => b.frequency - a.frequency)
+      .slice(0, 10);
+    
+    if (significantWords.length > 0) {
+      patterns.push({
+        transition,
+        transitionCount: totalTransitions,
+        keywords: significantWords,
+        examples: typeTransitions[transition]?.examples || [],
+      });
+    }
+  }
+  
+  // Sort patterns by frequency
+  patterns.sort((a, b) => b.transitionCount - a.transitionCount);
+  
+  return {
+    byOriginalType,
+    byCorrectedType,
+    typeTransitions,
+    patterns,
+  };
+}
+
+// Generate specific improvement suggestions based on patterns
+function generateImprovementSuggestions(analysis) {
+  const suggestions = [];
+  
+  for (const pattern of analysis.patterns) {
+    const [origType, corrType] = pattern.transition.split(' → ');
+    const keywords = pattern.keywords.map(k => k.word);
+    
+    // Generate regex pattern suggestion
+    const regexWords = keywords.slice(0, 3).join('|');
+    
+    if (pattern.transitionCount >= 2) {
+      // For infer_stage.py pattern rules
+      if (corrType === 'cip' && !origType.includes('cip')) {
+        suggestions.push({
+          file: 'scripts/ingest/infer_stage.py',
+          type: 'pattern_rule',
+          priority: pattern.transitionCount >= 5 ? 'high' : 'medium',
+          description: `Add pattern to detect CIP discussions from ${origType} topics`,
+          keywords,
+          suggestedPattern: `(r'\\\\b(${regexWords})\\\\b.*cip', 'cip-discuss', 0.85),`,
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified from ${origType} to ${corrType}`,
+        });
+      }
+      
+      if (corrType === 'validator' && origType === 'featured-app') {
+        suggestions.push({
+          file: 'server/api/governance-lifecycle.js',
+          type: 'identifier_pattern',
+          priority: pattern.transitionCount >= 5 ? 'high' : 'medium',
+          description: `Improve validator detection to not misclassify as featured-app`,
+          keywords,
+          suggestedCode: `// In extractIdentifiers: add pattern for keywords: ${keywords.join(', ')}
+const isValidator = /\\b(${regexWords}|validator|operator|node)\\b/i.test(text);`,
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified from ${origType} to ${corrType}`,
+        });
+      }
+      
+      if (corrType === 'featured-app' && origType === 'validator') {
+        suggestions.push({
+          file: 'server/api/governance-lifecycle.js',
+          type: 'identifier_pattern',
+          priority: pattern.transitionCount >= 5 ? 'high' : 'medium',
+          description: `Improve featured-app detection to not misclassify as validator`,
+          keywords,
+          suggestedCode: `// In extractIdentifiers: add featured-app keywords: ${keywords.join(', ')}
+const isFeaturedApp = /\\b(${regexWords}|featured|app|application)\\b/i.test(text);`,
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified from ${origType} to ${corrType}`,
+        });
+      }
+      
+      if (corrType === 'protocol-upgrade') {
+        suggestions.push({
+          file: 'server/api/governance-lifecycle.js',
+          type: 'identifier_pattern',
+          priority: 'medium',
+          description: `Add protocol-upgrade detection pattern`,
+          keywords,
+          suggestedCode: `// In correlateTopics: detect protocol upgrades
+const isProtocolUpgrade = /\\b(${regexWords}|splice|migration|upgrade|synchronizer)\\b/i.test(text);`,
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified to ${corrType}`,
+        });
+      }
+      
+      // For LLM classifier prompt improvements
+      if (corrType === 'cip' && origType !== 'cip') {
+        suggestions.push({
+          file: 'server/inference/llm-classifier.js',
+          type: 'prompt_improvement',
+          priority: pattern.transitionCount >= 3 ? 'medium' : 'low',
+          description: `Enhance CIP detection in LLM prompt`,
+          keywords,
+          suggestedPromptAddition: `**Additional CIP indicators:**
+- Topics containing: ${keywords.join(', ')}
+- These patterns were frequently misclassified as ${origType} but are actually CIPs`,
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified from ${origType} to ${corrType}`,
+        });
+      }
+      
+      // Generic suggestion for any significant pattern
+      if (!['cip', 'validator', 'featured-app', 'protocol-upgrade'].includes(corrType)) {
+        suggestions.push({
+          file: 'server/api/governance-lifecycle.js',
+          type: 'type_detection',
+          priority: 'low',
+          description: `Add detection for ${corrType} type`,
+          keywords,
+          examples: pattern.examples,
+          reason: `${pattern.transitionCount} items were manually reclassified from ${origType} to ${corrType}`,
+        });
+      }
+    }
+  }
+  
+  // Sort by priority
+  const priorityOrder = { high: 0, medium: 1, low: 2 };
+  suggestions.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+  
+  return suggestions;
+}
+
+// Export training data for potential model fine-tuning
+router.get('/classification-training-data', (req, res) => {
+  const auditLog = readAuditLog();
+  const overrides = readOverrides();
+  const cached = readCache();
+  
+  const trainingData = [];
+  
+  // Collect all corrections with full topic content
+  const processedIds = new Set();
+  
+  // From audit log
+  for (const entry of auditLog) {
+    if (entry.actionType === 'reclassify_item' || entry.actionType === 'reclassify_topic') {
+      const targetId = entry.targetId;
+      if (processedIds.has(targetId)) continue;
+      processedIds.add(targetId);
+      
+      // Find full topic content from cache
+      let content = null;
+      if (cached?.lifecycleItems) {
+        for (const item of cached.lifecycleItems) {
+          if (item.primaryId === targetId || item.id === targetId) {
+            // Item-level correction
+            const topics = item.topics || [];
+            content = {
+              subject: item.primaryId,
+              body: topics.map(t => t.subject).join(' | '),
+              stage: item.currentStage,
+            };
+            break;
+          }
+          const topic = (item.topics || []).find(t => String(t.id) === String(targetId));
+          if (topic) {
+            content = {
+              subject: topic.subject,
+              body: topic.content || topic.excerpt || '',
+              stage: topic.stage,
+            };
+            break;
+          }
+        }
+      }
+      
+      trainingData.push({
+        id: targetId,
+        originalType: entry.originalValue,
+        correctedType: entry.newValue,
+        label: entry.targetLabel,
+        content,
+        source: 'audit',
+      });
+    }
+  }
+  
+  // From overrides
+  for (const [key, override] of Object.entries(overrides.itemOverrides || {})) {
+    if (processedIds.has(key)) continue;
+    processedIds.add(key);
+    
+    let content = null;
+    if (cached?.lifecycleItems) {
+      const item = cached.lifecycleItems.find(i => i.primaryId === key || i.id === key);
+      if (item) {
+        const topics = item.topics || [];
+        content = {
+          subject: item.primaryId,
+          body: topics.map(t => t.subject).join(' | '),
+          stage: item.currentStage,
+        };
+      }
+    }
+    
+    trainingData.push({
+      id: key,
+      originalType: override.originalType,
+      correctedType: override.type,
+      label: key,
+      content,
+      source: 'override',
+    });
+  }
+  
+  res.json({
+    count: trainingData.length,
+    format: 'jsonl',
+    description: 'Training data for classification model improvement',
+    data: trainingData,
+    // JSONL format for direct use
+    jsonl: trainingData.map(d => JSON.stringify({
+      text: `${d.content?.subject || d.label}\n${d.content?.body || ''}`.trim(),
+      label: d.correctedType,
+      original_label: d.originalType,
+    })).join('\n'),
+  });
+});
+
 export { fetchFreshData, writeCache, readCache };
 export default router;
