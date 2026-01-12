@@ -160,6 +160,37 @@ export function removeGoldenItem(id, reason) {
 }
 
 /**
+ * Clear the entire golden set and evaluation history
+ */
+export function clearGoldenSet(clearHistory = true) {
+  ensureDir();
+  
+  // Reset items
+  const emptySet = {
+    version: '1.0.0',
+    createdAt: new Date().toISOString(),
+    lastModified: new Date().toISOString(),
+    items: [],
+    stats: { total: 0, byType: {}, byCategory: {} },
+    removalLog: [],
+  };
+  fs.writeFileSync(GOLDEN_SET_FILE, JSON.stringify(emptySet, null, 2));
+  
+  // Optionally clear history
+  if (clearHistory && fs.existsSync(EVALUATION_HISTORY_FILE)) {
+    const emptyHistory = {
+      evaluations: [],
+      clearedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(EVALUATION_HISTORY_FILE, JSON.stringify(emptyHistory, null, 2));
+  }
+  
+  console.log(`🗑️ Cleared golden set${clearHistory ? ' and evaluation history' : ''}`);
+  
+  return { success: true, clearedHistory: clearHistory };
+}
+
+/**
  * Update a golden item's true type (use sparingly - only for labeling errors)
  */
 export function updateGoldenItemType(id, newType, reason) {
