@@ -16,13 +16,22 @@ const router = Router();
 // Helper to get the correct read function for JSONL files (supports .jsonl, .jsonl.gz, .jsonl.zst)
 // Uses UNION for cross-platform compatibility (Windows doesn't support brace expansion)
 // Use UNION (not UNION ALL) to prevent duplicate records
-const getUpdatesSource = () => `(
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)
-  UNION
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
-  UNION
-  SELECT * FROM read_json_auto('${db.DATA_PATH}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)
-)`;
+// In test mode, uses small fixture dataset to avoid scanning hundreds of files
+const getUpdatesSource = () => {
+  // In test mode, use test fixtures to avoid 415-file scans
+  if (db.IS_TEST) {
+    return `(SELECT * FROM read_json_auto('${db.TEST_FIXTURES_PATH}/updates-*.jsonl', union_by_name=true, ignore_errors=true))`;
+  }
+  
+  const basePath = db.DATA_PATH.replace(/\\/g, '/');
+  return `(
+    SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)
+    UNION
+    SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)
+    UNION
+    SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)
+  )`;
+};
 
 // GET /api/search - Full text search across events
 router.get('/', async (req, res) => {

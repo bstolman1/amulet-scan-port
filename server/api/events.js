@@ -72,7 +72,13 @@ let voteRequestCacheTime = 0;
 const VOTE_REQUEST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Helper to get the correct read function for Parquet files (primary) or JSONL files (fallback)
+// In test mode, uses small fixture dataset to avoid scanning hundreds of files
 const getEventsSource = () => {
+  // In test mode, use test fixtures to avoid 415-file scans
+  if (db.IS_TEST) {
+    return `(SELECT * FROM read_json_auto('${db.TEST_FIXTURES_PATH}/events-*.jsonl', union_by_name=true, ignore_errors=true))`;
+  }
+  
   const hasParquet = db.hasFileType('events', '.parquet');
   if (hasParquet) {
     return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/events-*.parquet', union_by_name=true)`;

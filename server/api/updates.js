@@ -4,7 +4,13 @@ import binaryReader from '../duckdb/binary-reader.js';
 
 const router = Router();
 
+// In test mode, uses small fixture dataset to avoid scanning hundreds of files
 const getUpdatesSource = () => {
+  // In test mode, use test fixtures to avoid 415-file scans
+  if (db.IS_TEST) {
+    return `(SELECT * FROM read_json_auto('${db.TEST_FIXTURES_PATH}/updates-*.jsonl', union_by_name=true, ignore_errors=true))`;
+  }
+  
   const hasParquet = db.hasFileType('updates', '.parquet');
   if (hasParquet) {
     return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/updates-*.parquet', union_by_name=true)`;
