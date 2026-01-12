@@ -1,30 +1,42 @@
 import '@testing-library/jest-dom';
 import { afterEach } from 'vitest';
-import { cleanup } from '@testing-library/react';
 
-// Cleanup after each test
+// Only run React Testing Library cleanup in DOM-like environments
+let cleanup: undefined | (() => void);
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  cleanup = require('@testing-library/react').cleanup;
+} catch {
+  cleanup = undefined;
+}
+
 afterEach(() => {
-  cleanup();
+  cleanup?.();
 });
 
-// Mock matchMedia for components that use media queries
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: (query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: () => {},
-    removeListener: () => {},
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => false,
-  }),
-});
+// Guard browser-only globals so this setup file can run in node env too
+if (typeof window !== 'undefined') {
+  // Mock matchMedia for components that use media queries
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
 
-// Mock ResizeObserver
-global.ResizeObserver = class ResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+if (typeof globalThis !== 'undefined') {
+  // Mock ResizeObserver (used by some UI components)
+  (globalThis as any).ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}

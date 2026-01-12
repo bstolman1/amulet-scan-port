@@ -4,7 +4,9 @@ import path from 'path';
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'jsdom',
+    // Default to node so server-side modules (duckdb, fileURLToPath, fs, etc.) behave correctly.
+    // Frontend tests are switched to jsdom via environmentMatchGlobs below.
+    environment: 'node',
     setupFiles: ['./src/test/setup.ts'],
     include: [
       'src/**/*.{test,spec}.{js,ts,tsx}',
@@ -27,11 +29,9 @@ export default defineConfig({
         '**/node_modules/**',
       ],
     },
-    // Server-side tests need node environment
+    // Frontend tests need a DOM
     environmentMatchGlobs: [
-      ['server/**/*.test.js', 'node'],
-      ['server/**/*.integration.test.js', 'node'],
-      ['server/**/*.e2e.test.js', 'node'],
+      ['src/**/*.{test,spec}.{js,ts,tsx}', 'jsdom'],
     ],
   },
   resolve: {
@@ -43,7 +43,7 @@ export default defineConfig({
   ssr: {
     noExternal: ['supertest'],
   },
-  // Optimizations for node modules  
+  // Optimizations for node modules
   optimizeDeps: {
     include: ['supertest'],
   },
