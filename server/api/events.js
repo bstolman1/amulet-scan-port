@@ -17,8 +17,10 @@ import {
   sanitizeEventType,
   sanitizeIdentifier,
   sanitizeTimestamp,
+  sanitizeContractId,
   escapeLikePattern,
   escapeString,
+  containsDangerousPatterns,
 } from '../lib/sql-sanitize.js';
 
 const router = Router();
@@ -112,8 +114,8 @@ function getDataSources() {
 // GET /api/events/latest - Get latest events
 router.get('/latest', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
@@ -368,8 +370,8 @@ router.get('/debug', async (req, res) => {
 // GET /api/events/governance - Get governance-related events (VoteRequest, Confirmation, etc.)
 router.get('/governance', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 200 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     const sources = getDataSources();
     
     // Governance templates to filter for
@@ -419,8 +421,8 @@ router.get('/governance', async (req, res) => {
 // GET /api/events/rewards - Get reward-related events (RewardCoupon, etc.)
 router.get('/rewards', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 500, 2000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 2000, defaultValue: 500 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     const sources = getDataSources();
     
     // Reward templates to filter for
@@ -469,8 +471,8 @@ router.get('/rewards', async (req, res) => {
 // GET /api/events/member-traffic - Get member traffic events
 router.get('/member-traffic', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 200 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     const sources = getDataSources();
     
     if (sources.primarySource === 'binary') {
@@ -2036,11 +2038,14 @@ router.get('/debug-vote-requests', async (req, res) => {
 router.get('/debug-vote-request/:contractId', async (req, res) => {
   try {
     const { contractId } = req.params;
-    if (!contractId) {
-      return res.status(400).json({ error: 'Contract ID required' });
+    
+    // Validate contract ID format
+    const sanitizedContractId = sanitizeContractId(contractId);
+    if (!sanitizedContractId) {
+      return res.status(400).json({ error: 'Invalid contract ID format' });
     }
 
-    console.log(`\n🔍 Debug VoteRequest: ${contractId.slice(0, 30)}...`);
+    console.log(`\n🔍 Debug VoteRequest: ${sanitizedContractId.slice(0, 30)}...`);
     const sources = getDataSources();
 
     if (sources.primarySource !== 'binary') {
@@ -2053,7 +2058,7 @@ router.get('/debug-vote-request/:contractId', async (req, res) => {
       maxDays: 3650,
       maxFilesToScan: 100000,
       fullScan: true,
-      filter: (e) => e.contract_id === contractId
+      filter: (e) => e.contract_id === sanitizedContractId
     });
 
     // Dedupe by event_id (id field in the JSON)
@@ -2094,9 +2099,9 @@ router.get('/debug-vote-request/:contractId', async (req, res) => {
     let indexedRecord = null;
     try {
       const indexed = await voteRequestIndexer.queryVoteRequests({ limit: 1, status: 'all', offset: 0 });
-      // Query specifically by contract_id
+      // Query specifically by contract_id using sanitized value
       const rows = await db.safeQuery(`
-        SELECT * FROM vote_requests WHERE contract_id = '${contractId.replace(/'/g, "''")}'
+        SELECT * FROM vote_requests WHERE contract_id = '${escapeString(sanitizedContractId)}'
       `);
       if (rows.length > 0) {
         indexedRecord = rows[0];

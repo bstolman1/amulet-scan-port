@@ -4,9 +4,11 @@ import {
   sanitizeNumber, 
   sanitizeIdentifier, 
   sanitizeEventType,
+  sanitizeContractId,
   escapeLikePattern,
   buildLikeCondition,
   buildEqualCondition,
+  containsDangerousPatterns,
 } from '../lib/sql-sanitize.js';
 
 const router = Router();
@@ -27,13 +29,19 @@ router.get('/', async (req, res) => {
   try {
     const { q, type, template, party } = req.query;
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
-    const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
+    const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     
     let conditions = [];
     
-    // Validate and sanitize search query
+    // Validate and sanitize search query - reject dangerous patterns
     if (q && typeof q === 'string' && q.length <= 500) {
+      if (containsDangerousPatterns(q)) {
+        return res.status(400).json({ error: 'Invalid search query' });
+      }
       const escaped = escapeLikePattern(q);
+      if (!escaped) {
+        return res.status(400).json({ error: 'Invalid search query' });
+      }
       conditions.push(`(
         contract_id LIKE '%${escaped}%' ESCAPE '\\\\'
         OR template_id LIKE '%${escaped}%' ESCAPE '\\\\'
@@ -41,11 +49,12 @@ router.get('/', async (req, res) => {
       )`);
     }
     
-    // Validate event type
+    // Validate event type (whitelist approach)
     if (type) {
       const sanitizedType = sanitizeEventType(type);
       if (sanitizedType) {
-        conditions.push(buildEqualCondition('event_type', sanitizedType));
+        const condition = buildEqualCondition('event_type', sanitizedType);
+        if (condition) conditions.push(condition);
       }
     }
     
@@ -53,13 +62,20 @@ router.get('/', async (req, res) => {
     if (template) {
       const sanitizedTemplate = sanitizeIdentifier(template);
       if (sanitizedTemplate) {
-        conditions.push(buildLikeCondition('template_id', sanitizedTemplate));
+        const condition = buildLikeCondition('template_id', sanitizedTemplate);
+        if (condition) conditions.push(condition);
       }
     }
     
-    // Validate party filter (party IDs are typically alphanumeric with some special chars)
+    // Validate party filter - reject dangerous patterns
     if (party && typeof party === 'string' && party.length <= 500) {
+      if (containsDangerousPatterns(party)) {
+        return res.status(400).json({ error: 'Invalid party filter' });
+      }
       const escaped = escapeLikePattern(party);
+      if (!escaped) {
+        return res.status(400).json({ error: 'Invalid party filter' });
+      }
       // Use array_to_string for safer party matching
       conditions.push(`(
         array_to_string(signatories, ',') LIKE '%${escaped}%' ESCAPE '\\\\'
@@ -92,12 +108,16 @@ router.get('/contract/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Validate contract ID format (hex characters, dashes allowed)
-    if (!id || typeof id !== 'string' || id.length > 200 || !/^[a-fA-F0-9:-]+$/.test(id)) {
+    // Validate contract ID format using centralized sanitizer
+    const sanitizedId = sanitizeContractId(id);
+    if (!sanitizedId) {
       return res.status(400).json({ error: 'Invalid contract ID format' });
     }
     
-    const escaped = escapeLikePattern(id);
+    const escaped = escapeLikePattern(sanitizedId);
+    if (!escaped) {
+      return res.status(400).json({ error: 'Invalid contract ID format' });
+    }
     
     const sql = `
       SELECT DISTINCT contract_id, template_id, MIN(timestamp) as created_at
