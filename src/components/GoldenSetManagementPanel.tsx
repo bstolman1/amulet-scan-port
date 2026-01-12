@@ -318,17 +318,26 @@ export function GoldenSetManagementPanel() {
       
       const data = await response.json();
       
-      // The main endpoint returns lifecycleItems and allTopics
+      // The main endpoint returns lifecycleItems (nested with stages) and allTopics (flat list)
+      // allTopics is the flat list with subject, type, etc - prefer this
       let items: any[] = [];
       
-      if (Array.isArray(data.lifecycleItems) && data.lifecycleItems.length > 0) {
-        items = data.lifecycleItems;
-      } else if (Array.isArray(data.allTopics) && data.allTopics.length > 0) {
+      // First try allTopics which is a flat list of topics with subject, type, etc
+      if (Array.isArray(data.allTopics) && data.allTopics.length > 0) {
         items = data.allTopics;
-      } else if (Array.isArray(data.data)) {
-        items = data.data;
-      } else if (Array.isArray(data)) {
-        items = data;
+      } 
+      // If no allTopics, flatten lifecycleItems.stages into topics
+      else if (Array.isArray(data.lifecycleItems) && data.lifecycleItems.length > 0) {
+        // lifecycleItems has nested stages - extract all topics from all stages
+        for (const lifecycleItem of data.lifecycleItems) {
+          if (lifecycleItem.stages && typeof lifecycleItem.stages === 'object') {
+            for (const stageTopics of Object.values(lifecycleItem.stages)) {
+              if (Array.isArray(stageTopics)) {
+                items.push(...stageTopics);
+              }
+            }
+          }
+        }
       }
       
       if (items.length === 0) {
@@ -352,11 +361,12 @@ export function GoldenSetManagementPanel() {
       const shuffled = available.sort(() => Math.random() - 0.5);
       const sampled = shuffled.slice(0, count).map((item: any) => ({
         id: item.id || item.contractId || item.permalink || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        subject: item.subject || item.title || item.name || item.summary || 'Unknown',
-        body: item.body || item.description || item.snippet || item.url || '',
-        type: item.type || item.classificationType || item.postedStage || 'unknown',
+        // Topics have: subject, sourceUrl, groupName, postedStage, inferredStage, effectiveStage
+        subject: item.subject || item.title || item.name || 'Unknown',
+        body: item.sourceUrl || item.excerpt || item.content || '',
+        type: item.effectiveStage || item.postedStage || item.type || 'unknown',
         selected: true,
-        trueType: item.type || item.classificationType || '',
+        trueType: item.effectiveStage || item.postedStage || item.type || '',
       }));
         
       setSampledItems(sampled);
