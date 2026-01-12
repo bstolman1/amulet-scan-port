@@ -508,50 +508,131 @@ export function LearnFromCorrectionsPanel() {
 
         {/* Current Patterns Status */}
         {currentPatterns && (
-          <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium flex items-center gap-2">
-                <GitBranch className="h-4 w-4 text-muted-foreground" />
-                Current Learned Patterns
-                <Badge variant="outline" className="text-xs font-mono">
-                  v{currentPatterns.version}
-                </Badge>
-                {currentPatterns.previousVersion && (
-                  <span className="text-xs text-muted-foreground">
-                    (from v{currentPatterns.previousVersion})
-                  </span>
-                )}
-              </span>
-              <Badge variant="outline" className="text-xs">
-                {new Date(currentPatterns.generatedAt).toLocaleDateString()}
-              </Badge>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-              <div>Validator: {currentPatterns.patterns.validatorKeywords?.length || 0} keywords</div>
-              <div>Featured App: {currentPatterns.patterns.featuredAppKeywords?.length || 0} keywords</div>
-              <div>CIP: {currentPatterns.patterns.cipKeywords?.length || 0} keywords</div>
-              <div>Protocol: {currentPatterns.patterns.protocolUpgradeKeywords?.length || 0} keywords</div>
-              <div>Outcome: {currentPatterns.patterns.outcomeKeywords?.length || 0} keywords</div>
-              <div>Entity Mappings: {Object.keys(currentPatterns.patterns.entityNameMappings || {}).length}</div>
-            </div>
-            
-            {/* Version History */}
-            {currentPatterns.history && currentPatterns.history.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-border/30">
-                <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
-                  <History className="h-3 w-3" />
-                  Recent History
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  {currentPatterns.history.slice(-3).reverse().map((h, i) => (
-                    <Badge key={i} variant="outline" className="text-[10px] font-mono">
-                      v{h.version} • {h.correctionsApplied} corrections
+          <Accordion type="single" collapsible className="w-full">
+            <AccordionItem value="patterns" className="border-0">
+              <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
+                <AccordionTrigger className="hover:no-underline py-0">
+                  <div className="flex items-center justify-between w-full pr-2">
+                    <span className="text-sm font-medium flex items-center gap-2">
+                      <GitBranch className="h-4 w-4 text-muted-foreground" />
+                      Current Learned Patterns
+                      <Badge variant="outline" className="text-xs font-mono">
+                        v{currentPatterns.version}
+                      </Badge>
+                      {currentPatterns.previousVersion && (
+                        <span className="text-xs text-muted-foreground">
+                          (from v{currentPatterns.previousVersion})
+                        </span>
+                      )}
+                    </span>
+                    <Badge variant="outline" className="text-xs mr-2">
+                      {currentPatterns.generatedAt 
+                        ? new Date(currentPatterns.generatedAt).toLocaleDateString() 
+                        : 'Not generated yet'}
                     </Badge>
-                  ))}
+                  </div>
+                </AccordionTrigger>
+                
+                <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground mt-2">
+                  <div>Validator: {currentPatterns.patterns.validatorKeywords?.length || 0} keywords</div>
+                  <div>Featured App: {currentPatterns.patterns.featuredAppKeywords?.length || 0} keywords</div>
+                  <div>CIP: {currentPatterns.patterns.cipKeywords?.length || 0} keywords</div>
+                  <div>Protocol: {currentPatterns.patterns.protocolUpgradeKeywords?.length || 0} keywords</div>
+                  <div>Outcome: {currentPatterns.patterns.outcomeKeywords?.length || 0} keywords</div>
+                  <div>Entity Mappings: {Object.keys(currentPatterns.patterns.entityNameMappings || {}).length}</div>
                 </div>
+                
+                <AccordionContent className="pt-3 pb-0">
+                  {/* Detailed Keywords */}
+                  <div className="space-y-3 text-xs">
+                    {currentPatterns.patterns.validatorKeywords?.length > 0 && (
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">Validator Keywords</div>
+                        <div className="flex flex-wrap gap-1">
+                          {currentPatterns.patterns.validatorKeywords.map((kw, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {currentPatterns.patterns.featuredAppKeywords?.length > 0 && (
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">Featured App Keywords</div>
+                        <div className="flex flex-wrap gap-1">
+                          {currentPatterns.patterns.featuredAppKeywords.map((kw, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {currentPatterns.patterns.cipKeywords?.length > 0 && (
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">CIP Keywords</div>
+                        <div className="flex flex-wrap gap-1">
+                          {currentPatterns.patterns.cipKeywords.map((kw, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {currentPatterns.patterns.protocolUpgradeKeywords?.length > 0 && (
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">Protocol Upgrade Keywords</div>
+                        <div className="flex flex-wrap gap-1">
+                          {currentPatterns.patterns.protocolUpgradeKeywords.map((kw, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {currentPatterns.patterns.outcomeKeywords?.length > 0 && (
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">Outcome Keywords</div>
+                        <div className="flex flex-wrap gap-1">
+                          {currentPatterns.patterns.outcomeKeywords.map((kw, i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">{kw}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {Object.keys(currentPatterns.patterns.entityNameMappings || {}).length > 0 && (
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">Entity Mappings</div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(currentPatterns.patterns.entityNameMappings).map(([key, val], i) => (
+                            <Badge key={i} variant="secondary" className="text-[10px]">
+                              {key} → {val}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Version History */}
+                  {currentPatterns.history && currentPatterns.history.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-border/30">
+                      <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                        <History className="h-3 w-3" />
+                        Version History
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        {currentPatterns.history.slice(-5).reverse().map((h, i) => (
+                          <Badge key={i} variant="outline" className="text-[10px] font-mono">
+                            v{h.version} • {h.correctionsApplied} corrections • {
+                              h.timestamp 
+                                ? new Date(h.timestamp).toLocaleDateString() 
+                                : 'Unknown date'
+                            }
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </AccordionContent>
               </div>
-            )}
-          </div>
+            </AccordionItem>
+          </Accordion>
         )}
         
         {/* Proposals */}
