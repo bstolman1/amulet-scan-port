@@ -14,6 +14,8 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 
 export const SearchBar = () => {
   const [open, setOpen] = useState(false);
@@ -93,6 +95,10 @@ export const SearchBar = () => {
       </Button>
 
       <CommandDialog open={open} onOpenChange={setOpen}>
+        <VisuallyHidden>
+          <DialogTitle>Search</DialogTitle>
+          <DialogDescription>Search by party ID, event ID, or ANS name</DialogDescription>
+        </VisuallyHidden>
         <CommandInput
           placeholder="Search by party ID, event ID, or ANS name..."
           value={searchQuery}
