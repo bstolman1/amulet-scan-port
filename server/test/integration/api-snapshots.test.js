@@ -2,7 +2,9 @@
  * API Snapshot Tests
  * 
  * Lock down response structures for /api/events, /api/stats, and /api/governance-lifecycle endpoints.
- * These tests validate the shape of API responses, not the values.
+ * These tests validate the shape of API responses and REQUIRE success (200) or properly validate errors.
+ * 
+ * IMPORTANT: Tests now FAIL on 500 errors or validate error structure - no silent passes.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -91,6 +93,16 @@ function extractStructure(body) {
   return { type: typeof body };
 }
 
+/**
+ * Validate error response structure (used when APIs return 4xx/5xx)
+ */
+function validateErrorResponse(body) {
+  expect(body).toBeDefined();
+  expect(typeof body).toBe('object');
+  // Error responses should have an error message
+  expect('error' in body || 'message' in body || 'details' in body).toBe(true);
+}
+
 // =============================================================================
 // Health & Root Endpoints
 // =============================================================================
@@ -101,6 +113,7 @@ describe('API Snapshots: Core Endpoints', () => {
     expect(status).toBe(200);
     expect(body).toHaveProperty('status');
     expect(body).toHaveProperty('timestamp');
+    expect(body.status).toBe('ok');
     
     expect({
       fields: Object.keys(body).sort(),
@@ -114,6 +127,7 @@ describe('API Snapshots: Core Endpoints', () => {
     expect(body).toHaveProperty('name');
     expect(body).toHaveProperty('version');
     expect(body).toHaveProperty('status');
+    expect(body.status).toBe('ok');
     
     expect({
       fields: Object.keys(body).sort(),
@@ -134,123 +148,122 @@ describe('API Snapshots: Core Endpoints', () => {
 describe('API Snapshots: Events Endpoints', () => {
   it('GET /api/events/latest returns expected structure', async () => {
     const { status, body } = await httpJson('/api/events/latest', { query: { limit: 3 } });
-    expect([200, 500]).toContain(status);
     
-    if (status === 200) {
-      expect(body).toHaveProperty('data');
-      expect(Array.isArray(body.data)).toBe(true);
-      
-      expect(normalizeForSnapshot({
-        hasData: Array.isArray(body.data),
-        hasCount: 'count' in body,
-        hasSource: 'source' in body,
-        hasMore: 'hasMore' in body,
-        dataShape: body.data[0] ? Object.keys(body.data[0]).sort() : [],
-      })).toMatchSnapshot();
-    }
+    // STRICT: Must be 200 or we fail with useful message
+    expect(status, `Expected 200 but got ${status}: ${JSON.stringify(body)}`).toBe(200);
+    
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(typeof body.count).toBe('number');
+    
+    expect(normalizeForSnapshot({
+      hasData: true,
+      hasCount: true,
+      hasSource: 'source' in body,
+      hasMore: 'hasMore' in body,
+      dataIsArray: true,
+      // Only snapshot shape if we have data
+      dataShape: body.data.length > 0 ? Object.keys(body.data[0]).sort() : '[EMPTY]',
+    })).toMatchSnapshot();
   });
 
   it('GET /api/events/latest with pagination returns consistent structure', async () => {
     const { status, body } = await httpJson('/api/events/latest', { 
       query: { limit: 5, offset: 0 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        isArray: Array.isArray(body.data),
-        paginationFields: ['count', 'hasMore', 'offset'].filter(f => f in body).sort(),
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    
+    expect({
+      isArray: true,
+      paginationFields: ['count', 'hasMore', 'offset'].filter(f => f in body).sort(),
+    }).toMatchSnapshot();
   });
 
   it('GET /api/events/by-type/:type returns expected structure', async () => {
     const { status, body } = await httpJson('/api/events/by-type/created', { 
       query: { limit: 3 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        responseType: Array.isArray(body) ? 'array' : 'object',
-      }).toMatchSnapshot();
-    }
+    expect({
+      hasData: 'data' in body || Array.isArray(body),
+      responseType: Array.isArray(body) ? 'array' : 'object',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/events/by-template/:id returns expected structure', async () => {
     const { status, body } = await httpJson('/api/events/by-template/Splice.Amulet:Amulet', { 
       query: { limit: 3 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        responseType: Array.isArray(body) ? 'array' : 'object',
-      }).toMatchSnapshot();
-    }
+    expect({
+      hasData: 'data' in body || Array.isArray(body),
+      responseType: Array.isArray(body) ? 'array' : 'object',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/events/count returns expected structure', async () => {
     const { status, body } = await httpJson('/api/events/count');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        hasCount: 'count' in body,
-        hasEstimated: 'estimated' in body,
-        hasSource: 'source' in body,
-        fields: Object.keys(body).sort(),
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('count');
+    expect(typeof body.count).toBe('number');
+    
+    expect({
+      hasCount: true,
+      hasEstimated: 'estimated' in body,
+      hasSource: 'source' in body,
+      fields: Object.keys(body).sort(),
+    }).toMatchSnapshot();
   });
 
   it('GET /api/events/debug returns expected structure', async () => {
     const { status, body } = await httpJson('/api/events/debug');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        responseType: typeof body,
-        isObject: typeof body === 'object' && body !== null,
-        topLevelKeys: Object.keys(body).sort(),
-      }).toMatchSnapshot();
-    }
+    expect(body).toBeDefined();
+    expect(typeof body).toBe('object');
+    
+    expect({
+      responseType: 'object',
+      isObject: true,
+      topLevelKeys: Object.keys(body).sort(),
+    }).toMatchSnapshot();
   });
 
   it('GET /api/events/governance returns expected structure', async () => {
     const { status, body } = await httpJson('/api/events/governance', { 
       query: { limit: 5 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      const isArrayResponse = Array.isArray(body);
-      const hasDataProp = !isArrayResponse && 'data' in body;
-      
-      expect({
-        responseType: isArrayResponse ? 'array' : 'object',
-        hasData: hasDataProp,
-        topLevelKeys: isArrayResponse ? [] : Object.keys(body).sort(),
-      }).toMatchSnapshot();
-    }
+    const isArrayResponse = Array.isArray(body);
+    const hasDataProp = !isArrayResponse && 'data' in body;
+    
+    expect({
+      responseType: isArrayResponse ? 'array' : 'object',
+      hasData: hasDataProp,
+      topLevelKeys: isArrayResponse ? [] : Object.keys(body).sort(),
+    }).toMatchSnapshot();
   });
 
-  it('GET /api/events error response has correct structure', async () => {
-    // Request with invalid parameters to trigger validation error
+  it('handles validation by returning appropriate status', async () => {
+    // Test that invalid params are handled gracefully (200 with defaults or 400 with error)
     const { status, body } = await httpJson('/api/events/latest', { 
       query: { limit: -1 } 
     });
     
-    // Should either be 400 (validation error) or 200 (if limit is coerced)
-    expect([200, 400, 500]).toContain(status);
+    // Either 200 (coerced to valid value) or 400 (validation error)
+    expect([200, 400]).toContain(status);
     
     if (status === 400) {
-      expect({
-        hasError: 'error' in body,
-        errorType: typeof body.error,
-      }).toMatchSnapshot();
+      validateErrorResponse(body);
+    } else {
+      expect(body).toHaveProperty('data');
     }
   });
 });
@@ -262,101 +275,106 @@ describe('API Snapshots: Events Endpoints', () => {
 describe('API Snapshots: Stats Endpoints', () => {
   it('GET /api/stats/overview returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/overview');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}: ${JSON.stringify(body)}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        fields: Object.keys(body).sort(),
-        hasTotalEvents: 'total_events' in body,
-        hasDataSource: 'data_source' in body,
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('total_events');
+    expect(body).toHaveProperty('data_source');
+    expect(typeof body.total_events).toBe('number');
+    
+    expect({
+      fields: Object.keys(body).sort(),
+      hasTotalEvents: true,
+      hasDataSource: true,
+      validSource: ['engine', 'binary', 'jsonl', 'parquet', 'empty'].includes(body.data_source),
+    }).toMatchSnapshot();
   });
 
   it('GET /api/stats/daily returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/daily', { 
       query: { days: 7 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      const data = body.data || body;
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        isArray: Array.isArray(data),
-        itemShape: Array.isArray(data) && data[0] ? Object.keys(data[0]).sort() : [],
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    
+    expect({
+      hasData: true,
+      isArray: true,
+      itemShape: body.data.length > 0 ? Object.keys(body.data[0]).sort() : '[EMPTY]',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/stats/by-type returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/by-type');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      const data = body.data || body;
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        isArray: Array.isArray(data),
-        itemShape: Array.isArray(data) && data[0] ? Object.keys(data[0]).sort() : [],
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    
+    expect({
+      hasData: true,
+      isArray: true,
+      itemShape: body.data.length > 0 ? Object.keys(body.data[0]).sort() : '[EMPTY]',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/stats/by-template returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/by-template', { 
       query: { limit: 10 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      const data = body.data || body;
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        isArray: Array.isArray(data),
-        itemShape: Array.isArray(data) && data[0] ? Object.keys(data[0]).sort() : [],
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    
+    expect({
+      hasData: true,
+      isArray: true,
+      dataLength: body.data.length,
+      itemShape: body.data.length > 0 ? Object.keys(body.data[0]).sort() : '[EMPTY]',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/stats/hourly returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/hourly');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      const data = body.data || body;
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        isArray: Array.isArray(data),
-        itemShape: Array.isArray(data) && data[0] ? Object.keys(data[0]).sort() : [],
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    
+    expect({
+      hasData: true,
+      isArray: true,
+      itemShape: body.data.length > 0 ? Object.keys(body.data[0]).sort() : '[EMPTY]',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/stats/burn returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/burn');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      const data = body.data || body;
-      expect({
-        hasData: 'data' in body || Array.isArray(body),
-        isArray: Array.isArray(data),
-        itemShape: Array.isArray(data) && data[0] ? Object.keys(data[0]).sort() : [],
-      }).toMatchSnapshot();
-    }
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    
+    expect({
+      hasData: true,
+      isArray: true,
+      itemShape: body.data.length > 0 ? Object.keys(body.data[0]).sort() : '[EMPTY]',
+    }).toMatchSnapshot();
   });
 
   it('GET /api/stats/sources returns expected structure', async () => {
     const { status, body } = await httpJson('/api/stats/sources');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        fields: Object.keys(body).sort(),
-        hasSources: 'sources' in body || 'primary_source' in body,
-      }).toMatchSnapshot();
-    }
+    expect(body).toBeDefined();
+    expect(typeof body).toBe('object');
+    
+    expect({
+      fields: Object.keys(body).sort(),
+      hasSources: 'sources' in body || 'primary_source' in body,
+    }).toMatchSnapshot();
   });
 });
 
@@ -367,77 +385,86 @@ describe('API Snapshots: Stats Endpoints', () => {
 describe('API Snapshots: Governance Lifecycle Endpoints', () => {
   it('GET /api/governance-lifecycle returns expected structure', async () => {
     const { status, body } = await httpJson('/api/governance-lifecycle');
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}: ${JSON.stringify(body)}`).toBe(200);
     
-    if (status === 200) {
-      const isArrayResponse = Array.isArray(body);
-      const hasProposals = isArrayResponse || 
-                          (body.proposals && Array.isArray(body.proposals)) ||
-                          (body.data && Array.isArray(body.data));
-      
-      expect({
-        responseType: isArrayResponse ? 'array' : 'object',
-        hasProposals,
-        topLevelKeys: isArrayResponse ? [] : Object.keys(body).sort(),
-      }).toMatchSnapshot();
-    }
+    const isArrayResponse = Array.isArray(body);
+    const hasProposals = isArrayResponse || 
+                        (body.proposals && Array.isArray(body.proposals)) ||
+                        (body.data && Array.isArray(body.data));
+    
+    expect(hasProposals || typeof body === 'object').toBe(true);
+    
+    expect({
+      responseType: isArrayResponse ? 'array' : 'object',
+      hasProposals,
+      topLevelKeys: isArrayResponse ? [] : Object.keys(body).sort(),
+    }).toMatchSnapshot();
   });
 
   it('GET /api/governance-lifecycle with pagination returns consistent structure', async () => {
     const { status, body } = await httpJson('/api/governance-lifecycle', { 
       query: { limit: 5, offset: 0 } 
     });
-    expect([200, 500]).toContain(status);
+    expect(status, `Expected 200 but got ${status}`).toBe(200);
     
-    if (status === 200) {
-      expect({
-        responseType: Array.isArray(body) ? 'array' : 'object',
-        paginationSupported: 'total' in body || 'count' in body || 'hasMore' in body,
-      }).toMatchSnapshot();
-    }
+    expect({
+      responseType: Array.isArray(body) ? 'array' : 'object',
+      paginationSupported: 'total' in body || 'count' in body || 'hasMore' in body || Array.isArray(body),
+    }).toMatchSnapshot();
   });
 
-  it('GET /api/governance-lifecycle/proposals returns expected structure', async () => {
+  it('GET /api/governance-lifecycle/proposals returns expected structure or 404', async () => {
     const { status, body } = await httpJson('/api/governance-lifecycle/proposals', { 
       query: { limit: 5 } 
     });
-    expect([200, 404, 500]).toContain(status);
+    
+    // 200 = has data, 404 = endpoint doesn't exist (acceptable)
+    expect([200, 404]).toContain(status);
     
     if (status === 200) {
       expect(extractStructure(body)).toMatchSnapshot();
     }
   });
 
-  it('GET /api/governance-lifecycle/stats returns expected structure', async () => {
+  it('GET /api/governance-lifecycle/stats returns expected structure or 404', async () => {
     const { status, body } = await httpJson('/api/governance-lifecycle/stats');
-    expect([200, 404, 500]).toContain(status);
+    
+    expect([200, 404]).toContain(status);
     
     if (status === 200) {
+      expect(body).toBeDefined();
+      expect(typeof body).toBe('object');
+      
       expect({
-        responseType: typeof body,
-        isObject: typeof body === 'object' && body !== null,
+        responseType: 'object',
+        isObject: true,
         fields: Object.keys(body).sort(),
       }).toMatchSnapshot();
     }
   });
 
-  it('GET /api/governance-lifecycle/audit/status returns expected structure', async () => {
+  it('GET /api/governance-lifecycle/audit/status returns expected structure or 404', async () => {
     const { status, body } = await httpJson('/api/governance-lifecycle/audit/status');
-    expect([200, 404, 500]).toContain(status);
+    
+    expect([200, 404]).toContain(status);
     
     if (status === 200) {
+      expect(body).toBeDefined();
+      expect(typeof body).toBe('object');
+      
       expect({
-        responseType: typeof body,
-        isObject: typeof body === 'object' && body !== null,
+        responseType: 'object',
+        isObject: true,
         hasStatus: 'status' in body || 'enabled' in body,
         fields: Object.keys(body).sort(),
       }).toMatchSnapshot();
     }
   });
 
-  it('GET /api/governance-lifecycle/patterns returns expected structure', async () => {
+  it('GET /api/governance-lifecycle/patterns returns expected structure or 404', async () => {
     const { status, body } = await httpJson('/api/governance-lifecycle/patterns');
-    expect([200, 404, 500]).toContain(status);
+    
+    expect([200, 404]).toContain(status);
     
     if (status === 200) {
       expect(extractStructure(body)).toMatchSnapshot();
@@ -450,13 +477,17 @@ describe('API Snapshots: Governance Lifecycle Endpoints', () => {
 // =============================================================================
 
 describe('API Snapshots: Error Responses', () => {
-  it('validation error has consistent structure', async () => {
-    // Trigger a validation error with invalid query params
+  it('400 validation error has consistent structure', async () => {
+    // Trigger a validation error with clearly invalid params
     const { status, body } = await httpJson('/api/events/latest', { 
-      query: { limit: 'invalid' } 
+      query: { limit: 'not-a-number-xyz' } 
     });
     
+    // Depending on implementation: 200 (defaults used) or 400 (validation error)
+    expect([200, 400]).toContain(status);
+    
     if (status === 400) {
+      validateErrorResponse(body);
       expect({
         hasError: 'error' in body,
         hasDetails: 'details' in body || 'issues' in body,
@@ -465,9 +496,8 @@ describe('API Snapshots: Error Responses', () => {
     }
   });
 
-  it('server error has consistent structure', async () => {
-    // This tests the error handler structure if/when errors occur
-    // We just verify the test infrastructure works
-    expect(true).toBe(true);
+  it('404 endpoint returns proper error format', async () => {
+    const { status } = await httpJson('/api/this-endpoint-does-not-exist');
+    expect(status).toBe(404);
   });
 });
