@@ -7,6 +7,7 @@
 
 // Dangerous SQL patterns that should be rejected entirely
 const DANGEROUS_PATTERNS = [
+  // Statement injection patterns
   /;\s*--/i,           // Comment after statement terminator
   /;\s*\/\*/i,         // Block comment after statement terminator
   /'\s*;\s*DROP/i,     // DROP statement injection
@@ -17,12 +18,32 @@ const DANGEROUS_PATTERNS = [
   /'\s*;\s*CREATE/i,   // CREATE statement injection
   /'\s*;\s*TRUNCATE/i, // TRUNCATE statement injection
   /'\s*;\s*EXEC/i,     // EXEC statement injection
+  
+  // UNION-based injection
   /UNION\s+SELECT/i,   // UNION injection
   /UNION\s+ALL/i,      // UNION ALL injection
+  
+  // Tautology-based injection (always-true conditions)
+  /'\s*OR\s+'[^']*'\s*=\s*'[^']*'/i,  // 'x' OR 'a'='a'
+  /'\s*OR\s+\d+\s*=\s*\d+/i,          // 'x' OR 1=1
+  /\bOR\s+1\s*=\s*1\b/i,              // OR 1=1
+  /\bOR\s+'.*'\s*=\s*'.*'/i,          // OR 'a'='a'
+  /\bOR\s+true\b/i,                   // OR true
+  /\bAND\s+1\s*=\s*0\b/i,             // AND 1=0 (always false, used to bypass)
+  /\b1\s*=\s*1\s+(OR|AND)\b/i,        // 1=1 OR/AND
+  /\b'\s*=\s*'/,                      // '=' (empty string comparison trick)
+  
+  // File operations
   /INTO\s+OUTFILE/i,   // File write injection
   /LOAD_FILE/i,        // File read injection
+  
+  // SQL Server specific
   /xp_cmdshell/i,      // SQL Server command execution
   /sp_executesql/i,    // SQL Server dynamic execution
+  
+  // Comment-based bypass attempts
+  /\/\*.*\*\//,        // Inline comments used to obfuscate
+  /--\s*$/m,           // Line-ending comments
 ];
 
 /**
@@ -92,11 +113,16 @@ export function sanitizeIdentifier(str, maxLength = 500) {
 }
 
 /**
- * Validate a contract/event ID (hex string with optional dashes)
+ * Validate a contract/event ID
+ * Daml contract IDs format: 00hex::Package.Module:Template#suffix
+ * Allows: hex chars, letters, numbers, colons, dots, dashes, hashes, underscores, at-signs
  */
 export function sanitizeContractId(str) {
+  if (typeof str !== 'string') return null;
   if (containsDangerousPatterns(str)) return null;
-  return validatePattern(str, /^[a-fA-F0-9:-]+$/, 200);
+  // Match Daml contract ID format: hex prefix, double colon, then template path
+  // Examples: 00abc123::Splice.Amulet:Amulet, 00def456::Module:Template#0
+  return validatePattern(str, /^[a-fA-F0-9]+(::[a-zA-Z0-9_.:-]+)?(@[a-fA-F0-9]+)?(#[a-zA-Z0-9_]+)?$/, 500);
 }
 
 /**
