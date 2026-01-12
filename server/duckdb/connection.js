@@ -5,6 +5,13 @@ import fs from 'fs';
 // Use process.cwd() for Vitest compatibility (fileURLToPath breaks under Vite SSR)
 const __dirname = path.join(process.cwd(), 'server', 'duckdb');
 
+// ============================================================
+// TEST MODE DETECTION
+// In test mode, use small fixture dataset instead of scanning hundreds of raw files
+// ============================================================
+const IS_TEST = process.env.NODE_ENV === 'test';
+const TEST_FIXTURES_PATH = path.join(process.cwd(), 'data', 'test-fixtures').replace(/\\/g, '/');
+
 // Prefer the repository-local data directory if it exists (common in Lovable + WSL setups)
 // Repo layout: server/duckdb/connection.js -> ../../data
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
@@ -15,12 +22,14 @@ const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
 
 // Final selection order:
-// 1) process.env.DATA_DIR (explicit override)
-// 2) repo-local data/ (if present)
-// 3) Windows default path
+// 1) In test mode, use test-fixtures (skip raw data scan entirely)
+// 2) process.env.DATA_DIR (explicit override)
+// 3) repo-local data/ (if present)
+// 4) Windows default path
 const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
 // Ledger events/updates live under: <BASE_DATA_DIR>/raw
-const DATA_PATH = path.join(BASE_DATA_DIR, 'raw');
+// In test mode, point to test-fixtures instead
+const DATA_PATH = IS_TEST ? TEST_FIXTURES_PATH : path.join(BASE_DATA_DIR, 'raw');
 // ACS snapshots live under: <BASE_DATA_DIR>/raw/acs
 const ACS_DATA_PATH = path.join(BASE_DATA_DIR, 'raw', 'acs');
 
@@ -488,6 +497,11 @@ export function readParquetGlob(type = 'events') {
 // Uses forward slashes which DuckDB handles on all platforms
 // Uses lazy file detection to avoid memory issues with large file counts
 export function readJsonlGlob(type = 'events') {
+  // In test mode, use small fixture dataset to avoid scanning 415+ raw files
+  if (IS_TEST) {
+    return `(SELECT * FROM read_json_auto('${TEST_FIXTURES_PATH}/${type}-*.jsonl', union_by_name=true, ignore_errors=true))`;
+  }
+  
   const basePath = DATA_PATH.replace(/\\/g, '/');
   
   // Lazy check - stops as soon as one file of each type is found
@@ -636,7 +650,7 @@ export async function initializeViews() {
 // Initialize on import
 initializeViews();
 
-export { hasFileType, countDataFiles, hasDataFiles, hasParquetFiles, DATA_PATH, ACS_DATA_PATH };
+export { hasFileType, countDataFiles, hasDataFiles, hasParquetFiles, DATA_PATH, ACS_DATA_PATH, IS_TEST, TEST_FIXTURES_PATH };
 
 export default { 
   query, 
@@ -659,5 +673,7 @@ export default {
   hasDataFiles, 
   hasParquetFiles, 
   DATA_PATH, 
-  ACS_DATA_PATH 
+  ACS_DATA_PATH,
+  IS_TEST,
+  TEST_FIXTURES_PATH,
 };
