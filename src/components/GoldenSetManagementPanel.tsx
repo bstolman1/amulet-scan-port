@@ -302,38 +302,39 @@ export function GoldenSetManagementPanel() {
     setIsSampling(true);
     try {
       const baseUrl = getDuckDBApiUrl();
-      // Try multiple endpoints in order of preference
-      const endpoints = [
-        '/api/governance-lifecycle/items',
-        '/api/events/governance',
-        '/api/events/governance/combined',
-      ];
       
+      // Try the governance-lifecycle main endpoint which has rich items
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/`);
+      
+      if (!response.ok) {
+        toast({
+          title: "Failed to Sample",
+          description: "Could not fetch governance items",
+          variant: "destructive",
+        });
+        setIsSampling(false);
+        return;
+      }
+      
+      const data = await response.json();
+      
+      // The main endpoint returns lifecycleItems and allTopics
       let items: any[] = [];
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(`${baseUrl}${endpoint}?limit=200`);
-          if (response.ok) {
-            const data = await response.json();
-            // Handle various response structures - ensure we get an array
-            let extracted = data.items || data.events || data.proposals || data;
-            if (Array.isArray(extracted)) {
-              items = extracted;
-            } else if (extracted && typeof extracted === 'object') {
-              // Maybe it's an object with items as values
-              items = Object.values(extracted).filter(v => v && typeof v === 'object');
-            }
-            if (items.length > 0) break;
-          }
-        } catch {
-          continue;
-        }
+      
+      if (Array.isArray(data.lifecycleItems) && data.lifecycleItems.length > 0) {
+        items = data.lifecycleItems;
+      } else if (Array.isArray(data.allTopics) && data.allTopics.length > 0) {
+        items = data.allTopics;
+      } else if (Array.isArray(data.data)) {
+        items = data.data;
+      } else if (Array.isArray(data)) {
+        items = data;
       }
       
       if (items.length === 0) {
         toast({
           title: "No Items Found",
-          description: "No governance items available to sample from",
+          description: "No governance items available to sample from. Try refreshing the governance data first.",
           variant: "destructive",
         });
         setIsSampling(false);
@@ -342,15 +343,18 @@ export function GoldenSetManagementPanel() {
       
       // Filter out items already in golden set
       const existingIds = new Set(fullSet?.items.map(i => i.id) || []);
-      const available = items.filter((item: any) => !existingIds.has(item.id || item.contractId));
+      const available = items.filter((item: any) => {
+        const itemId = item.id || item.contractId || item.permalink;
+        return !existingIds.has(itemId);
+      });
       
       // Randomly sample
       const shuffled = available.sort(() => Math.random() - 0.5);
       const sampled = shuffled.slice(0, count).map((item: any) => ({
-        id: item.id || item.contractId || item.semanticKey || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        subject: item.subject || item.title || item.summary || item.payload?.action?.summary || 'Unknown',
-        body: item.body || item.description || item.url || item.payload?.action?.url || '',
-        type: item.type || item.classificationType || item.actionType || 'unknown',
+        id: item.id || item.contractId || item.permalink || `sample-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        subject: item.subject || item.title || item.name || item.summary || 'Unknown',
+        body: item.body || item.description || item.snippet || item.url || '',
+        type: item.type || item.classificationType || item.postedStage || 'unknown',
         selected: true,
         trueType: item.type || item.classificationType || '',
       }));
