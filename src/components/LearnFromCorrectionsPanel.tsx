@@ -680,145 +680,221 @@ export function LearnFromCorrectionsPanel() {
                         ? new Date(currentPatterns.generatedAt).toLocaleDateString() 
                         : 'Not generated yet'}
                     </Badge>
+                    {/* Rollback Button */}
+                    {currentPatterns.canRollback && currentPatterns.previousVersion && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          rollbackToVersion(currentPatterns.previousVersion!);
+                        }}
+                        disabled={isRollingBack}
+                      >
+                        {isRollingBack ? (
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <History className="h-3 w-3" />
+                        )}
+                        Undo to v{currentPatterns.previousVersion}
+                      </Button>
+                    )}
                   </div>
                 </AccordionTrigger>
                 
-                <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground mt-2">
-                  <div>Validator: {currentPatterns.patterns.validatorKeywords?.length || 0} keywords</div>
-                  <div>Featured App: {currentPatterns.patterns.featuredAppKeywords?.length || 0} keywords</div>
-                  <div>CIP: {currentPatterns.patterns.cipKeywords?.length || 0} keywords</div>
-                  <div>Protocol: {currentPatterns.patterns.protocolUpgradeKeywords?.length || 0} keywords</div>
-                  <div>Outcome: {currentPatterns.patterns.outcomeKeywords?.length || 0} keywords</div>
-                  <div>Entity Mappings: {Object.keys(currentPatterns.patterns.entityNameMappings || {}).length}</div>
+                {/* Summary Stats - Clean Grid */}
+                <div className="grid grid-cols-6 gap-2 text-xs mt-2">
+                  <div className="text-center p-2 bg-muted/30 rounded">
+                    <div className="font-bold text-lg">{currentPatterns.patterns.validatorKeywords?.length || 0}</div>
+                    <div className="text-muted-foreground text-[10px]">Validator</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted/30 rounded">
+                    <div className="font-bold text-lg">{currentPatterns.patterns.featuredAppKeywords?.length || 0}</div>
+                    <div className="text-muted-foreground text-[10px]">App</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted/30 rounded">
+                    <div className="font-bold text-lg">{currentPatterns.patterns.cipKeywords?.length || 0}</div>
+                    <div className="text-muted-foreground text-[10px]">CIP</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted/30 rounded">
+                    <div className="font-bold text-lg">{currentPatterns.patterns.protocolUpgradeKeywords?.length || 0}</div>
+                    <div className="text-muted-foreground text-[10px]">Protocol</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted/30 rounded">
+                    <div className="font-bold text-lg">{currentPatterns.patterns.outcomeKeywords?.length || 0}</div>
+                    <div className="text-muted-foreground text-[10px]">Outcome</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted/30 rounded">
+                    <div className="font-bold text-lg">{Object.keys(currentPatterns.patterns.entityNameMappings || {}).length}</div>
+                    <div className="text-muted-foreground text-[10px]">Entities</div>
+                  </div>
                 </div>
                 
                 <AccordionContent className="pt-3 pb-0">
-                  {/* Detailed Keywords with Confidence */}
-                  <div className="space-y-3 text-xs">
+                  {/* Collapsed Keyword Lists - Only Show Counts with Expandable Details */}
+                  <div className="space-y-2 text-xs">
+                    {/* Validator Keywords - Collapsible */}
                     {currentPatterns.patterns.validatorKeywords?.length > 0 && (
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1 flex items-center gap-2">
-                          Validator Keywords
-                          {currentPatterns.confidenceStats?.validator && (
-                            <span className="text-[10px] text-muted-foreground/60">
-                              ({currentPatterns.confidenceStats.validator.active} active, 
-                              {currentPatterns.confidenceStats.validator.decaying} decaying)
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.validatorKeywords.map((kw, i) => {
-                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
-                            const confidence = typeof kw === 'object' ? kw.confidence : 1;
-                            return (
-                              <Badge 
-                                key={i} 
-                                variant="secondary" 
-                                className={cn(
-                                  "text-[10px]",
-                                  confidence < 0.5 && "opacity-50"
-                                )}
-                                title={typeof kw === 'object' ? `Confidence: ${(confidence * 100).toFixed(0)}%, Matches: ${kw.matchCount || 0}` : undefined}
-                              >
-                                {keyword}
-                                {typeof kw === 'object' && confidence < 0.7 && (
-                                  <span className="ml-1 text-yellow-400">⚠</span>
-                                )}
+                      <Accordion type="single" collapsible className="border-0">
+                        <AccordionItem value="validator" className="border-0">
+                          <AccordionTrigger className="py-1 hover:no-underline">
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span className="font-medium">Validator Keywords</span>
+                              <Badge variant="outline" className="text-[10px]">
+                                {currentPatterns.patterns.validatorKeywords.length}
                               </Badge>
-                            );
-                          })}
-                        </div>
-                      </div>
+                              {currentPatterns.confidenceStats?.validator?.decaying > 0 && (
+                                <Badge variant="outline" className="text-[10px] text-yellow-400 border-yellow-500/30">
+                                  {currentPatterns.confidenceStats.validator.decaying} decaying
+                                </Badge>
+                              )}
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <ScrollArea className="h-24">
+                              <div className="flex flex-wrap gap-1 py-1">
+                                {currentPatterns.patterns.validatorKeywords.slice(0, 50).map((kw, i) => {
+                                  const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                                  return (
+                                    <Badge key={i} variant="secondary" className="text-[10px]">
+                                      {keyword}
+                                    </Badge>
+                                  );
+                                })}
+                                {currentPatterns.patterns.validatorKeywords.length > 50 && (
+                                  <Badge variant="outline" className="text-[10px]">
+                                    +{currentPatterns.patterns.validatorKeywords.length - 50} more
+                                  </Badge>
+                                )}
+                              </div>
+                            </ScrollArea>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                     )}
+                    
+                    {/* Featured App Keywords - Collapsible */}
                     {currentPatterns.patterns.featuredAppKeywords?.length > 0 && (
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1 flex items-center gap-2">
-                          Featured App Keywords
-                          {currentPatterns.confidenceStats?.featuredApp && (
-                            <span className="text-[10px] text-muted-foreground/60">
-                              ({currentPatterns.confidenceStats.featuredApp.active} active)
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.featuredAppKeywords.map((kw, i) => {
-                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
-                            const confidence = typeof kw === 'object' ? kw.confidence : 1;
-                            return (
-                              <Badge 
-                                key={i} 
-                                variant="secondary" 
-                                className={cn("text-[10px]", confidence < 0.5 && "opacity-50")}
-                              >
-                                {keyword}
+                      <Accordion type="single" collapsible className="border-0">
+                        <AccordionItem value="app" className="border-0">
+                          <AccordionTrigger className="py-1 hover:no-underline">
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span className="font-medium">Featured App Keywords</span>
+                              <Badge variant="outline" className="text-[10px]">
+                                {currentPatterns.patterns.featuredAppKeywords.length}
                               </Badge>
-                            );
-                          })}
-                        </div>
-                      </div>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <div className="flex flex-wrap gap-1 py-1">
+                              {currentPatterns.patterns.featuredAppKeywords.map((kw, i) => {
+                                const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                                return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                              })}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                     )}
-                    {currentPatterns.patterns.cipKeywords?.length > 0 && (
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1">CIP Keywords</div>
-                        <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.cipKeywords.map((kw, i) => {
-                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
-                            return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
-                          })}
+                    
+                    {/* Other Keywords in Compact Grid */}
+                    <div className="grid grid-cols-3 gap-2 pt-2">
+                      {currentPatterns.patterns.cipKeywords?.length > 0 && (
+                        <div className="p-2 bg-muted/20 rounded">
+                          <div className="text-[10px] text-muted-foreground mb-1">CIP Keywords</div>
+                          <div className="flex flex-wrap gap-1">
+                            {currentPatterns.patterns.cipKeywords.slice(0, 5).map((kw, i) => {
+                              const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                              return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    {currentPatterns.patterns.protocolUpgradeKeywords?.length > 0 && (
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1">Protocol Upgrade Keywords</div>
-                        <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.protocolUpgradeKeywords.map((kw, i) => {
-                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
-                            return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
-                          })}
+                      )}
+                      {currentPatterns.patterns.protocolUpgradeKeywords?.length > 0 && (
+                        <div className="p-2 bg-muted/20 rounded">
+                          <div className="text-[10px] text-muted-foreground mb-1">Protocol Keywords</div>
+                          <div className="flex flex-wrap gap-1">
+                            {currentPatterns.patterns.protocolUpgradeKeywords.slice(0, 5).map((kw, i) => {
+                              const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                              return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    {currentPatterns.patterns.outcomeKeywords?.length > 0 && (
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1">Outcome Keywords</div>
-                        <div className="flex flex-wrap gap-1">
-                          {currentPatterns.patterns.outcomeKeywords.map((kw, i) => {
-                            const keyword = typeof kw === 'string' ? kw : kw.keyword;
-                            return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
-                          })}
+                      )}
+                      {currentPatterns.patterns.outcomeKeywords?.length > 0 && (
+                        <div className="p-2 bg-muted/20 rounded">
+                          <div className="text-[10px] text-muted-foreground mb-1">Outcome Keywords</div>
+                          <div className="flex flex-wrap gap-1">
+                            {currentPatterns.patterns.outcomeKeywords.slice(0, 5).map((kw, i) => {
+                              const keyword = typeof kw === 'string' ? kw : kw.keyword;
+                              return <Badge key={i} variant="secondary" className="text-[10px]">{keyword}</Badge>;
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
+                    
+                    {/* Entity Mappings - Collapsible */}
                     {Object.keys(currentPatterns.patterns.entityNameMappings || {}).length > 0 && (
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1">Entity Mappings</div>
-                        <div className="flex flex-wrap gap-1">
-                          {Object.entries(currentPatterns.patterns.entityNameMappings).map(([key, val], i) => (
-                            <Badge key={i} variant="secondary" className="text-[10px]">
-                              {key} → {typeof val === 'object' ? (val as any).type : val}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
+                      <Accordion type="single" collapsible className="border-0">
+                        <AccordionItem value="entities" className="border-0">
+                          <AccordionTrigger className="py-1 hover:no-underline">
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span className="font-medium">Entity Mappings</span>
+                              <Badge variant="outline" className="text-[10px]">
+                                {Object.keys(currentPatterns.patterns.entityNameMappings).length}
+                              </Badge>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent>
+                            <ScrollArea className="h-32">
+                              <div className="flex flex-wrap gap-1 py-1">
+                                {Object.entries(currentPatterns.patterns.entityNameMappings).slice(0, 30).map(([key, val], i) => (
+                                  <Badge key={i} variant="secondary" className="text-[10px]">
+                                    {key} → {typeof val === 'object' ? (val as any).type : val}
+                                  </Badge>
+                                ))}
+                                {Object.keys(currentPatterns.patterns.entityNameMappings).length > 30 && (
+                                  <Badge variant="outline" className="text-[10px]">
+                                    +{Object.keys(currentPatterns.patterns.entityNameMappings).length - 30} more
+                                  </Badge>
+                                )}
+                              </div>
+                            </ScrollArea>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
                     )}
                   </div>
                   
-                  {/* Version History */}
+                  {/* Version History with Rollback */}
                   {currentPatterns.history && currentPatterns.history.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-border/30">
-                      <div className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
-                        <History className="h-3 w-3" />
-                        Version History
+                      <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <History className="h-3 w-3" />
+                          Version History
+                        </span>
+                        <span className="text-[10px] text-muted-foreground/60">Click older version to rollback</span>
                       </div>
                       <div className="flex gap-2 flex-wrap">
                         {currentPatterns.history.slice(-5).reverse().map((h, i) => (
-                          <Badge key={i} variant="outline" className="text-[10px] font-mono">
+                          <Badge 
+                            key={i} 
+                            variant={i === 0 ? "default" : "outline"} 
+                            className={cn(
+                              "text-[10px] font-mono",
+                              i > 0 && "cursor-pointer hover:bg-muted/50 hover:border-primary/50"
+                            )}
+                            onClick={() => i > 0 && rollbackToVersion(h.version)}
+                          >
                             v{h.version} • {h.correctionsApplied} corrections • {
                               h.timestamp 
                                 ? new Date(h.timestamp).toLocaleDateString() 
                                 : 'Unknown date'
                             }
+                            {i === 0 && <span className="ml-1">✓</span>}
                           </Badge>
                         ))}
                       </div>
