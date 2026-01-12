@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { PaginationControls } from './PaginationControls';
 
 describe('PaginationControls', () => {
@@ -42,23 +43,25 @@ describe('PaginationControls', () => {
     expect(buttons[1].disabled).toBe(true);
   });
 
-  it('calls onPageChange with previous page when clicking Previous', () => {
+  it('calls onPageChange with previous page when clicking Previous', async () => {
+    const user = userEvent.setup();
     const onPageChange = vi.fn();
     const { container } = render(
       <PaginationControls {...defaultProps} currentPage={5} onPageChange={onPageChange} />
     );
     const buttons = container.querySelectorAll('button');
-    fireEvent.click(buttons[0]);
+    await user.click(buttons[0]);
     expect(onPageChange).toHaveBeenCalledWith(4);
   });
 
-  it('calls onPageChange with next page when clicking Next', () => {
+  it('calls onPageChange with next page when clicking Next', async () => {
+    const user = userEvent.setup();
     const onPageChange = vi.fn();
     const { container } = render(
       <PaginationControls {...defaultProps} currentPage={5} onPageChange={onPageChange} />
     );
     const buttons = container.querySelectorAll('button');
-    fireEvent.click(buttons[1]);
+    await user.click(buttons[1]);
     expect(onPageChange).toHaveBeenCalledWith(6);
   });
 });
