@@ -2,24 +2,11 @@
 
 ## Overview
 
-This project uses a **hybrid backend architecture**:
-- **DuckDB + Parquet** for heavy ledger data (updates, events)
-- **Supabase** for lightweight metadata (cursors, snapshots, user data)
+This project uses a **DuckDB-only backend architecture** for all ledger data:
+- **DuckDB + Binary Protobuf** for heavy ledger data (updates, events)
+- **Local filesystem** for ACS snapshots and metadata
 
-## Backend Toggle
-
-The frontend can switch between backends via environment variables:
-
-```env
-# Use DuckDB for ledger data (default)
-VITE_LEDGER_BACKEND=duckdb
-
-# Or use Supabase for ledger data
-VITE_LEDGER_BACKEND=supabase
-
-# DuckDB API URL
-VITE_DUCKDB_API_URL=http://localhost:3001
-```
+> **Note:** Supabase integration has been removed. All data is now stored locally and served via the DuckDB API server.
 
 ## Data Flow
 
@@ -28,13 +15,13 @@ Canton Network API
         │
         ▼
 ┌───────────────────┐
-│  Ingestion Scripts │  (fetch-updates-parquet.js)
+│  Ingestion Scripts │  (scripts/ingest/*.js)
 └───────────────────┘
         │
         ▼
 ┌───────────────────┐
-│  Parquet Files    │  (data/raw/**/*.parquet)
-│  (~1.8TB storage) │
+│  Binary Storage   │  (*.pb.zst compressed Protobuf)
+│  Parquet Files    │  (optional for analytics)
 └───────────────────┘
         │
         ▼
@@ -45,7 +32,7 @@ Canton Network API
         │
         ▼
 ┌───────────────────┐
-│  React Frontend   │  (Lovable)
+│  React Frontend   │
 └───────────────────┘
 ```
 
@@ -62,20 +49,30 @@ Canton Network API
    ```bash
    cd scripts/ingest
    npm install
-   node fetch-updates-parquet.js
+   node fetch-updates.js      # Live updates
+   node fetch-backfill.js     # Historical backfill
+   node fetch-acs.js          # ACS snapshots
    ```
 
 3. **Access the frontend:**
    - Lovable preview: Uses the DuckDB API at localhost:3001
    - Or expose via Cloudflare Tunnel for team access
 
+## Security Features
+
+- **SQL Injection Prevention**: All queries use centralized sanitization utilities
+- **Dangerous Pattern Detection**: UNION injection, DROP/DELETE statements, and comment injection are rejected at input
+- **Input Validation**: Numeric parameters have enforced bounds; string inputs are validated against patterns
+- **Parameterized Queries**: Where possible, values are escaped rather than interpolated
+
 ## Archived Scripts
 
-The following scripts were used for the old Supabase-only architecture:
+Legacy scripts that used Supabase have been archived:
 - `scripts/archive/fetch-backfill-history.js.archived`
 - `scripts/archive/ingest-updates.js.archived`
+- `scripts/archive/fetch-acs-data.js.archived`
 
-These have been replaced by Parquet-based scripts in `scripts/ingest/`.
+These have been replaced by local-storage scripts in `scripts/ingest/`.
 
 ## API Endpoints
 
@@ -87,6 +84,7 @@ The DuckDB server exposes these endpoints:
 | `GET /api/events/latest` | Latest ledger events |
 | `GET /api/events/by-type/:type` | Events by type |
 | `GET /api/events/by-template/:id` | Events by template |
+| `GET /api/events/governance` | Governance events |
 | `GET /api/contracts/:id` | Contract lifecycle |
 | `GET /api/contracts/templates/list` | All templates |
 | `GET /api/stats/overview` | Overview statistics |
@@ -97,34 +95,40 @@ The DuckDB server exposes these endpoints:
 | `GET /api/acs/contracts` | Contracts by template |
 | `GET /api/acs/stats` | ACS overview stats |
 | `GET /api/acs/supply` | Supply statistics |
-
-## Supabase Tables (Metadata Only)
-
-These tables remain in Supabase for lightweight metadata:
-- `backfill_cursors` - Track ingestion progress
-- `acs_snapshots` - ACS snapshot metadata
-- `acs_template_stats` - Template statistics
-- `cips`, `cip_types` - Governance data
-- `user_roles` - Authentication
-
-Heavy data tables (`ledger_updates`, `ledger_events`) are now stored in Parquet files.
+| `GET /api/acs/rich-list` | Top token holders |
 
 ## Local ACS Snapshots
 
-The ACS snapshot data is stored in `data/acs/` directory with the following structure:
+ACS snapshot data is stored in the `DATA_DIR/acs/` directory:
 ```
-data/acs/
-  year=2024/
-    month=12/
-      day=11/
-        contracts-1.jsonl
-        contracts-2.jsonl
+acs/
+  migration=1/
+    year=2024/
+      month=12/
+        day=11/
+          snapshot=120000/
+            contracts-Amulet.parquet
+            contracts-LockedAmulet.parquet
+            _COMPLETE
 ```
 
 Run the ACS snapshot script to populate local data:
 ```bash
 cd scripts/ingest
-node fetch-acs-parquet.js
+node fetch-acs.js
 ```
 
-The UI will automatically use local ACS data when `VITE_LEDGER_BACKEND=duckdb` is set.
+## Environment Variables
+
+Configure the server via `server/.env`:
+
+```env
+# Required
+DATA_DIR=/path/to/ledger_raw
+
+# Optional
+PORT=3001
+ENGINE_ENABLED=true
+ENGINE_INTERVAL_MS=30000
+LOG_LEVEL=info
+```

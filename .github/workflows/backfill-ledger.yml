@@ -1,18 +1,21 @@
 name: Backfill Ledger History
 
+# DEPRECATED: This workflow used Supabase for ledger storage.
+# The project now uses local DuckDB/binary storage exclusively.
+# See scripts/ingest/fetch-backfill.js for the new local-only backfill.
+
 on:
-  schedule:
-    - cron: '0 0 * * 0'  # Run every Sunday at midnight (00:00 UTC)
-  workflow_dispatch: {}  # Keep manual trigger available
+  workflow_dispatch: # Manual trigger only - disabled scheduled runs
 
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
   group: ledger-ingestion
-  cancel-in-progress: false # Queue instead of canceling
+  cancel-in-progress: false
 
 jobs:
   backfill:
     runs-on: self-hosted
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
@@ -24,16 +27,13 @@ jobs:
           node-version: "20"
 
       - name: Install deps
-        run: |
-          npm init -y
-          npm install axios @supabase/supabase-js
+        working-directory: scripts/ingest
+        run: npm install
 
-      - name: Run backfill
+      - name: Run backfill (Local Storage)
+        working-directory: scripts/ingest
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          DATA_DIR: ${{ secrets.DATA_DIR || '/data/ledger_raw' }}
           BACKFILL_PAGE_SIZE: "500"
-          ENABLE_OPTIMIZATIONS: "true"
-        run: node scripts/fetch-backfill-history.js
+        run: node fetch-backfill.js

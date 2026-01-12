@@ -1,19 +1,21 @@
 name: Fetch ACS Snapshot
 
+# DEPRECATED: This workflow used Supabase for snapshot storage and resumption.
+# The project now uses local DuckDB storage exclusively.
+# See scripts/ingest/fetch-acs.js for the new local-only ACS fetcher.
+
 on:
-  workflow_dispatch: # Manual trigger
-  schedule:
-    - cron: '0 0,3,6,9,12,15,18,21 * * *' # Every 3 hours starting at 00:00 UTC
+  workflow_dispatch: # Manual trigger only - disabled scheduled runs
 
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
   group: ledger-ingestion
-  cancel-in-progress: false # Queue instead of canceling
+  cancel-in-progress: false
 
 jobs:
-  fetch-and-upload:
+  fetch-local:
     runs-on: self-hosted
-    timeout-minutes: 330 # 5.5 hours - leave buffer before 6-hour hard limit
+    timeout-minutes: 330
 
     steps:
       - name: Checkout code
@@ -25,29 +27,21 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: |
-          npm init -y
-          npm install axios bignumber.js @supabase/supabase-js
+        working-directory: scripts/ingest
+        run: npm install
 
-      - name: Fetch and Upload ACS Data in Real-Time
-        run: node scripts/fetch-acs-data.js
+      - name: Fetch ACS Data (Local Storage)
+        working-directory: scripts/ingest
+        run: node fetch-acs.js
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
-          EDGE_FUNCTION_URL: ${{ secrets.EDGE_FUNCTION_URL }}
-          ACS_UPLOAD_WEBHOOK_SECRET: ${{ secrets.ACS_UPLOAD_WEBHOOK_SECRET }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DATA_DIR: ${{ secrets.DATA_DIR || '/data/ledger_raw' }}
           PAGE_SIZE: '500'
-          UPLOAD_CHUNK_SIZE: '1'
-          UPLOAD_DELAY_MS: '200'
-          RETRY_COOLDOWN_MS: '15000'
-          MAX_INFLIGHT_UPLOADS: '1'
 
       - name: Upload artifacts (backup)
         uses: actions/upload-artifact@v4
         with:
           name: acs-snapshot-${{ github.run_number }}
           path: |
-            acs_full/
-            circulating-supply-single-sv.json
+            ${{ secrets.DATA_DIR || '/data/ledger_raw' }}/acs/
           retention-days: 30

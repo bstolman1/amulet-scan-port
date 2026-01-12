@@ -1,14 +1,16 @@
 name: Ingest Live Updates
 
+# DEPRECATED: This workflow used Supabase for ledger storage.
+# The project now uses local DuckDB/binary storage exclusively.
+# See scripts/ingest/fetch-updates.js for the new local-only fetcher.
+
 on:
-  workflow_dispatch: # Manual trigger
-  schedule:
-    - cron: '*/5 * * * *' # Every 5 minutes for near-real-time updates
+  workflow_dispatch: # Manual trigger only - disabled scheduled runs
 
 # Prevent concurrent runs that could conflict with database writes
 concurrency:
   group: ledger-ingestion
-  cancel-in-progress: false # Queue instead of canceling
+  cancel-in-progress: false
 
 jobs:
   ingest:
@@ -25,13 +27,12 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: |
-          npm init -y
-          npm install axios @supabase/supabase-js
+        working-directory: scripts/ingest
+        run: npm install
 
-      - name: Ingest Live Updates
-        run: node scripts/ingest-updates.js
+      - name: Ingest Live Updates (Local Storage)
+        working-directory: scripts/ingest
+        run: node fetch-updates.js
         env:
           BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DATA_DIR: ${{ secrets.DATA_DIR || '/data/ledger_raw' }}
