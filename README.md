@@ -1,125 +1,164 @@
-# Welcome to your Lovable project
+# Amulet Scan
 
-## Project info
+A high-performance ledger explorer for Canton Network, featuring real-time data ingestion, governance tracking, and comprehensive analytics.
 
-**URL**: https://lovable.dev/projects/fdd2ffc6-5832-4389-80f4-e69bba15aa8b
+## Overview
 
-## How can I edit this code?
+Amulet Scan provides a complete solution for exploring and analyzing Canton Network ledger data:
 
-There are several ways of editing your application.
+- **Real-time Updates**: Live streaming of ledger events as they occur
+- **Historical Backfill**: Complete historical data ingestion with TB-scale support
+- **Governance Tracking**: Monitor votes, proposals, and SV weight changes
+- **ACS Snapshots**: Point-in-time Active Contract Set analysis
+- **Supply Analytics**: Token minting, burning, and holder distribution
 
-**Use Lovable**
+## Architecture
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/fdd2ffc6-5832-4389-80f4-e69bba15aa8b) and start prompting.
+```
+┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
+│   Canton Network    │────▶│   Ingestion Layer   │────▶│   Binary Storage    │
+│      Scan API       │     │   (Node.js scripts) │     │   (.pb.zst files)   │
+└─────────────────────┘     └─────────────────────┘     └─────────────────────┘
+                                                                  │
+                                                                  ▼
+┌─────────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
+│   React Frontend    │◀────│    Express API      │◀────│      DuckDB         │
+│   (Vite + Tailwind) │     │    (Port 3001)      │     │   Query Engine      │
+└─────────────────────┘     └─────────────────────┘     └─────────────────────┘
+```
 
-Changes made via Lovable will be committed automatically to this repo.
+## Quick Start
 
-**Use your preferred IDE**
+### Prerequisites
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+- Node.js 20.x or later
+- Git
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### Installation
 
-Follow these steps:
+```bash
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/amulet-scan.git
+cd amulet-scan
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+# Install frontend dependencies
+npm install
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# Install server dependencies
+cd server && npm install
 
-# Step 3: Install the necessary dependencies.
-npm i
+# Install ingestion dependencies
+cd ../scripts/ingest && npm install
+```
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+### Running Locally
+
+```bash
+# Terminal 1: Start the API server
+cd server
+cp .env.example .env  # Configure your paths
+npm start
+
+# Terminal 2: Start the frontend
+cd ..
 npm run dev
+
+# Terminal 3: Run data ingestion (optional)
+cd scripts/ingest
+node fetch-updates.js  # Live updates
 ```
 
-**Edit a file directly in GitHub**
+### Environment Configuration
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/fdd2ffc6-5832-4389-80f4-e69bba15aa8b) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
-
-## Backfill Performance Optimizations
-
-The backfill script includes optional performance optimizations that can provide **3×–15× speed improvements** for bulk data ingestion:
-
-### Enabling Optimizations
-
-Set the `ENABLE_OPTIMIZATIONS=true` environment variable when running the backfill:
-
-```sh
-ENABLE_OPTIMIZATIONS=true node scripts/fetch-backfill-history.js
+Create `server/.env`:
+```bash
+PORT=3001
+DATA_DIR=/path/to/ledger_data
+CURSOR_DIR=/path/to/ledger_data/cursors
+ENGINE_ENABLED=true
 ```
 
-### What Gets Optimized
+## Documentation
 
-1. **UNLOGGED Tables** (3×–10× faster)
-   - Tables are made UNLOGGED during backfill
-   - Automatically restored to LOGGED after completion
+| Document | Description |
+|----------|-------------|
+| [Architecture Overview](docs/architecture-overview.md) | System design and component interactions |
+| [API Reference](docs/api-reference.md) | Complete API endpoint documentation |
+| [Data Architecture](docs/data-architecture.md) | Storage formats and indexing strategy |
+| [Setup Guide](docs/setup-guide.md) | Detailed installation and configuration |
+| [Deployment Guide](docs/deployment.md) | Production deployment instructions |
 
-2. **Index Dropping** (5×–15× faster)
-   - All indexes are dropped before ingestion
-   - Automatically recreated after completion
+## Technology Stack
 
-3. **Large Batch Sizes** (2×–4× faster)
-   - Batch size increased to 10,000 rows
-   - Reduces COPY operation overhead
+### Frontend
+- **React 18** with TypeScript
+- **Vite** for fast development and building
+- **Tailwind CSS** with custom design system
+- **shadcn/ui** component library
+- **TanStack Query** for data fetching
+- **Recharts** for data visualization
 
-### Important Notes
+### Backend
+- **Express.js** API server
+- **DuckDB** for high-performance SQL queries
+- **Node.js** ingestion scripts with worker pools
+- **Protobuf + Zstandard** for efficient storage
 
-- ⚠️ **UNLOGGED tables are not crash-safe**: Data may be lost if the database crashes during backfill
-- ✅ **Automatic restoration**: The script automatically restores normal settings after completion or on error
-- 🔒 **Use for initial backfill only**: Not recommended for production live ingestion
+### Data Pipeline
+- Binary files (.pb.zst) as source of truth
+- Optional Parquet materialization for analytics
+- Incremental indexing for fast queries
 
-### Manual Control (Advanced)
+## Project Structure
 
-If you need manual control over optimizations:
-
-**Before backfill:**
-```sql
-ALTER TABLE ledger_updates SET UNLOGGED;
-ALTER TABLE ledger_events SET UNLOGGED;
-DROP INDEX IF EXISTS idx_ledger_updates_migration_id;
-DROP INDEX IF EXISTS idx_ledger_events_migration_id;
+```
+├── src/                    # React frontend
+│   ├── components/         # UI components
+│   ├── hooks/              # Custom React hooks
+│   ├── pages/              # Route pages
+│   └── lib/                # Utilities
+├── server/                 # Express API server
+│   ├── api/                # API route handlers
+│   ├── engine/             # Warehouse engine
+│   ├── duckdb/             # Database connection
+│   └── cache/              # Caching layer
+├── scripts/ingest/         # Data ingestion
+│   ├── fetch-updates.js    # Live updates
+│   ├── fetch-backfill.js   # Historical data
+│   └── fetch-acs.js        # ACS snapshots
+├── docs/                   # Documentation
+└── data/                   # Data storage (gitignored)
 ```
 
-**After backfill:**
-```sql
-ALTER TABLE ledger_updates SET LOGGED;
-ALTER TABLE ledger_events SET LOGGED;
-CREATE INDEX idx_ledger_updates_migration_id ON ledger_updates(migration_id);
-CREATE INDEX idx_ledger_events_migration_id ON ledger_events(migration_id);
-```
+## Key Features
+
+### Governance Dashboard
+- Track VoteRequest lifecycle from creation to execution
+- Monitor Super Validator weight distributions
+- View proposal outcomes and voting patterns
+
+### Supply Analytics
+- Real-time minting and burning statistics
+- Rich list of top token holders
+- Daily supply changes visualization
+
+### Performance
+- Handles 35K+ binary files (1.8TB compressed)
+- Sub-second queries via template file indexing
+- Streaming decompression for memory efficiency
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is proprietary software. All rights reserved.
+
+## Support
+
+For questions or issues, please open a GitHub issue or contact the development team.
