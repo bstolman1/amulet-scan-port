@@ -33,14 +33,18 @@ export default defineConfig({
       ['server/**/*.integration.test.js', 'node'],
       ['server/**/*.e2e.test.js', 'node'],
     ],
-    deps: {
-      // Allow supertest and other node modules to be resolved
-      inline: [/supertest/],
-    },
   },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  // SSR settings for server-side module resolution
+  ssr: {
+    noExternal: ['supertest'],
+  },
+  // Optimizations for node modules  
+  optimizeDeps: {
+    include: ['supertest'],
   },
 });
