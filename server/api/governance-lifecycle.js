@@ -41,6 +41,28 @@ import {
   getAllAuditEntries,
   AUDIT_VERSION,
 } from '../inference/hybrid-auditor.js';
+// Golden evaluation set - fixed benchmark for classifier accuracy
+import {
+  readGoldenSet,
+  addGoldenItem,
+  removeGoldenItem,
+  updateGoldenItemType,
+  evaluateAgainstGoldenSet,
+  checkNoRegressionPolicy,
+  getGoldenSetFull,
+  getGoldenSetSummary,
+  getEvaluationHistory,
+  importFromCorrections,
+} from '../inference/golden-set.js';
+// Per-decision explainability - audit-grade classification traces
+import {
+  storeDecisionTrace,
+  getDecisionTrace,
+  getLatestDecision,
+  queryDecisions,
+  getDecisionStats,
+  explainDecision,
+} from '../inference/decision-explainability.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Cache directory - uses DATA_DIR/cache if DATA_DIR is set, otherwise project data/cache
@@ -122,7 +144,8 @@ function getLearnedPatterns() {
 }
 
 // Reinforce a pattern after a successful match
-function reinforcePattern(patternType, keyword) {
+// NEW: Also called when classification survives without correction
+function reinforcePattern(patternType, keyword, source = 'match') {
   try {
     if (!fs.existsSync(LEARNED_PATTERNS_FILE)) return;
     
@@ -150,14 +173,76 @@ function reinforcePattern(patternType, keyword) {
     if (pattern && typeof pattern === 'object') {
       pattern.lastReinforced = new Date().toISOString();
       pattern.matchCount = (pattern.matchCount || 0) + 1;
-      pattern.confidence = Math.min(1.0, (pattern.confidence || 0.8) + REINFORCEMENT_BOOST);
+      
+      // Reinforcement boost depends on source
+      // 'survival' = classification wasn't corrected (stronger signal)
+      // 'match' = pattern matched during classification
+      const boost = source === 'survival' ? REINFORCEMENT_BOOST * 1.5 : REINFORCEMENT_BOOST;
+      pattern.confidence = Math.min(1.0, (pattern.confidence || 0.8) + boost);
+      
+      // Track reinforcement history for audit
+      pattern.reinforcementLog = pattern.reinforcementLog || [];
+      pattern.reinforcementLog.push({
+        timestamp: new Date().toISOString(),
+        source,
+        newConfidence: pattern.confidence,
+      });
+      // Keep last 20 entries
+      if (pattern.reinforcementLog.length > 20) {
+        pattern.reinforcementLog = pattern.reinforcementLog.slice(-20);
+      }
       
       fs.writeFileSync(LEARNED_PATTERNS_FILE, JSON.stringify(data, null, 2));
       _learnedPatternsMtime = 0; // Force reload
+      
+      console.log(`📈 Pattern reinforced: "${keyword}" (${patternType}) via ${source}, confidence: ${pattern.confidence.toFixed(2)}`);
     }
   } catch (e) {
     console.error('Failed to reinforce pattern:', e.message);
   }
+}
+
+// Reinforce patterns that survived a classification cycle without corrections
+// Called periodically (e.g., daily) to reward patterns that are working well
+function reinforceSurvivingPatterns(classifiedItems, correctedIds = new Set()) {
+  const patterns = getLearnedPatterns();
+  if (!patterns) return { reinforced: 0 };
+  
+  let reinforced = 0;
+  
+  for (const item of classifiedItems) {
+    // Skip if this item was corrected
+    if (correctedIds.has(item.id) || correctedIds.has(item.primaryId)) continue;
+    
+    // Find which patterns matched this item
+    const subject = (item.primaryId || item.subject || '').toLowerCase();
+    
+    // Check each pattern type
+    const checkAndReinforce = (keywords, type) => {
+      if (!keywords) return;
+      for (const kw of keywords) {
+        const keyword = typeof kw === 'string' ? kw : kw.keyword;
+        if (subject.includes(keyword.toLowerCase())) {
+          reinforcePattern(type, keyword, 'survival');
+          reinforced++;
+        }
+      }
+    };
+    
+    if (item.type === 'validator') {
+      checkAndReinforce(patterns.validatorKeywords, 'validator');
+    } else if (item.type === 'featured-app') {
+      checkAndReinforce(patterns.featuredAppKeywords, 'featured-app');
+    } else if (item.type === 'cip') {
+      checkAndReinforce(patterns.cipKeywords, 'cip');
+    } else if (item.type === 'protocol-upgrade') {
+      checkAndReinforce(patterns.protocolUpgradeKeywords, 'protocol-upgrade');
+    } else if (item.type === 'outcome') {
+      checkAndReinforce(patterns.outcomeKeywords, 'outcome');
+    }
+  }
+  
+  return { reinforced };
 }
 
 // Check if text matches learned keywords for a type
@@ -4578,6 +4663,114 @@ router.get('/classification-training-data', (req, res) => {
       original_label: d.originalType,
     })).join('\n'),
   });
+});
+
+// ========== GOLDEN EVALUATION SET ENDPOINTS ==========
+
+// Get golden set summary
+router.get('/golden-set', (req, res) => {
+  const summary = getGoldenSetSummary();
+  res.json(summary);
+});
+
+// Get full golden set with all items
+router.get('/golden-set/full', (req, res) => {
+  const goldenSet = getGoldenSetFull();
+  res.json(goldenSet);
+});
+
+// Add item to golden set
+router.post('/golden-set', (req, res) => {
+  const { id, subject, body, trueType, notes, category } = req.body;
+  if (!id || !subject || !trueType) {
+    return res.status(400).json({ error: 'id, subject, and trueType are required' });
+  }
+  const result = addGoldenItem({ id, subject, body, trueType, notes, category, addedBy: 'api' });
+  res.json(result);
+});
+
+// Remove item from golden set
+router.delete('/golden-set/:id', (req, res) => {
+  const result = removeGoldenItem(req.params.id, req.body.reason || 'Removed via API');
+  res.json(result);
+});
+
+// Evaluate classifier against golden set
+router.post('/golden-set/evaluate', async (req, res) => {
+  const { classifierVersion } = req.body;
+  const patterns = getLearnedPatterns() || {};
+  
+  const classifyFn = (subject, body) => simulateClassification(subject, patterns);
+  const result = await evaluateAgainstGoldenSet(classifyFn, classifierVersion || `v${Date.now()}`);
+  res.json(result);
+});
+
+// Check no-regression policy before applying patterns
+router.post('/golden-set/check-policy', async (req, res) => {
+  const { proposedPatterns } = req.body;
+  const currentPatterns = getLearnedPatterns() || {};
+  
+  const currentClassify = (subject) => simulateClassification(subject, currentPatterns);
+  const proposedClassify = (subject) => simulateClassification(subject, { ...currentPatterns, ...proposedPatterns });
+  
+  const result = await checkNoRegressionPolicy(currentClassify, proposedClassify);
+  res.json(result);
+});
+
+// Get evaluation history
+router.get('/golden-set/history', (req, res) => {
+  const history = getEvaluationHistory();
+  res.json(history);
+});
+
+// ========== DECISION EXPLAINABILITY ENDPOINTS ==========
+
+// Get decision trace for an item
+router.get('/decision-trace/:itemId', (req, res) => {
+  const trace = getDecisionTrace(req.params.itemId);
+  if (!trace) {
+    return res.status(404).json({ error: 'No trace found' });
+  }
+  res.json(trace);
+});
+
+// Get human-readable explanation
+router.get('/explain/:itemId', (req, res) => {
+  const explanation = explainDecision(req.params.itemId);
+  res.json({ explanation });
+});
+
+// Query decisions
+router.get('/decisions', (req, res) => {
+  const results = queryDecisions({
+    type: req.query.type,
+    limit: parseInt(req.query.limit) || 100,
+    minConfidence: req.query.minConfidence ? parseFloat(req.query.minConfidence) : null,
+  });
+  res.json({ count: results.length, decisions: results });
+});
+
+// Get decision stats
+router.get('/decision-stats', (req, res) => {
+  const stats = getDecisionStats();
+  res.json(stats);
+});
+
+// ========== REINFORCEMENT ENDPOINT ==========
+
+// Trigger reinforcement for surviving patterns
+router.post('/reinforce-survivors', (req, res) => {
+  const cached = readCache();
+  const overrides = readOverrides();
+  
+  if (!cached?.lifecycleItems) {
+    return res.json({ success: false, message: 'No data available' });
+  }
+  
+  const correctedIds = new Set(Object.keys(overrides.itemOverrides || {}));
+  const result = reinforceSurvivingPatterns(cached.lifecycleItems, correctedIds);
+  
+  res.json({ success: true, ...result });
 });
 
 export { fetchFreshData, writeCache, readCache };
