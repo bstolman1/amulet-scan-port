@@ -1174,7 +1174,7 @@ const Governance = () => {
                       {fullScanData.summary.uniqueProposals} unique proposals
                     </Badge>
                     <Badge variant="secondary" className="ml-1">
-                      {fullScanData.summary.filesScanned.toLocaleString()} / {fullScanData.summary.totalFilesInDataset.toLocaleString()} files
+                      {fullScanData.summary.filesScanned?.toLocaleString() ?? 0} / {fullScanData.summary.totalFilesInDataset?.toLocaleString() ?? 0} files
                     </Badge>
                   </>
                 )}
@@ -1282,7 +1282,7 @@ const Governance = () => {
                   <Loader2 className="h-12 w-12 text-primary mb-4 animate-spin" />
                   <p className="text-lg font-semibold mb-2">Scanning Ledger Files...</p>
                   <p className="text-muted-foreground text-sm mb-4">
-                    {scanProgress.filesScanned.toLocaleString()} / {scanProgress.totalFiles.toLocaleString()} files
+                    {scanProgress?.filesScanned?.toLocaleString() ?? 0} / {scanProgress?.totalFiles?.toLocaleString() ?? 0} files
                   </p>
                 </div>
                 
@@ -1351,7 +1351,7 @@ const Governance = () => {
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-xs text-muted-foreground mb-1">Files Scanned</p>
-                    <p className="text-2xl font-bold">{fullScanData.summary.filesScanned.toLocaleString()}</p>
+                    <p className="text-2xl font-bold">{fullScanData.summary?.filesScanned?.toLocaleString() ?? 0}</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/30">
                     <p className="text-xs text-muted-foreground mb-1">Vote Requests</p>
