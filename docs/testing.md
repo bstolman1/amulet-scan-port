@@ -41,7 +41,14 @@ npm test -- src/
     ├── api/
     │   ├── stats.test.js             # Stats API integration tests
     │   ├── events.test.js            # Events API integration tests
-    │   └── search.test.js            # Search API integration tests
+    │   ├── search.test.js            # Search API integration tests
+    │   ├── rewards.test.js           # Rewards API tests
+    │   ├── party.test.js             # Party API tests
+    │   └── governance-lifecycle.test.js  # Governance lifecycle tests
+    ├── engine/
+    │   ├── decoder.test.js           # Binary decoder tests
+    │   ├── vote-outcome-analyzer.test.js # Vote threshold logic tests
+    │   └── reward-indexer.test.js    # Reward indexing tests
     ├── lib/
     │   └── sql-sanitize.test.js      # SQL injection prevention tests
     └── test/
@@ -58,22 +65,39 @@ npm test -- src/
 Located in `server/lib/sql-sanitize.test.js`, these tests verify:
 
 - Detection of SQL injection patterns (UNION, DROP, DELETE, etc.)
+- **Tautology-based injection detection** (OR 1=1, 'a'='a', etc.)
+- **Comment-based bypass detection** (/**/, --)
 - Proper escaping of special characters in strings
 - Input validation for identifiers, timestamps, contract IDs
 - Safe query builder functions
 
 **These tests are critical** - they verify the security layer that prevents SQL injection attacks.
 
-### 2. Utility Tests
+### 2. Engine Tests (Core Business Logic)
+
+- **decoder.test.js**: Binary file decoding, malformed input handling
+- **vote-outcome-analyzer.test.js**: 2/3 majority threshold voting logic
+- **reward-indexer.test.js**: Reward coupon indexing and CC calculations
+
+### 3. API Tests
+
+- **stats.test.js**: Statistics endpoint validation
+- **events.test.js**: Event query parameter validation
+- **search.test.js**: Search query sanitization
+- **rewards.test.js**: Reward calculation and filtering
+- **party.test.js**: Party search and event retrieval
+- **governance-lifecycle.test.js**: Governance flow classification
+
+### 4. Utility Tests
 
 - **amount-utils.test.ts**: Tests for CC (Canton Coin) amount conversions
 - **utils.test.ts**: Tests for the `cn()` class name merging utility
 
-### 3. Hook Tests
+### 5. Hook Tests
 
 - **use-toast.test.ts**: Tests for the toast notification system
 
-### 4. Component Tests
+### 6. Component Tests
 
 - **button.test.tsx**: Button variants, sizes, and click handling
 - **card.test.tsx**: Card composition and styling
