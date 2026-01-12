@@ -4,9 +4,9 @@ import path from 'path';
 export default defineConfig({
   test: {
     globals: true,
-    // Default to node so server-side modules (duckdb, fileURLToPath, fs, etc.) behave correctly.
-    // Frontend tests are switched to jsdom via environmentMatchGlobs below.
-    environment: 'node',
+    // Default to jsdom so React Testing Library tests have a DOM.
+    // Server-side tests are switched back to node via environmentMatchGlobs below.
+    environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: [
       'src/**/*.{test,spec}.{js,ts,tsx}',
@@ -29,12 +29,9 @@ export default defineConfig({
         '**/node_modules/**',
       ],
     },
-    // Frontend tests need a DOM - explicit file pattern for cross-platform compatibility
+    // Server tests must run in node (duckdb, fs, fileURLToPath, etc.)
     environmentMatchGlobs: [
-      ['**/src/**/*.test.ts', 'jsdom'],
-      ['**/src/**/*.test.tsx', 'jsdom'],
-      ['**/src/**/*.spec.ts', 'jsdom'],
-      ['**/src/**/*.spec.tsx', 'jsdom'],
+      ['server/**', 'node'],
     ],
   },
   resolve: {

@@ -7,7 +7,10 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createTestApp } from '../app.js';
-import request from 'supertest';
+import { createRequire } from 'module';
+
+const require = createRequire(new URL('../../../package.json', import.meta.url));
+const request = require('supertest');
 
 describe('Governance Flow E2E', () => {
   let app;

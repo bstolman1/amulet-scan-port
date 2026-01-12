@@ -6,7 +6,10 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createTestApp } from '../app.js';
-import request from 'supertest';
+import { createRequire } from 'module';
+
+const require = createRequire(new URL('../../../package.json', import.meta.url));
+const request = require('supertest');
 
 describe('Data Integrity E2E Tests', () => {
   let app;
