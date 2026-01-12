@@ -2,16 +2,13 @@
 
 ## Overview
 
-This project provides a Canton ledger explorer with two backend options:
+This project provides a Canton ledger explorer using a local-first DuckDB/binary file architecture.
 
-1. **Supabase/Postgres** - Cloud-hosted, managed database (current)
-2. **Parquet/DuckDB** - Local-first, file-based analytics (new)
-
-## Parquet/DuckDB Architecture
+## DuckDB Architecture
 
 ### Why This Approach?
 
-- **TB-scale data**: Parquet handles 1.8TB+ efficiently
+- **TB-scale data**: Binary files with ZSTD compression handle 1.8TB+ efficiently
 - **Zero cost**: No database hosting fees
 - **BigQuery ready**: Parquet files upload directly to GCS/BigQuery
 - **Simple**: No connection pooling, no ORM, just files + SQL
@@ -21,19 +18,16 @@ This project provides a Canton ledger explorer with two backend options:
 ```
 amulet-scan-port/
 ├── scripts/ingest/           # Data ingestion from Canton API
-│   ├── fetch-updates-parquet.js    # Live incremental updates
-│   ├── fetch-backfill-parquet.js   # Historical backfill
-│   ├── parquet-schema.js           # Schema definitions
-│   ├── write-parquet.js            # File writing logic
-│   └── rotate-parquet.js           # File compaction
+│   ├── fetch-updates.js      # Live incremental updates
+│   ├── fetch-backfill.js     # Historical backfill
+│   ├── write-binary.js       # Binary file writing
+│   └── write-parquet.js      # Parquet conversion
 │
 ├── data/
-│   ├── raw/                  # Partitioned data files
-│   │   └── year=YYYY/month=MM/day=DD/
-│   │       ├── updates-00001.parquet
-│   │       └── events-00001.parquet
+│   ├── ledger_raw/           # Compressed binary files
+│   ├── parquet/              # Materialized Parquet files
 │   ├── cursors/              # Backfill progress tracking
-│   └── metadata/             # Reference data (validators, etc.)
+│   └── cache/                # Aggregation cache
 │
 ├── server/                   # Express + DuckDB API
 │   ├── server.js
@@ -43,9 +37,10 @@ amulet-scan-port/
 │       ├── party.js
 │       ├── contracts.js
 │       ├── stats.js
+│       ├── acs.js
 │       └── search.js
 │
-└── frontend/lovable/         # React UI (this Lovable project)
+└── src/                      # React UI (Lovable project)
 ```
 
 ### Data Flow
@@ -54,13 +49,13 @@ amulet-scan-port/
 Canton Scan API
       │
       ▼
-[fetch-updates-parquet.js]  ◄── Live polling (5s intervals)
+[fetch-updates.js]           ◄── Live polling (5s intervals)
       │
       ▼
-[write-parquet.js]          ◄── Batch to 25k rows
+[write-binary.js]            ◄── ZSTD-compressed Protobuf
       │
       ▼
-/data/raw/year=.../          ◄── Partitioned files
+/data/ledger_raw/            ◄── Binary files
       │
       ▼
 [DuckDB Server]              ◄── Query engine
@@ -80,15 +75,15 @@ Canton Scan API
 2. **Start ingestion**
    ```bash
    # Live updates
-   node scripts/ingest/fetch-updates-parquet.js
+   node scripts/ingest/fetch-updates.js
    
    # Or backfill historical data
-   node scripts/ingest/fetch-backfill-parquet.js
+   node scripts/ingest/fetch-backfill.js
    ```
 
-3. **Convert to Parquet** (requires DuckDB CLI)
+3. **Convert to Parquet** (optional)
    ```bash
-   node scripts/ingest/rotate-parquet.js
+   node scripts/ingest/materialize-parquet.js
    ```
 
 4. **Start API server**
@@ -98,13 +93,12 @@ Canton Scan API
 
 5. **Connect frontend**
    - Set `VITE_DUCKDB_API_URL=http://localhost:3001` in `.env`
-   - Or use Cloudflare Tunnel for remote access
 
 ### BigQuery Migration
 
 When ready to move to BigQuery:
 
-1. Upload `/data/raw/` to Google Cloud Storage
+1. Upload parquet files to Google Cloud Storage
 2. Create external BigQuery table pointing to GCS
 3. Update API queries to use BigQuery client
 

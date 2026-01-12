@@ -2,11 +2,12 @@
 
 ## Overview
 
-This project uses a **DuckDB-only backend architecture** for all ledger data:
-- **DuckDB + Binary Protobuf** for heavy ledger data (updates, events)
-- **Local filesystem** for ACS snapshots and metadata
+The backend uses a **DuckDB-based architecture** with local file storage:
 
-> **Note:** Supabase integration has been removed. All data is now stored locally and served via the DuckDB API server.
+- **DuckDB** for querying ledger events and ACS snapshots
+- **Binary files** (Protobuf + ZSTD compression) for raw ledger data
+- **Parquet files** for materialized analytics
+- **Local filesystem** for ACS snapshots and metadata
 
 ## Data Flow
 
@@ -64,15 +65,6 @@ Canton Network API
 - **Dangerous Pattern Detection**: UNION injection, DROP/DELETE statements, and comment injection are rejected at input
 - **Input Validation**: Numeric parameters have enforced bounds; string inputs are validated against patterns
 - **Parameterized Queries**: Where possible, values are escaped rather than interpolated
-
-## Archived Scripts
-
-Legacy scripts that used Supabase have been archived:
-- `scripts/archive/fetch-backfill-history.js.archived`
-- `scripts/archive/ingest-updates.js.archived`
-- `scripts/archive/fetch-acs-data.js.archived`
-
-These have been replaced by local-storage scripts in `scripts/ingest/`.
 
 ## API Endpoints
 
