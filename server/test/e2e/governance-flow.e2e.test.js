@@ -6,11 +6,8 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createRequire } from 'module';
 import { createTestApp } from '../app.js';
-
-const require = createRequire(import.meta.url);
-const request = require(require.resolve('supertest', { paths: [process.cwd()] }));
+import request from 'supertest';
 
 describe('Governance Flow E2E', () => {
   let app;
