@@ -1,13 +1,25 @@
-# VM Deployment Guide
+# Production Deployment Guide
 
-Deploy the DuckDB API server and ingestion pipeline to a Linux VM (Google Cloud, AWS, etc.).
+This guide covers deploying Amulet Scan to a Linux VM (Google Cloud, AWS, Azure, etc.) for production use.
+
+## Overview
+
+The deployment consists of:
+1. **API Server** - Express.js serving the DuckDB-powered API
+2. **Ingestion Pipeline** - Node.js scripts for data collection
+3. **Frontend** - Static React app (served separately or via CDN)
 
 ## Prerequisites
 
-- Linux VM with SSH access
-- Node.js 20.x
-- Git
-- Access to Canton Scan API
+| Requirement | Details |
+|-------------|---------|
+| Linux VM | Ubuntu 22.04 LTS recommended |
+| SSH Access | For initial setup and maintenance |
+| Node.js | 20.x (installed via NodeSource) |
+| Git | For code deployment |
+| Storage | 500GB+ SSD for full backfill |
+| RAM | 16GB+ recommended |
+| Network | Access to Canton Scan API |
 
 ## Quick Start
 
@@ -205,28 +217,153 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d your-domain.com
 ```
 
+## Monitoring
+
+### Log Rotation
+
+Add log rotation to prevent disk filling:
+
+```bash
+sudo tee /etc/logrotate.d/amulet-scan << 'EOF'
+/home/YOUR_USERNAME/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+EOF
+```
+
+### Health Check Script
+
+Create a monitoring script:
+
+```bash
+cat > ~/check-health.sh << 'EOF'
+#!/bin/bash
+RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/health)
+if [ "$RESPONSE" != "200" ]; then
+    echo "$(date): Health check failed with status $RESPONSE"
+    sudo systemctl restart duckdb-api
+    echo "$(date): Server restarted"
+fi
+EOF
+chmod +x ~/check-health.sh
+```
+
+Add to crontab:
+```bash
+*/5 * * * * /home/YOUR_USERNAME/check-health.sh >> /home/YOUR_USERNAME/health.log 2>&1
+```
+
 ## Troubleshooting
 
-### Check if server is running
+### Check Server Status
 ```bash
 sudo systemctl status duckdb-api
-curl http://localhost:3001/api/stats
+curl http://localhost:3001/health/detailed
 ```
 
-### View logs
+### View Logs
 ```bash
-journalctl -u duckdb-api -f          # Server logs
-tail -f ~/ingest.log                  # Ingestion logs
-tail -f ~/update.log                  # Git update logs
+# Server logs (systemd)
+journalctl -u duckdb-api -f
+
+# Ingestion logs
+tail -f ~/ingest.log
+
+# Git update logs
+tail -f ~/update.log
 ```
 
-### Manual restart
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| Server won't start | Check `journalctl -u duckdb-api -e` for errors |
+| Out of memory | Reduce `MAX_WORKERS` or add swap |
+| Permission denied | Verify file ownership: `chown -R $USER ~/ledger_data` |
+| Port in use | Check: `lsof -i :3001` and kill process |
+| Disk full | Check: `df -h` and clean old logs |
+
+### Manual Operations
+
 ```bash
+# Restart server
 sudo systemctl restart duckdb-api
-```
 
-### Check data directory
-```bash
+# Check data directory
 ls -la ~/ledger_data/raw/
 du -sh ~/ledger_data/
+
+# Rebuild indexes
+curl -X POST http://localhost:3001/api/engine/templates/build
+
+# Trigger aggregation refresh
+curl -X POST http://localhost:3001/api/refresh-aggregations
 ```
+
+## Backup Strategy
+
+### Data Backup
+
+```bash
+# Create backup script
+cat > ~/backup-data.sh << 'EOF'
+#!/bin/bash
+DATE=$(date +%Y%m%d)
+BACKUP_DIR=~/backups
+mkdir -p $BACKUP_DIR
+
+# Backup cursors and indexes (small, critical)
+tar -czf $BACKUP_DIR/cursors-$DATE.tar.gz ~/ledger_data/cursors/
+tar -czf $BACKUP_DIR/indexes-$DATE.tar.gz ~/ledger_data/*.json
+
+# Keep only last 7 backups
+find $BACKUP_DIR -name "*.tar.gz" -mtime +7 -delete
+EOF
+chmod +x ~/backup-data.sh
+```
+
+### Upload to Cloud Storage
+
+```bash
+# Google Cloud Storage example
+gsutil cp ~/backups/*.tar.gz gs://your-bucket/backups/
+```
+
+## Performance Tuning
+
+### System Limits
+
+```bash
+# Increase file descriptor limits
+echo "YOUR_USERNAME soft nofile 65536" | sudo tee -a /etc/security/limits.conf
+echo "YOUR_USERNAME hard nofile 65536" | sudo tee -a /etc/security/limits.conf
+```
+
+### Node.js Memory
+
+For large datasets, increase Node.js heap:
+
+```bash
+# In systemd service file
+Environment=NODE_OPTIONS="--max-old-space-size=8192"
+```
+
+### DuckDB Configuration
+
+The connection pool in `server/duckdb/connection.js` can be tuned:
+- `MAX_POOL_SIZE`: Increase for more concurrent queries
+- `QUERY_TIMEOUT_MS`: Adjust for slow queries
+
+## Security Checklist
+
+- [ ] Firewall configured (only port 3001 or 443 open)
+- [ ] HTTPS enabled with valid certificate
+- [ ] API keys stored in environment variables
+- [ ] Regular security updates applied
+- [ ] Log monitoring configured
+- [ ] Backup strategy implemented
