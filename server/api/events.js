@@ -154,7 +154,7 @@ router.get('/latest', async (req, res) => {
         observers,
         payload
       FROM ${getEventsSource()}
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -196,7 +196,7 @@ router.get('/by-type/:type', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE event_type = '${escapeString(sanitizedType)}'
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
     `;
     
@@ -237,7 +237,7 @@ router.get('/by-template/:templateId', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%${escaped}%' ESCAPE '\\'
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
     `;
     
@@ -287,14 +287,14 @@ router.get('/by-date', async (req, res) => {
     }
     
     let whereClause = '';
-    if (sanitizedStart) whereClause += ` AND effective_at >= '${escapeString(sanitizedStart)}'`;
-    if (sanitizedEnd) whereClause += ` AND effective_at <= '${escapeString(sanitizedEnd)}'`;
+    if (sanitizedStart) whereClause += ` AND COALESCE(timestamp, effective_at) >= '${escapeString(sanitizedStart)}'`;
+    if (sanitizedEnd) whereClause += ` AND COALESCE(timestamp, effective_at) <= '${escapeString(sanitizedEnd)}'`;
     
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE 1=1 ${whereClause}
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
     `;
     
@@ -411,7 +411,7 @@ router.get('/governance', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE ${templateFilter}
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -461,7 +461,7 @@ router.get('/rewards', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE ${templateFilter}
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -502,7 +502,7 @@ router.get('/member-traffic', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%MemberTraffic%'
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -868,7 +868,7 @@ router.get('/governance-history', async (req, res) => {
         payload
       FROM ${getEventsSource()}
       WHERE (${templateFilter}) OR (${choiceFilter}) OR template_id LIKE '%DsoRules%'
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
       OFFSET ${offset}
     `;
@@ -1166,7 +1166,7 @@ router.get('/vote-requests', async (req, res) => {
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%VoteRequest%'
         AND event_type = 'created'
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
       LIMIT ${limit}
     `;
     
@@ -3386,7 +3386,7 @@ async function scanGovernanceProposalsFromParquet(req, res, sendEvent, scanStart
       FROM ${eventsSource}
       WHERE template_id LIKE '%VoteRequest%'
         AND event_type = 'created'
-      ORDER BY effective_at DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC
     `;
     
     const createdEvents = await db.safeQuery(createdSql);

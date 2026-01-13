@@ -32,7 +32,7 @@ router.get('/:contractId', async (req, res) => {
       SELECT *
       FROM ${getUpdatesSource()}
       WHERE contract_id = '${contractId}'
-      ORDER BY effective_at ASC
+      ORDER BY COALESCE(timestamp, effective_at) ASC
     `;
     
     const rows = await db.safeQuery(sql);
