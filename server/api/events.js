@@ -90,9 +90,10 @@ const getEventsSource = () => {
   const hasZstd = db.hasFileType('events', '.jsonl.zst');
   
   if (!hasJsonl && !hasGzip && !hasZstd) {
-    // Return empty table if no files exist
+    // Return empty table if no files exist (must include all commonly-selected columns)
     return `(SELECT NULL::VARCHAR as event_id, NULL::VARCHAR as event_type, NULL::VARCHAR as contract_id, 
-             NULL::VARCHAR as template_id, NULL::VARCHAR as package_name, NULL::TIMESTAMP as timestamp,
+             NULL::VARCHAR as template_id, NULL::VARCHAR as package_name,
+             NULL::TIMESTAMP as timestamp, NULL::TIMESTAMP as effective_at,
              NULL::VARCHAR[] as signatories, NULL::VARCHAR[] as observers, NULL::JSON as payload WHERE false)`;
   }
   
