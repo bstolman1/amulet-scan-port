@@ -15,7 +15,8 @@ import {
   getContentCacheStats 
 } from './post-content-cache.js';
 
-const API_KEY = process.env.GROUPS_IO_API_KEY;
+// Read API_KEY lazily to ensure env.js has loaded
+const getApiKey = () => process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
 // Rate limiting
@@ -36,7 +37,7 @@ export async function fetchTopicContent(topicId, groupId, options = {}) {
     }
   }
   
-  if (!API_KEY) {
+  if (!getApiKey()) {
     console.warn('⚠️ GROUPS_IO_API_KEY not set, cannot fetch content');
     return null;
   }
@@ -46,7 +47,7 @@ export async function fetchTopicContent(topicId, groupId, options = {}) {
     const url = `${BASE_URL}/api/v1/gettopic?topic_id=${topicId}`;
     
     const response = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` },
+      headers: { 'Authorization': `Bearer ${getApiKey()}` },
     });
     
     if (!response.ok) {
@@ -64,7 +65,7 @@ export async function fetchTopicContent(topicId, groupId, options = {}) {
     try {
       const msgsUrl = `${BASE_URL}/api/v1/getmessages?topic_id=${topicId}&limit=1`;
       const msgsResponse = await fetch(msgsUrl, {
-        headers: { 'Authorization': `Bearer ${API_KEY}` },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` },
       });
       
       if (msgsResponse.ok) {
@@ -158,7 +159,7 @@ function cleanBodyText(body, maxLength = 6000) {
 export async function fetchTopicsContentBatch(topics, options = {}) {
   const { forceRefresh = false, onProgress = null } = options;
   
-  if (!API_KEY) {
+  if (!getApiKey()) {
     console.warn('⚠️ GROUPS_IO_API_KEY not set, cannot fetch content');
     return { fetched: 0, cached: topics.length, failed: 0 };
   }
