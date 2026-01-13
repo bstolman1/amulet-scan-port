@@ -14,13 +14,13 @@ interface BackendConfig {
 // - Non-local (Lovable preview / deployed): localhost is not reachable, so API features will be unavailable.
 const DEFAULT_DUCKDB_PORT = 3001;
 
-// Cloudflare tunnel URL for remote access (set to empty string to use default localhost behavior)
-const CLOUDFLARE_TUNNEL_URL = '';
+// Remote server URL for access from any environment (set to empty string to use default localhost behavior)
+const REMOTE_SERVER_URL = 'http://34.56.191.157:3001';
 
 function computeDuckDbApiUrl(): string {
-  // If Cloudflare tunnel is configured, always use it (works from any environment)
-  if (CLOUDFLARE_TUNNEL_URL) {
-    return CLOUDFLARE_TUNNEL_URL;
+  // If remote server is configured, always use it (works from any environment)
+  if (REMOTE_SERVER_URL) {
+    return REMOTE_SERVER_URL;
   }
   
   if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
