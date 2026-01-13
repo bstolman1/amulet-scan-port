@@ -113,6 +113,28 @@ app.get('/health/detailed', async (req, res) => {
   });
 });
 
+// Config debug endpoint - shows environment configuration for debugging
+app.get('/health/config', (req, res) => {
+  res.json({
+    timestamp: new Date().toISOString(),
+    config: {
+      DATA_DIR: process.env.DATA_DIR || '(not set)',
+      CURSOR_DIR: process.env.CURSOR_DIR || '(not set)',
+      ENGINE_ENABLED: ENGINE_ENABLED,
+      PORT: PORT,
+      LOG_LEVEL: process.env.LOG_LEVEL || '(not set)',
+    },
+    paths: {
+      dataPath: db.DATA_PATH,
+      cwd: process.cwd(),
+    },
+    node: {
+      version: process.version,
+      platform: process.platform,
+    }
+  });
+});
+
 // Refresh DuckDB views (call after data ingestion)
 app.post('/api/refresh-views', async (req, res) => {
   try {
