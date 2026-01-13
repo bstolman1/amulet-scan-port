@@ -253,8 +253,10 @@ cron.schedule('0 0,3,6,9,12,15,18,21 * * *', async () => {
   });
 });
 
-// Startup logic
-app.listen(PORT, async () => {
+// Startup logic - bind to 0.0.0.0 for external access
+const HOST = process.env.HOST || '0.0.0.0';
+app.listen(PORT, HOST, async () => {
+  console.log(`🦆 DuckDB API server running on http://${HOST}:${PORT}`);
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
   console.log(`⏰ Governance data refresh scheduled every 4 hours`);
