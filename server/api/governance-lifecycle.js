@@ -261,7 +261,8 @@ function getLearnedEntityType(entityName) {
   return patterns.entityNameMappings[key] || null;
 }
 
-const API_KEY = process.env.GROUPS_IO_API_KEY;
+// Read API_KEY lazily to ensure env.js has loaded
+const getApiKey = () => process.env.GROUPS_IO_API_KEY;
 const BASE_URL = 'https://lists.sync.global';
 
 // Define the governance groups and their lifecycle stages
@@ -610,7 +611,7 @@ async function getGroupDetails(groupId) {
   console.log(`Fetching group details for ID ${groupId}...`);
   try {
     const response = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${API_KEY}` },
+      headers: { 'Authorization': `Bearer ${getApiKey()}` },
     });
     if (response.ok) {
       const data = await response.json();
@@ -638,7 +639,7 @@ async function getSubscribedGroups() {
   const subsUrl = `${BASE_URL}/api/v1/getsubs?limit=100`;
   
   const response = await fetch(subsUrl, {
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
+    headers: { 'Authorization': `Bearer ${getApiKey()}` },
   });
   
   if (!response.ok) {
@@ -692,7 +693,7 @@ async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
     
     try {
       const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${API_KEY}` },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` },
       });
       
       if (!response.ok) {
@@ -2079,7 +2080,7 @@ router.get('/', async (req, res) => {
   }
   
   // No cache or force refresh - fetch fresh data
-  if (!API_KEY) {
+  if (!getApiKey()) {
     // Check if we have stale cache to serve (even on force refresh when no API key)
     const staleCache = readCache();
     if (staleCache) {
@@ -2127,7 +2128,7 @@ router.get('/', async (req, res) => {
 
 // Refresh endpoint - explicitly fetches fresh data
 async function handleRefresh(req, res) {
-  if (!API_KEY) {
+  if (!getApiKey()) {
     return res.status(500).json({ error: 'GROUPS_IO_API_KEY not configured' });
   }
 

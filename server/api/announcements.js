@@ -2,7 +2,8 @@ import express from 'express';
 
 const router = express.Router();
 
-const API_KEY = process.env.GROUPS_IO_API_KEY;
+// Read API_KEY lazily to ensure env.js has loaded
+const getApiKey = () => process.env.GROUPS_IO_API_KEY;
 const GROUP_NAME = 'supervalidator-announce'; // The subgroup name we're looking for
 const BASE_URL = 'https://lists.sync.global';
 
@@ -20,7 +21,7 @@ async function getGroupId() {
   console.log('Getting subscriptions to find group_id...');
   
   const response = await fetch(subsUrl, {
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
+    headers: { 'Authorization': `Bearer ${getApiKey()}` },
   });
   
   if (response.ok) {
@@ -67,7 +68,7 @@ async function fetchAllTopics(groupId, maxTopics = 500) {
     let response;
     try {
       response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${API_KEY}` },
+        headers: { 'Authorization': `Bearer ${getApiKey()}` },
       });
     } catch (fetchError) {
       console.error('Fetch error:', fetchError);
@@ -113,7 +114,7 @@ async function fetchAllTopics(groupId, maxTopics = 500) {
 router.get('/', async (req, res) => {
   const limit = parseInt(req.query.limit) || 200;
   
-  if (!API_KEY) {
+  if (!getApiKey()) {
     return res.status(500).json({ 
       error: 'GROUPS_IO_API_KEY not configured',
       announcements: [] 
