@@ -17,10 +17,33 @@ import { getACSPartitionPath } from './acs-schema.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default Windows path: C:\\ledger_raw
+// Platform detection
+const isWindows = process.platform === 'win32';
+const isWindowsPath = (p) => /^[A-Za-z]:[\\/]/.test(p);
+
+// Configuration - cross-platform path handling
 const WIN_DEFAULT = 'C:\\ledger_raw';
-const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WIN_DEFAULT;
-const BASE_DATA_DIR = isAbsolute(BASE_DATA_DIR_RAW) ? resolve(BASE_DATA_DIR_RAW) : resolve(BASE_DATA_DIR_RAW);
+const LINUX_DEFAULT = '/home/ben/ledger_data';
+const BASE_DATA_DIR_RAW = process.env.DATA_DIR || (isWindows ? WIN_DEFAULT : LINUX_DEFAULT);
+
+// Normalize path for current platform
+function normalizeCrossPlatform(inputPath) {
+  // If we're on Linux but got a Windows path, use Linux default
+  if (!isWindows && isWindowsPath(inputPath)) {
+    console.warn(`⚠️ [ACS-Parquet] Windows path detected on Linux: "${inputPath}"`);
+    console.warn(`   Using Linux default: "${LINUX_DEFAULT}"`);
+    return LINUX_DEFAULT;
+  }
+  // If we're on Windows but got a Linux path, use Windows default
+  if (isWindows && inputPath.startsWith('/')) {
+    console.warn(`⚠️ [ACS-Parquet] Linux path detected on Windows: "${inputPath}"`);
+    console.warn(`   Using Windows default: "${WIN_DEFAULT}"`);
+    return WIN_DEFAULT;
+  }
+  return inputPath;
+}
+
+const BASE_DATA_DIR = resolve(normalizeCrossPlatform(BASE_DATA_DIR_RAW));
 const DATA_DIR = join(BASE_DATA_DIR, 'raw');
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
