@@ -18,10 +18,10 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 
-// Configuration
-const WIN_DEFAULT = 'C:\\\\\\\\ledger_raw';
-const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
-const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
+// Configuration - cross-platform path handling
+import { getBaseDataDir, getCursorDir } from './path-utils.js';
+const BASE_DATA_DIR = getBaseDataDir();
+const CURSOR_DIR = getCursorDir();
 
 /**
  * Sanitize string for filename

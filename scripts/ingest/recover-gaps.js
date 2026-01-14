@@ -41,11 +41,11 @@ if (INSECURE_TLS) {
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
-// Default Windows path: C:\ledger_raw
-const WIN_DEFAULT = 'C:\\ledger_raw';
-const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
-const CURSOR_DIR = process.env.CURSOR_DIR || path.join(BASE_DATA_DIR, 'cursors');
-const RAW_DIR = path.join(BASE_DATA_DIR, 'raw');
+// Cross-platform path handling
+import { getBaseDataDir, getCursorDir, getRawDir } from './path-utils.js';
+const BASE_DATA_DIR = getBaseDataDir();
+const CURSOR_DIR = getCursorDir();
+const RAW_DIR = getRawDir();
 
 // Gap detection threshold (default 2 minutes)
 const DEFAULT_GAP_THRESHOLD_MS = 120000;

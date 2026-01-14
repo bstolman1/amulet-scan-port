@@ -25,9 +25,9 @@ import { readdirSync, statSync, unlinkSync, existsSync, writeFileSync } from 'fs
 import { join, dirname, basename } from 'path';
 import { readBinaryFile } from './read-binary.js';
 
-// Default Windows path: C:\ledger_raw\raw
-const WIN_DEFAULT = 'C:\\ledger_raw\\raw';
-const DATA_DIR = process.env.DATA_DIR ? join(process.env.DATA_DIR, 'raw') : WIN_DEFAULT;
+// Cross-platform path handling
+import { getRawDir } from './path-utils.js';
+const DATA_DIR = getRawDir();
 const MIN_FILE_SIZE_MB = 100;  // Minimum file size before compaction (increased for larger files)
 const TARGET_FILE_SIZE_MB = 500;  // Target file size after compaction (larger = faster reads)
 

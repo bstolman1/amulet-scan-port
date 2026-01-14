@@ -26,10 +26,11 @@ import { readBinaryFile, getFileStats } from './read-binary.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Configuration - defaults to Windows paths, can override with env vars
-const BASE_DATA_DIR = process.env.DATA_DIR || 'C:\\ledger_raw';
-const CURSOR_DIR = process.env.CURSOR_DIR || path.join(BASE_DATA_DIR, 'cursors');
-const RAW_DIR = process.env.RAW_DIR || path.join(BASE_DATA_DIR, 'raw');
+// Configuration - cross-platform path handling
+import { getBaseDataDir, getCursorDir, getRawDir } from './path-utils.js';
+const BASE_DATA_DIR = getBaseDataDir();
+const CURSOR_DIR = getCursorDir();
+const RAW_DIR = process.env.RAW_DIR || getRawDir();
 
 // Gap detection threshold (gaps larger than this are reported)
 const GAP_THRESHOLD_MS = parseInt(process.env.GAP_THRESHOLD_MS) || 60000; // 1 minute default

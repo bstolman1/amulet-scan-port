@@ -10,30 +10,22 @@
  */
 
 import { mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
-import { join, dirname, sep, isAbsolute, resolve } from 'path';
+import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { getPartitionPath } from './data-schema.js';
 import { getBinaryWriterPool, shutdownBinaryPool } from './binary-writer-pool.js';
+import { getBaseDataDir, getRawDir } from './path-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - Default Windows path: C:\ledger_raw
-const WIN_DEFAULT = 'C:\\ledger_raw';
-const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WIN_DEFAULT;
-
-// Safety: require an absolute path to avoid accidentally writing outside the intended directory.
-// (resolve() will make it absolute, but we still fail fast if a relative path was provided.)
-if (process.env.DATA_DIR && !isAbsolute(process.env.DATA_DIR)) {
-  throw new Error(`[write-binary] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
-}
-
-const BASE_DATA_DIR = resolve(BASE_DATA_DIR_RAW);
-const DATA_DIR = join(BASE_DATA_DIR, 'raw'); // Binary files go in raw/ subdirectory
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000; // Reduced to flush more often
+// Configuration - using cross-platform path utilities
+const BASE_DATA_DIR = getBaseDataDir();
+const DATA_DIR = getRawDir(); // Binary files go in raw/ subdirectory
+const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 1;
-const MAX_PENDING_WRITES = parseInt(process.env.MAX_PENDING_WRITES) || 50; // Limit concurrent writes
+const MAX_PENDING_WRITES = parseInt(process.env.MAX_PENDING_WRITES) || 50;
 
 // In-memory buffers
 let updatesBuffer = [];
