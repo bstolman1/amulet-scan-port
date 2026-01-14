@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import {
   Activity,
   BarChart3,
@@ -118,6 +119,9 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
       {/* Main Content */}
       <main className="container mx-auto px-6 py-8">{children}</main>
+      
+      {/* Connection Status Indicator */}
+      <ConnectionStatusIndicator />
     </div>
   );
 };
