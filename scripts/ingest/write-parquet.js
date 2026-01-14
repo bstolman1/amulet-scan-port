@@ -28,16 +28,10 @@ import { getParquetWriterPool, shutdownParquetPool } from './parquet-writer-pool
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration
-const WIN_DEFAULT = 'C:\\ledger_raw';
-const BASE_DATA_DIR_RAW = process.env.DATA_DIR || WIN_DEFAULT;
-
-if (process.env.DATA_DIR && !isAbsolute(process.env.DATA_DIR)) {
-  throw new Error(`[write-parquet] DATA_DIR must be an absolute path (got: ${process.env.DATA_DIR})`);
-}
-
-const BASE_DATA_DIR = resolve(BASE_DATA_DIR_RAW);
-const DATA_DIR = join(BASE_DATA_DIR, 'raw');
+// Configuration - cross-platform path handling
+import { getBaseDataDir, getRawDir } from './path-utils.js';
+const BASE_DATA_DIR = getBaseDataDir();
+const DATA_DIR = getRawDir();
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const USE_CLI = process.env.PARQUET_USE_CLI === 'true';
 

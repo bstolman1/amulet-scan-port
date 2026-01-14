@@ -15,8 +15,10 @@ import { EXPECTED_TEMPLATES, normalizeTemplateKey } from './acs-schema.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const BASE_DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data');
-const ACS_DIR = path.join(BASE_DATA_DIR, 'raw/acs');
+// Cross-platform path handling
+import { getBaseDataDir, getRawDir } from './path-utils.js';
+const BASE_DATA_DIR = getBaseDataDir();
+const ACS_DIR = path.join(getRawDir(), 'acs');
 
 // Parse CLI args
 const args = process.argv.slice(2);

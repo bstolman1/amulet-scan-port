@@ -19,11 +19,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration
-const WIN_DEFAULT = 'C:\\ledger_raw';
-const BASE_DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
-const CURSOR_DIR = process.env.CURSOR_DIR || join(BASE_DATA_DIR, 'cursors');
-const RAW_DIR = join(BASE_DATA_DIR, 'raw');
+// Configuration - cross-platform path handling
+import { getBaseDataDir, getCursorDir, getRawDir } from './path-utils.js';
+const BASE_DATA_DIR = getBaseDataDir();
+const CURSOR_DIR = getCursorDir();
+const RAW_DIR = getRawDir();
 
 // Constants for bulletproof operation
 const OVERLAP_MS = 1000; // 1 second overlap between time slices to catch boundary cases

@@ -111,9 +111,9 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Default Windows path: C:\ledger_raw
-const WIN_DEFAULT = 'C:\\ledger_raw';
-const DATA_DIR = process.env.DATA_DIR || WIN_DEFAULT;
+// Cross-platform path handling
+import { getBaseDataDir, getCursorDir } from './path-utils.js';
+const DATA_DIR = getBaseDataDir();
 
 // Track state
 let lastTimestamp = null;
@@ -125,7 +125,7 @@ let sessionErrorCount = 0; // Track errors for this session
 let sessionStartTime = Date.now();
 
 // Cursor directory (same as backfill script)
-const CURSOR_DIR = path.join(DATA_DIR, 'cursors');
+const CURSOR_DIR = getCursorDir();
 const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
 
 /**
