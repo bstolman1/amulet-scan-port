@@ -1,7 +1,18 @@
+/**
+ * Rewards API - DuckDB Parquet Only
+ * 
+ * Data Authority: All queries use DuckDB over Parquet files.
+ * See docs/architecture.md for the Data Authority Contract.
+ */
+
 import { Router } from 'express';
-import db from '../duckdb/connection.js';
-import binaryReader from '../duckdb/binary-reader.js';
-import { getFilesForTemplate, isTemplateIndexPopulated } from '../engine/template-file-index.js';
+import { 
+  safeQuery, 
+  hasFileType, 
+  DATA_PATH, 
+  IS_TEST, 
+  TEST_FIXTURES_PATH 
+} from '../duckdb/connection.js';
 
 const router = Router();
 
@@ -10,29 +21,36 @@ const REWARD_TEMPLATES = ['AppRewardCoupon', 'ValidatorRewardCoupon', 'SvRewardC
 const ROUND_TEMPLATES = ['IssuingMiningRound', 'ClosedMiningRound', 'OpenMiningRound'];
 
 /**
- * Extract CC reward amount from a reward coupon payload
- * For reward coupons, the amount is: weight * issuancePerReward
- * If we don't have issuance data, we return the weight as a fallback
+ * Get the SQL source for events data
+ * Prefers Parquet, falls back to JSONL
  */
-function extractRewardAmount(payload, roundIssuance = null) {
-  // Direct amount field (some coupons have this)
-  if (payload?.amount) {
-    return parseFloat(payload.amount);
-  }
-  if (payload?.initialAmount) {
-    return parseFloat(payload.initialAmount);
+const getEventsSource = () => {
+  if (IS_TEST) {
+    return `(SELECT * FROM read_json_auto('${TEST_FIXTURES_PATH}/events-*.jsonl', union_by_name=true, ignore_errors=true))`;
   }
   
-  // For coupons with weight, calculate using issuance rate
-  const weight = parseFloat(payload?.weight || 0);
-  if (weight > 0 && roundIssuance) {
-    // issuance is typically in CC per weight unit
-    return weight * roundIssuance;
-  }
+  const basePath = DATA_PATH.replace(/\\/g, '/');
   
-  // Return weight as fallback (will be multiplied by issuance later if available)
-  return weight;
-}
+  if (hasFileType('events', '.parquet')) {
+    return `read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)`;
+  }
+
+  const hasJsonl = hasFileType('events', '.jsonl');
+  const hasGzip = hasFileType('events', '.jsonl.gz');
+  const hasZstd = hasFileType('events', '.jsonl.zst');
+
+  if (!hasJsonl && !hasGzip && !hasZstd) {
+    return `(SELECT NULL::VARCHAR as event_id, NULL::VARCHAR as event_type, NULL::VARCHAR as contract_id, 
+             NULL::VARCHAR as template_id, NULL::TIMESTAMP as timestamp, NULL::JSON as payload WHERE false)`;
+  }
+
+  const queries = [];
+  if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)`);
+  if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
+  if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
+
+  return `(${queries.join(' UNION ')})`;
+};
 
 /**
  * GET /api/rewards/calculate
@@ -63,139 +81,99 @@ router.get('/calculate', async (req, res) => {
     const startR = startRound ? parseInt(startRound, 10) : null;
     const endR = endRound ? parseInt(endRound, 10) : null;
     
-    // Parse date range if provided
-    const startMs = startDate ? new Date(startDate).getTime() : null;
-    const endMs = endDate ? new Date(endDate).getTime() : null;
+    // Build template filter SQL
+    const templateConditions = REWARD_TEMPLATES.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
     
-    // Check if we're using date filter or round filter (not both typically needed)
-    const useDateFilter = startMs !== null || endMs !== null;
-    const useRoundFilter = startR !== null || endR !== null;
+    // Build party filter SQL - check various fields where party might appear as beneficiary
+    const partyCondition = `(
+      json_extract_string(payload, '$.provider') = '${partyId}'
+      OR json_extract_string(payload, '$.beneficiary') = '${partyId}'
+      OR json_extract_string(payload, '$.owner') = '${partyId}'
+      OR json_extract_string(payload, '$.round.provider') = '${partyId}'
+      OR json_extract_string(payload, '$.dso') = '${partyId}'
+    )`;
     
-    // Build filter for reward coupons
-    const isRewardForParty = (e) => {
-      const templateName = e.template_id || '';
-      const isRewardTemplate = REWARD_TEMPLATES.some(t => templateName.includes(t));
-      if (!isRewardTemplate) return false;
-      if (!e.payload) return false;
-      
-      const payload = e.payload;
-      // Check various fields where party might appear as beneficiary
-      if (payload.provider === partyId) return true;
-      if (payload.beneficiary === partyId) return true;
-      if (payload.owner === partyId) return true;
-      if (payload.round?.provider === partyId) return true;
-      if (payload.dso === partyId) return true;
-      
-      return false;
-    };
-    
-    // Date filter
-    const passesDateFilter = (e) => {
-      if (!useDateFilter) return true;
-      if (!e.effective_at) return true;
-      const eventMs = new Date(e.effective_at).getTime();
-      if (startMs !== null && eventMs < startMs) return false;
-      if (endMs !== null && eventMs > endMs) return false;
-      return true;
-    };
-    
-    // Round filter
-    const passesRoundFilter = (e) => {
-      if (!useRoundFilter) return true;
-      const roundNum = e.payload?.round?.number ?? e.payload?.round;
-      if (roundNum === undefined || roundNum === null) return true;
-      const r = typeof roundNum === 'number' ? roundNum : parseInt(roundNum, 10);
-      if (startR !== null && r < startR) return false;
-      if (endR !== null && r > endR) return false;
-      return true;
-    };
-    
-    // Combined filter
-    const combinedFilter = (e) => isRewardForParty(e) && passesDateFilter(e) && passesRoundFilter(e);
-    
-    // Check if template index is available for faster scanning
-    const templateIndexPopulated = await isTemplateIndexPopulated();
-    let records = [];
-    let roundIssuanceMap = new Map(); // round -> issuance rate
-    
-    if (templateIndexPopulated) {
-      // Fast path: use template index - search for all reward coupon types
-      console.log('   ⚡ Using template index for fast scanning');
-      const allRewardFiles = new Set();
-      
-      for (const template of REWARD_TEMPLATES) {
-        const files = await getFilesForTemplate(template);
-        files.forEach(f => allRewardFiles.add(f));
-      }
-      
-      const rewardFiles = Array.from(allRewardFiles);
-      console.log(`   📂 Found ${rewardFiles.length} files with reward events`);
-      
-      // Also get round data for issuance rates
-      const roundFiles = new Set();
-      for (const template of ROUND_TEMPLATES) {
-        const files = await getFilesForTemplate(template);
-        files.forEach(f => roundFiles.add(f));
-      }
-      
-      // Build issuance map from round data (sample first few files)
-      const roundFileList = Array.from(roundFiles).slice(0, 100);
-      for (const file of roundFileList) {
-        try {
-          const result = await binaryReader.readBinaryFile(file);
-          for (const record of (result.records || [])) {
-            if (record.event_type === 'created' && record.template_id?.includes('MiningRound')) {
-              const roundNum = record.payload?.round?.number ?? record.payload?.round;
-              const issuance = parseFloat(record.payload?.issuancePerSvRewardCoupon || 
-                                          record.payload?.issuancePerValidatorRewardCoupon ||
-                                          record.payload?.issuancePerAppRewardCoupon || 0);
-              if (roundNum && issuance) {
-                roundIssuanceMap.set(roundNum, issuance);
-              }
-            }
-          }
-        } catch (err) {
-          // Skip files that can't be read
-        }
-      }
-      console.log(`   📊 Built issuance map for ${roundIssuanceMap.size} rounds`);
-      
-      // Scan reward files with filter
-      for (const file of rewardFiles) {
-        try {
-          const result = await binaryReader.readBinaryFile(file);
-          const fileRecords = result.records || [];
-          
-          for (const record of fileRecords) {
-            if (record.event_type === 'created' && combinedFilter(record)) {
-              records.push(record);
-            }
-          }
-        } catch (err) {
-          console.warn(`   ⚠️ Error reading file ${file}: ${err.message}`);
-        }
-        
-        // Limit to prevent timeout
-        if (records.length > 10000) {
-          console.log('   ⚠️ Hit 10k record limit, stopping scan');
-          break;
-        }
-      }
-    } else {
-      // Slow path: full scan
-      console.log('   📂 Template index not available, using full scan');
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 10000,
-        offset: 0,
-        maxDays: 365 * 3,
-        maxFilesToScan: 5000,
-        fullScan: true,
-        sortBy: 'effective_at',
-        filter: (e) => e.event_type === 'created' && combinedFilter(e),
-      });
-      records = result.records || [];
+    // Build date filter SQL
+    let dateCondition = '';
+    if (startDate) {
+      dateCondition += ` AND COALESCE(timestamp, effective_at) >= '${startDate}'`;
+    }
+    if (endDate) {
+      dateCondition += ` AND COALESCE(timestamp, effective_at) <= '${endDate}'`;
     }
     
+    // Build round filter SQL
+    let roundCondition = '';
+    if (startR !== null) {
+      roundCondition += ` AND COALESCE(
+        CAST(json_extract(payload, '$.round.number') AS INTEGER),
+        CAST(json_extract(payload, '$.round') AS INTEGER)
+      ) >= ${startR}`;
+    }
+    if (endR !== null) {
+      roundCondition += ` AND COALESCE(
+        CAST(json_extract(payload, '$.round.number') AS INTEGER),
+        CAST(json_extract(payload, '$.round') AS INTEGER)
+      ) <= ${endR}`;
+    }
+    
+    // First, get issuance rates from mining rounds
+    const issuanceQuery = `
+      SELECT 
+        COALESCE(
+          CAST(json_extract(payload, '$.round.number') AS INTEGER),
+          CAST(json_extract(payload, '$.round') AS INTEGER)
+        ) as round_number,
+        COALESCE(
+          CAST(json_extract(payload, '$.issuancePerSvRewardCoupon') AS DOUBLE),
+          CAST(json_extract(payload, '$.issuancePerValidatorRewardCoupon') AS DOUBLE),
+          CAST(json_extract(payload, '$.issuancePerAppRewardCoupon') AS DOUBLE),
+          0
+        ) as issuance_rate
+      FROM ${getEventsSource()}
+      WHERE event_type = 'created'
+        AND (${ROUND_TEMPLATES.map(t => `template_id LIKE '%${t}%'`).join(' OR ')})
+      LIMIT 1000
+    `;
+    
+    const issuanceRows = await safeQuery(issuanceQuery);
+    const roundIssuanceMap = new Map();
+    for (const row of issuanceRows) {
+      if (row.round_number && row.issuance_rate > 0) {
+        roundIssuanceMap.set(row.round_number, row.issuance_rate);
+      }
+    }
+    console.log(`   📊 Built issuance map for ${roundIssuanceMap.size} rounds`);
+    
+    // Query reward events
+    const rewardsQuery = `
+      SELECT 
+        event_id,
+        template_id,
+        COALESCE(timestamp, effective_at) as effective_at,
+        payload,
+        COALESCE(
+          CAST(json_extract(payload, '$.round.number') AS INTEGER),
+          CAST(json_extract(payload, '$.round') AS INTEGER),
+          0
+        ) as round_number,
+        COALESCE(
+          CAST(json_extract(payload, '$.amount') AS DOUBLE),
+          CAST(json_extract(payload, '$.initialAmount') AS DOUBLE),
+          0
+        ) as direct_amount,
+        COALESCE(CAST(json_extract(payload, '$.weight') AS DOUBLE), 0) as weight
+      FROM ${getEventsSource()}
+      WHERE event_type = 'created'
+        AND (${templateConditions})
+        AND ${partyCondition}
+        ${dateCondition}
+        ${roundCondition}
+      ORDER BY effective_at DESC
+      LIMIT 10000
+    `;
+    
+    const records = await safeQuery(rewardsQuery);
     console.log(`   Found ${records.length} reward events for party`);
     
     // Calculate totals
@@ -205,16 +183,20 @@ router.get('/calculate', async (req, res) => {
     const events = [];
     
     for (const record of records) {
-      const payload = record.payload || {};
-      const roundNum = payload.round?.number ?? payload.round ?? 0;
+      const roundNum = record.round_number || 0;
       const roundKey = String(roundNum);
+      const weight = record.weight || 0;
       
       // Get issuance for this round if available
       const issuance = roundIssuanceMap.get(roundNum) || null;
       
-      // Extract amount (uses weight * issuance if available)
-      const amount = extractRewardAmount(payload, issuance);
-      const weight = parseFloat(payload.weight || 0);
+      // Calculate amount (uses weight * issuance if available, otherwise direct amount or weight)
+      let amount = record.direct_amount || 0;
+      if (amount === 0 && weight > 0 && issuance) {
+        amount = weight * issuance;
+      } else if (amount === 0) {
+        amount = weight; // Fallback to weight
+      }
       
       totalRewards += amount;
       totalWeight += weight;
@@ -254,6 +236,7 @@ router.get('/calculate', async (req, res) => {
       queryTime: parseFloat(elapsed),
       hasIssuanceData: roundIssuanceMap.size > 0,
       note: roundIssuanceMap.size === 0 ? 'Amounts shown as weights (issuance data not available)' : null,
+      data_source: 'parquet',
     });
     
   } catch (err) {
@@ -274,6 +257,41 @@ router.get('/templates', async (req, res) => {
       { name: 'SvRewardCoupon', description: 'Super Validator rewards' },
     ],
   });
+});
+
+/**
+ * GET /api/rewards/by-round
+ * Get aggregate reward stats by round
+ */
+router.get('/by-round', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const templateConditions = REWARD_TEMPLATES.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    
+    const sql = `
+      SELECT 
+        COALESCE(
+          CAST(json_extract(payload, '$.round.number') AS INTEGER),
+          CAST(json_extract(payload, '$.round') AS INTEGER),
+          0
+        ) as round_number,
+        COUNT(*) as reward_count,
+        SUM(COALESCE(CAST(json_extract(payload, '$.weight') AS DOUBLE), 0)) as total_weight,
+        COUNT(DISTINCT json_extract_string(payload, '$.provider')) as unique_providers
+      FROM ${getEventsSource()}
+      WHERE event_type = 'created'
+        AND (${templateConditions})
+      GROUP BY round_number
+      ORDER BY round_number DESC
+      LIMIT ${limit}
+    `;
+    
+    const rows = await safeQuery(sql);
+    res.json({ data: rows, data_source: 'parquet' });
+  } catch (err) {
+    console.error('Error fetching rewards by round:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
