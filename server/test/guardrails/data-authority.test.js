@@ -86,13 +86,14 @@ describe('Data Authority Contract', () => {
       // Files that are exempt from this check (pending migration or special purpose)
       // TODO: Remove exclusions as files are migrated to Parquet-only
       const exemptFiles = [
-        'backfill.js',      // Legacy backfill status
-        'acs.js',           // ACS snapshot management
-        'announcements.js', // External API proxy
-        'rewards.js',       // Pending Parquet migration
-        'stats.js',         // Pending Parquet migration
-        'updates.js',       // Pending Parquet migration
-        'kaiko.js',         // External API proxy
+        'backfill.js',            // Legacy backfill status
+        'acs.js',                 // ACS snapshot management
+        'announcements.js',       // External API proxy
+        'rewards.js',             // Pending Parquet migration
+        'stats.js',               // Pending Parquet migration
+        'updates.js',             // Pending Parquet migration
+        'kaiko.js',               // External API proxy
+        'governance-lifecycle.js', // Uses cached JSON (derived from Parquet)
       ];
       
       const apiFiles = fs.readdirSync(apiDir).filter(f => 
