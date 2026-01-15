@@ -1,65 +1,64 @@
+/**
+ * Updates API - DuckDB Parquet Only
+ * 
+ * Data Authority: All queries use DuckDB over Parquet files.
+ * See docs/architecture.md for the Data Authority Contract.
+ */
+
 import { Router } from 'express';
-import db from '../duckdb/connection.js';
-import binaryReader from '../duckdb/binary-reader.js';
+import { safeQuery, hasFileType, DATA_PATH, IS_TEST, TEST_FIXTURES_PATH } from '../duckdb/connection.js';
 
 const router = Router();
 
-// In test mode, uses small fixture dataset to avoid scanning hundreds of files
+/**
+ * Get the SQL source for updates data
+ * Prefers Parquet, falls back to JSONL
+ */
 const getUpdatesSource = () => {
-  // In test mode, use test fixtures to avoid 415-file scans
-  if (db.IS_TEST) {
-    return `(SELECT * FROM read_json_auto('${db.TEST_FIXTURES_PATH}/updates-*.jsonl', union_by_name=true, ignore_errors=true))`;
+  // In test mode, use test fixtures
+  if (IS_TEST) {
+    return `(SELECT * FROM read_json_auto('${TEST_FIXTURES_PATH}/updates-*.jsonl', union_by_name=true, ignore_errors=true))`;
   }
   
-  const hasParquet = db.hasFileType('updates', '.parquet');
-  if (hasParquet) {
-    return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/updates-*.parquet', union_by_name=true)`;
+  const basePath = DATA_PATH.replace(/\\/g, '/');
+  
+  // Prefer Parquet
+  if (hasFileType('updates', '.parquet')) {
+    return `read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)`;
   }
 
-  const hasJsonl = db.hasFileType('updates', '.jsonl');
-  const hasGzip = db.hasFileType('updates', '.jsonl.gz');
-  const hasZstd = db.hasFileType('updates', '.jsonl.zst');
+  // Fall back to JSONL variants
+  const hasJsonl = hasFileType('updates', '.jsonl');
+  const hasGzip = hasFileType('updates', '.jsonl.gz');
+  const hasZstd = hasFileType('updates', '.jsonl.zst');
 
   if (!hasJsonl && !hasGzip && !hasZstd) {
     return `(SELECT NULL::VARCHAR as update_id, NULL::VARCHAR as update_type, NULL::TIMESTAMP as record_time WHERE false)`;
   }
 
-  const basePath = db.DATA_PATH.replace(/\\/g, '/');
   const queries = [];
   if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl', union_by_name=true, ignore_errors=true)`);
   if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/updates-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
-  // Use UNION (not UNION ALL) to prevent duplicate records
+  
   return `(${queries.join(' UNION ')})`;
 };
 
-function getDataSources() {
-  const hasBinaryUpdates = binaryReader.hasBinaryFiles(db.DATA_PATH, 'updates');
-  const hasParquetUpdates = db.hasFileType('updates', '.parquet');
-  return {
-    hasBinaryUpdates,
-    hasParquetUpdates,
-    primarySource: hasBinaryUpdates ? 'binary' : hasParquetUpdates ? 'parquet' : 'jsonl',
-  };
+/**
+ * Get data source info for response metadata
+ */
+function getDataSourceInfo() {
+  if (IS_TEST) return 'test';
+  if (hasFileType('updates', '.parquet')) return 'parquet';
+  if (hasFileType('updates', '.jsonl') || hasFileType('updates', '.jsonl.gz') || hasFileType('updates', '.jsonl.zst')) return 'jsonl';
+  return 'none';
 }
 
-// GET /api/updates/latest
+// GET /api/updates/latest - Fetch latest updates
 router.get('/latest', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     const offset = parseInt(req.query.offset) || 0;
-    const sources = getDataSources();
-
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'updates', {
-        limit,
-        offset,
-        maxDays: 30,
-        maxFilesToScan: 200,
-        sortBy: 'record_time',
-      });
-      return res.json({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' });
-    }
 
     const sql = `
       SELECT *
@@ -69,28 +68,81 @@ router.get('/latest', async (req, res) => {
       OFFSET ${offset}
     `;
 
-    const rows = await db.safeQuery(sql);
-    res.json({ data: rows, count: rows.length, source: sources.primarySource });
+    const rows = await safeQuery(sql);
+    
+    // Check if there are more results
+    const countSql = `SELECT COUNT(*) as total FROM ${getUpdatesSource()}`;
+    const countResult = await safeQuery(countSql);
+    const total = Number(countResult[0]?.total || 0);
+    
+    res.json({ 
+      data: rows, 
+      count: rows.length, 
+      total,
+      hasMore: offset + rows.length < total,
+      source: getDataSourceInfo() 
+    });
   } catch (err) {
     console.error('Error fetching latest updates:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/updates/count
+// GET /api/updates/count - Get total update count
 router.get('/count', async (req, res) => {
   try {
-    const sources = getDataSources();
-
-    if (sources.primarySource === 'binary') {
-      const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'updates');
-      const estimated = fileCount * 100;
-      return res.json({ count: estimated, estimated: true, fileCount, source: 'binary' });
-    }
-
-    const rows = await db.safeQuery(`SELECT COUNT(*) as total FROM ${getUpdatesSource()}`);
-    res.json({ count: rows[0]?.total || 0, source: sources.primarySource });
+    const sql = `SELECT COUNT(*) as total FROM ${getUpdatesSource()}`;
+    const rows = await safeQuery(sql);
+    
+    res.json({ 
+      count: Number(rows[0]?.total || 0), 
+      source: getDataSourceInfo() 
+    });
   } catch (err) {
+    console.error('Error counting updates:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/updates/by-type - Updates grouped by type
+router.get('/by-type', async (req, res) => {
+  try {
+    const sql = `
+      SELECT 
+        update_type,
+        COUNT(*) as count
+      FROM ${getUpdatesSource()}
+      GROUP BY update_type
+      ORDER BY count DESC
+    `;
+    
+    const rows = await safeQuery(sql);
+    res.json({ data: rows, source: getDataSourceInfo() });
+  } catch (err) {
+    console.error('Error fetching updates by type:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/updates/daily - Daily update counts
+router.get('/daily', async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 30, 365);
+    
+    const sql = `
+      SELECT 
+        DATE_TRUNC('day', record_time) as date,
+        COUNT(*) as count
+      FROM ${getUpdatesSource()}
+      WHERE record_time >= NOW() - INTERVAL '${days} days'
+      GROUP BY DATE_TRUNC('day', record_time)
+      ORDER BY date DESC
+    `;
+    
+    const rows = await safeQuery(sql);
+    res.json({ data: rows, source: getDataSourceInfo() });
+  } catch (err) {
+    console.error('Error fetching daily updates:', err);
     res.status(500).json({ error: err.message });
   }
 });
