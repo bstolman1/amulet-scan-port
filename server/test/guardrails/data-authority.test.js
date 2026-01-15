@@ -36,8 +36,6 @@ describe('Data Authority Contract', () => {
       const allowedExceptions = [
         'backfill.js',              // Legacy backfill status (to be migrated)
         'rewards.js',               // Pending Parquet migration
-        'stats.js',                 // Pending Parquet migration  
-        'updates.js',               // Pending Parquet migration
         // External API proxies (not Parquet candidates - they fetch from external sources)
         'governance-lifecycle.js',  // Fetches from Groups.io API, not ledger data
         'announcements.js',         // Fetches from external SV announcements
@@ -88,17 +86,15 @@ describe('Data Authority Contract', () => {
     it('API routes use readParquetGlob or DuckDB queries', () => {
       const apiDir = path.join(process.cwd(), 'server/api');
       
-      // Files that are exempt from this check (pending migration or special purpose)
-      // TODO: Remove exclusions as files are migrated to Parquet-only
+      // Files that are exempt from this check (special purpose or external data sources)
       const exemptFiles = [
-        'backfill.js',            // Legacy backfill status
-        'acs.js',                 // ACS snapshot management
-        'announcements.js',       // External API proxy
-        'rewards.js',             // Pending Parquet migration
-        'stats.js',               // Pending Parquet migration
-        'updates.js',             // Pending Parquet migration
-        'kaiko.js',               // External API proxy
-        'governance-lifecycle.js', // Uses cached JSON (derived from Parquet)
+        'backfill.js',              // Legacy backfill status (pending migration)
+        'rewards.js',               // Pending Parquet migration
+        // External API proxies (not Parquet candidates - they fetch from external sources)
+        'governance-lifecycle.js',  // Fetches from Groups.io API, not ledger data
+        'announcements.js',         // Fetches from external SV announcements
+        'kaiko.js',                 // Fetches from Kaiko price API
+        'acs.js',                   // ACS snapshot management
       ];
       
       const apiFiles = fs.readdirSync(apiDir).filter(f => 
