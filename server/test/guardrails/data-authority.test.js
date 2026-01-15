@@ -110,6 +110,8 @@ describe('Data Authority Contract', () => {
         /getUpdatesSource/, // Helper that wraps Parquet access
       ];
       
+      const failures = [];
+      
       for (const file of apiFiles) {
         const content = fs.readFileSync(path.join(apiDir, file), 'utf-8');
         
@@ -119,10 +121,13 @@ describe('Data Authority Contract', () => {
         const usesValidDataAccess = validPatterns.some(p => p.test(content));
         
         // If file has routes, it should use valid data access patterns
-        if (content.includes('router.get') || content.includes('router.post')) {
-          expect(usesValidDataAccess).toBe(true);
+        if ((content.includes('router.get') || content.includes('router.post')) && !usesValidDataAccess) {
+          failures.push(file);
         }
       }
+      
+      // Report which files failed for easier debugging
+      expect(failures).toEqual([]);
     });
   });
   
