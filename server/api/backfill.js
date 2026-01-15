@@ -1,10 +1,16 @@
+/**
+ * Backfill API - DuckDB Parquet Only
+ * 
+ * Data Authority: All queries use DuckDB over Parquet files.
+ * See docs/architecture.md for the Data Authority Contract.
+ */
+
 import { Router } from 'express';
 import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
 import { join, basename as pathBasename } from 'path';
-import db from '../duckdb/connection.js';
+import db, { safeQuery, hasFileType, DATA_PATH } from '../duckdb/connection.js';
 import { getLastGapDetection } from '../engine/gap-detector.js';
 import { triggerGapDetection } from '../engine/worker.js';
-import { decodeFile, getFileType } from '../engine/decoder.js';
 
 // Use process.cwd() for Vitest/Vite SSR compatibility
 const __dirname = join(process.cwd(), 'server', 'api');
@@ -574,38 +580,22 @@ router.get('/reconciliation', async (req, res) => {
   }
 });
 
-// POST /api/backfill/validate-integrity - Validate data integrity by sampling files
-// Supports both Parquet (preferred) and legacy .pb.zst files
+// POST /api/backfill/validate-integrity - Validate data integrity by sampling Parquet files
 // Checks schema requirements: event_type_original, root_event_ids, child_event_ids, record_time, canonical event_id
 router.post('/validate-integrity', async (req, res) => {
-  const sampleSize = Math.min(req.body?.sampleSize || 100, 500); // Sample size for DuckDB SAMPLE
+  const sampleSize = Math.min(req.body?.sampleSize || 100, 500);
   
   try {
-    const rawDir = join(DATA_DIR, 'raw');
-    if (!existsSync(rawDir)) {
-      return res.json({ success: false, error: 'No raw data directory found' });
-    }
+    const basePath = DATA_PATH.replace(/\\/g, '/');
+    const hasParquetEvents = hasFileType('events', '.parquet');
+    const hasParquetUpdates = hasFileType('updates', '.parquet');
     
-    // Import detection functions from binary-reader
-    const { hasParquetFiles, countParquetFiles, hasBinaryFiles, countBinaryFiles } = 
-      await import('../duckdb/binary-reader.js');
-    
-    // Check for available formats
-    const hasParquetEvents = hasParquetFiles(rawDir, 'events');
-    const hasParquetUpdates = hasParquetFiles(rawDir, 'updates');
-    const hasBinaryEvts = hasBinaryFiles(rawDir, 'events');
-    const hasBinaryUpds = hasBinaryFiles(rawDir, 'updates');
-    
-    const hasParquet = hasParquetEvents || hasParquetUpdates;
-    const hasBinary = hasBinaryEvts || hasBinaryUpds;
-    
-    if (!hasParquet && !hasBinary) {
-      return res.json({ success: false, error: 'No data files found (.parquet or .pb.zst)' });
+    if (!hasParquetEvents && !hasParquetUpdates) {
+      return res.json({ success: false, error: 'No Parquet data files found' });
     }
     
     const results = {
-      dataFormat: hasParquet ? 'parquet' : 'pb.zst',
-      totalFiles: 0,
+      dataFormat: 'parquet',
       sampledRecords: sampleSize,
       eventFiles: { checked: 0, valid: 0, missingRawJson: 0, emptyRecords: 0 },
       updateFiles: { checked: 0, valid: 0, missingUpdateDataJson: 0, emptyRecords: 0 },
@@ -621,298 +611,113 @@ router.post('/validate-integrity', async (req, res) => {
         eventsWithChildEventIds: 0,
         eventsWithContractId: 0,
         eventsWithoutContractId: 0,
-        updatesWithContractId: 0,
-        updatesWithoutContractId: 0,
       },
       errors: [],
       sampleDetails: [],
     };
     
-    // ===== PARQUET VALIDATION (via DuckDB) =====
-    if (hasParquet) {
-      const normalizedRawDir = rawDir.replace(/\\/g, '/');
-      
-      // Count files
-      const eventFileCount = countParquetFiles(rawDir, 'events');
-      const updateFileCount = countParquetFiles(rawDir, 'updates');
-      results.totalFiles = eventFileCount + updateFileCount;
-      
-      // Validate events via DuckDB sampling
-      if (hasParquetEvents) {
-        try {
-          const eventGlob = `${normalizedRawDir}/**/events-*.parquet`;
-          
-          // Sample events and check required fields
-          // Note: Column is 'raw_event' in Parquet files (not 'raw_json')
-          const eventSample = await db.safeQuery(`
-            SELECT 
-              event_id,
-              raw_event IS NOT NULL as has_raw_json,
-              event_type_original IS NOT NULL as has_type_original,
-              contract_id IS NOT NULL as has_contract_id,
-              child_event_ids IS NOT NULL as has_child_event_ids
-            FROM read_parquet('${eventGlob}', union_by_name=true)
-            USING SAMPLE ${sampleSize} ROWS
-          `);
-          // For Parquet, 'checked/valid' refers to sampled records (not files)
-          results.eventFiles.checked = eventSample.length;
-          
-          for (const row of eventSample) {
-            // Check raw_json
-            if (row.has_raw_json) {
-              results.eventFiles.valid++;
-            } else {
-              results.eventFiles.missingRawJson++;
-            }
-            
-            // Check event_type_original
-            if (row.has_type_original) {
-              results.schemaCompliance.eventsWithTypeOriginal++;
-            } else {
-              results.schemaCompliance.eventsWithoutTypeOriginal++;
-            }
-            
-            // Check canonical event_id format
-            if (row.event_id && String(row.event_id).includes(':')) {
-              results.schemaCompliance.eventsWithCanonicalId++;
-            } else if (row.event_id) {
-              results.schemaCompliance.eventsWithSynthesizedId++;
-            }
-            
-            // Check contract_id
-            if (row.has_contract_id) {
-              results.schemaCompliance.eventsWithContractId++;
-            } else {
-              results.schemaCompliance.eventsWithoutContractId++;
-            }
-            
-            // Check child_event_ids
-            if (row.has_child_event_ids) {
-              results.schemaCompliance.eventsWithChildEventIds++;
-            }
-          }
-          
-          // Add sample detail
-          results.sampleDetails.push({
-            file: `${eventFileCount} parquet files`,
-            type: 'events',
-            recordCount: eventSample.length,
-            hasRequiredFields: results.eventFiles.missingRawJson === 0,
-            missingFields: results.eventFiles.missingRawJson > 0 ? ['raw_json'] : [],
-            schemaIssues: [],
-          });
-          
-        } catch (err) {
-          results.errors.push({ file: 'events-*.parquet', error: err.message });
-        }
-      }
-      
-      // Validate updates via DuckDB sampling
-      if (hasParquetUpdates) {
-        try {
-          const updateGlob = `${normalizedRawDir}/**/updates-*.parquet`;
-          
-          // Sample updates and check required fields
-          // Note: Column is 'update_data' in Parquet files (not 'update_data_json')
-          const updateSample = await db.safeQuery(`
-            SELECT 
-              update_id,
-              update_data IS NOT NULL as has_update_data,
-              root_event_ids IS NOT NULL as has_root_event_ids,
-              record_time IS NOT NULL as has_record_time
-            FROM read_parquet('${updateGlob}', union_by_name=true)
-            USING SAMPLE ${sampleSize} ROWS
-          `);
-          
-          // For Parquet, 'checked/valid' refers to sampled records (not files)
-          results.updateFiles.checked = updateSample.length;
-          
-          for (const row of updateSample) {
-            // Check update_data_json
-            if (row.has_update_data) {
-              results.updateFiles.valid++;
-            } else {
-              results.updateFiles.missingUpdateDataJson++;
-            }
-            
-            // Check root_event_ids
-            if (row.has_root_event_ids) {
-              results.schemaCompliance.updatesWithRootEventIds++;
-            } else {
-              results.schemaCompliance.updatesWithoutRootEventIds++;
-            }
-            
-            // Check record_time
-            if (row.has_record_time) {
-              results.schemaCompliance.updatesWithRecordTime++;
-            } else {
-              results.schemaCompliance.updatesWithoutRecordTime++;
-            }
-          }
-          
-          // Add sample detail
-          results.sampleDetails.push({
-            file: `${updateFileCount} parquet files`,
-            type: 'updates',
-            recordCount: updateSample.length,
-            hasRequiredFields: results.updateFiles.missingUpdateDataJson === 0,
-            missingFields: results.updateFiles.missingUpdateDataJson > 0 ? ['update_data_json'] : [],
-            schemaIssues: [],
-          });
-          
-        } catch (err) {
-          results.errors.push({ file: 'updates-*.parquet', error: err.message });
-        }
-      }
-      
-    } else {
-      // ===== LEGACY .pb.zst VALIDATION =====
-      const allFiles = [];
-      function scanDir(dir) {
-        try {
-          const entries = readdirSync(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            if (entry.isDirectory()) {
-              scanDir(join(dir, entry.name));
-            } else if (entry.name.endsWith('.pb.zst')) {
-              allFiles.push(join(dir, entry.name));
-            }
-          }
-        } catch {}
-      }
-      scanDir(rawDir);
-      
-      results.totalFiles = allFiles.length;
-      
-      // Random sample (limit to 50 files for legacy format)
-      const fileSampleSize = Math.min(50, allFiles.length);
-      const shuffled = allFiles.sort(() => 0.5 - Math.random());
-      const sampled = shuffled.slice(0, fileSampleSize);
-      results.sampledRecords = fileSampleSize;
-      
-      // Import reader dynamically
-      const { readBinaryFile } = await import('../../scripts/ingest/read-binary.js');
-      
-      for (const filePath of sampled) {
-        try {
-          const basename = pathBasename(filePath);
-          const isEvents = basename.startsWith('events-');
-          const isUpdates = basename.startsWith('updates-');
-          
-          const fileData = await readBinaryFile(filePath);
-          const records = fileData.records || [];
-          
-          const detail = {
-            file: basename,
-            type: isEvents ? 'events' : 'updates',
-            recordCount: records.length,
-            hasRequiredFields: true,
-            missingFields: [],
-            schemaIssues: [],
-            sampleRecord: null,
-          };
-          
-          if (records.length === 0) {
-            detail.hasRequiredFields = false;
-            detail.missingFields.push('empty_file');
-            if (isEvents) results.eventFiles.emptyRecords++;
-            else results.updateFiles.emptyRecords++;
+    // Validate events via DuckDB sampling
+    if (hasParquetEvents) {
+      try {
+        const eventSample = await safeQuery(`
+          SELECT 
+            event_id,
+            raw_event IS NOT NULL as has_raw_json,
+            event_type_original IS NOT NULL as has_type_original,
+            contract_id IS NOT NULL as has_contract_id,
+            child_event_ids IS NOT NULL as has_child_event_ids
+          FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+          USING SAMPLE ${sampleSize} ROWS
+        `);
+        
+        results.eventFiles.checked = eventSample.length;
+        
+        for (const row of eventSample) {
+          if (row.has_raw_json) {
+            results.eventFiles.valid++;
           } else {
-            const sampleRecords = records.slice(0, 5);
-            
-            if (isEvents) {
-              results.eventFiles.checked++;
-              let hasMissing = false;
-              
-              for (const r of sampleRecords) {
-                if (!r.raw_json && r.raw_json !== null) {
-                  hasMissing = true;
-                  if (!detail.missingFields.includes('raw_json')) {
-                    detail.missingFields.push('raw_json');
-                  }
-                }
-                
-                const typeOriginal = r.event_type_original || r.typeOriginal || r.type_original;
-                if (typeOriginal) {
-                  results.schemaCompliance.eventsWithTypeOriginal++;
-                } else {
-                  results.schemaCompliance.eventsWithoutTypeOriginal++;
-                }
-                
-                const eventId = r.event_id || r.eventId;
-                if (eventId && eventId.includes(':')) {
-                  results.schemaCompliance.eventsWithCanonicalId++;
-                } else if (eventId) {
-                  results.schemaCompliance.eventsWithSynthesizedId++;
-                }
-                
-                const childEventIds = r.child_event_ids || r.childEventIds;
-                if (childEventIds !== undefined) {
-                  results.schemaCompliance.eventsWithChildEventIds++;
-                }
-                
-                const contractId = r.contract_id || r.contractId;
-                if (contractId) {
-                  results.schemaCompliance.eventsWithContractId++;
-                } else {
-                  results.schemaCompliance.eventsWithoutContractId++;
-                }
-              }
-              
-              if (hasMissing) {
-                results.eventFiles.missingRawJson++;
-                detail.hasRequiredFields = false;
-              } else {
-                results.eventFiles.valid++;
-              }
-            } else if (isUpdates) {
-              results.updateFiles.checked++;
-              let hasMissing = false;
-              
-              for (const r of sampleRecords) {
-                const hasUpdateDataField =
-                  Object.prototype.hasOwnProperty.call(r, 'update_data_json') ||
-                  Object.prototype.hasOwnProperty.call(r, 'updateDataJson') ||
-                  Object.prototype.hasOwnProperty.call(r, 'update_data') ||
-                  Object.prototype.hasOwnProperty.call(r, 'data');
-                const hasUpdateDataValue = r.update_data_json || r.updateDataJson || r.update_data || r.data;
-                if (!hasUpdateDataField && !hasUpdateDataValue) {
-                  hasMissing = true;
-                  if (!detail.missingFields.includes('update_data_json')) {
-                    detail.missingFields.push('update_data_json');
-                  }
-                }
-
-                const hasRootEventIdsField =
-                  Object.prototype.hasOwnProperty.call(r, 'root_event_ids') ||
-                  Object.prototype.hasOwnProperty.call(r, 'rootEventIds');
-                if (hasRootEventIdsField) {
-                  results.schemaCompliance.updatesWithRootEventIds++;
-                } else {
-                  results.schemaCompliance.updatesWithoutRootEventIds++;
-                }
-                
-                const recordTime = r.record_time || r.recordTime;
-                if (recordTime) {
-                  results.schemaCompliance.updatesWithRecordTime++;
-                } else {
-                  results.schemaCompliance.updatesWithoutRecordTime++;
-                }
-              }
-              
-              if (hasMissing) {
-                results.updateFiles.missingUpdateDataJson++;
-                detail.hasRequiredFields = false;
-              } else {
-                results.updateFiles.valid++;
-              }
-            }
+            results.eventFiles.missingRawJson++;
           }
           
-          results.sampleDetails.push(detail);
-        } catch (err) {
-          results.errors.push({ file: filePath, error: err.message });
+          if (row.has_type_original) {
+            results.schemaCompliance.eventsWithTypeOriginal++;
+          } else {
+            results.schemaCompliance.eventsWithoutTypeOriginal++;
+          }
+          
+          if (row.event_id && String(row.event_id).includes(':')) {
+            results.schemaCompliance.eventsWithCanonicalId++;
+          } else if (row.event_id) {
+            results.schemaCompliance.eventsWithSynthesizedId++;
+          }
+          
+          if (row.has_contract_id) {
+            results.schemaCompliance.eventsWithContractId++;
+          } else {
+            results.schemaCompliance.eventsWithoutContractId++;
+          }
+          
+          if (row.has_child_event_ids) {
+            results.schemaCompliance.eventsWithChildEventIds++;
+          }
         }
+        
+        results.sampleDetails.push({
+          type: 'events',
+          recordCount: eventSample.length,
+          hasRequiredFields: results.eventFiles.missingRawJson === 0,
+          missingFields: results.eventFiles.missingRawJson > 0 ? ['raw_json'] : [],
+        });
+        
+      } catch (err) {
+        results.errors.push({ file: 'events-*.parquet', error: err.message });
+      }
+    }
+    
+    // Validate updates via DuckDB sampling
+    if (hasParquetUpdates) {
+      try {
+        const updateSample = await safeQuery(`
+          SELECT 
+            update_id,
+            update_data IS NOT NULL as has_update_data,
+            root_event_ids IS NOT NULL as has_root_event_ids,
+            record_time IS NOT NULL as has_record_time
+          FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
+          USING SAMPLE ${sampleSize} ROWS
+        `);
+        
+        results.updateFiles.checked = updateSample.length;
+        
+        for (const row of updateSample) {
+          if (row.has_update_data) {
+            results.updateFiles.valid++;
+          } else {
+            results.updateFiles.missingUpdateDataJson++;
+          }
+          
+          if (row.has_root_event_ids) {
+            results.schemaCompliance.updatesWithRootEventIds++;
+          } else {
+            results.schemaCompliance.updatesWithoutRootEventIds++;
+          }
+          
+          if (row.has_record_time) {
+            results.schemaCompliance.updatesWithRecordTime++;
+          } else {
+            results.schemaCompliance.updatesWithoutRecordTime++;
+          }
+        }
+        
+        results.sampleDetails.push({
+          type: 'updates',
+          recordCount: updateSample.length,
+          hasRequiredFields: results.updateFiles.missingUpdateDataJson === 0,
+          missingFields: results.updateFiles.missingUpdateDataJson > 0 ? ['update_data'] : [],
+        });
+        
+      } catch (err) {
+        results.errors.push({ file: 'updates-*.parquet', error: err.message });
       }
     }
     
@@ -1031,7 +836,7 @@ router.post('/gaps/recover', async (req, res) => {
 
 /**
  * GET /api/backfill/sample-raw
- * Sample and decode raw .pb.zst files to verify data integrity
+ * Sample records from Parquet files to verify data integrity
  * Query params:
  *   - limit: max records to return (default 10)
  *   - type: 'events' or 'updates' (default both)
@@ -1043,101 +848,98 @@ router.get('/sample-raw', async (req, res) => {
     const typeFilter = req.query.type; // 'events', 'updates', or undefined for both
     const templateFilter = req.query.template;
     
-    const rawDir = join(DATA_DIR, 'raw');
-    if (!existsSync(rawDir)) {
-      return res.json({ error: 'No raw data directory found', path: rawDir });
-    }
+    const basePath = DATA_PATH.replace(/\\/g, '/');
+    const hasParquetEvents = hasFileType('events', '.parquet');
+    const hasParquetUpdates = hasFileType('updates', '.parquet');
     
-    // Find .pb.zst files recursively
-    const files = [];
-    function scanDir(dir) {
-      try {
-        const entries = readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.isDirectory()) {
-            scanDir(join(dir, entry.name));
-          } else if (entry.name.endsWith('.pb.zst')) {
-            const filePath = join(dir, entry.name);
-            const fileType = getFileType(filePath);
-            if (!typeFilter || fileType === typeFilter) {
-              const stat = statSync(filePath);
-              files.push({
-                path: filePath,
-                name: entry.name,
-                type: fileType,
-                size: stat.size,
-                mtime: stat.mtime,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`Error scanning ${dir}:`, err.message);
-      }
-    }
-    scanDir(rawDir);
-    
-    if (files.length === 0) {
+    if (!hasParquetEvents && !hasParquetUpdates) {
       return res.json({ 
-        error: 'No .pb.zst files found',
-        path: rawDir,
+        error: 'No Parquet files found',
+        path: basePath,
         typeFilter,
       });
     }
     
-    // Sort by modification time (newest first) and take a sample
-    files.sort((a, b) => b.mtime - a.mtime);
-    const sampleFiles = files.slice(0, 5);
-    
     const results = {
-      totalFiles: files.length,
-      sampledFiles: sampleFiles.length,
+      dataFormat: 'parquet',
       typeFilter,
       templateFilter,
       samples: [],
     };
     
-    for (const file of sampleFiles) {
-      const fileSample = {
-        file: file.name,
-        path: file.path.replace(DATA_DIR, ''),
-        type: file.type,
-        size: file.size,
-        records: [],
-        recordCount: 0,
-        error: null,
-      };
-      
+    // Sample events
+    if (hasParquetEvents && (!typeFilter || typeFilter === 'events')) {
       try {
-        let count = 0;
-        for await (const record of decodeFile(file.path)) {
-          // Apply template filter if specified
-          if (templateFilter && record.template && !record.template.includes(templateFilter)) {
-            continue;
-          }
-          
-          fileSample.records.push(record);
-          count++;
-          
-          if (count >= limit) break;
+        let eventQuery = `
+          SELECT 
+            event_id,
+            event_type,
+            template_id,
+            contract_id,
+            COALESCE(timestamp, effective_at) as timestamp,
+            payload
+          FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+        `;
+        
+        if (templateFilter) {
+          eventQuery += ` WHERE template_id LIKE '%${templateFilter}%'`;
         }
-        fileSample.recordCount = count;
+        
+        eventQuery += ` LIMIT ${limit}`;
+        
+        const eventRecords = await safeQuery(eventQuery);
+        results.samples.push({
+          type: 'events',
+          recordCount: eventRecords.length,
+          records: eventRecords,
+          error: null,
+        });
       } catch (err) {
-        fileSample.error = err.message;
+        results.samples.push({
+          type: 'events',
+          recordCount: 0,
+          records: [],
+          error: err.message,
+        });
       }
-      
-      results.samples.push(fileSample);
+    }
+    
+    // Sample updates
+    if (hasParquetUpdates && (!typeFilter || typeFilter === 'updates')) {
+      try {
+        const updateQuery = `
+          SELECT 
+            update_id,
+            migration_id,
+            record_time,
+            root_event_ids
+          FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
+          LIMIT ${limit}
+        `;
+        
+        const updateRecords = await safeQuery(updateQuery);
+        results.samples.push({
+          type: 'updates',
+          recordCount: updateRecords.length,
+          records: updateRecords,
+          error: null,
+        });
+      } catch (err) {
+        results.samples.push({
+          type: 'updates',
+          recordCount: 0,
+          records: [],
+          error: err.message,
+        });
+      }
     }
     
     // Summary stats
     const allRecords = results.samples.flatMap(s => s.records);
     results.summary = {
       totalRecordsReturned: allRecords.length,
-      hasPayload: allRecords.filter(r => r.payload !== null).length,
-      hasExerciseResult: allRecords.filter(r => r.exercise_result !== null).length,
-      hasRawJson: allRecords.filter(r => r.raw_json !== null).length,
-      eventTypes: [...new Set(allRecords.map(r => r.type).filter(Boolean))],
-      templates: [...new Set(allRecords.map(r => r.template).filter(Boolean))].slice(0, 20),
+      eventTypes: [...new Set(allRecords.map(r => r.event_type).filter(Boolean))],
+      templates: [...new Set(allRecords.map(r => r.template_id).filter(Boolean))].slice(0, 20),
     };
     
     res.json(results);
