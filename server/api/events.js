@@ -1,17 +1,12 @@
 import { Router } from 'express';
-import fs from 'fs';
-import path from 'path';
 import db from '../duckdb/connection.js';
-import binaryReader from '../duckdb/binary-reader.js';
 import {
   sanitizeNumber,
   sanitizeEventType,
   sanitizeIdentifier,
   sanitizeTimestamp,
-  sanitizeContractId,
   escapeLikePattern,
   escapeString,
-  containsDangerousPatterns,
 } from '../lib/sql-sanitize.js';
 
 const router = Router();
@@ -32,37 +27,22 @@ function convertBigInts(obj) {
 }
 
 /**
- * Helper to get raw event data as an object.
+ * Get DuckDB source for events (Parquet files via glob)
+ * Parquet is the single source of truth - no binary fallback
  */
-function getRawEvent(event) {
-  if (!event) return {};
-  if (event.raw_event) {
-    if (typeof event.raw_event === 'string') {
-      try {
-        return JSON.parse(event.raw_event);
-      } catch {
-        return {};
-      }
-    }
-    return event.raw_event;
-  }
-  if (event.raw && typeof event.raw === 'object') {
-    return event.raw;
-  }
-  return {};
-}
-
-// Helper to get the correct read function for Parquet files (primary) or JSONL files (fallback)
 const getEventsSource = () => {
   if (db.IS_TEST) {
     return `(SELECT * FROM read_json_auto('${db.TEST_FIXTURES_PATH}/events-*.jsonl', union_by_name=true, ignore_errors=true))`;
   }
   
+  const basePath = db.DATA_PATH.replace(/\\/g, '/');
   const hasParquet = db.hasFileType('events', '.parquet');
+  
   if (hasParquet) {
-    return `read_parquet('${db.DATA_PATH.replace(/\\/g, '/')}/**/events-*.parquet', union_by_name=true)`;
+    return `read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)`;
   }
   
+  // Fallback to JSONL if no Parquet (legacy data only)
   const hasJsonl = db.hasFileType('events', '.jsonl');
   const hasGzip = db.hasFileType('events', '.jsonl.gz');
   const hasZstd = db.hasFileType('events', '.jsonl.zst');
@@ -74,23 +54,22 @@ const getEventsSource = () => {
              NULL::VARCHAR[] as signatories, NULL::VARCHAR[] as observers, NULL::JSON as payload WHERE false)`;
   }
   
-  const basePath = db.DATA_PATH.replace(/\\/g, '/');
   const queries = [];
   if (hasJsonl) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl', union_by_name=true, ignore_errors=true)`);
   if (hasGzip) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.gz', union_by_name=true, ignore_errors=true)`);
   if (hasZstd) queries.push(`SELECT * FROM read_json_auto('${basePath}/**/events-*.jsonl.zst', union_by_name=true, ignore_errors=true)`);
   
-  return `(${queries.join(' UNION ')})`;
+  return `(${queries.join(' UNION ALL ')})`;
 };
 
-// Check what data sources are available
-function getDataSources() {
-  const hasBinaryEvents = binaryReader.hasBinaryFiles(db.DATA_PATH, 'events');
-  const hasParquetEvents = db.hasFileType('events', '.parquet');
-  return { 
-    hasBinaryEvents, 
-    hasParquetEvents,
-    primarySource: hasBinaryEvents ? 'binary' : hasParquetEvents ? 'parquet' : 'jsonl' 
+/**
+ * Get data source info for API responses
+ */
+function getDataSourceInfo() {
+  const hasParquet = db.hasFileType('events', '.parquet');
+  return {
+    source: hasParquet ? 'parquet' : 'jsonl',
+    engine: 'duckdb',
   };
 }
 
@@ -99,31 +78,20 @@ router.get('/latest', async (req, res) => {
   try {
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
-    const sources = getDataSources();
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 7,
-        maxFilesToScan: 200,
-        sortBy: 'timestamp',
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
+    const sourceInfo = getDataSourceInfo();
     
     const sql = `
       SELECT 
         event_id, update_id, event_type, contract_id, template_id, package_name,
         migration_id, synchronizer_id, timestamp, effective_at, signatories, observers, payload
       FROM ${getEventsSource()}
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
       OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     console.error('Error fetching latest events:', err);
     res.status(500).json({ error: err.message });
@@ -141,30 +109,19 @@ router.get('/by-type/:type', async (req, res) => {
     
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
-    const sources = getDataSources();
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 30,
-        maxFilesToScan: 200,
-        sortBy: 'effective_at',
-        filter: (e) => e.event_type === sanitizedType
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
+    const sourceInfo = getDataSourceInfo();
     
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE event_type = '${escapeString(sanitizedType)}'
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
+      OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -181,31 +138,20 @@ router.get('/by-template/:templateId', async (req, res) => {
     
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
-    const sources = getDataSources();
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 30,
-        maxFilesToScan: 200,
-        sortBy: 'effective_at',
-        filter: (e) => e.template_id?.includes(sanitizedTemplateId)
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
+    const sourceInfo = getDataSourceInfo();
     
     const escaped = escapeLikePattern(sanitizedTemplateId);
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%${escaped}%' ESCAPE '\\\\'
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
+      OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -217,7 +163,7 @@ router.get('/by-date', async (req, res) => {
     const { start, end } = req.query;
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, defaultValue: 0 });
-    const sources = getDataSources();
+    const sourceInfo = getDataSourceInfo();
     
     const sanitizedStart = start ? sanitizeTimestamp(start) : null;
     const sanitizedEnd = end ? sanitizeTimestamp(end) : null;
@@ -229,25 +175,6 @@ router.get('/by-date', async (req, res) => {
       return res.status(400).json({ error: 'Invalid end date format' });
     }
     
-    if (sources.primarySource === 'binary') {
-      const startDate = sanitizedStart ? new Date(sanitizedStart).getTime() : 0;
-      const endDate = sanitizedEnd ? new Date(sanitizedEnd).getTime() : Date.now();
-      
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 90,
-        maxFilesToScan: 300,
-        sortBy: 'effective_at',
-        filter: (e) => {
-          if (!e.effective_at) return false;
-          const ts = new Date(e.effective_at).getTime();
-          return ts >= startDate && ts <= endDate;
-        }
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
-    
     let whereClause = '';
     if (sanitizedStart) whereClause += ` AND COALESCE(timestamp, effective_at) >= '${escapeString(sanitizedStart)}'`;
     if (sanitizedEnd) whereClause += ` AND COALESCE(timestamp, effective_at) <= '${escapeString(sanitizedEnd)}'`;
@@ -256,12 +183,13 @@ router.get('/by-date', async (req, res) => {
       SELECT *
       FROM ${getEventsSource()}
       WHERE 1=1 ${whereClause}
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
+      OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -270,159 +198,116 @@ router.get('/by-date', async (req, res) => {
 // GET /api/events/count - Get total event count
 router.get('/count', async (req, res) => {
   try {
-    const sources = getDataSources();
-    
-    if (sources.primarySource === 'binary') {
-      const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
-      const estimated = fileCount * 100;
-      return res.json(convertBigInts({ count: estimated, estimated: true, fileCount, source: 'binary' }));
-    }
-    
+    const sourceInfo = getDataSourceInfo();
     const sql = `SELECT COUNT(*) as total FROM ${getEventsSource()}`;
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ count: rows[0]?.total || 0, source: sources.primarySource }));
+    res.json(convertBigInts({ count: rows[0]?.total || 0, ...sourceInfo }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/events/debug - Debug endpoint
+// GET /api/events/debug - Debug endpoint showing data sources
 router.get('/debug', async (req, res) => {
   try {
-    const sources = getDataSources();
-    const newestFiles = binaryReader.findBinaryFilesFast(db.DATA_PATH, 'events', { maxDays: 7, maxFiles: 10 });
-    const fileCount = binaryReader.countBinaryFiles(db.DATA_PATH, 'events');
+    const sourceInfo = getDataSourceInfo();
+    const hasParquet = db.hasFileType('events', '.parquet');
+    const hasJsonl = db.hasFileType('events', '.jsonl');
     
+    // Get sample record via DuckDB
     let sampleRecord = null;
-    if (newestFiles.length > 0) {
-      try {
-        const result = await binaryReader.readBinaryFile(newestFiles[0]);
-        sampleRecord = result.records[0] || null;
-      } catch (e) {
-        sampleRecord = { error: e.message };
-      }
+    try {
+      const sql = `SELECT * FROM ${getEventsSource()} LIMIT 1`;
+      const rows = await db.safeQuery(sql);
+      sampleRecord = rows[0] || null;
+    } catch (e) {
+      sampleRecord = { error: e.message };
     }
     
     res.json(convertBigInts({
       dataPath: db.DATA_PATH,
-      sources,
-      totalBinaryFiles: fileCount,
-      newestByDataDate: newestFiles.slice(0, 5),
-      sampleNewestRecord: sampleRecord,
+      ...sourceInfo,
+      hasParquetFiles: hasParquet,
+      hasJsonlFiles: hasJsonl,
+      sampleRecord,
     }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/events/governance - Get governance-related events
+// GET /api/events/governance - Get governance-related events via DuckDB analytical query
 router.get('/governance', async (req, res) => {
   try {
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 200 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
-    const sources = getDataSources();
+    const sourceInfo = getDataSourceInfo();
     
     const governanceTemplates = ['VoteRequest', 'Confirmation', 'DsoRules', 'AmuletRules', 'AmuletPriceVote'];
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 365,
-        maxFilesToScan: 500,
-        sortBy: 'effective_at',
-        filter: (e) => governanceTemplates.some(t => e.template_id?.includes(t))
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
-    
     const templateFilter = governanceTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE ${templateFilter}
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
       OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     console.error('Error fetching governance events:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/events/rewards - Get reward-related events
+// GET /api/events/rewards - Get reward-related events via DuckDB analytical query
 router.get('/rewards', async (req, res) => {
   try {
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 2000, defaultValue: 500 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
-    const sources = getDataSources();
+    const sourceInfo = getDataSourceInfo();
     
     const rewardTemplates = ['RewardCoupon', 'AppRewardCoupon', 'ValidatorRewardCoupon', 'SvRewardCoupon'];
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 90,
-        maxFilesToScan: 300,
-        sortBy: 'effective_at',
-        filter: (e) => rewardTemplates.some(t => e.template_id?.includes(t))
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
-    
     const templateFilter = rewardTemplates.map(t => `template_id LIKE '%${t}%'`).join(' OR ');
+    
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE ${templateFilter}
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
       OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     console.error('Error fetching reward events:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/events/member-traffic - Get member traffic events
+// GET /api/events/member-traffic - Get member traffic events via DuckDB
 router.get('/member-traffic', async (req, res) => {
   try {
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 200 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
-    const sources = getDataSources();
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit,
-        offset,
-        maxDays: 90,
-        maxFilesToScan: 300,
-        sortBy: 'effective_at',
-        filter: (e) => e.template_id?.includes('MemberTraffic')
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, hasMore: result.hasMore, source: 'binary' }));
-    }
+    const sourceInfo = getDataSourceInfo();
     
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE template_id LIKE '%MemberTraffic%'
-      ORDER BY COALESCE(timestamp, effective_at) DESC
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
       OFFSET ${offset}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     console.error('Error fetching member traffic events:', err);
     res.status(500).json({ error: err.message });
@@ -433,29 +318,19 @@ router.get('/member-traffic', async (req, res) => {
 router.get('/by-contract/:contractId', async (req, res) => {
   try {
     const { contractId } = req.params;
-    const sources = getDataSources();
-    
-    if (sources.primarySource === 'binary') {
-      const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
-        limit: 100,
-        offset: 0,
-        maxDays: 3650,
-        maxFilesToScan: 10000,
-        filter: (e) => e.contract_id === contractId
-      });
-      return res.json(convertBigInts({ data: result.records, count: result.records.length, source: 'binary' }));
-    }
+    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
+    const sourceInfo = getDataSourceInfo();
     
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
       WHERE contract_id = '${escapeString(contractId)}'
-      ORDER BY COALESCE(timestamp, effective_at) DESC
-      LIMIT 100
+      ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
+      LIMIT ${limit}
     `;
     
     const rows = await db.safeQuery(sql);
-    res.json(convertBigInts({ data: rows, count: rows.length, source: sources.primarySource }));
+    res.json(convertBigInts({ data: rows, count: rows.length, ...sourceInfo }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -464,14 +339,20 @@ router.get('/by-contract/:contractId', async (req, res) => {
 // GET /api/events/sources - Check what data sources are available
 router.get('/sources', (req, res) => {
   try {
-    const sources = getDataSources();
-    res.json(sources);
+    const hasParquet = db.hasFileType('events', '.parquet');
+    const hasJsonl = db.hasFileType('events', '.jsonl');
+    res.json({
+      primarySource: hasParquet ? 'parquet' : 'jsonl',
+      hasParquet,
+      hasJsonl,
+      engine: 'duckdb',
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// SV Node API endpoints (live queries to SV node)
+// ============= SV Node API endpoints (live queries to SV node) =============
 const SV_API_BASE = process.env.SV_API_BASE || 'https://sv.sv-1.global.canton.network.sync.global/api/sv';
 
 // GET /api/events/sv-node/vote-requests - Fetch active vote requests from SV node
