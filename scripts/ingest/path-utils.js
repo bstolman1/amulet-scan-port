@@ -3,9 +3,17 @@
  * 
  * Provides consistent path handling across Windows and Linux environments.
  * Automatically detects platform mismatches and uses appropriate defaults.
+ * 
+ * Includes support for:
+ * - GCS (Google Cloud Storage) configuration via GCS_BUCKET env var
+ * - /tmp/ledger_raw as ephemeral scratch space for GCP VMs
  */
 
 import { resolve, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
+
+// Tmp directory for ephemeral scratch space (GCP VMs)
+export const TMP_DIR = '/tmp/ledger_raw';
 
 // Platform detection
 export const isWindows = process.platform === 'win32';
@@ -95,6 +103,43 @@ export function toDuckDBPath(filePath) {
 }
 
 /**
+ * Get the tmp directory for ephemeral scratch space.
+ * Used on GCP VMs where data is written to /tmp then uploaded to GCS.
+ * 
+ * @returns {string} - Path to tmp directory
+ */
+export function getTmpDir() {
+  return TMP_DIR;
+}
+
+/**
+ * Get the tmp raw directory for Parquet files.
+ * 
+ * @returns {string} - Path to tmp/raw directory
+ */
+export function getTmpRawDir() {
+  return join(TMP_DIR, 'raw');
+}
+
+/**
+ * Ensure the tmp directory exists.
+ */
+export function ensureTmpDir() {
+  if (!existsSync(TMP_DIR)) {
+    mkdirSync(TMP_DIR, { recursive: true });
+  }
+}
+
+/**
+ * Check if GCS mode is enabled (GCS_BUCKET is set).
+ * 
+ * @returns {boolean} - True if GCS uploads are enabled
+ */
+export function isGCSMode() {
+  return !!process.env.GCS_BUCKET && process.env.GCS_ENABLED !== 'false';
+}
+
+/**
  * Log the current path configuration (for debugging)
  */
 export function logPathConfig(moduleName = 'path-utils') {
@@ -103,6 +148,11 @@ export function logPathConfig(moduleName = 'path-utils') {
   console.log(`📂 [${moduleName}] Base data dir: ${getBaseDataDir()}`);
   console.log(`📂 [${moduleName}] Raw dir: ${getRawDir()}`);
   console.log(`📂 [${moduleName}] Cursor dir: ${getCursorDir()}`);
+  console.log(`📂 [${moduleName}] GCS mode: ${isGCSMode() ? 'enabled' : 'disabled'}`);
+  if (isGCSMode()) {
+    console.log(`📂 [${moduleName}] GCS bucket: ${process.env.GCS_BUCKET}`);
+    console.log(`📂 [${moduleName}] Tmp dir: ${TMP_DIR}`);
+  }
 }
 
 export default {
@@ -111,10 +161,15 @@ export default {
   isLinuxPath,
   WIN_DEFAULT,
   LINUX_DEFAULT,
+  TMP_DIR,
   normalizeCrossPlatform,
   getBaseDataDir,
   getRawDir,
   getCursorDir,
+  getTmpDir,
+  getTmpRawDir,
+  ensureTmpDir,
+  isGCSMode,
   toDuckDBPath,
   logPathConfig,
 };
