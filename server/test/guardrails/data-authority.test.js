@@ -34,10 +34,15 @@ describe('Data Authority Contract', () => {
       // Files that are allowed to have binary patterns (pending migration)
       // TODO: Remove these exclusions as files are migrated to Parquet-only
       const allowedExceptions = [
-        'backfill.js',   // Legacy backfill status (to be migrated)
-        'rewards.js',    // Pending Parquet migration
-        'stats.js',      // Pending Parquet migration  
-        'updates.js',    // Pending Parquet migration
+        'backfill.js',              // Legacy backfill status (to be migrated)
+        'rewards.js',               // Pending Parquet migration
+        'stats.js',                 // Pending Parquet migration  
+        'updates.js',               // Pending Parquet migration
+        // External API proxies (not Parquet candidates - they fetch from external sources)
+        'governance-lifecycle.js',  // Fetches from Groups.io API, not ledger data
+        'announcements.js',         // Fetches from external SV announcements
+        'kaiko.js',                 // Fetches from Kaiko price API
+        'acs.js',                   // ACS snapshot management
       ];
       
       const forbiddenPatterns = [
