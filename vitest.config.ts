@@ -9,6 +9,7 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: [
       'src/**/*.{test,spec}.{js,ts,tsx}',
+      'server/test/guardrails/**/*.{test,spec}.js',
       'server/**/*.{test,spec}.{js,ts}',
     ],
     // Exclude integration/e2e tests (require running server) and node_modules
@@ -53,6 +54,7 @@ coverage: {
     environmentMatchGlobs: [
       ['server/**/*.test.js', 'node'],
       ['server/**/*.spec.js', 'node'],
+      ['server/test/**/*.js', 'node'],
     ],
     // Increase timeout for slow database queries
     testTimeout: 15000,
