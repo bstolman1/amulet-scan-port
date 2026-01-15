@@ -2,16 +2,40 @@
 
 ## Overview
 
-This project provides a Canton ledger explorer using a local-first DuckDB/binary file architecture.
+This project provides a Canton ledger explorer using a local-first DuckDB + Parquet architecture.
+
+---
+
+## ⚠️ DATA AUTHORITY CONTRACT
+
+> **Parquet files produced by ledger ingestion are the sole authoritative data source.**
+>
+> All governance, rewards, and party state **must** be derived via DuckDB SQL queries
+> over Parquet files. Binary formats (JSONL, PBZST) are **export-only** and must not
+> be read by API routes or business logic.
+>
+> This is not documentation fluff — it's a contract with future you (and future collaborators).
+
+### Enforcement
+
+- `server/api/` — DuckDB queries over Parquet only
+- `server/analytics/` — DuckDB analytical queries only  
+- `scripts/ingest/` — Write-only (produces Parquet)
+- `scripts/export/` — JSONL/PBZST writers (export-only, never imported by API)
+
+**CI enforces this** via `data-authority-check` job (see `.github/workflows/test.yml`).
+
+---
 
 ## DuckDB Architecture
 
 ### Why This Approach?
 
-- **TB-scale data**: Binary files with ZSTD compression handle 1.8TB+ efficiently
+- **TB-scale data**: Parquet with ZSTD compression handles 1.8TB+ efficiently
 - **Zero cost**: No database hosting fees
 - **BigQuery ready**: Parquet files upload directly to GCS/BigQuery
 - **Simple**: No connection pooling, no ORM, just files + SQL
+- **Immutable**: Parquet files are append-only, derived views are disposable
 
 ### Directory Structure
 

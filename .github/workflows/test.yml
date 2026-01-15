@@ -119,9 +119,46 @@ jobs:
         run: npx eslint . --ext .ts,.tsx,.js --max-warnings 0
         continue-on-error: true
 
+  # Guardrail: Prevent reintroduction of binary file reading in API layer
+  data-authority-check:
+    runs-on: ubuntu-latest
+    name: Data Authority Contract
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for forbidden binary reader patterns in API
+        run: |
+          echo "🔍 Checking data authority contract..."
+          echo "   Parquet via DuckDB is the only allowed data source for API routes."
+          echo ""
+          
+          # Patterns that indicate binary file reading (forbidden in server/api/)
+          FORBIDDEN_PATTERNS="binaryReader|streamRecords|\.pb\.zst|readBinaryFile|hasBinaryFiles"
+          
+          # Check server/api/ for forbidden patterns
+          if grep -rE "$FORBIDDEN_PATTERNS" server/api/ 2>/dev/null; then
+            echo ""
+            echo "❌ FAILED: Binary file reading detected in server/api/"
+            echo "   API routes must use DuckDB queries over Parquet files only."
+            echo "   See docs/architecture.md for the Data Authority Contract."
+            exit 1
+          fi
+          
+          # Check that binary-reader.js doesn't exist (was deleted)
+          if [ -f "server/duckdb/binary-reader.js" ]; then
+            echo "❌ FAILED: server/duckdb/binary-reader.js should not exist"
+            echo "   Binary reading was removed. Use DuckDB Parquet queries instead."
+            exit 1
+          fi
+          
+          echo "✅ Data authority contract verified"
+          echo "   No binary reading patterns found in API layer"
+
   build:
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, data-authority-check]
     
     steps:
       - name: Checkout repository
