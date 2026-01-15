@@ -44,25 +44,32 @@ amulet-scan-port/
 ├── scripts/ingest/           # Data ingestion from Canton API
 │   ├── fetch-updates.js      # Live incremental updates
 │   ├── fetch-backfill.js     # Historical backfill
-│   ├── write-binary.js       # Binary file writing
-│   └── write-parquet.js      # Parquet conversion
+│   └── write-parquet.js      # Parquet file writing
 │
 ├── data/
-│   ├── ledger_raw/           # Compressed binary files
-│   ├── parquet/              # Materialized Parquet files
+│   ├── raw/                  # Parquet files (source of truth)
+│   │   └── migration=X/      # Hive-partitioned structure
+│   │       └── year=YYYY/
+│   │           └── month=MM/
+│   │               └── day=DD/
+│   │                   ├── events-*.parquet
+│   │                   └── updates-*.parquet
+│   ├── acs/                  # Active Contract Set snapshots
 │   ├── cursors/              # Backfill progress tracking
 │   └── cache/                # Aggregation cache
 │
 ├── server/                   # Express + DuckDB API
 │   ├── server.js
-│   ├── duckdb/connection.js
+│   ├── duckdb/connection.js  # DuckDB connection + query helpers
 │   └── api/
-│       ├── events.js
-│       ├── party.js
-│       ├── contracts.js
-│       ├── stats.js
-│       ├── acs.js
-│       └── search.js
+│       ├── events.js         # Event queries
+│       ├── party.js          # Party activity
+│       ├── contracts.js      # Contract lifecycle
+│       ├── stats.js          # Dashboard statistics
+│       ├── rewards.js        # Reward calculations
+│       ├── backfill.js       # Backfill management
+│       ├── acs.js            # ACS queries
+│       └── search.js         # Full-text search
 │
 └── src/                      # React UI (Lovable project)
 ```
@@ -76,13 +83,13 @@ Canton Scan API
 [fetch-updates.js]           ◄── Live polling (5s intervals)
       │
       ▼
-[write-binary.js]            ◄── ZSTD-compressed Protobuf
+[write-parquet.js]           ◄── Parquet with ZSTD compression
       │
       ▼
-/data/ledger_raw/            ◄── Binary files
+/data/raw/**/*.parquet       ◄── Source of truth
       │
       ▼
-[DuckDB Server]              ◄── Query engine
+[DuckDB Server]              ◄── Direct SQL queries over Parquet
       │
       ▼
 [React Frontend]             ◄── API calls

@@ -2,7 +2,42 @@
 
 ## Overview
 
-This document describes the data pipeline from raw ledger ingestion through derived indexes. The architecture uses **binary `.pb.zst` files** (Protobuf + Zstandard compression) as the source of truth, with derived indexes stored in DuckDB and JSON files.
+This document describes the data pipeline from raw ledger ingestion through API queries. The architecture uses **Parquet files** as the sole authoritative data source, queried via DuckDB.
+
+---
+
+## ⚠️ DATA AUTHORITY CONTRACT
+
+> **Parquet files produced by ledger ingestion are the sole authoritative data source.**
+>
+> All governance, rewards, party state, and analytics **must** be derived via DuckDB SQL queries
+> over Parquet files. Legacy binary formats (JSONL, PBZST) are **deprecated** and must not
+> be read by API routes or business logic.
+>
+> This is not documentation fluff — it's a contract with future you (and future collaborators).
+
+### Enforcement
+
+| Directory | Allowed Operations |
+|-----------|-------------------|
+| `server/api/` | DuckDB queries over Parquet **only** |
+| `server/engine/` | DuckDB analytical queries **only** |
+| `scripts/ingest/` | Write-only (produces Parquet) |
+| `scripts/export/` | JSONL/PBZST writers (export-only, never imported by API) |
+
+**CI enforces this** via `data-authority-check` job in `.github/workflows/test.yml`.
+
+### Guardrail Tests
+
+The `server/test/guardrails/data-authority.test.js` file enforces:
+
+1. **No binary reader imports** in `server/api/` files
+2. **No `.pb.zst` references** in API code
+3. **No `decodeFile` or `binaryReader` usage** in query paths
+
+Violations cause CI failures. No exceptions.
+
+---
 
 ## Data Flow Diagram
 
@@ -21,59 +56,37 @@ This document describes the data pipeline from raw ledger ingestion through deri
                      │                │                │
                      ▼                ▼                ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        SOURCE OF TRUTH: .pb.zst FILES                        │
+│                    SOURCE OF TRUTH: PARQUET FILES                            │
 │                                                                              │
-│  data/ledger_raw/                    data/acs/                               │
-│  ├── migration=1/                    ├── migration=1/                        │
-│  │   └── year=2024/                  │   └── year=2024/                      │
-│  │       └── month=12/               │       └── month=12/                   │
-│  │           └── day=15/             │           └── day=15/                 │
-│  │               └── events-*.pb.zst │               └── *.parquet           │
-│  └── updates-*.pb.zst                └── _COMPLETE                           │
-│                                                                              │
-│  Format: Protobuf-serialized events compressed with Zstandard               │
-│  Size: ~1.8 TB compressed (35K+ files)                                       │
+│  data/raw/                              data/acs/                            │
+│  ├── migration=1/                       ├── migration=1/                     │
+│  │   └── year=2024/                     │   └── year=2024/                   │
+│  │       └── month=12/                  │       └── month=12/                │
+│  │           └── day=15/                │           └── day=15/              │
+│  │               ├── events-*.parquet   │               └── *.parquet        │
+│  │               └── updates-*.parquet  └── _COMPLETE                        │
+│  │                                                                           │
+│  Compression: ZSTD (Parquet internal)                                        │
+│  Size: ~1.8 TB compressed (optimized columnar format)                        │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
-                                      │ Index Build Process
-                                      │ (scans .pb.zst files)
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            DERIVED INDEXES                                   │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ TEMPLATE FILE INDEX                                                  │    │
-│  │ Storage: DuckDB tables (template_file_index, template_file_state)   │    │
-│  │ Purpose: Map template names → files containing that template        │    │
-│  │ Build time: ~10-15 min parallel, ~70 min sequential                 │    │
-│  │ Enables: Fast VoteRequest queries (scan 100 files vs 35K)           │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ PARTY INDEX                                                          │    │
-│  │ Storage: JSON file (data/party-index.json)                          │    │
-│  │ Purpose: Map party IDs → files containing their events              │    │
-│  │ Structure: partyId → [{ file, eventCount, firstSeen, lastSeen }]    │    │
-│  │ Enables: O(1) lookup of party activity across backfill              │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ AGGREGATIONS                                                         │    │
-│  │ Storage: DuckDB tables (events_raw, aggregation_state)              │    │
-│  │ Purpose: Pre-computed counts and summaries                          │    │
-│  │ Tracks: Last processed file_id for incremental updates             │    │
-│  │ Provides: Event type counts, template counts, time ranges           │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
+                                      │ Direct SQL Queries
+                                      │ (no intermediate indexing)
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           QUERY LAYER (DuckDB)                               │
 │                                                                              │
-│  server/duckdb/connection.js - Connection pool with retry logic              │
-│  server/duckdb/binary-reader.js - Reads and decompresses .pb.zst files      │
+│  server/duckdb/connection.js                                                 │
+│  ├── safeQuery()      - Parameterized query execution                        │
+│  ├── getEventsSource() - Returns Parquet glob for events                     │
+│  ├── hasFileType()    - Check for Parquet/JSONL availability                 │
+│  └── DATA_PATH        - Base path for data files                             │
 │                                                                              │
+│  Features:                                                                   │
+│  • Connection pooling with retry logic                                       │
+│  • Automatic BigInt → Number conversion                                      │
+│  • Union by name for schema evolution                                        │
+│  • Glob patterns for partitioned data                                        │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -81,208 +94,194 @@ This document describes the data pipeline from raw ledger ingestion through deri
 │                              API LAYER                                       │
 │                                                                              │
 │  server/api/*.js - Express routes                                            │
-│  Port 3001                                                                   │
+│  ├── events.js     - Event queries (created, archived, exercised)            │
+│  ├── party.js      - Party activity and summaries                            │
+│  ├── contracts.js  - Contract lifecycle queries                              │
+│  ├── stats.js      - Dashboard statistics                                    │
+│  ├── search.js     - Full-text and filtered search                           │
+│  ├── rewards.js    - Reward calculations (DuckDB only)                       │
+│  ├── backfill.js   - Backfill progress and cursors                           │
+│  └── governance-lifecycle.js - Proposal tracking                             │
 │                                                                              │
+│  Port: 3001                                                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           REACT FRONTEND                                     │
+│                                                                              │
+│  src/hooks/use-*.ts - React Query hooks for API calls                        │
+│  src/lib/api-client.ts - Typed API client                                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Index Details
-
-### 1. Template File Index
-
-**Purpose**: Dramatically speed up template-specific queries by scanning only relevant files.
-
-**Source**: `server/engine/template-file-index.js`
-
-**Storage Location**: DuckDB tables
-- `template_file_index` - Maps (file_path, template_name) → metadata
-- `template_file_index_state` - Tracks build progress and last indexed file
-
-**Schema**:
-```sql
-CREATE TABLE template_file_index (
-  file_path VARCHAR NOT NULL,
-  template_name VARCHAR NOT NULL,
-  event_count INTEGER DEFAULT 0,
-  first_event_at TIMESTAMP,
-  last_event_at TIMESTAMP,
-  PRIMARY KEY (file_path, template_name)
-);
-```
-
-**Build Process**:
-1. Scan all `.pb.zst` files in `DATA_PATH`
-2. Decompress and parse each file
-3. Extract unique template names from events
-4. Insert mappings into DuckDB with event counts and timestamps
-5. Supports incremental updates (only indexes new files)
-
-**Usage Example**:
-```javascript
-// Get all files containing VoteRequest events
-const files = await getFilesForTemplate('VoteRequest');
-// Returns: ['/data/ledger_raw/migration=1/.../events-001.pb.zst', ...]
-```
-
 ---
 
-### 2. Party Index
+## DuckDB Query Patterns
 
-**Purpose**: Enable O(1) lookup of which files contain a party's events.
+### Basic Event Query
 
-**Source**: `server/engine/party-indexer.js`
-
-**Storage Location**: JSON files on disk
-- `data/party-index.json` - Main index
-- `data/party-index-state.json` - Build state tracking
-
-**Structure**:
-```json
-{
-  "party::12345abcdef...": [
-    {
-      "file": "/data/ledger_raw/.../events-001.pb.zst",
-      "eventCount": 42,
-      "firstSeen": "2024-01-15T10:30:00Z",
-      "lastSeen": "2024-01-15T14:22:00Z"
-    }
-  ]
-}
-```
-
-**Build Process**:
-1. Scan all `.pb.zst` event files
-2. Extract signatories and observers from each event
-3. Build mapping: partyId → list of files with metadata
-4. Save checkpoints every 500 files
-5. Store final index as JSON
-
-**Usage Example**:
 ```javascript
-// Get files containing a party's events
-const fileInfos = getFilesForParty('party::alice123...');
-// Returns: [{ file, eventCount, firstSeen, lastSeen }, ...]
+import db from '../duckdb/connection.js';
+
+const events = await db.safeQuery(`
+  SELECT * FROM ${db.getEventsSource()}
+  WHERE template_name = $1
+  ORDER BY record_time DESC
+  LIMIT $2
+`, [templateName, limit]);
 ```
 
----
+### Aggregation Query
 
-### 3. Aggregations
-
-**Purpose**: Pre-computed statistics for fast dashboard queries.
-
-**Source**: `server/engine/aggregations.js`
-
-**Storage Location**: DuckDB tables
-- `events_raw` - Ingested raw events
-- `aggregation_state` - Tracks last processed file per aggregation
-
-**Schema**:
-```sql
-CREATE TABLE aggregation_state (
-  agg_name VARCHAR PRIMARY KEY,
-  last_file_id INTEGER,
-  last_updated TIMESTAMP
-);
+```javascript
+const stats = await db.safeQuery(`
+  SELECT 
+    template_name,
+    COUNT(*) as event_count,
+    MIN(record_time) as first_seen,
+    MAX(record_time) as last_seen
+  FROM ${db.getEventsSource()}
+  GROUP BY template_name
+  ORDER BY event_count DESC
+`);
 ```
 
-**Aggregations Computed**:
-| Name | Description |
-|------|-------------|
-| `event_type_counts` | Count of events by type (created, archived, etc.) |
-| `template_counts` | Count of events by template |
-| `time_range` | MIN/MAX timestamps in dataset |
-| `total_counts` | Total events and updates |
+### Direct Parquet Query (when needed)
 
-**Incremental Update Process**:
-1. Check `last_file_id` for aggregation
-2. Query events where `_file_id > last_file_id`
-3. Compute new aggregates
-4. Update `aggregation_state` with new `last_file_id`
+```javascript
+const basePath = db.DATA_PATH.replace(/\\/g, '/');
+
+const result = await db.safeQuery(`
+  SELECT COUNT(*) as count 
+  FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
+  WHERE migration_id = $1
+`, [migrationId]);
+```
 
 ---
 
 ## File Formats
 
-### Binary Files (.pb.zst)
+### Parquet Files (Primary)
 
-**Location**: `data/ledger_raw/`
+**Location**: `data/raw/` and `data/acs/`
 
-**Format**: Protobuf messages compressed with Zstandard
+**Format**: Apache Parquet with ZSTD compression
 
-**Schema**: Defined in `scripts/ingest/schema/ledger.proto`
+**Partitioning**: Hive-style (`migration=X/year=YYYY/month=MM/day=DD/`)
 
-**Reader**: `server/duckdb/binary-reader.js`
+**Schema**: Defined by ingestion scripts, includes:
+- `event_id` - Unique event identifier
+- `template_name` - DAML template name
+- `event_type` - created, archived, exercised
+- `contract_id` - Contract identifier
+- `signatories` - List of signing parties
+- `observers` - List of observing parties
+- `payload` - JSON payload
+- `record_time` - Event timestamp
+- `migration_id` - Network migration ID
 
-```javascript
-import { readBinaryFile } from '../duckdb/binary-reader.js';
-
-const result = await readBinaryFile('/path/to/events-001.pb.zst');
-// result.records = [{ template, type, signatories, observers, payload, ... }]
+**Query Pattern**:
+```sql
+SELECT * FROM read_parquet('data/raw/**/events-*.parquet', union_by_name=true)
 ```
 
-### Parquet Files (Optional)
+### JSONL Files (Fallback)
 
-**Location**: `data/parquet/` and `data/acs/`
+**Location**: `data/jsonl/`
 
-**Purpose**: 
-- Analytics and ad-hoc SQL queries
-- BigQuery/external tool compatibility
-- ACS (Active Contract Set) snapshots
+**Purpose**: Compatibility layer for environments without Parquet support
 
-**Generation**: `scripts/ingest/materialize-parquet.js`
+**Query Pattern**:
+```sql
+SELECT * FROM read_json_auto('data/jsonl/events-*.jsonl')
+```
 
 ---
 
-## Index Build Commands
+## Aggregations
 
-```bash
-# Build template file index (incremental by default)
-curl http://localhost:3001/api/index/templates/build
+### Pre-computed Statistics
 
-# Force rebuild template index
-curl http://localhost:3001/api/index/templates/build?force=true
+The `server/engine/aggregations.js` module provides:
 
-# Build party index
-curl http://localhost:3001/api/index/party/build
+| Function | Description |
+|----------|-------------|
+| `getTotalCounts()` | Total events and updates |
+| `getTimeRange()` | MIN/MAX timestamps |
+| `getTemplateEventCounts()` | Events per template |
+| `getEventTypeCounts()` | Events by type |
 
-# Check index status
-curl http://localhost:3001/api/index/status
-```
+All aggregations query Parquet files directly via DuckDB.
 
 ---
 
 ## Performance Characteristics
 
-| Index | Build Time | Storage Size | Query Speedup |
-|-------|------------|--------------|---------------|
-| Template File Index | 10-15 min (parallel) | ~50 MB in DuckDB | 100-350x for template queries |
-| Party Index | 30-60 min | ~200 MB JSON | O(n) → O(1) for party lookups |
-| Aggregations | Incremental (seconds) | ~10 MB | Pre-computed, instant |
+| Metric | Value |
+|--------|-------|
+| Cold query (first) | 100-500ms |
+| Warm query (cached) | 10-50ms |
+| Full table scan | 2-10s (depends on data size) |
+| Template-filtered | 50-200ms |
+| Party-filtered | 100-500ms |
+
+DuckDB automatically caches metadata and uses column pruning for efficient queries.
+
+---
+
+## Migration from Binary Format
+
+The codebase has been migrated from `.pb.zst` (Protobuf + Zstandard) to Parquet:
+
+### What Changed
+
+1. **Removed**: `server/duckdb/binary-reader.js`
+2. **Removed**: `server/engine/template-file-index.js` (no longer needed)
+3. **Updated**: All `server/api/*.js` to use `db.safeQuery()` with Parquet sources
+4. **Added**: Guardrail tests to prevent regression
+
+### Why Parquet?
+
+1. **Direct SQL**: No decompression/parsing step - DuckDB reads Parquet natively
+2. **Column pruning**: Only reads columns needed for query
+3. **Predicate pushdown**: Filters applied at file level
+4. **Schema evolution**: `union_by_name=true` handles schema changes
+5. **BigQuery ready**: Parquet files upload directly to GCS/BigQuery
+
+### Legacy Binary Files
+
+If you have existing `.pb.zst` files, convert them using:
+
+```bash
+node scripts/ingest/materialize-parquet.js
+```
+
+The API will not read binary files - they must be converted to Parquet first.
 
 ---
 
 ## Design Decisions
 
-### Why .pb.zst as Source of Truth?
+### Why Parquet as Sole Source of Truth?
 
-1. **Compact**: Protobuf + Zstd achieves ~10:1 compression
-2. **Fast writes**: Append-only, no index updates during ingestion
-3. **Immutable**: Files never modified, only appended
-4. **Portable**: Self-contained, easy to backup/restore
+1. **Query performance**: Native DuckDB support, no parsing overhead
+2. **Compression**: ZSTD compression built into Parquet
+3. **Portability**: Industry standard, works with BigQuery, Spark, Pandas
+4. **Column store**: Efficient for analytical queries
+5. **Metadata**: Statistics enable query optimization
 
-### Why Not Parquet as Primary?
+### Why Not Keep Binary Format?
 
-1. **Write overhead**: Parquet requires sorting and statistics computation
-2. **Schema evolution**: Protobuf handles schema changes more gracefully
-3. **Incremental ingestion**: Binary files support faster streaming writes
+1. **Complexity**: Maintaining two code paths (binary + Parquet) is error-prone
+2. **Performance**: Binary requires decompression + parsing on every query
+3. **Tooling**: Parquet has better ecosystem support
+4. **Debugging**: Can inspect Parquet with standard tools (DuckDB CLI, Pandas)
 
-### Why Derived Indexes?
+### Data Authority Contract Benefits
 
-1. **Query performance**: Avoid full scans of 35K+ files
-2. **Separation of concerns**: Ingestion is fast; indexing can run async
-3. **Flexibility**: Different indexes for different query patterns
+1. **Single source of truth**: No ambiguity about which format is canonical
+2. **CI enforcement**: Guardrail tests catch violations
+3. **Future-proofing**: Clear contract for all contributors
+4. **Simplified debugging**: Always know where data comes from
