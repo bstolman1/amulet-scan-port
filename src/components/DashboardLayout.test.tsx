@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DashboardLayout } from './DashboardLayout';
 
 // Helper functions
@@ -24,14 +25,27 @@ const getLink = (container: HTMLElement, name: string | RegExp) => {
 
 const getAllLinks = (container: HTMLElement) => Array.from(container.querySelectorAll('a'));
 
+// Create a fresh QueryClient for each test
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
 describe('DashboardLayout', () => {
   const renderWithRouter = (initialPath = '/') => {
+    const queryClient = createTestQueryClient();
     return render(
-      <MemoryRouter initialEntries={[initialPath]}>
-        <DashboardLayout>
-          <div data-testid="child-content">Test Content</div>
-        </DashboardLayout>
-      </MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <DashboardLayout>
+            <div data-testid="child-content">Test Content</div>
+          </DashboardLayout>
+        </MemoryRouter>
+      </QueryClientProvider>
     );
   };
 
