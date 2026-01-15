@@ -24,7 +24,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
-import { VoteRequestIndexBanner } from "@/components/VoteRequestIndexBanner";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
 // Safe date formatter that won't crash on invalid dates
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
@@ -367,9 +366,6 @@ const Governance = () => {
             </AlertDescription>
           </Alert>
         )}
-
-        {/* VoteRequest Index Banner */}
-        <VoteRequestIndexBanner />
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
