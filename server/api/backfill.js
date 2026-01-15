@@ -94,8 +94,6 @@ let lastFileCounts = { events: 0, updates: 0, timestamp: 0 };
 
 function countRawFiles() {
   const rawDir = join(DATA_DIR, 'raw');
-  let events = 0;
-  let updates = 0;
   let parquetEvents = 0;
   let parquetUpdates = 0;
   
@@ -105,9 +103,6 @@ function countRawFiles() {
       for (const entry of entries) {
         if (entry.isDirectory()) {
           scanDir(join(dir, entry.name));
-        } else if (entry.name.endsWith('.pb.zst')) {
-          if (entry.name.startsWith('events-')) events++;
-          else if (entry.name.startsWith('updates-')) updates++;
         } else if (entry.name.endsWith('.parquet')) {
           if (entry.name.startsWith('events-')) parquetEvents++;
           else if (entry.name.startsWith('updates-')) parquetUpdates++;
@@ -120,15 +115,12 @@ function countRawFiles() {
     scanDir(rawDir);
   }
   
-  // Return combined counts - prefer Parquet if available
   return { 
-    events: parquetEvents || events, 
-    updates: parquetUpdates || updates,
-    format: (parquetEvents > 0 || parquetUpdates > 0) ? 'parquet' : (events > 0 || updates > 0) ? 'pb.zst' : 'none',
+    events: parquetEvents, 
+    updates: parquetUpdates,
+    format: (parquetEvents > 0 || parquetUpdates > 0) ? 'parquet' : 'none',
     parquetEvents,
     parquetUpdates,
-    binaryEvents: events,
-    binaryUpdates: updates,
   };
 }
 
