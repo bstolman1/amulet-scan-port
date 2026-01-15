@@ -29,7 +29,6 @@ import ExternalPartySetup from "./pages/ExternalPartySetup";
 import BackfillProgress from "./pages/BackfillProgress";
 import LiveUpdates from "./pages/LiveUpdates";
 import IngestionDashboard from "./pages/IngestionDashboard";
-import IndexStatus from "./pages/IndexStatus";
 
 import Elections from "./pages/Elections";
 import TransferCounters from "./pages/TransferCounters";
@@ -93,7 +92,6 @@ const App = () => (
             <Route path="/ingestion" element={<IngestionDashboard />} />
             <Route path="/governance-flow" element={<GovernanceFlow />} />
             <Route path="/kaiko-feed" element={<KaikoFeed />} />
-            <Route path="/index-status" element={<IndexStatus />} />
             <Route path="/reward-calculations" element={<RewardCalculations />} />
             <Route path="/party/:partyId" element={<Party />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

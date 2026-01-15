@@ -26,7 +26,6 @@ import {
   TrendingUp,
   GitBranch,
   CandlestickChart,
-  HardDrive,
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -61,7 +60,6 @@ const navigation = [
   { name: "Ingestion", href: "/ingestion", icon: Database },
   { name: "Backfill Progress", href: "/backfill-progress", icon: Clock },
   { name: "Live Updates", href: "/live-updates", icon: TrendingUp },
-  { name: "Index Status", href: "/index-status", icon: HardDrive },
   { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
   { name: "Admin", href: "/admin", icon: Shield },
   { name: "Templates", href: "/templates", icon: FileText },
