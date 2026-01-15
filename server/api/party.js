@@ -1,40 +1,10 @@
 import { Router } from 'express';
 import db from '../duckdb/connection.js';
-import * as partyIndexer from '../engine/party-indexer.js';
 import * as binaryReader from '../duckdb/binary-reader.js';
 
 const router = Router();
 
-// GET /api/party/index/status - Get party index status
-router.get('/index/status', async (req, res) => {
-  try {
-    const stats = partyIndexer.getPartyIndexStats();
-    const progress = partyIndexer.getIndexingProgress();
-    res.json({ ...stats, indexing: progress });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/party/index/build - Build party index
-router.post('/index/build', async (req, res) => {
-  try {
-    const { forceRebuild } = req.body || {};
-    
-    // Start indexing in background
-    partyIndexer.buildPartyIndex({ forceRebuild }).then(result => {
-      console.log('Party index build completed:', result);
-    }).catch(err => {
-      console.error('Party index build failed:', err);
-    });
-    
-    res.json({ status: 'started', message: 'Party index build started in background' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/party/search - Search parties by prefix
+// GET /api/party/search - Search parties (basic scan fallback)
 router.get('/search', async (req, res) => {
   try {
     const { q, limit = 50 } = req.query;
@@ -43,31 +13,54 @@ router.get('/search', async (req, res) => {
       return res.status(400).json({ error: 'Search query required (q parameter)' });
     }
     
-    const matches = partyIndexer.searchPartiesByPrefix(q, parseInt(limit));
-    res.json({ data: matches, count: matches.length, indexed: partyIndexer.isIndexPopulated() });
+    // Scan recent binary files for matching parties
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: 1000,
+      maxDays: 30,
+      filter: (event) => {
+        const sigMatch = event.signatories?.some(s => s.includes(q));
+        const obsMatch = event.observers?.some(o => o.includes(q));
+        return sigMatch || obsMatch;
+      }
+    });
+    
+    // Extract unique parties matching the query
+    const matchingParties = new Set();
+    for (const event of result.records) {
+      for (const sig of (event.signatories || [])) {
+        if (sig.includes(q)) matchingParties.add(sig);
+      }
+      for (const obs of (event.observers || [])) {
+        if (obs.includes(q)) matchingParties.add(obs);
+      }
+    }
+    
+    const matches = Array.from(matchingParties).slice(0, parseInt(limit));
+    res.json({ data: matches, count: matches.length, indexed: false });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/party/list/all - Get all unique parties
+// GET /api/party/list/all - Get unique parties (scan fallback)
 router.get('/list/all', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 1000, 10000);
     
-    // If party index is populated, use it (much faster)
-    if (partyIndexer.isIndexPopulated()) {
-      const index = partyIndexer.loadPartyIndex();
-      const parties = Array.from(index.keys()).slice(0, limit);
-      return res.json({ data: parties, count: parties.length, indexed: true });
+    // Scan recent files to find parties
+    const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
+      limit: 5000,
+      maxDays: 30,
+    });
+    
+    const parties = new Set();
+    for (const event of result.records) {
+      for (const sig of (event.signatories || [])) parties.add(sig);
+      for (const obs of (event.observers || [])) parties.add(obs);
     }
     
-    // No index - return error suggesting to build the index
-    res.status(503).json({ 
-      error: 'Party index not built. Build the party index first for this query.',
-      indexed: false,
-      suggestion: 'POST /api/party/index/build to start building the index'
-    });
+    const partyList = Array.from(parties).slice(0, limit);
+    res.json({ data: partyList, count: partyList.length, indexed: false });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -78,23 +71,9 @@ router.get('/:partyId', async (req, res) => {
   try {
     const { partyId } = req.params;
     const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const useIndex = req.query.index !== 'false';
     
-    // If party index is populated and requested, use it (much faster)
-    if (useIndex && partyIndexer.isIndexPopulated()) {
-      const result = await partyIndexer.getPartyEventsFromIndex(partyId, limit);
-      return res.json({ 
-        data: result.events, 
-        count: result.events.length,
-        total: result.total,
-        party_id: partyId,
-        indexed: true,
-        filesScanned: result.filesScanned,
-      });
-    }
-    
-    // Fallback: scan recent binary files (slow but works without index)
-    console.log(`Party ${partyId}: No index, falling back to binary scan...`);
+    // Scan recent binary files
+    console.log(`Party ${partyId}: Scanning binary files...`);
     const result = await binaryReader.streamRecords(db.DATA_PATH, 'events', {
       limit: limit * 10, // Get more to filter
       maxDays: 30,
@@ -115,7 +94,7 @@ router.get('/:partyId', async (req, res) => {
       count: filtered.length, 
       party_id: partyId, 
       indexed: false,
-      warning: 'Scanning recent files only (last 30 days). Build the party index for complete history.'
+      warning: 'Scanning recent files only (last 30 days).'
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -126,22 +105,13 @@ router.get('/:partyId', async (req, res) => {
 router.get('/:partyId/summary', async (req, res) => {
   try {
     const { partyId } = req.params;
-    const useIndex = req.query.index !== 'false';
     
-    // If party index is populated, get quick summary
-    if (useIndex && partyIndexer.isIndexPopulated()) {
-      const summary = partyIndexer.getPartySummaryFromIndex(partyId);
-      if (summary) {
-        return res.json({ data: summary, party_id: partyId, indexed: true });
-      }
-    }
-    
-    // No index - return minimal info
+    // Return minimal info without index
     res.json({ 
       data: null, 
       party_id: partyId, 
       indexed: false,
-      warning: 'Party index not built. Build the index for summary data.'
+      warning: 'Party summary requires scanning historical data.'
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
