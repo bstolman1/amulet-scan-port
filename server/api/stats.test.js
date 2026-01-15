@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMockRequest, createMockResponse, mockStatsOverview } from '../test/fixtures/mock-data.js';
 
-// Mock the database and binary reader before importing the router
+// Mock the database before importing the router
 vi.mock('../duckdb/connection.js', () => ({
   default: {
     DATA_PATH: '/mock/data',
@@ -21,15 +21,6 @@ vi.mock('../duckdb/connection.js', () => ({
     hasFileType: vi.fn().mockReturnValue(false),
   },
   query: vi.fn(),
-}));
-
-vi.mock('../duckdb/binary-reader.js', () => ({
-  default: {
-    hasBinaryFiles: vi.fn().mockReturnValue(false),
-    findBinaryFiles: vi.fn().mockReturnValue([]),
-    loadAllRecords: vi.fn().mockResolvedValue([]),
-    streamRecords: vi.fn().mockResolvedValue({ records: [], hasMore: false }),
-  },
 }));
 
 vi.mock('../engine/aggregations.js', () => ({
