@@ -1,17 +1,21 @@
 /**
- * Parquet Writer Module - Parallel DuckDB Version
+ * Parquet Writer Module - Parallel DuckDB Version with GCS Upload
  * 
  * Writes ledger data to Parquet files using a worker pool with DuckDB.
  * Each worker has its own in-memory DuckDB instance for parallel writes.
  * 
- * Drop-in replacement for the original synchronous CLI-based version.
+ * GCS Mode (when GCS_BUCKET is set):
+ * 1. Writes Parquet files to /tmp/ledger_raw (ephemeral scratch space)
+ * 2. Uploads each file immediately to GCS using gsutil
+ * 3. Deletes local file after upload
+ * 4. Keeps disk usage flat regardless of total data volume
  * 
- * How it works:
- * 1. Buffer records in memory (same as before)
- * 2. On flush: Enqueue job to worker pool (non-blocking)
- * 3. Worker writes Parquet with ZSTD via DuckDB Node.js bindings
+ * Local Mode (default):
+ * - Writes to DATA_DIR/raw like before
  * 
  * Configuration:
+ * - GCS_BUCKET: Set to enable GCS uploads
+ * - GCS_ENABLED: Set to 'false' to disable GCS even if bucket is set
  * - PARQUET_WORKERS: Number of parallel writers (default: CPU-1)
  * - MAX_ROWS_PER_FILE: Records per Parquet file (default: 5000)
  * - PARQUET_USE_CLI=true: Fall back to synchronous CLI approach
@@ -24,19 +28,47 @@ import { randomBytes } from 'crypto';
 import { execSync } from 'child_process';
 import { getPartitionPath } from './data-schema.js';
 import { getParquetWriterPool, shutdownParquetPool } from './parquet-writer-pool.js';
+import { 
+  isGCSMode, 
+  getTmpRawDir, 
+  getRawDir, 
+  getBaseDataDir,
+  ensureTmpDir 
+} from './path-utils.js';
+import {
+  initGCS,
+  isGCSEnabled,
+  getGCSPath,
+  uploadAndCleanupSync,
+  getUploadStats,
+} from './gcs-upload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - cross-platform path handling
-import { getBaseDataDir, getRawDir } from './path-utils.js';
-const BASE_DATA_DIR = getBaseDataDir();
-const DATA_DIR = getRawDir();
+// Configuration - use /tmp in GCS mode, DATA_DIR otherwise
+const GCS_MODE = isGCSMode();
+const BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
+const DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const USE_CLI = process.env.PARQUET_USE_CLI === 'true';
 
-// Log configuration on module load
-console.log(`📂 [write-parquet] Output directory: ${DATA_DIR}`);
+// Initialize GCS if enabled
+if (GCS_MODE) {
+  try {
+    initGCS();
+    ensureTmpDir();
+    console.log(`☁️ [write-parquet] GCS mode enabled`);
+    console.log(`☁️ [write-parquet] Local scratch: ${DATA_DIR}`);
+    console.log(`☁️ [write-parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
+  } catch (err) {
+    console.error(`❌ [write-parquet] GCS initialization failed: ${err.message}`);
+    throw err;
+  }
+} else {
+  console.log(`📂 [write-parquet] Local mode - output directory: ${DATA_DIR}`);
+}
+
 console.log(`📂 [write-parquet] Mode: ${USE_CLI ? 'CLI (synchronous)' : 'Worker Pool (parallel)'}`);
 
 // In-memory buffers
@@ -48,6 +80,7 @@ let currentMigrationId = null;
 let totalUpdatesWritten = 0;
 let totalEventsWritten = 0;
 let totalFilesWritten = 0;
+let totalFilesUploaded = 0;
 
 // Pending write promises (for tracking parallel writes)
 const pendingWrites = new Set();
@@ -101,6 +134,35 @@ function generateFileName(prefix) {
   const ts = Date.now();
   const rand = randomBytes(4).toString('hex');
   return `${prefix}-${ts}-${rand}.parquet`;
+}
+
+/**
+ * Get the relative path from DATA_DIR for GCS upload
+ */
+function getRelativePath(fullPath) {
+  // Remove the DATA_DIR prefix to get relative path
+  if (fullPath.startsWith(DATA_DIR)) {
+    return fullPath.substring(DATA_DIR.length).replace(/^[/\\]/, '');
+  }
+  return fullPath;
+}
+
+/**
+ * Upload file to GCS if in GCS mode
+ */
+function uploadToGCSIfEnabled(localPath, partition, fileName) {
+  if (!GCS_MODE) return null;
+  
+  const relativePath = join(partition, fileName).replace(/\\/g, '/');
+  const gcsPath = getGCSPath(relativePath);
+  
+  const result = uploadAndCleanupSync(localPath, gcsPath, { quiet: false });
+  
+  if (result.ok) {
+    totalFilesUploaded++;
+  }
+  
+  return result;
 }
 
 /**
@@ -215,7 +277,7 @@ function mapEventRecord(r) {
 /**
  * Write records to Parquet via CLI (synchronous fallback)
  */
-function writeToParquetCLI(records, filePath, type) {
+function writeToParquetCLI(records, filePath, type, partition, fileName) {
   if (records.length === 0) return null;
   
   const normalizedFilePath = filePath.replace(/\\/g, '/');
@@ -265,11 +327,20 @@ function writeToParquetCLI(records, filePath, type) {
     totalFilesWritten++;
     console.log(`📝 Wrote ${records.length} ${type} to ${filePath}`);
     
+    // Upload to GCS if enabled (this also deletes the local file)
+    if (GCS_MODE) {
+      uploadToGCSIfEnabled(filePath, partition, fileName);
+    }
+    
     return { file: filePath, count: records.length };
   } catch (err) {
     const tempNativePath = tempJsonlPath.replace(/\//g, sep);
     if (existsSync(tempNativePath)) {
       try { unlinkSync(tempNativePath); } catch {}
+    }
+    // In GCS mode, always clean up local file on error
+    if (GCS_MODE && existsSync(filePath)) {
+      try { unlinkSync(filePath); } catch {}
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
     throw err;
@@ -279,7 +350,7 @@ function writeToParquetCLI(records, filePath, type) {
 /**
  * Write records to Parquet via worker pool (parallel)
  */
-async function writeToParquetPool(records, filePath, type) {
+async function writeToParquetPool(records, filePath, type, partition, fileName) {
   if (records.length === 0) return null;
   
   await ensurePoolInitialized();
@@ -314,12 +385,23 @@ async function writeToParquetPool(records, filePath, type) {
       : '';
     console.log(`📝 Wrote ${records.length} ${type} to ${filePath} (${(result.bytes / 1024).toFixed(1)}KB) ${validationStatus}`);
     
+    // Upload to GCS if enabled (this also deletes the local file)
+    if (GCS_MODE) {
+      uploadToGCSIfEnabled(filePath, partition, fileName);
+    }
+    
     return { 
       file: filePath, 
       count: records.length, 
       bytes: result.bytes,
       validation: result.validation,
     };
+  } catch (err) {
+    // In GCS mode, always clean up local file on error
+    if (GCS_MODE && existsSync(filePath)) {
+      try { unlinkSync(filePath); } catch {}
+    }
+    throw err;
   } finally {
     pendingWrites.delete(writePromise);
   }
@@ -370,8 +452,8 @@ export async function flushUpdates() {
   updatesBuffer = [];
   
   const result = USE_CLI 
-    ? writeToParquetCLI(rowsToWrite, filePath, 'updates')
-    : await writeToParquetPool(rowsToWrite, filePath, 'updates');
+    ? writeToParquetCLI(rowsToWrite, filePath, 'updates', partition, fileName)
+    : await writeToParquetPool(rowsToWrite, filePath, 'updates', partition, fileName);
   
   totalUpdatesWritten += rowsToWrite.length;
   
@@ -399,8 +481,8 @@ export async function flushEvents() {
   eventsBuffer = [];
   
   const result = USE_CLI
-    ? writeToParquetCLI(rowsToWrite, filePath, 'events')
-    : await writeToParquetPool(rowsToWrite, filePath, 'events');
+    ? writeToParquetCLI(rowsToWrite, filePath, 'events', partition, fileName)
+    : await writeToParquetPool(rowsToWrite, filePath, 'events', partition, fileName);
   
   totalEventsWritten += rowsToWrite.length;
   
@@ -430,6 +512,8 @@ export function getBufferStats() {
     ? getParquetWriterPool().getStats() 
     : null;
   
+  const gcsStats = GCS_MODE ? getUploadStats() : null;
+  
   return {
     updates: updatesBuffer.length,
     events: eventsBuffer.length,
@@ -437,12 +521,14 @@ export function getBufferStats() {
     eventsBuffered: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
     mode: USE_CLI ? 'cli' : 'pool',
+    gcsMode: GCS_MODE,
     queuedJobs: poolStats?.queuedJobs || 0,
     activeWorkers: poolStats?.activeWorkers || 0,
     pendingWrites: pendingWrites.size,
     totalUpdatesWritten,
     totalEventsWritten,
     totalFilesWritten,
+    totalFilesUploaded,
     // Pool-specific stats
     ...(poolStats && {
       poolCompletedJobs: poolStats.completedJobs,
@@ -455,6 +541,13 @@ export function getBufferStats() {
       validationFailures: poolStats.validationFailures,
       validationRate: poolStats.validationRate,
       validationIssues: poolStats.validationIssues,
+    }),
+    // GCS-specific stats
+    ...(gcsStats && {
+      gcsUploads: gcsStats.totalUploads,
+      gcsSuccessful: gcsStats.successfulUploads,
+      gcsFailed: gcsStats.failedUploads,
+      gcsBytesUploaded: gcsStats.totalBytesUploaded,
     }),
   };
 }
@@ -488,6 +581,11 @@ export async function shutdown() {
     await shutdownParquetPool();
     poolInitialized = false;
   }
+  
+  if (GCS_MODE) {
+    const gcsStats = getUploadStats();
+    console.log(`☁️ [write-parquet] GCS shutdown - ${gcsStats.successfulUploads} files uploaded`);
+  }
 }
 
 /**
@@ -505,9 +603,14 @@ export function clearMigrationId() {
 }
 
 /**
- * Purge migration data
+ * Purge migration data (local mode only)
  */
 export function purgeMigrationData(migrationId) {
+  if (GCS_MODE) {
+    console.log(`   ⚠️ [write-parquet] Cannot purge GCS data from this command. Use gsutil.`);
+    return { deletedFiles: 0, deletedDirs: 0 };
+  }
+  
   const migrationPrefix = `migration=${migrationId}`;
   let deletedDirs = 0;
   
@@ -536,9 +639,14 @@ export function purgeMigrationData(migrationId) {
 }
 
 /**
- * Purge all data
+ * Purge all data (local mode only)
  */
 export function purgeAllData() {
+  if (GCS_MODE) {
+    console.log(`   ⚠️ [write-parquet] Cannot purge GCS data from this command. Use gsutil.`);
+    return;
+  }
+  
   if (!existsSync(DATA_DIR)) {
     console.log(`   ℹ️ Data directory doesn't exist`);
     return;

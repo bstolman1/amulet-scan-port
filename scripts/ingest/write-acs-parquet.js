@@ -1,8 +1,17 @@
 /**
- * ACS Parquet Writer Module
+ * ACS Parquet Writer Module with GCS Upload
  * 
  * Writes ACS snapshot data directly to Parquet files using DuckDB Node.js bindings.
  * This eliminates the need for a separate materialization step.
+ * 
+ * GCS Mode (when GCS_BUCKET is set):
+ * 1. Writes Parquet files to /tmp/ledger_raw/acs (ephemeral scratch space)
+ * 2. Uploads each file immediately to GCS using gsutil
+ * 3. Deletes local file after upload
+ * 4. Keeps disk usage flat regardless of total data volume
+ * 
+ * Local Mode (default):
+ * - Writes to DATA_DIR/raw/acs like before
  * 
  * Drop-in replacement for write-acs-jsonl.js with same API surface.
  */
@@ -13,18 +22,48 @@ import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import duckdb from 'duckdb';
 import { getACSPartitionPath } from './acs-schema.js';
+import { 
+  isGCSMode, 
+  getTmpRawDir, 
+  getRawDir, 
+  getBaseDataDir,
+  ensureTmpDir 
+} from './path-utils.js';
+import {
+  initGCS,
+  isGCSEnabled,
+  getGCSPath,
+  uploadAndCleanupSync,
+  getUploadStats,
+} from './gcs-upload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - cross-platform path handling
-import { getBaseDataDir, getRawDir } from './path-utils.js';
-const BASE_DATA_DIR = getBaseDataDir();
-const DATA_DIR = getRawDir();
+// Configuration - use /tmp in GCS mode, DATA_DIR otherwise
+const GCS_MODE = isGCSMode();
+const BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
+const DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
 // Keep at least 2 snapshots per migration
 const MAX_SNAPSHOTS_PER_MIGRATION = parseInt(process.env.MAX_SNAPSHOTS_PER_MIGRATION) || 2;
+
+// Initialize GCS if enabled
+if (GCS_MODE) {
+  try {
+    initGCS();
+    ensureTmpDir();
+    console.log(`☁️ [ACS-Parquet] GCS mode enabled`);
+    console.log(`☁️ [ACS-Parquet] Local scratch: ${DATA_DIR}`);
+    console.log(`☁️ [ACS-Parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/acs/`);
+  } catch (err) {
+    console.error(`❌ [ACS-Parquet] GCS initialization failed: ${err.message}`);
+    throw err;
+  }
+} else {
+  console.log(`📂 [ACS-Parquet] Local mode - output directory: ${DATA_DIR}`);
+}
 
 // In-memory buffer for batching
 let contractsBuffer = [];
@@ -35,6 +74,7 @@ let fileCounter = 0;
 // Stats tracking
 let totalContractsWritten = 0;
 let totalFilesWritten = 0;
+let totalFilesUploaded = 0;
 
 // DuckDB instance for Parquet writing
 let db = null;
@@ -81,8 +121,14 @@ function ensureDir(dirPath) {
 
 /**
  * Delete old snapshots for a migration, keeping only the most recent ones
+ * Note: In GCS mode, this only affects local /tmp files (which should be empty anyway)
  */
 export function cleanupOldSnapshots(migrationId, keepCount = MAX_SNAPSHOTS_PER_MIGRATION) {
+  if (GCS_MODE) {
+    console.log(`[ACS] ⚠️ cleanupOldSnapshots not applicable in GCS mode. Use gsutil for GCS cleanup.`);
+    return { deleted: 0, kept: 0 };
+  }
+  
   const migrationDir = join(DATA_DIR, 'acs', `migration=${migrationId}`);
   
   if (!existsSync(migrationDir)) {
@@ -202,9 +248,27 @@ function cleanupEmptyDirs(dirPath) {
 }
 
 /**
+ * Upload file to GCS if in GCS mode
+ */
+function uploadToGCSIfEnabled(localPath, partition, fileName) {
+  if (!GCS_MODE) return null;
+  
+  const relativePath = join('acs', partition, fileName).replace(/\\/g, '/');
+  const gcsPath = getGCSPath(relativePath);
+  
+  const result = uploadAndCleanupSync(localPath, gcsPath, { quiet: false });
+  
+  if (result.ok) {
+    totalFilesUploaded++;
+  }
+  
+  return result;
+}
+
+/**
  * Write contracts to Parquet file via DuckDB Node.js bindings
  */
-async function writeToParquet(contracts, filePath) {
+async function writeToParquet(contracts, filePath, partition, fileName) {
   if (contracts.length === 0) return null;
   
   ensureDbInitialized();
@@ -241,12 +305,26 @@ async function writeToParquet(contracts, filePath) {
     totalFilesWritten++;
     
     console.log(`📝 Wrote ${contracts.length} contracts to ${filePath}`);
+    
+    // Upload to GCS if enabled (this also deletes the local file)
+    if (GCS_MODE) {
+      uploadToGCSIfEnabled(filePath, partition, fileName);
+    }
+    
     return { file: filePath, count: contracts.length };
   } catch (err) {
     // Clean up temp file on error
     if (existsSync(tempJsonlPath)) {
       try {
         unlinkSync(tempJsonlPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+    // In GCS mode, always clean up local file on error
+    if (GCS_MODE && existsSync(filePath)) {
+      try {
+        unlinkSync(filePath);
       } catch {
         // Ignore cleanup errors
       }
@@ -288,7 +366,7 @@ export async function flushContracts() {
   const timestamp = currentSnapshotTime || contractsBuffer[0]?.snapshot_time || new Date();
   const migrationId = currentMigrationId ?? contractsBuffer[0]?.migration_id ?? null;
   const partition = getACSPartitionPath(timestamp, migrationId);
-  const partitionDir = join(DATA_DIR, partition);
+  const partitionDir = join(DATA_DIR, 'acs', partition);
   
   ensureDir(partitionDir);
   
@@ -300,7 +378,7 @@ export async function flushContracts() {
   const contractsToWrite = contractsBuffer;
   contractsBuffer = [];
   
-  return await writeToParquet(contractsToWrite, filePath);
+  return await writeToParquet(contractsToWrite, filePath, partition, fileName);
 }
 
 /**
@@ -319,11 +397,22 @@ export async function flushAll() {
  * Get buffer stats
  */
 export function getBufferStats() {
+  const gcsStats = GCS_MODE ? getUploadStats() : null;
+  
   return {
     contracts: contractsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
     totalContractsWritten,
     totalFilesWritten,
+    totalFilesUploaded,
+    gcsMode: GCS_MODE,
+    // GCS-specific stats
+    ...(gcsStats && {
+      gcsUploads: gcsStats.totalUploads,
+      gcsSuccessful: gcsStats.successfulUploads,
+      gcsFailed: gcsStats.failedUploads,
+      gcsBytesUploaded: gcsStats.totalBytesUploaded,
+    }),
   };
 }
 
@@ -339,12 +428,13 @@ export function clearBuffers() {
 
 /**
  * Write a completion marker file for a snapshot
+ * In GCS mode, this marker is also uploaded to GCS
  */
 export async function writeCompletionMarker(snapshotTime, migrationId, stats = {}) {
   const timestamp = snapshotTime || currentSnapshotTime || new Date();
   const migration = migrationId ?? currentMigrationId;
   const partition = getACSPartitionPath(timestamp, migration);
-  const partitionDir = join(DATA_DIR, partition);
+  const partitionDir = join(DATA_DIR, 'acs', partition);
   
   ensureDir(partitionDir);
   
@@ -355,21 +445,32 @@ export async function writeCompletionMarker(snapshotTime, migrationId, stats = {
     migration_id: migration,
     files_written: totalFilesWritten,
     contracts_written: totalContractsWritten,
+    files_uploaded: totalFilesUploaded,
+    gcs_mode: GCS_MODE,
     ...stats,
   };
   
   writeFileSync(markerPath, JSON.stringify(markerData, null, 2));
   console.log(`✅ Wrote completion marker to ${markerPath}`);
   console.log(`   📊 Summary: ${totalFilesWritten} files, ${totalContractsWritten} contracts`);
+  
+  // Upload marker to GCS if enabled
+  if (GCS_MODE) {
+    const relativePath = join('acs', partition, '_COMPLETE').replace(/\\/g, '/');
+    const gcsPath = getGCSPath(relativePath);
+    uploadAndCleanupSync(markerPath, gcsPath, { quiet: true });
+  }
+  
   return markerPath;
 }
 
 /**
  * Check if a snapshot partition is complete
+ * Note: In GCS mode, this only checks local files
  */
 export function isSnapshotComplete(snapshotTime, migrationId) {
   const partition = getACSPartitionPath(snapshotTime, migrationId);
-  const markerPath = join(DATA_DIR, partition, '_COMPLETE');
+  const markerPath = join(DATA_DIR, 'acs', partition, '_COMPLETE');
   return existsSync(markerPath);
 }
 
@@ -393,6 +494,12 @@ export function shutdown() {
     }
     db = null;
   }
+  
+  if (GCS_MODE) {
+    const gcsStats = getUploadStats();
+    console.log(`☁️ [ACS-Parquet] GCS shutdown - ${gcsStats.successfulUploads} files uploaded`);
+  }
+  
   console.log(`🦆 [ACS-Parquet] Shutdown complete`);
 }
 
