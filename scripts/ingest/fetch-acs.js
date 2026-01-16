@@ -432,9 +432,21 @@ async function runACSSnapshot() {
   console.log(`   - Page Size: ${PAGE_SIZE}`);
   console.log(`   - Skip Complete: ${SKIP_COMPLETE}`);
   console.log(`   - Fetch All Migrations: ${FETCH_ALL}`);
+  console.log(`   - DATA_DIR env: ${process.env.DATA_DIR || '(not set)'}`);
+  console.log(`   - GCS_BUCKET env: ${process.env.GCS_BUCKET || '(not set)'}`);
   console.log('');
   
-  const migrations = await detectMigrations();
+  console.log('🔄 Calling detectMigrations()...');
+  let migrations;
+  try {
+    migrations = await detectMigrations();
+    console.log(`✅ detectMigrations() returned: [${migrations.join(', ')}]`);
+  } catch (err) {
+    console.error(`❌ detectMigrations() failed: ${err.message}`);
+    console.error(err.stack);
+    throw err;
+  }
+  
   const results = [];
   
   // Determine which migrations to process
@@ -457,8 +469,14 @@ async function runACSSnapshot() {
     }
     
     clearBuffers();
-    const result = await runMigrationSnapshot(migrationId);
-    results.push(result);
+    try {
+      const result = await runMigrationSnapshot(migrationId);
+      results.push(result);
+    } catch (err) {
+      console.error(`❌ runMigrationSnapshot(${migrationId}) failed: ${err.message}`);
+      console.error(err.stack);
+      throw err;
+    }
   }
   
   // Print summary
