@@ -24,18 +24,15 @@ coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'json-summary', 'html', 'lcov'],
       reportsDirectory: './coverage',
-      // Focus on directly-importable logic that coverage can actually instrument
-      // API routes execute via server runtime - validated by integration/e2e tests
+      // Focus on directly-importable pure logic that coverage can instrument
+      // Runtime clients and API routes are validated by integration/e2e tests
       include: [
-        // Core business logic (directly imported, sync execution)
+        // Core server business logic (directly imported, sync execution)
         'server/lib/**/*.js',
         'server/engine/aggregations.js',
-        // Frontend utilities (directly imported)
+        // Pure frontend utilities (no runtime dependencies)
         'src/lib/amount-utils.ts',
         'src/lib/utils.ts',
-        'src/lib/duckdb-api-client.ts',
-        // Hooks that don't require full runtime bootstrap
-        'src/hooks/use-toast.ts',
       ],
       exclude: [
         '**/*.test.ts',
@@ -44,30 +41,19 @@ coverage: {
         '**/*.test.js',
         '**/*.spec.js',
         '**/node_modules/**',
-        'src/components/ui/**', // shadcn components
-        // Exclude runtime-bootstrapped code (tested via integration/e2e)
-        'server/api/**/*.js',
-        'server/engine/worker.js',
-        'server/engine/api.js',
-        'server/engine/ingest.js',
-        'server/engine/decoder.js',
-        'server/engine/file-index.js',
-        'server/engine/gap-detector.js',
-        'server/engine/schema.js',
-        'server/duckdb/**/*.js',
-        // Frontend runtime components (tested via component tests)
-        'src/components/**/*.tsx',
-        'src/hooks/**/*.ts',
+        'src/components/ui/**',
+        // Runtime clients tested via integration tests
+        'src/lib/duckdb-api-client.ts',
         'src/lib/api-client.ts',
         'src/lib/backend-config.ts',
         'src/lib/config-sync.ts',
       ],
-      // Thresholds for core logic coverage
+      // Thresholds for pure business logic
       thresholds: {
-        statements: 80,
+        statements: 85,
         branches: 70,
-        functions: 80,
-        lines: 80,
+        functions: 90,
+        lines: 85,
       },
     },
     // Server tests need node environment for DuckDB, fs, etc.
