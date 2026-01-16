@@ -39,28 +39,32 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - use /tmp in GCS mode, DATA_DIR otherwise
-const GCS_MODE = isGCSMode();
+// Configuration
+// GCS_BUCKET is always required, but GCS_ENABLED controls whether to upload or write to disk
+const GCS_MODE = isGCSMode();  // true = upload to GCS, false = write to DATA_DIR
 const BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
 const DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 1;
 const MAX_PENDING_WRITES = parseInt(process.env.MAX_PENDING_WRITES) || 50;
 
-// Initialize GCS if enabled
-if (GCS_MODE) {
-  try {
-    initGCS();
+// Initialize GCS - bucket is always required, but GCS_ENABLED controls behavior
+try {
+  initGCS();  // Validates GCS_BUCKET is set
+  
+  if (GCS_MODE) {
     ensureTmpDir();
-    console.log(`☁️ [write-binary] GCS mode enabled`);
+    console.log(`☁️ [write-binary] Mode: GCS upload enabled`);
     console.log(`☁️ [write-binary] Local scratch: ${DATA_DIR}`);
     console.log(`☁️ [write-binary] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
-  } catch (err) {
-    console.error(`❌ [write-binary] GCS initialization failed: ${err.message}`);
-    throw err;
+  } else {
+    console.log(`📂 [write-binary] Mode: Disk only (GCS_ENABLED=false)`);
+    console.log(`📂 [write-binary] Output directory: ${DATA_DIR}`);
+    console.log(`📂 [write-binary] GCS bucket configured but uploads disabled`);
   }
-} else {
-  console.log(`📂 [write-binary] Local mode - output directory: ${DATA_DIR}`);
+} catch (err) {
+  console.error(`❌ [write-binary] GCS initialization failed: ${err.message}`);
+  throw err;
 }
 
 // Stats tracking for GCS uploads

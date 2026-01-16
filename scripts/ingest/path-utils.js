@@ -131,12 +131,40 @@ export function ensureTmpDir() {
 }
 
 /**
- * Check if GCS mode is enabled (GCS_BUCKET is set).
+ * Check if GCS uploads are enabled.
+ * GCS_BUCKET must always be set. GCS_ENABLED controls whether to upload.
  * 
  * @returns {boolean} - True if GCS uploads are enabled
  */
 export function isGCSMode() {
-  return !!process.env.GCS_BUCKET && process.env.GCS_ENABLED !== 'false';
+  // GCS_ENABLED defaults to true, set to 'false' to write to disk only
+  return process.env.GCS_ENABLED !== 'false';
+}
+
+/**
+ * Validate that GCS_BUCKET is always set (required).
+ * Call at startup to fail fast.
+ * 
+ * @throws {Error} If GCS_BUCKET is not set
+ */
+export function validateGCSBucket() {
+  if (!process.env.GCS_BUCKET) {
+    throw new Error(
+      'GCS_BUCKET environment variable is required but not set.\n' +
+      'Set GCS_BUCKET=your-bucket-name in your .env file.\n' +
+      'Use GCS_ENABLED=false to write to local disk instead of uploading.'
+    );
+  }
+  return process.env.GCS_BUCKET;
+}
+
+/**
+ * Get the GCS bucket name.
+ * @returns {string} Bucket name
+ * @throws {Error} If GCS_BUCKET is not set
+ */
+export function getGCSBucket() {
+  return validateGCSBucket();
 }
 
 /**
@@ -148,10 +176,12 @@ export function logPathConfig(moduleName = 'path-utils') {
   console.log(`📂 [${moduleName}] Base data dir: ${getBaseDataDir()}`);
   console.log(`📂 [${moduleName}] Raw dir: ${getRawDir()}`);
   console.log(`📂 [${moduleName}] Cursor dir: ${getCursorDir()}`);
-  console.log(`📂 [${moduleName}] GCS mode: ${isGCSMode() ? 'enabled' : 'disabled'}`);
+  console.log(`📂 [${moduleName}] GCS_BUCKET: ${process.env.GCS_BUCKET || '(NOT SET - REQUIRED)'}`);
+  console.log(`📂 [${moduleName}] GCS_ENABLED: ${process.env.GCS_ENABLED !== 'false' ? 'true (uploading to GCS)' : 'false (disk only)'}`);
   if (isGCSMode()) {
-    console.log(`📂 [${moduleName}] GCS bucket: ${process.env.GCS_BUCKET}`);
-    console.log(`📂 [${moduleName}] Tmp dir: ${TMP_DIR}`);
+    console.log(`📂 [${moduleName}] Mode: Write to /tmp → upload to GCS → delete local`);
+  } else {
+    console.log(`📂 [${moduleName}] Mode: Write to DATA_DIR (no GCS upload)`);
   }
 }
 
@@ -170,6 +200,8 @@ export default {
   getTmpRawDir,
   ensureTmpDir,
   isGCSMode,
+  validateGCSBucket,
+  getGCSBucket,
   toDuckDBPath,
   logPathConfig,
 };

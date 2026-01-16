@@ -54,9 +54,8 @@ const TRANSIENT_ERROR_PATTERNS = [
   /retryable/i,
 ];
 
-// GCS bucket configuration (fail fast if not set)
+// GCS bucket configuration
 let GCS_BUCKET = null;
-let gcsEnabled = false;
 
 /**
  * Check if an error is transient and should be retried.
@@ -102,43 +101,58 @@ function sleep(ms) {
 
 /**
  * Initialize GCS configuration.
- * Call this before any uploads. Will throw if GCS_BUCKET not set.
+ * GCS_BUCKET is always required. Call this at startup to fail fast.
+ * 
+ * @throws {Error} If GCS_BUCKET is not set
  */
 export function initGCS() {
   GCS_BUCKET = process.env.GCS_BUCKET;
   
   if (!GCS_BUCKET) {
     throw new Error(
-      'GCS_BUCKET environment variable not set. ' +
-      'Set GCS_BUCKET to enable GCS uploads, or run with GCS_ENABLED=false for local-only mode.'
+      'GCS_BUCKET environment variable is required but not set.\n' +
+      'Set GCS_BUCKET=your-bucket-name in your .env file.\n' +
+      'Use GCS_ENABLED=false to write to local disk instead of uploading.'
     );
   }
   
-  gcsEnabled = true;
-  console.log(`☁️ [gcs-upload] GCS enabled, bucket: ${GCS_BUCKET}`);
-  console.log(`☁️ [gcs-upload] Tmp directory: ${TMP_DIR}`);
-  console.log(`☁️ [gcs-upload] Retry config: max ${DEFAULT_MAX_RETRIES} retries, base delay ${DEFAULT_BASE_DELAY_MS}ms`);
+  const gcsEnabled = isGCSEnabled();
+  
+  console.log(`☁️ [gcs-upload] GCS_BUCKET: ${GCS_BUCKET}`);
+  console.log(`☁️ [gcs-upload] GCS_ENABLED: ${gcsEnabled}`);
+  
+  if (gcsEnabled) {
+    console.log(`☁️ [gcs-upload] Mode: Write to /tmp → upload to GCS → delete local`);
+    console.log(`☁️ [gcs-upload] Tmp directory: ${TMP_DIR}`);
+    console.log(`☁️ [gcs-upload] Retry config: max ${DEFAULT_MAX_RETRIES} retries, base delay ${DEFAULT_BASE_DELAY_MS}ms`);
+  } else {
+    console.log(`☁️ [gcs-upload] Mode: Write to DATA_DIR (no GCS upload)`);
+  }
   
   return GCS_BUCKET;
 }
 
 /**
  * Check if GCS uploads are enabled.
+ * GCS_ENABLED defaults to true; set to 'false' to write to disk only.
+ * 
+ * @returns {boolean} True if GCS uploads should happen
  */
 export function isGCSEnabled() {
-  // Allow explicit disable via environment
-  if (process.env.GCS_ENABLED === 'false') {
-    return false;
-  }
-  return gcsEnabled || !!process.env.GCS_BUCKET;
+  return process.env.GCS_ENABLED !== 'false';
 }
 
 /**
  * Get the GCS bucket name.
- * @returns {string|null} Bucket name or null if not configured
+ * @returns {string} Bucket name
+ * @throws {Error} If GCS_BUCKET is not configured
  */
 export function getGCSBucket() {
-  return GCS_BUCKET || process.env.GCS_BUCKET || null;
+  const bucket = GCS_BUCKET || process.env.GCS_BUCKET;
+  if (!bucket) {
+    throw new Error('GCS_BUCKET not configured. Call initGCS() first or set GCS_BUCKET env var.');
+  }
+  return bucket;
 }
 
 /**
