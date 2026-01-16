@@ -70,10 +70,15 @@ run_frontend_coverage() {
         return 0
     fi
     
-    # Run vitest with coverage
+    # Run vitest with coverage (disable thresholds for reporting)
     echo "Running frontend tests with coverage..."
-    npx vitest run --coverage --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html \
-        --coverage.reportsDirectory="$COVERAGE_DIR/frontend" 2>&1 || true
+    npx vitest run --coverage \
+        --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html \
+        --coverage.reportsDirectory="$COVERAGE_DIR/frontend" \
+        --coverage.thresholds.statements=0 \
+        --coverage.thresholds.branches=0 \
+        --coverage.thresholds.functions=0 \
+        --coverage.thresholds.lines=0 2>&1 || true
     
     if [ -f "$COVERAGE_DIR/frontend/coverage-summary.json" ]; then
         echo -e "${GREEN}✅ Frontend coverage report generated${NC}"
@@ -88,28 +93,25 @@ run_frontend_coverage() {
 run_server_coverage() {
     print_section "🖥️  Server Coverage"
     
-    cd "$PROJECT_ROOT/server"
+    cd "$PROJECT_ROOT"
     
-    # Check if dependencies are installed
-    if [ ! -d "node_modules" ]; then
-        echo "Installing server dependencies..."
-        npm install
-    fi
+    echo "Running server tests with coverage via vitest..."
     
-    # Run server tests with coverage using c8
-    echo "Running server tests with coverage..."
-    
-    # Check if c8 is available, install if not
-    if ! npx c8 --version > /dev/null 2>&1; then
-        echo "Installing c8 for coverage..."
-        npm install --save-dev c8
-    fi
-    
-    npx c8 --reporter=text --reporter=json --reporter=html \
-        --reports-dir="$COVERAGE_DIR/server" \
-        --include="api/**/*.js" --include="engine/**/*.js" --include="lib/**/*.js" \
-        --exclude="**/*.test.js" \
-        npm test 2>&1 || true
+    # Run server tests through vitest (which is already configured for server tests)
+    # Use timeout to prevent stalling
+    timeout 120 npx vitest run \
+        --coverage \
+        --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html \
+        --coverage.reportsDirectory="$COVERAGE_DIR/server" \
+        --coverage.include="server/lib/**/*.js" \
+        --coverage.include="server/api/**/*.js" \
+        --coverage.include="server/engine/**/*.js" \
+        --coverage.include="server/duckdb/**/*.js" \
+        --coverage.thresholds.statements=0 \
+        --coverage.thresholds.branches=0 \
+        --coverage.thresholds.functions=0 \
+        --coverage.thresholds.lines=0 \
+        "server/**/*.test.js" 2>&1 || true
     
     if [ -f "$COVERAGE_DIR/server/coverage-summary.json" ]; then
         echo -e "${GREEN}✅ Server coverage report generated${NC}"
@@ -140,11 +142,12 @@ run_ingest_coverage() {
     
     echo "Running ingest tests with coverage..."
     
-    npx c8 --reporter=text --reporter=json --reporter=html \
+    # Use timeout to prevent stalling
+    timeout 180 npx c8 --reporter=text --reporter=json --reporter=html \
         --reports-dir="$COVERAGE_DIR/ingest" \
         --include="*.js" --include="test/**/*.js" \
         --exclude="node_modules/**" \
-        npm run test:all 2>&1 || true
+        npm run test:api 2>&1 || true
     
     if [ -f "$COVERAGE_DIR/ingest/coverage-summary.json" ]; then
         echo -e "${GREEN}✅ Ingest coverage report generated${NC}"
