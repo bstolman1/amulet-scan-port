@@ -225,19 +225,19 @@ case "$TEST_TYPE" in
         ;;
     coverage)
         print_header "Running All Tests with Coverage"
-        "$SCRIPT_DIR/coverage.sh" all
+        bash "$SCRIPT_DIR/coverage.sh" all
         ;;
     cov:front|cov:frontend)
         print_header "Running Frontend Coverage"
-        "$SCRIPT_DIR/coverage.sh" frontend
+        bash "$SCRIPT_DIR/coverage.sh" frontend
         ;;
     cov:server)
         print_header "Running Server Coverage"
-        "$SCRIPT_DIR/coverage.sh" server
+        bash "$SCRIPT_DIR/coverage.sh" server
         ;;
     cov:ingest)
         print_header "Running Ingest Coverage"
-        "$SCRIPT_DIR/coverage.sh" ingest
+        bash "$SCRIPT_DIR/coverage.sh" ingest
         ;;
     *)
         print_error "Unknown test type: $TEST_TYPE"
