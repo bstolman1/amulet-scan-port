@@ -162,9 +162,10 @@ if (INSECURE_TLS) {
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 // Cross-platform path handling
-import { getBaseDataDir, getCursorDir } from './path-utils.js';
+import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig } from './path-utils.js';
 const BASE_DATA_DIR = getBaseDataDir();
 const CURSOR_DIR = getCursorDir();
+const GCS_MODE = isGCSMode();
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5;
 
 // Sharding configuration
@@ -1554,6 +1555,17 @@ async function runBackfill() {
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   INSECURE_TLS:", INSECURE_TLS ? 'ENABLED (unsafe)' : 'disabled');
   console.log("=".repeat(80));
+  
+  // GCS mode info
+  if (GCS_MODE) {
+    console.log("\n☁️  GCS Mode ENABLED:");
+    console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
+    console.log("   Local scratch: /tmp/ledger_raw");
+    console.log("   Files are uploaded to GCS immediately after creation");
+  } else {
+    console.log(`\n📂 Local Mode: Writing to ${BASE_DATA_DIR}`);
+  }
+  
   console.log("\n⚙️  Auto-Tuning Configuration:");
   console.log(`   Parallel Fetches: ${dynamicParallelFetches} (range: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
   console.log(`   Decode Workers: ${dynamicDecodeWorkers} (range: ${MIN_DECODE_WORKERS}-${MAX_DECODE_WORKERS})`);

@@ -112,8 +112,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // Cross-platform path handling
-import { getBaseDataDir, getCursorDir } from './path-utils.js';
+import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig } from './path-utils.js';
 const DATA_DIR = getBaseDataDir();
+const GCS_MODE = isGCSMode();
 
 // Track state
 let lastTimestamp = null;
@@ -643,11 +644,30 @@ async function runIngestion() {
   const modeLabel = LIVE_MODE ? 'LIVE' : 'RESUME';
   sessionStartTime = Date.now();
   
+  console.log("\n" + "=".repeat(60));
+  console.log(`🚀 Starting Canton ledger updates (${modeLabel} mode)`);
+  console.log("   SCAN_URL:", SCAN_URL);
+  console.log("   BATCH_SIZE:", BATCH_SIZE);
+  console.log("   POLL_INTERVAL:", POLL_INTERVAL, "ms");
+  
+  // GCS mode info
+  if (GCS_MODE) {
+    console.log("\n☁️  GCS Mode ENABLED:");
+    console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
+    console.log("   Local scratch: /tmp/ledger_raw");
+    console.log("   Files are uploaded to GCS immediately after creation");
+  } else {
+    console.log(`\n📂 Local Mode: Writing to ${DATA_DIR}`);
+  }
+  console.log("=".repeat(60));
+  
   log('info', 'ingestion_start', { 
     mode: modeLabel,
     scan_url: SCAN_URL,
     batch_size: BATCH_SIZE,
     poll_interval: POLL_INTERVAL,
+    gcs_mode: GCS_MODE,
+    gcs_bucket: process.env.GCS_BUCKET || null,
   });
   
   // Check for existing data from backfill first (sets lastMigrationId if found)
