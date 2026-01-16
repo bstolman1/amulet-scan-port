@@ -135,17 +135,24 @@ show_help() {
     echo "  frontend   Run frontend component tests"
     echo "  full       Run everything (ingest + server + frontend)"
     echo ""
-    echo "Coverage:"
+echo "Coverage:"
     echo "  coverage   Run all tests with coverage reports"
     echo "  cov:front  Frontend coverage only"
     echo "  cov:server Server coverage only"
     echo "  cov:ingest Ingest coverage only"
+    echo ""
+    echo "Quality & Mutation:"
+    echo "  quality    Generate test quality report"
+    echo "  mutate     Run Stryker mutation testing"
+    echo "  mutate:dry Dry run mutation testing (show what would be mutated)"
     echo ""
     echo "Examples:"
     echo "  $0              # Run all ingest tests"
     echo "  $0 api          # Test API connectivity only"
     echo "  $0 health       # Run full pipeline health check"
     echo "  $0 coverage     # Generate coverage reports"
+    echo "  $0 quality      # Generate test quality report"
+    echo "  $0 mutate       # Run mutation testing"
     echo "  $0 full         # Run all test suites"
     echo ""
     echo "Environment variables:"
@@ -238,6 +245,21 @@ case "$TEST_TYPE" in
     cov:ingest)
         print_header "Running Ingest Coverage"
         bash "$SCRIPT_DIR/coverage.sh" ingest
+        ;;
+    quality)
+        print_header "Generating Test Quality Report"
+        cd "$PROJECT_ROOT"
+        node scripts/test-quality-report.js
+        ;;
+    mutate)
+        print_header "Running Stryker Mutation Testing"
+        cd "$PROJECT_ROOT"
+        npx stryker run
+        ;;
+    mutate:dry)
+        print_header "Stryker Dry Run (showing mutants)"
+        cd "$PROJECT_ROOT"
+        npx stryker run --dryRun
         ;;
     *)
         print_error "Unknown test type: $TEST_TYPE"
