@@ -10,6 +10,7 @@ import {
   escapeString,
   containsDangerousPatterns,
 } from '../lib/sql-sanitize.js';
+import { requireAuth } from '../lib/auth.js';
 
 const router = Router();
 
@@ -562,8 +563,8 @@ router.get('/cache', (req, res) => {
   res.json(getCacheStats());
 });
 
-// POST /api/acs/cache/invalidate - Invalidate cache
-router.post('/cache/invalidate', (req, res) => {
+// POST /api/acs/cache/invalidate - Invalidate cache - PROTECTED
+router.post('/cache/invalidate', requireAuth, (req, res) => {
   const { prefix } = req.body || {};
   invalidateCache(prefix || 'acs:');
   res.json({ status: 'ok', message: 'Cache invalidated' });
@@ -2198,8 +2199,8 @@ router.get('/aggregate', async (req, res) => {
   }
 });
 
-// POST /api/acs/trigger-snapshot - Trigger a new ACS snapshot
-router.post('/trigger-snapshot', async (req, res) => {
+// POST /api/acs/trigger-snapshot - Trigger a new ACS snapshot - PROTECTED
+router.post('/trigger-snapshot', requireAuth, async (req, res) => {
   try {
     // This endpoint triggers the local snapshot script
     // For now, just return a message - the actual trigger would be implemented
@@ -2214,8 +2215,8 @@ router.post('/trigger-snapshot', async (req, res) => {
   }
 });
 
-// POST /api/acs/purge - Purge all local ACS data
-router.post('/purge', async (req, res) => {
+// POST /api/acs/purge - Purge all local ACS data - PROTECTED
+router.post('/purge', requireAuth, async (req, res) => {
   try {
     console.log('[ACS] Purge requested');
     

@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { requireAuth } from '../lib/auth.js';
 import { inferStagesBatch } from '../inference/inferStage.js';
 import { 
   classifyTopicsBatch, 
@@ -2143,7 +2144,7 @@ async function handleRefresh(req, res) {
 }
 
 // POST is the intended method (safe for browsers/tools)
-router.post('/refresh', handleRefresh);
+router.post('/refresh', requireAuth, handleRefresh);
 
 // Convenience: allow GET so visiting in a browser doesn't show "Cannot GET"
 router.get('/refresh', handleRefresh);
@@ -2171,7 +2172,7 @@ router.get('/overrides', (req, res) => {
 });
 
 // Set/update an override for a lifecycle item
-router.post('/overrides', (req, res) => {
+router.post('/overrides', requireAuth, (req, res) => {
   const { itemId, primaryId, type, reason } = req.body;
   
   if (!type || (!itemId && !primaryId)) {
@@ -2215,7 +2216,7 @@ router.post('/overrides', (req, res) => {
 });
 
 // Delete an override
-router.delete('/overrides/:key', (req, res) => {
+router.delete('/overrides', requireAuth/:key', (req, res) => {
   const { key } = req.params;
   const overrides = readOverrides();
   
@@ -2282,7 +2283,7 @@ router.get('/audit-log/stats', (req, res) => {
 
 // Backfill audit log from existing overrides
 // This creates audit entries for overrides that were created before audit logging was added
-router.post('/audit-log/backfill', (req, res) => {
+router.post('/audit-log/backfill', requireAuth, (req, res) => {
   const overrides = readOverrides();
   const existingAuditLog = readAuditLog();
   const existingIds = new Set(existingAuditLog.map(e => e.targetId));
@@ -2425,7 +2426,7 @@ router.get('/audit-log/pending-backfill', (req, res) => {
   });
 });
 
-router.post('/overrides/topic', (req, res) => {
+router.post('/overrides/topic', requireAuth, (req, res) => {
   const { topicId, newType, reason } = req.body;
   
   if (!topicId || !newType) {
@@ -2475,7 +2476,7 @@ router.post('/overrides/topic', (req, res) => {
 });
 
 // Extract a topic to its own card (keeps same type, just separates it)
-router.post('/overrides/extract', (req, res) => {
+router.post('/overrides/extract', requireAuth, (req, res) => {
   const { topicId, customName, reason } = req.body;
   
   if (!topicId) {
@@ -2520,7 +2521,7 @@ router.post('/overrides/extract', (req, res) => {
 
 // Set a merge override (merge one item into one or multiple CIPs)
 // Supports both single CIP (string) and multiple CIPs (array)
-router.post('/overrides/merge', (req, res) => {
+router.post('/overrides/merge', requireAuth, (req, res) => {
   const { sourceId, sourcePrimaryId, mergeInto, reason } = req.body;
   
   if (!mergeInto || (!sourceId && !sourcePrimaryId)) {
@@ -2680,7 +2681,7 @@ router.get('/card-list', (req, res) => {
 });
 
 // Move a topic from one card to another
-router.post('/overrides/move-topic', (req, res) => {
+router.post('/overrides/move-topic', requireAuth, (req, res) => {
   const { topicId, targetCardId, reason } = req.body;
   
   if (!topicId || !targetCardId) {
@@ -3153,7 +3154,7 @@ router.get('/llm-status', async (req, res) => {
 });
 
 // Force reclassify a specific topic
-router.post('/reclassify/:topicId', async (req, res) => {
+router.post('/reclassify', requireAuth/:topicId', async (req, res) => {
   const { topicId } = req.params;
   
   if (!isLLMAvailable()) {
@@ -3178,7 +3179,7 @@ router.post('/reclassify/:topicId', async (req, res) => {
 });
 
 // Clear LLM cache (for full reindex)
-router.post('/clear-llm-cache', (req, res) => {
+router.post('/clear-llm-cache', requireAuth, (req, res) => {
   clearLLMCache();
   res.json({ success: true, message: 'LLM classification cache cleared. Run POST /refresh to reclassify.' });
 });
@@ -3302,7 +3303,7 @@ router.get('/audit-review', (req, res) => {
 });
 
 // Clear audit cache (for full re-audit)
-router.post('/clear-audit-cache', (req, res) => {
+router.post('/clear-audit-cache', requireAuth, (req, res) => {
   clearAuditCache();
   res.json({ 
     success: true, 
@@ -3312,7 +3313,7 @@ router.post('/clear-audit-cache', (req, res) => {
 });
 
 // Re-verify a specific item
-router.post('/reverify/:itemId', async (req, res) => {
+router.post('/reverify', requireAuth/:itemId', async (req, res) => {
   const { itemId } = req.params;
   
   if (!isAuditorAvailable()) {
@@ -3800,7 +3801,7 @@ Key distinction from ${origType}: Focus on the primary governance action, not in
 // ========== APPLY IMPROVEMENTS ==========
 // Endpoint to apply learned patterns to the classification system
 
-router.post('/apply-improvements', async (req, res) => {
+router.post('/apply-improvements', requireAuth, async (req, res) => {
   const { acceptedProposals, dryRun = true } = req.body;
   
   // Get current improvements
@@ -3968,7 +3969,7 @@ router.post('/apply-improvements', async (req, res) => {
 });
 
 // Toggle learning mode
-router.post('/learning-mode', (req, res) => {
+router.post('/learning-mode', requireAuth, (req, res) => {
   const { enabled } = req.body;
   
   if (typeof enabled !== 'boolean') {
@@ -4000,7 +4001,7 @@ router.post('/learning-mode', (req, res) => {
 
 // ========== TEST AGAINST HISTORY ==========
 // Validate proposals against historical classifications to prevent drift
-router.post('/test-proposals', async (req, res) => {
+router.post('/test-proposals', requireAuth, async (req, res) => {
   const { proposedPatterns, sampleSize = 50 } = req.body;
   
   const cached = readCache();
@@ -4399,7 +4400,7 @@ router.get('/learned-patterns', (req, res) => {
 });
 
 // Rollback to a previous version
-router.post('/rollback', (req, res) => {
+router.post('/rollback', requireAuth, (req, res) => {
   const { targetVersion } = req.body;
   
   if (!targetVersion) {
@@ -4467,7 +4468,7 @@ router.post('/rollback', (req, res) => {
 });
 
 // Get impact preview before applying patterns
-router.post('/impact-preview', async (req, res) => {
+router.post('/impact-preview', requireAuth, async (req, res) => {
   const { proposedPatterns } = req.body;
   
   const cached = readCache();
@@ -4682,7 +4683,7 @@ router.get('/golden-set/full', (req, res) => {
 });
 
 // Add item to golden set
-router.post('/golden-set', (req, res) => {
+router.post('/golden-set', requireAuth, (req, res) => {
   const { id, subject, body, trueType, notes, category } = req.body;
   if (!id || !subject || !trueType) {
     return res.status(400).json({ error: 'id, subject, and trueType are required' });
@@ -4692,13 +4693,13 @@ router.post('/golden-set', (req, res) => {
 });
 
 // Remove item from golden set
-router.delete('/golden-set/:id', (req, res) => {
+router.delete('/golden-set', requireAuth/:id', (req, res) => {
   const result = removeGoldenItem(req.params.id, req.body.reason || 'Removed via API');
   res.json(result);
 });
 
 // Clear entire golden set and optionally evaluation history
-router.delete('/golden-set', (req, res) => {
+router.delete('/golden-set', requireAuth', (req, res) => {
   const clearHistory = req.query.clearHistory !== 'false';
   const result = clearGoldenSet(clearHistory);
   res.json(result);
@@ -4768,7 +4769,7 @@ router.get('/decision-stats', (req, res) => {
 // ========== REINFORCEMENT ENDPOINT ==========
 
 // Trigger reinforcement for surviving patterns
-router.post('/reinforce-survivors', (req, res) => {
+router.post('/reinforce-survivors', requireAuth, (req, res) => {
   const cached = readCache();
   const overrides = readOverrides();
   

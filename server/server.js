@@ -24,6 +24,11 @@ import { getCacheStats } from './cache/stats-cache.js';
 // Warehouse engine imports
 import { startEngineWorker, getEngineStatus } from './engine/worker.js';
 import engineRouter from './engine/api.js';
+// Authentication middleware
+import { requireAuth } from './lib/auth.js';
+// Rate limiting and security headers
+import { rateLimit } from './lib/rate-limit.js';
+import { securityHeaders, requireHTTPS } from './lib/security-headers.js';
 
 // Use process.cwd() for Vitest/Vite SSR compatibility
 const __dirname = path.join(process.cwd(), 'server');
@@ -34,7 +39,47 @@ const PORT = process.env.PORT || 3001;
 // Engine enabled flag - set to true to use the new warehouse engine
 const ENGINE_ENABLED = process.env.ENGINE_ENABLED === 'true';
 
-app.use(cors());
+// Apply security headers to all responses
+app.use(securityHeaders());
+
+// Redirect HTTP to HTTPS in production
+app.use(requireHTTPS);
+
+// Rate limiting - prevent DoS attacks
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
+});
+app.use('/api/', apiLimiter);
+
+// Stricter rate limit for admin endpoints
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Limit to 20 admin requests per window
+  message: 'Too many admin requests, please try again later.'
+});
+
+// CORS configuration - restrict to allowed origins in production
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+  : ['http://localhost:5173', 'http://localhost:3000']; // Default for development
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+}));
 app.use(express.json());
 
 // Global BigInt serialization safety net - prevents "Do not know how to serialize a BigInt" errors
@@ -113,30 +158,11 @@ app.get('/health/detailed', async (req, res) => {
   });
 });
 
-// Config debug endpoint - shows environment configuration for debugging
-app.get('/health/config', (req, res) => {
-  res.json({
-    timestamp: new Date().toISOString(),
-    config: {
-      DATA_DIR: process.env.DATA_DIR || '(not set)',
-      CURSOR_DIR: process.env.CURSOR_DIR || '(not set)',
-      ENGINE_ENABLED: ENGINE_ENABLED,
-      PORT: PORT,
-      LOG_LEVEL: process.env.LOG_LEVEL || '(not set)',
-    },
-    paths: {
-      dataPath: db.DATA_PATH,
-      cwd: process.cwd(),
-    },
-    node: {
-      version: process.version,
-      platform: process.platform,
-    }
-  });
-});
+// NOTE: Removed /health/config endpoint for security - it exposed internal paths and configuration
+// If you need to debug configuration, check server logs on startup
 
-// Refresh DuckDB views (call after data ingestion)
-app.post('/api/refresh-views', async (req, res) => {
+// Refresh DuckDB views (call after data ingestion) - PROTECTED ENDPOINT
+app.post('/api/refresh-views', requireAuth, async (req, res) => {
   try {
     console.log('🔄 Refreshing DuckDB views...');
     await initializeViews();
@@ -147,8 +173,8 @@ app.post('/api/refresh-views', async (req, res) => {
   }
 });
 
-// Refresh aggregations manually
-app.post('/api/refresh-aggregations', async (req, res) => {
+// Refresh aggregations manually - PROTECTED ENDPOINT
+app.post('/api/refresh-aggregations', requireAuth, async (req, res) => {
   try {
     console.log('🔄 Manual aggregation refresh triggered...');
     const result = await refreshAllAggregations();

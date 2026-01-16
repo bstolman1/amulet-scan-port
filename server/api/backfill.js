@@ -11,6 +11,7 @@ import { join, basename as pathBasename } from 'path';
 import db, { safeQuery, hasFileType, DATA_PATH } from '../duckdb/connection.js';
 import { getLastGapDetection } from '../engine/gap-detector.js';
 import { triggerGapDetection } from '../engine/worker.js';
+import { requireAuth } from '../lib/auth.js';
 
 // Use process.cwd() for Vitest/Vite SSR compatibility
 const __dirname = join(process.cwd(), 'server', 'api');
@@ -441,8 +442,8 @@ router.get('/shards', (req, res) => {
   }
 });
 
-// DELETE /api/backfill/purge - Purge all backfill data (local files)
-router.delete('/purge', (req, res) => {
+// DELETE /api/backfill/purge - Purge all backfill data (local files) - PROTECTED
+router.delete('/purge', requireAuth, (req, res) => {
   try {
     const dataDir = DATA_DIR;
     const rawDir = join(dataDir, 'raw');
@@ -504,8 +505,8 @@ router.get('/gaps', (req, res) => {
   }
 });
 
-// POST /api/backfill/gaps/detect - Trigger gap detection manually
-router.post('/gaps/detect', async (req, res) => {
+// POST /api/backfill/gaps/detect - Trigger gap detection manually - PROTECTED
+router.post('/gaps/detect', requireAuth, async (req, res) => {
   try {
     const autoRecover = req.body?.autoRecover === true;
     const result = await triggerGapDetection(autoRecover);
@@ -580,9 +581,9 @@ router.get('/reconciliation', async (req, res) => {
   }
 });
 
-// POST /api/backfill/validate-integrity - Validate data integrity by sampling Parquet files
+// POST /api/backfill/validate-integrity - Validate data integrity by sampling Parquet files - PROTECTED
 // Checks schema requirements: event_type_original, root_event_ids, child_event_ids, record_time, canonical event_id
-router.post('/validate-integrity', async (req, res) => {
+router.post('/validate-integrity', requireAuth, async (req, res) => {
   const sampleSize = Math.min(req.body?.sampleSize || 100, 500);
   
   try {
@@ -753,8 +754,8 @@ router.post('/validate-integrity', async (req, res) => {
   }
 });
 
-// POST /api/backfill/gaps/recover - Recover gaps with streaming progress
-router.post('/gaps/recover', async (req, res) => {
+// POST /api/backfill/gaps/recover - Recover gaps with streaming progress - PROTECTED
+router.post('/gaps/recover', requireAuth, async (req, res) => {
   const maxGaps = req.body?.maxGaps || 10;
   const stream = req.body?.stream === true;
   

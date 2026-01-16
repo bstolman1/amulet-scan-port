@@ -17,6 +17,7 @@ import {
 import { getTotalCounts, getTimeRange, getTemplateEventCounts } from '../engine/aggregations.js';
 import { getIngestionStats } from '../engine/ingest.js';
 import { initEngineSchema } from '../engine/schema.js';
+import { requireAuth } from '../lib/auth.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -72,8 +73,8 @@ function getDataSourceInfo() {
   return 'none';
 }
 
-// POST /api/stats/init-engine-schema - Initialize the engine schema
-router.post('/init-engine-schema', async (req, res) => {
+// POST /api/stats/init-engine-schema - Initialize the engine schema - PROTECTED
+router.post('/init-engine-schema', requireAuth, async (req, res) => {
   try {
     await initEngineSchema();
     res.json({ success: true, message: 'Engine schema initialized successfully' });
@@ -523,8 +524,8 @@ router.get('/aggregation-state', async (req, res) => {
   }
 });
 
-// POST /api/stats/aggregation-state/reset - Reset aggregation state
-router.post('/aggregation-state/reset', async (req, res) => {
+// POST /api/stats/aggregation-state/reset - Reset aggregation state - PROTECTED
+router.post('/aggregation-state/reset', requireAuth, async (req, res) => {
   try {
     const tableCheck = await query(`
       SELECT COUNT(*) as cnt 
@@ -561,8 +562,8 @@ router.post('/aggregation-state/reset', async (req, res) => {
   }
 });
 
-// DELETE /api/stats/live-cursor - Purge live cursor
-router.delete('/live-cursor', async (req, res) => {
+// DELETE /api/stats/live-cursor - Purge live cursor - PROTECTED
+router.delete('/live-cursor', requireAuth, async (req, res) => {
   try {
     const dataDir = process.env.DATA_DIR || DATA_PATH;
     const cursorDir = path.join(dataDir, 'cursors');
