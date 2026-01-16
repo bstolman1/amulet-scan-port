@@ -173,7 +173,7 @@ function generateReport() {
   // Analyze each test category
   for (const { dir, pattern, type } of TEST_PATTERNS) {
     const files = findTestFiles(dir, pattern);
-    const results = files.map(f => ({ ...analyzeTestFile(f), type }));
+    const results = files.map(f => ({ file: f, ...analyzeTestFile(f), type }));
     allResults.push(...results);
     
     categoryStats[type] = {
