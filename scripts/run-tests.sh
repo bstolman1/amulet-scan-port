@@ -135,11 +135,17 @@ show_help() {
     echo "  frontend   Run frontend component tests"
     echo "  full       Run everything (ingest + server + frontend)"
     echo ""
+    echo "Coverage:"
+    echo "  coverage   Run all tests with coverage reports"
+    echo "  cov:front  Frontend coverage only"
+    echo "  cov:server Server coverage only"
+    echo "  cov:ingest Ingest coverage only"
+    echo ""
     echo "Examples:"
     echo "  $0              # Run all ingest tests"
     echo "  $0 api          # Test API connectivity only"
     echo "  $0 health       # Run full pipeline health check"
-    echo "  $0 gcs          # Test GCS integrity"
+    echo "  $0 coverage     # Generate coverage reports"
     echo "  $0 full         # Run all test suites"
     echo ""
     echo "Environment variables:"
@@ -216,6 +222,22 @@ case "$TEST_TYPE" in
         
         echo ""
         print_success "All test suites passed!"
+        ;;
+    coverage)
+        print_header "Running All Tests with Coverage"
+        "$SCRIPT_DIR/coverage.sh" all
+        ;;
+    cov:front|cov:frontend)
+        print_header "Running Frontend Coverage"
+        "$SCRIPT_DIR/coverage.sh" frontend
+        ;;
+    cov:server)
+        print_header "Running Server Coverage"
+        "$SCRIPT_DIR/coverage.sh" server
+        ;;
+    cov:ingest)
+        print_header "Running Ingest Coverage"
+        "$SCRIPT_DIR/coverage.sh" ingest
         ;;
     *)
         print_error "Unknown test type: $TEST_TYPE"
