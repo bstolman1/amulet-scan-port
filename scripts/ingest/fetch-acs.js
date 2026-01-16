@@ -167,14 +167,20 @@ async function retryWithBackoff(fn, maxRetries = 5) {
  */
 async function detectMigrations() {
   console.log('🔎 Detecting migrations...');
+  console.log(`   API base URL: ${SCAN_URL}`);
   const migrations = [];
   let id = 0;
   
   while (true) {
+    const endpoint = '/v0/state/acs/snapshot-timestamp';
+    const params = { before: new Date().toISOString(), migration_id: id };
+    console.log(`   🌐 [migration ${id}] GET ${endpoint} with params:`, JSON.stringify(params));
+    const t0 = Date.now();
+    
     try {
-      const res = await client.get('/v0/state/acs/snapshot-timestamp', {
-        params: { before: new Date().toISOString(), migration_id: id },
-      });
+      const res = await client.get(endpoint, { params });
+      const latency = Date.now() - t0;
+      console.log(`   ✅ [migration ${id}] Response in ${latency}ms, status=${res.status}`);
       
       if (res.data?.record_time) {
         migrations.push(id);
@@ -185,7 +191,11 @@ async function detectMigrations() {
         break;
       }
     } catch (err) {
-      console.log(`   Migration ${id} check failed: ${err.message || 'unknown error'}`);
+      const latency = Date.now() - t0;
+      console.log(`   ❌ [migration ${id}] Failed after ${latency}ms: ${err.code || err.message}`);
+      if (err.response) {
+        console.log(`      HTTP ${err.response.status}: ${JSON.stringify(err.response.data).substring(0, 200)}`);
+      }
       break;
     }
   }
