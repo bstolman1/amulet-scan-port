@@ -1,31 +1,70 @@
 /**
- * Binary Writer Module - PROTOBUF + ZSTD VERSION
+ * Binary Writer Module - PROTOBUF + ZSTD VERSION with GCS Upload
  * 
  * Handles writing ledger data to partitioned binary files using:
  * - Protobuf encoding (no giant JSON.stringify)
  * - ZSTD compression in worker threads
  * - Each worker has its own heap (sidesteps 4GB limit)
  * 
+ * GCS Mode (when GCS_BUCKET is set):
+ * 1. Writes binary files to /tmp/ledger_raw (ephemeral scratch space)
+ * 2. Uploads each file immediately to GCS using gsutil
+ * 3. Deletes local file after upload
+ * 4. Keeps disk usage flat regardless of total data volume
+ * 
  * Drop-in replacement for write-jsonl.js with same API surface.
  */
 
-import { mkdirSync, existsSync, rmSync, readdirSync } from 'fs';
+import { mkdirSync, existsSync, rmSync, readdirSync, unlinkSync } from 'fs';
 import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { getPartitionPath } from './data-schema.js';
 import { getBinaryWriterPool, shutdownBinaryPool } from './binary-writer-pool.js';
-import { getBaseDataDir, getRawDir } from './path-utils.js';
+import { 
+  getBaseDataDir, 
+  getRawDir, 
+  isGCSMode, 
+  getTmpRawDir, 
+  ensureTmpDir 
+} from './path-utils.js';
+import {
+  initGCS,
+  isGCSEnabled,
+  getGCSPath,
+  uploadAndCleanup,
+  getUploadStats,
+} from './gcs-upload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration - using cross-platform path utilities
-const BASE_DATA_DIR = getBaseDataDir();
-const DATA_DIR = getRawDir(); // Binary files go in raw/ subdirectory
+// Configuration - use /tmp in GCS mode, DATA_DIR otherwise
+const GCS_MODE = isGCSMode();
+const BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
+const DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const ZSTD_LEVEL = parseInt(process.env.ZSTD_LEVEL) || 1;
 const MAX_PENDING_WRITES = parseInt(process.env.MAX_PENDING_WRITES) || 50;
+
+// Initialize GCS if enabled
+if (GCS_MODE) {
+  try {
+    initGCS();
+    ensureTmpDir();
+    console.log(`☁️ [write-binary] GCS mode enabled`);
+    console.log(`☁️ [write-binary] Local scratch: ${DATA_DIR}`);
+    console.log(`☁️ [write-binary] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
+  } catch (err) {
+    console.error(`❌ [write-binary] GCS initialization failed: ${err.message}`);
+    throw err;
+  }
+} else {
+  console.log(`📂 [write-binary] Local mode - output directory: ${DATA_DIR}`);
+}
+
+// Stats tracking for GCS uploads
+let totalFilesUploaded = 0;
 
 // In-memory buffers
 let updatesBuffer = [];
@@ -257,9 +296,37 @@ function mapEventRecord(r) {
 }
 
 /**
- * Queue a binary write job with backpressure
+ * Get the relative path from DATA_DIR for GCS upload
  */
-async function queueBinaryWrite(records, filePath, type) {
+function getRelativePath(fullPath) {
+  if (fullPath.startsWith(DATA_DIR)) {
+    return fullPath.substring(DATA_DIR.length).replace(/^[/\\]/, '');
+  }
+  return fullPath;
+}
+
+/**
+ * Upload file to GCS if in GCS mode (async version for binary files)
+ */
+async function uploadToGCSIfEnabled(localPath, partition, fileName) {
+  if (!GCS_MODE) return null;
+  
+  const relativePath = join(partition, fileName).replace(/\\/g, '/');
+  const gcsPath = getGCSPath(relativePath);
+  
+  const result = await uploadAndCleanup(localPath, gcsPath, { quiet: false });
+  
+  if (result.ok) {
+    totalFilesUploaded++;
+  }
+  
+  return result;
+}
+
+/**
+ * Queue a binary write job with backpressure and GCS upload
+ */
+async function queueBinaryWrite(records, filePath, type, partition, fileName) {
   if (records.length === 0) {
     return null;
   }
@@ -276,6 +343,8 @@ async function queueBinaryWrite(records, filePath, type) {
     ? records.map(mapUpdateRecord)
     : records.map(mapEventRecord);
   
+  const recordCount = mappedRecords.length;
+  
   // Clear the source records to free memory immediately
   records.length = 0;
   
@@ -286,24 +355,34 @@ async function queueBinaryWrite(records, filePath, type) {
     filePath,
     records: mappedRecords,
     zstdLevel: ZSTD_LEVEL,
-  }).then(result => {
+  }).then(async result => {
     pendingWrites--;
     writePromises.delete(promise); // Remove from tracking immediately
     const ratio = result.originalSize > 0 
       ? ((result.compressedSize / result.originalSize) * 100).toFixed(1)
       : 0;
     console.log(`📝 Wrote ${result.count} ${type} to ${filePath.split('/').pop()} (${ratio}% of original)`);
+    
+    // Upload to GCS if enabled (this also deletes the local file)
+    if (GCS_MODE && partition && fileName) {
+      await uploadToGCSIfEnabled(filePath, partition, fileName);
+    }
+    
     return result;
-  }).catch(err => {
+  }).catch(async err => {
     pendingWrites--;
     writePromises.delete(promise); // Remove from tracking on error too
     console.error(`❌ Binary write failed for ${filePath}:`, err.message);
+    // In GCS mode, clean up local file on error
+    if (GCS_MODE && existsSync(filePath)) {
+      try { unlinkSync(filePath); } catch {}
+    }
     throw err;
   });
   
   writePromises.add(promise);
   
-  return { file: filePath, count: records.length, queued: true };
+  return { file: filePath, count: recordCount, queued: true };
 }
 
 /**
@@ -352,7 +431,7 @@ export async function flushUpdates() {
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
-  return queueBinaryWrite(rowsToWrite, filePath, 'updates');
+  return queueBinaryWrite(rowsToWrite, filePath, 'updates', partition, fileName);
 }
 
 /**
@@ -377,7 +456,7 @@ export async function flushEvents() {
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
-  return queueBinaryWrite(rowsToWrite, filePath, 'events');
+  return queueBinaryWrite(rowsToWrite, filePath, 'events', partition, fileName);
 }
 
 /**
