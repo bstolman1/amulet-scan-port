@@ -162,7 +162,10 @@ if (INSECURE_TLS) {
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 // Cross-platform path handling
-import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig } from './path-utils.js';
+import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
+// GCS preflight checks
+import { runPreflightChecks } from './gcs-preflight.js';
+
 const BASE_DATA_DIR = getBaseDataDir();
 const CURSOR_DIR = getCursorDir();
 const GCS_MODE = isGCSMode();
@@ -1556,14 +1559,27 @@ async function runBackfill() {
   console.log("   INSECURE_TLS:", INSECURE_TLS ? 'ENABLED (unsafe)' : 'disabled');
   console.log("=".repeat(80));
   
-  // GCS mode info
-  if (GCS_MODE) {
-    console.log("\n☁️  GCS Mode ENABLED:");
-    console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
-    console.log("   Local scratch: /tmp/ledger_raw");
-    console.log("   Files are uploaded to GCS immediately after creation");
-  } else {
-    console.log(`\n📂 Local Mode: Writing to ${BASE_DATA_DIR}`);
+  // ─────────────────────────────────────────────────────────────
+  // GCS PREFLIGHT CHECKS (fail fast if GCS is not properly configured)
+  // ─────────────────────────────────────────────────────────────
+  try {
+    validateGCSBucket();  // GCS_BUCKET is always required
+    
+    if (GCS_MODE) {
+      console.log("\n🔍 Running GCS preflight checks...");
+      runPreflightChecks({ quick: false, throwOnFail: true });
+      console.log("\n☁️  GCS Mode ENABLED:");
+      console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
+      console.log("   Local scratch: /tmp/ledger_raw");
+      console.log("   Files are uploaded to GCS immediately after creation");
+    } else {
+      console.log(`\n📂 Disk Mode (GCS_ENABLED=false): Writing to ${BASE_DATA_DIR}`);
+      console.log(`   GCS bucket configured: gs://${process.env.GCS_BUCKET}/`);
+      console.log("   Uploads disabled - writing to local disk only");
+    }
+  } catch (err) {
+    logFatal('gcs_preflight_failed', err);
+    throw err;
   }
   
   console.log("\n⚙️  Auto-Tuning Configuration:");
