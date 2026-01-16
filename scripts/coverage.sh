@@ -143,14 +143,28 @@ run_ingest_coverage() {
     fi
     
     echo "Running ingest tests with coverage..."
+    echo "(timeout: 60s - API tests only)"
     
-    # Use timeout to prevent stalling
-    # Prefer API-only by default (network-dependent suites can hang)
-    timeout 180 npx c8 --reporter=text --reporter=json --reporter=json-summary --reporter=html \
+    # Run with shorter timeout since API tests can hang on network issues
+    # Use set +e to prevent script exit on timeout
+    set +e
+    timeout 60 npx c8 \
+        --reporter=text \
+        --reporter=json-summary \
+        --reporter=html \
         --reports-dir="$COVERAGE_DIR/ingest" \
-        --include="*.js" --include="test/**/*.js" \
+        --include="*.js" \
         --exclude="node_modules/**" \
-        npm run test:api 2>&1 || true
+        node test/api.test.js 2>&1
+    
+    exit_code=$?
+    set -e
+    
+    if [ $exit_code -eq 124 ]; then
+        echo -e "${YELLOW}⚠ Ingest tests timed out (network issues?)${NC}"
+    elif [ $exit_code -ne 0 ]; then
+        echo -e "${YELLOW}⚠ Ingest tests exited with code $exit_code${NC}"
+    fi
     
     if [ -f "$COVERAGE_DIR/ingest/coverage-summary.json" ]; then
         echo -e "${GREEN}✅ Ingest coverage report generated${NC}"
