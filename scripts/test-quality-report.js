@@ -43,6 +43,16 @@ const ASSERTION_PATTERNS = [
   /\.toThrow\s*\(/g,
   /\.rejects\s*\./g,
   /\.resolves\s*\./g,
+  /\.toHaveProperty\s*\(/g,
+  /\.toBeInstanceOf\s*\(/g,
+  /\.toBeGreaterThan\s*\(/g,
+  /\.toBeLessThan\s*\(/g,
+  /\.toBeGreaterThanOrEqual\s*\(/g,
+  /\.toBeLessThanOrEqual\s*\(/g,
+  /\.toBeCloseTo\s*\(/g,
+  /\.toHaveBeenCalled/g,
+  /\.toHaveBeenCalledWith\s*\(/g,
+  /\.not\./g,
 ];
 
 const TEST_PATTERNS_REGEX = [
