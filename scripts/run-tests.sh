@@ -254,12 +254,12 @@ case "$TEST_TYPE" in
     mutate)
         print_header "Running Stryker Mutation Testing"
         cd "$PROJECT_ROOT"
-        npx stryker run
+        npx stryker run --configFile stryker.config.js
         ;;
     mutate:dry)
         print_header "Stryker Dry Run (showing mutants)"
         cd "$PROJECT_ROOT"
-        npx stryker run --dryRun
+        npx stryker run --configFile stryker.config.js --dryRun
         ;;
     *)
         print_error "Unknown test type: $TEST_TYPE"
