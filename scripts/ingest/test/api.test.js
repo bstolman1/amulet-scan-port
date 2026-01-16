@@ -14,6 +14,8 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
+import https from 'https';
+import http from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,24 +28,44 @@ const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.networ
 const TIMEOUT_MS = parseInt(process.env.API_TIMEOUT_MS) || 30000;
 
 // ─────────────────────────────────────────────────────────────
-// Test Utilities
+// HTTP Client (works with all Node.js versions)
 // ─────────────────────────────────────────────────────────────
 
-async function fetchWithTimeout(url, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
+function httpGet(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const client = parsedUrl.protocol === 'https:' ? https : http;
+    
+    const req = client.get(url, {
+      timeout: TIMEOUT_MS,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'ScanAPITest/1.0',
+        ...options.headers,
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        resolve({
+          ok: res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode,
+          statusText: res.statusMessage,
+          json: () => Promise.resolve(JSON.parse(data)),
+          text: () => Promise.resolve(data),
+        });
+      });
     });
-    clearTimeout(timeout);
-    return response;
-  } catch (err) {
-    clearTimeout(timeout);
-    throw err;
-  }
+    
+    req.on('error', (err) => {
+      reject(new Error(`Network error: ${err.message}`));
+    });
+    
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`Request timeout after ${TIMEOUT_MS}ms`));
+    });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -67,6 +89,7 @@ async function runTests() {
   console.log('═'.repeat(60));
   console.log(`   API URL: ${SCAN_URL}`);
   console.log(`   Timeout: ${TIMEOUT_MS}ms`);
+  console.log(`   Node.js: ${process.version}`);
   console.log('─'.repeat(60) + '\n');
   
   for (const { name, fn, skip: isSkipped, reason } of tests) {
@@ -99,7 +122,7 @@ async function runTests() {
 // ─────────────────────────────────────────────────────────────
 
 test('Scan API base URL is reachable', async () => {
-  const response = await fetchWithTimeout(`${SCAN_URL}/v0/round-of-latest-data`);
+  const response = await httpGet(`${SCAN_URL}/v0/round-of-latest-data`);
   
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -109,7 +132,12 @@ test('Scan API base URL is reachable', async () => {
 });
 
 test('Round data endpoint returns valid JSON', async () => {
-  const response = await fetchWithTimeout(`${SCAN_URL}/v0/round-of-latest-data`);
+  const response = await httpGet(`${SCAN_URL}/v0/round-of-latest-data`);
+  
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  
   const data = await response.json();
   
   if (typeof data.round !== 'number' && typeof data.round !== 'string') {
@@ -124,7 +152,7 @@ test('Updates endpoint returns expected structure', async () => {
   const before = new Date().toISOString();
   const url = `${SCAN_URL}/v0/updates?before=${encodeURIComponent(before)}&page_size=1`;
   
-  const response = await fetchWithTimeout(url);
+  const response = await httpGet(url);
   
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -145,7 +173,7 @@ test('ACS snapshot timestamp endpoint is accessible', async () => {
   const before = new Date().toISOString();
   const url = `${SCAN_URL}/v0/state/acs/snapshot-timestamp?before=${encodeURIComponent(before)}&migration_id=0`;
   
-  const response = await fetchWithTimeout(url);
+  const response = await httpGet(url);
   
   // May return 404 if no snapshots, but endpoint should be reachable
   if (response.status === 404) {
@@ -157,7 +185,6 @@ test('ACS snapshot timestamp endpoint is accessible', async () => {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
   
-  const data = await response.json();
   console.log(`   Snapshot timestamp available`);
 });
 
@@ -165,21 +192,30 @@ test('Migration detection works', async () => {
   // Try to detect migrations by checking snapshot timestamps for multiple migration IDs
   const before = new Date().toISOString();
   const migrations = [];
+  const errors = [];
   
   for (let migId = 0; migId <= 5; migId++) {
     try {
       const url = `${SCAN_URL}/v0/state/acs/snapshot-timestamp?before=${encodeURIComponent(before)}&migration_id=${migId}`;
-      const response = await fetchWithTimeout(url);
+      const response = await httpGet(url);
       
       if (response.ok) {
         migrations.push(migId);
       }
-    } catch {
-      // Ignore errors for individual migrations
+    } catch (err) {
+      errors.push(`Migration ${migId}: ${err.message}`);
     }
   }
   
+  // If ALL requests failed with network errors, that's a connectivity issue
+  if (errors.length === 6 && migrations.length === 0) {
+    throw new Error(`All migration checks failed with network errors. First error: ${errors[0]}`);
+  }
+  
   console.log(`   Found ${migrations.length} accessible migrations: [${migrations.join(', ')}]`);
+  
+  // It's OK to have 0 migrations if the endpoint is reachable but returns 404
+  // The key is that we didn't get network errors for all requests
 });
 
 // ─────────────────────────────────────────────────────────────
