@@ -128,6 +128,7 @@ show_help() {
     echo "  backfill   Test backfill data integrity"
     echo "  acs        Test ACS snapshot integrity"
     echo "  gcs        Test GCS upload integrity (requires GCS_BUCKET)"
+    echo "  health     Run end-to-end pipeline health check"
     echo "  preflight  Run GCS preflight checks"
     echo "  validate   Run all validation scripts"
     echo "  server     Run server API tests"
@@ -137,11 +138,12 @@ show_help() {
     echo "Examples:"
     echo "  $0              # Run all ingest tests"
     echo "  $0 api          # Test API connectivity only"
+    echo "  $0 health       # Run full pipeline health check"
     echo "  $0 gcs          # Test GCS integrity"
     echo "  $0 full         # Run all test suites"
     echo ""
     echo "Environment variables:"
-    echo "  GCS_BUCKET      Required for gcs and preflight tests"
+    echo "  GCS_BUCKET      Required for gcs, health, and preflight tests"
     echo "  SCAN_URL        Scan API URL (default: https://scan.sv-1.global.canton.network.sync.global)"
     echo ""
 }
@@ -172,6 +174,14 @@ case "$TEST_TYPE" in
     gcs)
         run_ingest_test "gcs"
         print_success "GCS integrity tests passed!"
+        ;;
+    health)
+        run_ingest_test "health"
+        print_success "Pipeline health check passed!"
+        ;;
+    health:quick)
+        run_ingest_test "health:quick"
+        print_success "Quick health check passed!"
         ;;
     preflight)
         run_preflight
