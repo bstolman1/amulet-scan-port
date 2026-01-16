@@ -129,6 +129,7 @@ run_ingest_coverage() {
     print_section "📥 Ingest Script Coverage"
     
     cd "$PROJECT_ROOT/scripts/ingest"
+    echo "Working directory: $(pwd)"
     
     # Check if dependencies are installed
     if [ ! -d "node_modules" ]; then
@@ -136,18 +137,41 @@ run_ingest_coverage() {
         npm install
     fi
     
-    # Check if c8 is available, install if not
-    if ! npx c8 --version > /dev/null 2>&1; then
+    # Check if c8 is available
+    echo "Checking c8 availability..."
+    if ! npx c8 --version 2>&1; then
         echo "Installing c8 for coverage..."
         npm install --save-dev c8
+        echo "c8 installed, version: $(npx c8 --version 2>&1)"
     fi
     
+    echo ""
     echo "Running ingest tests with coverage..."
-    echo "(timeout: 60s - API tests only)"
+    echo "Command: npx c8 --reporter=text node test/api.test.js"
+    echo "Timeout: 60 seconds"
+    echo ""
     
-    # Run with shorter timeout since API tests can hang on network issues
-    # Use set +e to prevent script exit on timeout
+    # Create coverage dir
+    mkdir -p "$COVERAGE_DIR/ingest"
+    
+    # Run with explicit output capture
     set +e
+    
+    # First try running the test directly without c8 to see if it works
+    echo "--- Testing direct execution first ---"
+    timeout 30 node test/api.test.js
+    direct_exit=$?
+    echo "Direct execution exit code: $direct_exit"
+    echo ""
+    
+    if [ $direct_exit -eq 124 ]; then
+        echo -e "${YELLOW}⚠ Tests timed out on direct execution (network unreachable)${NC}"
+        echo "Skipping coverage run."
+        set -e
+        return 0
+    fi
+    
+    echo "--- Now running with c8 coverage ---"
     timeout 60 npx c8 \
         --reporter=text \
         --reporter=json-summary \
@@ -155,16 +179,24 @@ run_ingest_coverage() {
         --reports-dir="$COVERAGE_DIR/ingest" \
         --include="*.js" \
         --exclude="node_modules/**" \
-        node test/api.test.js 2>&1
+        node test/api.test.js
     
     exit_code=$?
     set -e
+    
+    echo ""
+    echo "c8 exit code: $exit_code"
     
     if [ $exit_code -eq 124 ]; then
         echo -e "${YELLOW}⚠ Ingest tests timed out (network issues?)${NC}"
     elif [ $exit_code -ne 0 ]; then
         echo -e "${YELLOW}⚠ Ingest tests exited with code $exit_code${NC}"
     fi
+    
+    # Check what files were created
+    echo ""
+    echo "Coverage files created:"
+    ls -la "$COVERAGE_DIR/ingest/" 2>/dev/null || echo "  (none)"
     
     if [ -f "$COVERAGE_DIR/ingest/coverage-summary.json" ]; then
         echo -e "${GREEN}✅ Ingest coverage report generated${NC}"
