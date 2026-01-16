@@ -71,9 +71,10 @@ run_frontend_coverage() {
     fi
     
     # Run vitest with coverage (disable thresholds for reporting)
+    # Ensure json-summary is produced (coverage-summary.json)
     echo "Running frontend tests with coverage..."
     npx vitest run --coverage \
-        --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html \
+        --coverage.reporter=text --coverage.reporter=json --coverage.reporter=json-summary --coverage.reporter=html \
         --coverage.reportsDirectory="$COVERAGE_DIR/frontend" \
         --coverage.thresholds.statements=0 \
         --coverage.thresholds.branches=0 \
@@ -97,21 +98,22 @@ run_server_coverage() {
     
     echo "Running server tests with coverage via vitest..."
     
-    # Run server tests through vitest (which is already configured for server tests)
-    # Use timeout to prevent stalling
-    timeout 120 npx vitest run \
+    # Note: vitest config already includes server tests; we run the whole suite
+    # but restrict coverage collection to server/** so the report is server-only.
+    timeout 180 npx vitest run \
         --coverage \
-        --coverage.reporter=text --coverage.reporter=json --coverage.reporter=html \
+        --coverage.reporter=text --coverage.reporter=json --coverage.reporter=json-summary --coverage.reporter=html \
         --coverage.reportsDirectory="$COVERAGE_DIR/server" \
         --coverage.include="server/lib/**/*.js" \
         --coverage.include="server/api/**/*.js" \
         --coverage.include="server/engine/**/*.js" \
         --coverage.include="server/duckdb/**/*.js" \
+        --coverage.exclude="src/**" \
         --coverage.thresholds.statements=0 \
         --coverage.thresholds.branches=0 \
         --coverage.thresholds.functions=0 \
         --coverage.thresholds.lines=0 \
-        "server/**/*.test.js" 2>&1 || true
+        2>&1 || true
     
     if [ -f "$COVERAGE_DIR/server/coverage-summary.json" ]; then
         echo -e "${GREEN}✅ Server coverage report generated${NC}"
@@ -143,7 +145,8 @@ run_ingest_coverage() {
     echo "Running ingest tests with coverage..."
     
     # Use timeout to prevent stalling
-    timeout 180 npx c8 --reporter=text --reporter=json --reporter=html \
+    # Prefer API-only by default (network-dependent suites can hang)
+    timeout 180 npx c8 --reporter=text --reporter=json --reporter=json-summary --reporter=html \
         --reports-dir="$COVERAGE_DIR/ingest" \
         --include="*.js" --include="test/**/*.js" \
         --exclude="node_modules/**" \
