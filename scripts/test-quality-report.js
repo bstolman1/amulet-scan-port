@@ -383,12 +383,12 @@ function generateReport() {
   } else {
     // If no coverage file, check if we have integration/e2e tests
     const hasIntegration = allResults.some(r => 
-      r.file.includes('integration') || r.file.includes('e2e')
+      r && r.file && (r.file.includes('integration') || r.file.includes('e2e'))
     );
     if (hasIntegration) {
       // Give partial credit for integration tests
       const integrationTests = allResults.filter(r => 
-        r.file.includes('integration') || r.file.includes('e2e')
+        r && r.file && (r.file.includes('integration') || r.file.includes('e2e'))
       );
       const integrationScore = Math.min(15, integrationTests.length * 3);
       score += integrationScore;
