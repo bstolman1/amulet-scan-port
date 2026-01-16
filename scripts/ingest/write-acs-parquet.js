@@ -301,34 +301,51 @@ async function writeToParquet(contracts, filePath, partition, fileName) {
   const jsonlPath = tempJsonlPath.replace(/\\/g, '/');
   
   try {
+    const t0 = Date.now();
+
+    console.log(`🧾 [ACS-Parquet] Writing temp JSONL (${contracts.length} rows) -> ${tempJsonlPath}`);
+
     // Write contracts to temp JSONL file
     const lines = contracts.map(c => JSON.stringify(c));
     writeFileSync(tempJsonlPath, lines.join('\n') + '\n');
-    
+
+    const jsonlBytes = existsSync(tempJsonlPath) ? statSync(tempJsonlPath).size : 0;
+    console.log(`🧾 [ACS-Parquet] Temp JSONL size: ${(jsonlBytes / 1024 / 1024).toFixed(2)} MB`);
+
     // Use DuckDB Node.js bindings to convert to Parquet
     const sql = `
       COPY (
         SELECT * FROM read_json_auto('${jsonlPath}', ignore_errors=true)
       ) TO '${parquetPath}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);
     `;
-    
-    await new Promise((resolve, reject) => {
-      conn.run(sql, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-    
+
+    const duckdbTimeoutMs = parseInt(process.env.DUCKDB_COPY_TIMEOUT_MS) || 10 * 60 * 1000; // 10 min
+    console.log(`🦆 [ACS-Parquet] DuckDB COPY -> ${filePath} (timeout: ${duckdbTimeoutMs}ms)`);
+
+    await Promise.race([
+      new Promise((resolve, reject) => {
+        conn.run(sql, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      }),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`DuckDB COPY timed out after ${duckdbTimeoutMs}ms`)), duckdbTimeoutMs);
+      }),
+    ]);
+
+    console.log(`🦆 [ACS-Parquet] DuckDB COPY complete in ${Date.now() - t0}ms`);
+
     // Clean up temp file
     if (existsSync(tempJsonlPath)) {
       unlinkSync(tempJsonlPath);
     }
-    
+
     totalContractsWritten += contracts.length;
     totalFilesWritten++;
-    
+
     console.log(`📝 Wrote ${contracts.length} contracts to ${filePath}`);
-    
+
     // Upload to GCS if enabled (this also deletes the local file)
     if (GCS_MODE) {
       uploadToGCSIfEnabled(filePath, partition, fileName);
