@@ -41,28 +41,45 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Configuration - use /tmp in GCS mode, DATA_DIR otherwise
-const GCS_MODE = isGCSMode();
-const BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
-const DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
+// Defer GCS_MODE check to avoid errors during module import
+let GCS_MODE = null;
+let BASE_DATA_DIR = null;
+let DATA_DIR = null;
 const MAX_ROWS_PER_FILE = parseInt(process.env.ACS_MAX_ROWS_PER_FILE) || 10000;
 
 // Keep at least 2 snapshots per migration
 const MAX_SNAPSHOTS_PER_MIGRATION = parseInt(process.env.MAX_SNAPSHOTS_PER_MIGRATION) || 2;
 
-// Initialize GCS if enabled
-if (GCS_MODE) {
+// Deferred initialization flag
+let moduleInitialized = false;
+
+/**
+ * Initialize module configuration (called lazily on first use)
+ */
+function ensureModuleInitialized() {
+  if (moduleInitialized) return;
+  
   try {
-    initGCS();
-    ensureTmpDir();
-    console.log(`☁️ [ACS-Parquet] GCS mode enabled`);
-    console.log(`☁️ [ACS-Parquet] Local scratch: ${DATA_DIR}`);
-    console.log(`☁️ [ACS-Parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/acs/`);
+    GCS_MODE = isGCSMode();
+    BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
+    DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
+    
+    if (GCS_MODE) {
+      initGCS();
+      ensureTmpDir();
+      console.log(`☁️ [ACS-Parquet] GCS mode enabled`);
+      console.log(`☁️ [ACS-Parquet] Local scratch: ${DATA_DIR}`);
+      console.log(`☁️ [ACS-Parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/acs/`);
+    } else {
+      console.log(`📂 [ACS-Parquet] Local mode - output directory: ${DATA_DIR}`);
+    }
+    
+    moduleInitialized = true;
   } catch (err) {
-    console.error(`❌ [ACS-Parquet] GCS initialization failed: ${err.message}`);
+    console.error(`❌ [ACS-Parquet] Initialization failed: ${err.message}`);
+    console.error(err.stack);
     throw err;
   }
-} else {
-  console.log(`📂 [ACS-Parquet] Local mode - output directory: ${DATA_DIR}`);
 }
 
 // In-memory buffer for batching
@@ -84,6 +101,8 @@ let conn = null;
  * Initialize DuckDB connection
  */
 function ensureDbInitialized() {
+  ensureModuleInitialized();
+  
   if (db && conn) return;
   
   db = new duckdb.Database(':memory:');
@@ -124,6 +143,8 @@ function ensureDir(dirPath) {
  * Note: In GCS mode, this only affects local /tmp files (which should be empty anyway)
  */
 export function cleanupOldSnapshots(migrationId, keepCount = MAX_SNAPSHOTS_PER_MIGRATION) {
+  ensureModuleInitialized();
+  
   if (GCS_MODE) {
     console.log(`[ACS] ⚠️ cleanupOldSnapshots not applicable in GCS mode. Use gsutil for GCS cleanup.`);
     return { deleted: 0, kept: 0 };
@@ -251,7 +272,9 @@ function cleanupEmptyDirs(dirPath) {
  * Upload file to GCS if in GCS mode
  */
 function uploadToGCSIfEnabled(localPath, partition, fileName) {
-  if (!GCS_MODE) return null;
+  // GCS_MODE is already checked before calling this function
+  // but check again for safety
+  if (!moduleInitialized || !GCS_MODE) return null;
   
   const relativePath = join('acs', partition, fileName).replace(/\\/g, '/');
   const gcsPath = getGCSPath(relativePath);
@@ -363,6 +386,8 @@ export async function bufferContracts(contracts) {
 export async function flushContracts() {
   if (contractsBuffer.length === 0) return null;
   
+  ensureModuleInitialized();
+  
   const timestamp = currentSnapshotTime || contractsBuffer[0]?.snapshot_time || new Date();
   const migrationId = currentMigrationId ?? contractsBuffer[0]?.migration_id ?? null;
   const partition = getACSPartitionPath(timestamp, migrationId);
@@ -397,7 +422,9 @@ export async function flushAll() {
  * Get buffer stats
  */
 export function getBufferStats() {
-  const gcsStats = GCS_MODE ? getUploadStats() : null;
+  // Safely check GCS_MODE - may not be initialized yet
+  const gcsMode = moduleInitialized ? GCS_MODE : false;
+  const gcsStats = gcsMode ? getUploadStats() : null;
   
   return {
     contracts: contractsBuffer.length,
@@ -405,7 +432,7 @@ export function getBufferStats() {
     totalContractsWritten,
     totalFilesWritten,
     totalFilesUploaded,
-    gcsMode: GCS_MODE,
+    gcsMode: gcsMode,
     // GCS-specific stats
     ...(gcsStats && {
       gcsUploads: gcsStats.totalUploads,
@@ -431,6 +458,8 @@ export function clearBuffers() {
  * In GCS mode, this marker is also uploaded to GCS
  */
 export async function writeCompletionMarker(snapshotTime, migrationId, stats = {}) {
+  ensureModuleInitialized();
+  
   const timestamp = snapshotTime || currentSnapshotTime || new Date();
   const migration = migrationId ?? currentMigrationId;
   const partition = getACSPartitionPath(timestamp, migration);
@@ -469,6 +498,8 @@ export async function writeCompletionMarker(snapshotTime, migrationId, stats = {
  * Note: In GCS mode, this only checks local files
  */
 export function isSnapshotComplete(snapshotTime, migrationId) {
+  ensureModuleInitialized();
+  
   const partition = getACSPartitionPath(snapshotTime, migrationId);
   const markerPath = join(DATA_DIR, 'acs', partition, '_COMPLETE');
   return existsSync(markerPath);
@@ -495,7 +526,8 @@ export function shutdown() {
     db = null;
   }
   
-  if (GCS_MODE) {
+  // Safely check GCS_MODE - may not be initialized
+  if (moduleInitialized && GCS_MODE) {
     const gcsStats = getUploadStats();
     console.log(`☁️ [ACS-Parquet] GCS shutdown - ${gcsStats.successfulUploads} files uploaded`);
   }

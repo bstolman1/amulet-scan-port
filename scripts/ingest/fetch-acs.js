@@ -178,16 +178,21 @@ async function detectMigrations() {
       
       if (res.data?.record_time) {
         migrations.push(id);
+        console.log(`   Found migration ${id} with record_time: ${res.data.record_time}`);
         id++;
       } else {
+        console.log(`   Migration ${id} returned no record_time, stopping detection`);
         break;
       }
-    } catch {
+    } catch (err) {
+      console.log(`   Migration ${id} check failed: ${err.message || 'unknown error'}`);
       break;
     }
   }
   
-  if (migrations.length === 0) throw new Error('No valid migrations found');
+  if (migrations.length === 0) {
+    throw new Error('No valid migrations found. Check SCAN_URL and network connectivity.');
+  }
   console.log(`📘 Found migrations: [${migrations.join(', ')}]`);
   return migrations;
 }
