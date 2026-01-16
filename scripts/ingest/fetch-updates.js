@@ -112,7 +112,10 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // Cross-platform path handling
-import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig } from './path-utils.js';
+import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
+// GCS preflight checks
+import { runPreflightChecks } from './gcs-preflight.js';
+
 const DATA_DIR = getBaseDataDir();
 const GCS_MODE = isGCSMode();
 
@@ -650,14 +653,27 @@ async function runIngestion() {
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   POLL_INTERVAL:", POLL_INTERVAL, "ms");
   
-  // GCS mode info
-  if (GCS_MODE) {
-    console.log("\n☁️  GCS Mode ENABLED:");
-    console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
-    console.log("   Local scratch: /tmp/ledger_raw");
-    console.log("   Files are uploaded to GCS immediately after creation");
-  } else {
-    console.log(`\n📂 Local Mode: Writing to ${DATA_DIR}`);
+  // ─────────────────────────────────────────────────────────────
+  // GCS PREFLIGHT CHECKS (fail fast if GCS is not properly configured)
+  // ─────────────────────────────────────────────────────────────
+  try {
+    validateGCSBucket();  // GCS_BUCKET is always required
+    
+    if (GCS_MODE) {
+      console.log("\n🔍 Running GCS preflight checks...");
+      runPreflightChecks({ quick: false, throwOnFail: true });
+      console.log("\n☁️  GCS Mode ENABLED:");
+      console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
+      console.log("   Local scratch: /tmp/ledger_raw");
+      console.log("   Files are uploaded to GCS immediately after creation");
+    } else {
+      console.log(`\n📂 Disk Mode (GCS_ENABLED=false): Writing to ${DATA_DIR}`);
+      console.log(`   GCS bucket configured: gs://${process.env.GCS_BUCKET}/`);
+      console.log("   Uploads disabled - writing to local disk only");
+    }
+  } catch (err) {
+    logFatal('gcs_preflight_failed', err);
+    throw err;
   }
   console.log("=".repeat(60));
   
