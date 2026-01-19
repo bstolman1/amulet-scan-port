@@ -132,28 +132,40 @@ export function ensureTmpDir() {
 
 /**
  * Check if GCS uploads are enabled.
- * GCS_BUCKET must always be set. GCS_ENABLED controls whether to upload.
+ * GCS mode is enabled when:
+ *   1. GCS_BUCKET is set, AND
+ *   2. GCS_ENABLED is not explicitly 'false'
+ * 
+ * This means GCS_BUCKET must be set to enable GCS mode - safe default is local disk.
  * 
  * @returns {boolean} - True if GCS uploads are enabled
  */
 export function isGCSMode() {
-  // GCS_ENABLED defaults to true, set to 'false' to write to disk only
+  // Require GCS_BUCKET to be set for GCS mode - no bucket means local mode
+  if (!process.env.GCS_BUCKET) {
+    return false;
+  }
+  // GCS_ENABLED defaults to true when bucket is set, set to 'false' to disable
   return process.env.GCS_ENABLED !== 'false';
 }
 
 /**
- * Validate that GCS_BUCKET is always set (required).
- * Call at startup to fail fast.
+ * Validate GCS_BUCKET is set when GCS mode is required.
+ * Only throws if GCS is explicitly enabled but bucket is missing.
  * 
- * @throws {Error} If GCS_BUCKET is not set
+ * @param {boolean} required - If true, throws when bucket is not set
+ * @throws {Error} If required=true and GCS_BUCKET is not set
  */
-export function validateGCSBucket() {
+export function validateGCSBucket(required = false) {
   if (!process.env.GCS_BUCKET) {
-    throw new Error(
-      'GCS_BUCKET environment variable is required but not set.\n' +
-      'Set GCS_BUCKET=your-bucket-name in your .env file.\n' +
-      'Use GCS_ENABLED=false to write to local disk instead of uploading.'
-    );
+    if (required || process.env.GCS_ENABLED === 'true') {
+      throw new Error(
+        'GCS_BUCKET environment variable is required but not set.\n' +
+        'Set GCS_BUCKET=your-bucket-name in your .env file.\n' +
+        'Or remove GCS_ENABLED=true to use local disk instead.'
+      );
+    }
+    return null;  // No bucket, local mode
   }
   return process.env.GCS_BUCKET;
 }
@@ -176,12 +188,12 @@ export function logPathConfig(moduleName = 'path-utils') {
   console.log(`📂 [${moduleName}] Base data dir: ${getBaseDataDir()}`);
   console.log(`📂 [${moduleName}] Raw dir: ${getRawDir()}`);
   console.log(`📂 [${moduleName}] Cursor dir: ${getCursorDir()}`);
-  console.log(`📂 [${moduleName}] GCS_BUCKET: ${process.env.GCS_BUCKET || '(NOT SET - REQUIRED)'}`);
-  console.log(`📂 [${moduleName}] GCS_ENABLED: ${process.env.GCS_ENABLED !== 'false' ? 'true (uploading to GCS)' : 'false (disk only)'}`);
+  console.log(`📂 [${moduleName}] GCS_BUCKET: ${process.env.GCS_BUCKET || '(not set - local mode)'}`);
+  console.log(`📂 [${moduleName}] GCS_ENABLED: ${process.env.GCS_ENABLED || '(not set)'}`);
   if (isGCSMode()) {
     console.log(`📂 [${moduleName}] Mode: Write to /tmp → upload to GCS → delete local`);
   } else {
-    console.log(`📂 [${moduleName}] Mode: Write to DATA_DIR (no GCS upload)`);
+    console.log(`📂 [${moduleName}] Mode: Write to DATA_DIR (local disk only)`);
   }
 }
 

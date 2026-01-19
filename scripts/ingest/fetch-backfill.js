@@ -1560,12 +1560,12 @@ async function runBackfill() {
   console.log("=".repeat(80));
   
   // ─────────────────────────────────────────────────────────────
-  // GCS PREFLIGHT CHECKS (fail fast if GCS is not properly configured)
+  // GCS / DISK MODE CONFIGURATION
   // ─────────────────────────────────────────────────────────────
   try {
-    validateGCSBucket();  // GCS_BUCKET is always required
-    
     if (GCS_MODE) {
+      // GCS mode requires bucket
+      validateGCSBucket(true);
       console.log("\n🔍 Running GCS preflight checks...");
       runPreflightChecks({ quick: false, throwOnFail: true });
       console.log("\n☁️  GCS Mode ENABLED:");
@@ -1573,9 +1573,13 @@ async function runBackfill() {
       console.log("   Local scratch: /tmp/ledger_raw");
       console.log("   Files are uploaded to GCS immediately after creation");
     } else {
-      console.log(`\n📂 Disk Mode (GCS_ENABLED=false): Writing to ${BASE_DATA_DIR}`);
-      console.log(`   GCS bucket configured: gs://${process.env.GCS_BUCKET}/`);
-      console.log("   Uploads disabled - writing to local disk only");
+      console.log(`\n📂 Disk Mode: Writing to ${BASE_DATA_DIR}`);
+      if (process.env.GCS_BUCKET) {
+        console.log(`   GCS bucket configured: gs://${process.env.GCS_BUCKET}/`);
+        console.log("   Uploads disabled (GCS_ENABLED=false) - writing to local disk only");
+      } else {
+        console.log("   GCS not configured - writing to local disk only");
+      }
     }
   } catch (err) {
     logFatal('gcs_preflight_failed', err);
