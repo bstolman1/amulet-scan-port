@@ -342,6 +342,7 @@ export function validateTemplates(templateCounts) {
 /**
  * Get partition path for ACS snapshots (by date, time, and migration)
  * Each snapshot gets its own partition to preserve historical snapshots
+ * Uses Hive-compliant key=value folder names for BigQuery compatibility
  */
 export function getACSPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
@@ -353,11 +354,12 @@ export function getACSPartitionPath(timestamp, migrationId = null) {
   const second = String(d.getSeconds()).padStart(2, '0');
   
   // Include full timestamp with seconds to keep each snapshot separate
-  // Format: acs/migration=X/year=YYYY/month=MM/day=DD/snapshot=HHMMSS
+  // Format: acs/migration=X/year=YYYY/month=MM/day=DD/snapshot_id=HHMMSS
+  // Uses snapshot_id= (not snapshot-) for BigQuery Hive partitioning compatibility
   const snapshotId = `${hour}${minute}${second}`;
   
   if (migrationId) {
-    return `acs/migration=${migrationId}/year=${year}/month=${month}/day=${day}/snapshot=${snapshotId}`;
+    return `acs/migration=${migrationId}/year=${year}/month=${month}/day=${day}/snapshot_id=${snapshotId}`;
   }
-  return `acs/year=${year}/month=${month}/day=${day}/snapshot=${snapshotId}`;
+  return `acs/year=${year}/month=${month}/day=${day}/snapshot_id=${snapshotId}`;
 }
