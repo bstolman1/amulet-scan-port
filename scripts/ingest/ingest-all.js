@@ -10,6 +10,7 @@
  *   node ingest-all.js --live-only  # Skip backfill, start live updates immediately
  *   node ingest-all.js --backfill-only  # Run backfill only, don't start live updates
  *   node ingest-all.js --keep-raw   # Also write to .pb.zst files (passed to both scripts)
+ *   node ingest-all.js --local      # Force local disk mode (ignore GCS_BUCKET)
  * 
  * Environment variables:
  *   GCS_BUCKET=bucket-name   - GCS bucket name (GCS enabled by default when set)
@@ -30,6 +31,12 @@ const args = process.argv.slice(2);
 const LIVE_ONLY = args.includes('--live-only') || args.includes('-l');
 const BACKFILL_ONLY = args.includes('--backfill-only') || args.includes('-b');
 const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
+const LOCAL_MODE = args.includes('--local') || args.includes('--local-disk');
+
+// If --local flag is set, force local disk mode by setting GCS_ENABLED=false
+if (LOCAL_MODE) {
+  process.env.GCS_ENABLED = 'false';
+}
 
 // Pass-through args for child scripts
 const passArgs = [];
@@ -79,8 +86,8 @@ async function main() {
   const gcsEnabled = gcsBucket && !gcsExplicitlyDisabled;
   
   console.log(`Mode: ${LIVE_ONLY ? 'LIVE ONLY' : BACKFILL_ONLY ? 'BACKFILL ONLY' : 'BACKFILL → LIVE'}`);
-  console.log(`GCS Bucket: ${gcsBucket || '(not set - local disk mode)'}`);
-  console.log(`GCS Mode: ${gcsEnabled ? '☁️ ENABLED' : '📂 LOCAL DISK'}`);
+  console.log(`GCS Bucket: ${gcsBucket || '(not set)'}`);
+  console.log(`GCS Mode: ${gcsEnabled ? '☁️ ENABLED' : '📂 LOCAL DISK'}${LOCAL_MODE ? ' (--local flag)' : ''}`);
   console.log(`Keep Raw: ${KEEP_RAW}`);
   console.log("═".repeat(80));
 
