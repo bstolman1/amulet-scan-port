@@ -143,17 +143,40 @@ function updatePeakMetrics() {
 }
 
 /**
+ * Create a fresh connection for the pool
+ */
+function createConnection(id) {
+  return {
+    id,
+    conn: db.connect(),
+    inUse: false,
+    createdAt: Date.now(),
+  };
+}
+
+/**
+ * Test if a connection is healthy by running a simple query
+ */
+function testConnection(connWrapper) {
+  return new Promise((resolve) => {
+    try {
+      connWrapper.conn.all('SELECT 1 AS ok', (err, rows) => {
+        resolve(!err && rows && rows.length > 0);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+/**
  * Initialize the connection pool
  */
 function initPool() {
   if (poolInitialized) return;
   
   for (let i = 0; i < POOL_SIZE; i++) {
-    pool.push({
-      id: i,
-      conn: db.connect(),
-      inUse: false,
-    });
+    pool.push(createConnection(i));
   }
   
   console.log(`🦆 DuckDB connection pool initialized: ${POOL_SIZE} connections`);
@@ -166,23 +189,35 @@ initPool();
 /**
  * Acquire a connection from the pool
  * Returns a promise that resolves with a connection wrapper
+ * Automatically tests and recreates stale connections
  */
-function acquireConnection() {
+async function acquireConnection() {
   const acquireStart = Date.now();
   
-  return new Promise((resolve, reject) => {
-    // Try to find an available connection
-    const available = pool.find(c => !c.inUse);
-    if (available) {
-      available.inUse = true;
-      updatePeakMetrics();
-      resolve({ connWrapper: available, waitMs: 0 });
-      return;
+  // Try to find an available connection
+  const available = pool.find(c => !c.inUse);
+  if (available) {
+    available.inUse = true;
+    updatePeakMetrics();
+    
+    // Test connection health - recreate if stale
+    const isHealthy = await testConnection(available);
+    if (!isHealthy) {
+      console.log(`🔄 Recreating stale DuckDB connection ${available.id}`);
+      try {
+        available.conn.close?.();
+      } catch { /* ignore close errors */ }
+      available.conn = db.connect();
+      available.createdAt = Date.now();
     }
     
-    // No available connection, add to waiting queue with timeout
+    return { connWrapper: available, waitMs: 0 };
+  }
+  
+  // No available connection, add to waiting queue with timeout
+  return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
-      const idx = waiting.findIndex(w => w.resolve === resolve);
+      const idx = waiting.findIndex(w => w.reject === reject);
       if (idx !== -1) {
         waiting.splice(idx, 1);
         poolMetrics.timeoutCount++;
@@ -191,9 +226,21 @@ function acquireConnection() {
     }, POOL_TIMEOUT_MS);
     
     waiting.push({ 
-      resolve: (connWrapper) => {
+      resolve: async (connWrapper) => {
         const waitMs = Date.now() - acquireStart;
         recordWaitTime(waitMs);
+        
+        // Test connection health - recreate if stale
+        const isHealthy = await testConnection(connWrapper);
+        if (!isHealthy) {
+          console.log(`🔄 Recreating stale DuckDB connection ${connWrapper.id}`);
+          try {
+            connWrapper.conn.close?.();
+          } catch { /* ignore close errors */ }
+          connWrapper.conn = db.connect();
+          connWrapper.createdAt = Date.now();
+        }
+        
         resolve({ connWrapper, waitMs });
       }, 
       reject, 
