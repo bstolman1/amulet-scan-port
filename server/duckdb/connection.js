@@ -333,76 +333,85 @@ function isRowReturningSql(sql) {
 
 /**
  * Execute a query using per-query connection (Windows)
- * Creates fresh db + connection, executes, closes both immediately.
- * Serialized via enqueueWindowsQuery().
+ *
+ * IMPORTANT:
+ * - Windows DuckDB uses exclusive file locking.
+ * - Re-opening the *database file* repeatedly (new Database(DB_FILE)) can race with async close/unlock
+ *   and trigger "file is being used by another process" even when the PID is this same Node process.
+ * - Instead, keep a single Database handle open for the process, and create/close a Connection per query.
+ * - Queries are serialized via enqueueWindowsQuery().
  */
+let windowsDbPromise = null;
+function getWindowsDb() {
+  if (IS_TEST) return Promise.resolve(new duckdb.Database(':memory:'));
+
+  if (!windowsDbPromise) {
+    windowsDbPromise = new Promise((resolve, reject) => {
+      const dbInstance = new duckdb.Database(DB_FILE, (openErr) => {
+        if (openErr) {
+          try { dbInstance?.close?.(); } catch {}
+          reject(openErr);
+          return;
+        }
+        resolve(dbInstance);
+      });
+    });
+  }
+  return windowsDbPromise;
+}
+
 function queryWindows(sql, params = []) {
   return enqueueWindowsQuery(async () => {
     const MAX_ATTEMPTS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_RETRIES || '3', 10);
-    const BASE_BACKOFF_MS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_BACKOFF_MS || '25', 10);
+    const BASE_BACKOFF_MS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_BACKOFF_MS || '50', 10);
 
-    const attemptOnce = () =>
-      new Promise((resolve, reject) => {
-        const queryStart = Date.now();
-        poolMetrics.totalQueries++;
+    const attemptOnce = async () => {
+      const queryStart = Date.now();
+      poolMetrics.totalQueries++;
 
-        let localDb;
-        let conn;
+      const windowsDb = await getWindowsDb();
 
-        // On Windows, opening the DB file can be async-initializing; use the constructor callback
-        // to avoid transient "Connection was never established" failures.
-        localDb = new duckdb.Database(DB_FILE, (openErr) => {
-          if (openErr) {
+      let conn;
+      try {
+        conn = windowsDb.connect();
+      } catch (connErr) {
+        poolMetrics.totalErrors++;
+        try { conn?.close?.(); } catch {}
+        throw connErr;
+      }
+
+      return await new Promise((resolve, reject) => {
+        const finish = (err, rows = []) => {
+          const queryMs = Date.now() - queryStart;
+          recordQueryTime(queryMs);
+
+          try { conn.close(); } catch { /* ignore */ }
+
+          if (err) {
             poolMetrics.totalErrors++;
-            // Ensure we don't leak a file handle/lock on failed open attempts
-            try { localDb?.close?.(); } catch {}
-            reject(openErr);
-            return;
+            reject(err);
+          } else {
+            resolve(rows);
           }
+        };
 
-          try {
-            conn = localDb.connect();
-          } catch (connErr) {
-            poolMetrics.totalErrors++;
-            try { conn?.close?.(); } catch {}
-            try { localDb?.close?.(); } catch {}
-            reject(connErr);
-            return;
+        try {
+          const expectsRows = isRowReturningSql(sql);
+          const hasParams = Array.isArray(params) && params.length > 0;
+
+          if (expectsRows) {
+            if (hasParams) conn.all(sql, params, finish);
+            else conn.all(sql, finish);
+          } else {
+            // DDL/DML: use run() which is more stable than all() on Windows.
+            if (hasParams) conn.run(sql, params, (err) => finish(err, []));
+            else conn.run(sql, (err) => finish(err, []));
           }
-
-          const finish = (err, rows = []) => {
-            const queryMs = Date.now() - queryStart;
-            recordQueryTime(queryMs);
-
-            // Always close connection and db
-            try { conn.close(); } catch { /* ignore */ }
-            try { localDb.close(); } catch { /* ignore */ }
-
-            if (err) {
-              poolMetrics.totalErrors++;
-              reject(err);
-            } else {
-              resolve(rows);
-            }
-          };
-
-          try {
-            const expectsRows = isRowReturningSql(sql);
-            const hasParams = Array.isArray(params) && params.length > 0;
-
-            if (expectsRows) {
-              if (hasParams) conn.all(sql, params, finish);
-              else conn.all(sql, finish);
-            } else {
-              // DDL/DML: use run() which is more stable than all() on Windows.
-              if (hasParams) conn.run(sql, params, (err) => finish(err, []));
-              else conn.run(sql, (err) => finish(err, []));
-            }
-          } catch (err) {
-            finish(err, []);
-          }
-        });
+        } catch (err) {
+          finish(err, []);
+        }
       });
+    };
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
@@ -412,7 +421,6 @@ function queryWindows(sql, params = []) {
         const isTransientWindowsConn =
           msg.includes('Connection was never established') ||
           msg.includes('DUCKDB_NODEJS_ERROR') ||
-          // Windows file-lock timing: close() can be async; rapid reopen may fail transiently
           msg.includes('Cannot open file') ||
           msg.includes('being used by another process') ||
           msg.includes('The process cannot access the file');
