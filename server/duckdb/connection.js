@@ -301,30 +301,69 @@ function releaseConnection(connWrapper) {
 }
 
 /**
+ * Windows-only query serialization
+ *
+ * Even within a single process, opening/closing the DuckDB database file concurrently on Windows
+ * can trigger transient "connection was never established" errors. We serialize all queries.
+ */
+let windowsQueryChain = Promise.resolve();
+
+function enqueueWindowsQuery(task) {
+  const run = windowsQueryChain.then(task, task);
+  // Keep the chain alive even if a query fails
+  windowsQueryChain = run.catch(() => {});
+  return run;
+}
+
+/**
  * Execute a query using per-query connection (Windows)
- * Creates fresh db + connection, executes, closes both immediately
+ * Creates fresh db + connection, executes, closes both immediately.
+ * Serialized via enqueueWindowsQuery().
  */
 function queryWindows(sql, params = []) {
-  const queryStart = Date.now();
-  poolMetrics.totalQueries++;
-  
-  return new Promise((resolve, reject) => {
-    const localDb = new duckdb.Database(DB_FILE);
-    const conn = localDb.connect();
-    
-    conn.all(sql, ...params, (err, rows) => {
-      const queryMs = Date.now() - queryStart;
-      recordQueryTime(queryMs);
-      
-      // Always close connection and db
-      try { conn.close(); } catch { /* ignore */ }
-      try { localDb.close(); } catch { /* ignore */ }
-      
-      if (err) {
+  return enqueueWindowsQuery(() => {
+    const queryStart = Date.now();
+    poolMetrics.totalQueries++;
+
+    return new Promise((resolve, reject) => {
+      let localDb;
+      let conn;
+
+      try {
+        localDb = new duckdb.Database(DB_FILE);
+        conn = localDb.connect();
+      } catch (err) {
         poolMetrics.totalErrors++;
+        try { conn?.close?.(); } catch {}
+        try { localDb?.close?.(); } catch {}
         reject(err);
-      } else {
-        resolve(rows);
+        return;
+      }
+
+      const cb = (err, rows) => {
+        const queryMs = Date.now() - queryStart;
+        recordQueryTime(queryMs);
+
+        // Always close connection and db
+        try { conn.close(); } catch { /* ignore */ }
+        try { localDb.close(); } catch { /* ignore */ }
+
+        if (err) {
+          poolMetrics.totalErrors++;
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      };
+
+      try {
+        if (Array.isArray(params) && params.length > 0) {
+          conn.all(sql, params, cb);
+        } else {
+          conn.all(sql, cb);
+        }
+      } catch (err) {
+        cb(err);
       }
     });
   });
@@ -335,21 +374,27 @@ function queryWindows(sql, params = []) {
  * Automatically acquires and releases connections
  */
 async function queryLinux(sql, params = []) {
-  const { connWrapper, waitMs } = await acquireConnection();
+  const { connWrapper } = await acquireConnection();
   const queryStart = Date.now();
-  
+
   try {
     poolMetrics.totalQueries++;
-    
+
     return await new Promise((resolve, reject) => {
-      connWrapper.conn.all(sql, ...params, (err, rows) => {
+      const cb = (err, rows) => {
         if (err) {
           poolMetrics.totalErrors++;
           reject(err);
         } else {
           resolve(rows);
         }
-      });
+      };
+
+      if (Array.isArray(params) && params.length > 0) {
+        connWrapper.conn.all(sql, params, cb);
+      } else {
+        connWrapper.conn.all(sql, cb);
+      }
     });
   } finally {
     const queryMs = Date.now() - queryStart;
@@ -357,7 +402,6 @@ async function queryLinux(sql, params = []) {
     releaseConnection(connWrapper);
   }
 }
-
 /**
  * Execute a query - automatically chooses strategy based on platform
  */
