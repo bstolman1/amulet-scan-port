@@ -1,9 +1,19 @@
 import duckdb from 'duckdb';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 // Use process.cwd() for Vitest compatibility (fileURLToPath breaks under Vite SSR)
 const __dirname = path.join(process.cwd(), 'server', 'duckdb');
+
+// ============================================================
+// PLATFORM DETECTION
+// Windows requires per-query connections due to exclusive file locking
+// ============================================================
+const IS_WINDOWS = os.platform() === 'win32';
+if (IS_WINDOWS) {
+  console.log('🪟 Windows detected - using per-query DuckDB connections');
+}
 
 // ============================================================
 // TEST MODE DETECTION
@@ -41,15 +51,16 @@ const DB_FILE = IS_TEST
 console.log(`🦆 DuckDB database: ${DB_FILE}`);
 
 // ============================================================
-// CONNECTION POOL
-// DuckDB supports multiple connections from the same Database instance.
-// Each connection has its own transaction context, allowing safe concurrent queries.
+// CONNECTION STRATEGY
+// Linux: Connection pool (shared Database instance, multiple connections)
+// Windows: Per-query connections (create db + conn, execute, close both)
 // ============================================================
 
 const POOL_SIZE = IS_TEST ? 1 : parseInt(process.env.DUCKDB_POOL_SIZE || '4', 10);
 const POOL_TIMEOUT_MS = parseInt(process.env.DUCKDB_POOL_TIMEOUT_MS || '30000', 10);
 
-const db = new duckdb.Database(DB_FILE);
+// Only create persistent db instance on Linux
+const db = IS_WINDOWS ? null : new duckdb.Database(DB_FILE);
 
 // Pool of connections
 const pool = [];
@@ -143,9 +154,12 @@ function updatePeakMetrics() {
 }
 
 /**
- * Create a fresh connection for the pool
+ * Create a fresh connection for the pool (Linux only)
  */
 function createConnection(id) {
+  if (IS_WINDOWS) {
+    throw new Error('createConnection() should not be called on Windows');
+  }
   return {
     id,
     conn: db.connect(),
@@ -155,7 +169,7 @@ function createConnection(id) {
 }
 
 /**
- * Test if a connection is healthy by running a simple query
+ * Test if a connection is healthy by running a simple query (Linux only)
  */
 function testConnection(connWrapper) {
   return new Promise((resolve) => {
@@ -170,9 +184,15 @@ function testConnection(connWrapper) {
 }
 
 /**
- * Initialize the connection pool
+ * Initialize the connection pool (Linux only)
  */
 function initPool() {
+  if (IS_WINDOWS) {
+    console.log(`🦆 DuckDB per-query mode (Windows) - no connection pool`);
+    poolInitialized = true;
+    return;
+  }
+  
   if (poolInitialized) return;
   
   for (let i = 0; i < POOL_SIZE; i++) {
@@ -187,11 +207,15 @@ function initPool() {
 initPool();
 
 /**
- * Acquire a connection from the pool
+ * Acquire a connection from the pool (Linux only)
  * Returns a promise that resolves with a connection wrapper
  * Automatically tests and recreates stale connections
  */
 async function acquireConnection() {
+  if (IS_WINDOWS) {
+    throw new Error('acquireConnection() should not be called on Windows');
+  }
+  
   const acquireStart = Date.now();
   
   // Try to find an available connection
@@ -253,9 +277,11 @@ async function acquireConnection() {
 }
 
 /**
- * Release a connection back to the pool
+ * Release a connection back to the pool (Linux only)
  */
 function releaseConnection(connWrapper) {
+  if (IS_WINDOWS) return; // No-op on Windows
+  
   connWrapper.inUse = false;
   
   // If there are waiting requests, give them this connection
@@ -268,10 +294,40 @@ function releaseConnection(connWrapper) {
 }
 
 /**
- * Execute a query using a pooled connection
+ * Execute a query using per-query connection (Windows)
+ * Creates fresh db + connection, executes, closes both immediately
+ */
+function queryWindows(sql, params = []) {
+  const queryStart = Date.now();
+  poolMetrics.totalQueries++;
+  
+  return new Promise((resolve, reject) => {
+    const localDb = new duckdb.Database(DB_FILE);
+    const conn = localDb.connect();
+    
+    conn.all(sql, ...params, (err, rows) => {
+      const queryMs = Date.now() - queryStart;
+      recordQueryTime(queryMs);
+      
+      // Always close connection and db
+      try { conn.close(); } catch { /* ignore */ }
+      try { localDb.close(); } catch { /* ignore */ }
+      
+      if (err) {
+        poolMetrics.totalErrors++;
+        reject(err);
+      } else {
+        resolve(rows);
+      }
+    });
+  });
+}
+
+/**
+ * Execute a query using a pooled connection (Linux)
  * Automatically acquires and releases connections
  */
-export async function query(sql, params = []) {
+async function queryLinux(sql, params = []) {
   const { connWrapper, waitMs } = await acquireConnection();
   const queryStart = Date.now();
   
@@ -293,6 +349,16 @@ export async function query(sql, params = []) {
     recordQueryTime(queryMs);
     releaseConnection(connWrapper);
   }
+}
+
+/**
+ * Execute a query - automatically chooses strategy based on platform
+ */
+export async function query(sql, params = []) {
+  if (IS_WINDOWS) {
+    return queryWindows(sql, params);
+  }
+  return queryLinux(sql, params);
 }
 
 /**
