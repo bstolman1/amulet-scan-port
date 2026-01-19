@@ -5,7 +5,10 @@
  * Runs fetch-acs.js every 3 hours starting at 00:00 UTC
  * Schedule: 0 0,3,6,9,12,15,18,21 * * *
  * 
- * Usage: node acs-scheduler.js
+ * Usage: 
+ *   node acs-scheduler.js              # Normal mode
+ *   node acs-scheduler.js --run-now    # Run immediately then schedule
+ *   node acs-scheduler.js --local      # Force local disk mode (ignore GCS_BUCKET)
  */
 
 import cron from 'node-cron';
@@ -84,8 +87,16 @@ console.log(`
 ╚════════════════════════════════════════════════════════════════════════════════╝
 `);
 
-// Parse arguments for immediate run
+// Parse arguments for immediate run and local mode
 const args = process.argv.slice(2);
+const LOCAL_MODE = args.includes('--local') || args.includes('--local-disk');
+
+// If --local flag is set, force local disk mode
+if (LOCAL_MODE) {
+  process.env.GCS_ENABLED = 'false';
+  console.log('📂 Local disk mode enabled (--local flag)\n');
+}
+
 if (args.includes('--run-now') || args.includes('-r')) {
   console.log('🔄 Running immediate ACS snapshot before starting scheduler...\n');
   runACSSnapshot();
