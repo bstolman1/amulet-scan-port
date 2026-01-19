@@ -316,6 +316,22 @@ function enqueueWindowsQuery(task) {
 }
 
 /**
+ * Determine whether a SQL statement is expected to return rows.
+ * DuckDB's Node bindings are more reliable when using conn.run() for DDL/DML.
+ */
+function isRowReturningSql(sql) {
+  const s = String(sql || '').trim().toUpperCase();
+  return (
+    s.startsWith('SELECT') ||
+    s.startsWith('WITH') ||
+    s.startsWith('PRAGMA') ||
+    s.startsWith('SHOW') ||
+    s.startsWith('DESCRIBE') ||
+    s.startsWith('EXPLAIN')
+  );
+}
+
+/**
  * Execute a query using per-query connection (Windows)
  * Creates fresh db + connection, executes, closes both immediately.
  * Serialized via enqueueWindowsQuery().
@@ -325,57 +341,77 @@ function queryWindows(sql, params = []) {
     const MAX_ATTEMPTS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_RETRIES || '3', 10);
     const BASE_BACKOFF_MS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_BACKOFF_MS || '25', 10);
 
-    const attemptOnce = () => new Promise((resolve, reject) => {
-      const queryStart = Date.now();
-      poolMetrics.totalQueries++;
+    const attemptOnce = () =>
+      new Promise((resolve, reject) => {
+        const queryStart = Date.now();
+        poolMetrics.totalQueries++;
 
-      let localDb;
-      let conn;
+        let localDb;
+        let conn;
 
-      try {
-        localDb = new duckdb.Database(DB_FILE);
-        conn = localDb.connect();
-      } catch (err) {
-        poolMetrics.totalErrors++;
-        try { conn?.close?.(); } catch {}
-        try { localDb?.close?.(); } catch {}
-        reject(err);
-        return;
-      }
-
-      const cb = (err, rows) => {
-        const queryMs = Date.now() - queryStart;
-        recordQueryTime(queryMs);
-
-        // Always close connection and db
-        try { conn.close(); } catch { /* ignore */ }
-        try { localDb.close(); } catch { /* ignore */ }
-
-        if (err) {
+        try {
+          localDb = new duckdb.Database(DB_FILE);
+          conn = localDb.connect();
+        } catch (err) {
           poolMetrics.totalErrors++;
+          try {
+            conn?.close?.();
+          } catch {}
+          try {
+            localDb?.close?.();
+          } catch {}
           reject(err);
-        } else {
-          resolve(rows);
+          return;
         }
-      };
 
-      try {
-        if (Array.isArray(params) && params.length > 0) {
-          conn.all(sql, params, cb);
-        } else {
-          conn.all(sql, cb);
+        const finish = (err, rows = []) => {
+          const queryMs = Date.now() - queryStart;
+          recordQueryTime(queryMs);
+
+          // Always close connection and db
+          try {
+            conn.close();
+          } catch {
+            /* ignore */
+          }
+          try {
+            localDb.close();
+          } catch {
+            /* ignore */
+          }
+
+          if (err) {
+            poolMetrics.totalErrors++;
+            reject(err);
+          } else {
+            resolve(rows);
+          }
+        };
+
+        try {
+          const expectsRows = isRowReturningSql(sql);
+          const hasParams = Array.isArray(params) && params.length > 0;
+
+          if (expectsRows) {
+            if (hasParams) conn.all(sql, params, finish);
+            else conn.all(sql, finish);
+          } else {
+            // DDL/DML: use run() which is more stable than all() on Windows.
+            if (hasParams) conn.run(sql, params, (err) => finish(err, []));
+            else conn.run(sql, (err) => finish(err, []));
+          }
+        } catch (err) {
+          finish(err, []);
         }
-      } catch (err) {
-        cb(err);
-      }
-    });
+      });
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         return await attemptOnce();
       } catch (err) {
         const msg = String(err?.message || err);
-        const isTransientWindowsConn = msg.includes('Connection was never established') || msg.includes('DUCKDB_NODEJS_ERROR');
+        const isTransientWindowsConn =
+          msg.includes('Connection was never established') || msg.includes('DUCKDB_NODEJS_ERROR');
         if (!isTransientWindowsConn || attempt === MAX_ATTEMPTS) throw err;
 
         const backoff = BASE_BACKOFF_MS * attempt;
@@ -397,7 +433,7 @@ async function queryLinux(sql, params = []) {
     poolMetrics.totalQueries++;
 
     return await new Promise((resolve, reject) => {
-      const cb = (err, rows) => {
+      const finish = (err, rows = []) => {
         if (err) {
           poolMetrics.totalErrors++;
           reject(err);
@@ -406,10 +442,15 @@ async function queryLinux(sql, params = []) {
         }
       };
 
-      if (Array.isArray(params) && params.length > 0) {
-        connWrapper.conn.all(sql, params, cb);
+      const expectsRows = isRowReturningSql(sql);
+      const hasParams = Array.isArray(params) && params.length > 0;
+
+      if (expectsRows) {
+        if (hasParams) connWrapper.conn.all(sql, params, finish);
+        else connWrapper.conn.all(sql, finish);
       } else {
-        connWrapper.conn.all(sql, cb);
+        if (hasParams) connWrapper.conn.run(sql, params, (err) => finish(err, []));
+        else connWrapper.conn.run(sql, (err) => finish(err, []));
       }
     });
   } finally {
