@@ -31,8 +31,17 @@ const __dirname = path.join(process.cwd(), 'server');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+const IS_WINDOWS = process.platform === 'win32';
+
 // Engine enabled flag - set to true to use the new warehouse engine
-const ENGINE_ENABLED = process.env.ENGINE_ENABLED === 'true';
+// On Windows, default to disabled (DuckDB file locking constraints) unless explicitly forced.
+const ENGINE_ENABLED =
+  process.env.ENGINE_ENABLED === 'true' &&
+  (!IS_WINDOWS || process.env.ENGINE_FORCE_WINDOWS === 'true');
+
+if (IS_WINDOWS && process.env.ENGINE_ENABLED === 'true' && !ENGINE_ENABLED) {
+  console.warn('⚠️ ENGINE_ENABLED=true ignored on Windows (set ENGINE_FORCE_WINDOWS=true to override)');
+}
 
 app.use(cors());
 app.use(express.json());
