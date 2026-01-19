@@ -101,19 +101,25 @@ function sleep(ms) {
 
 /**
  * Initialize GCS configuration.
- * GCS_BUCKET is always required. Call this at startup to fail fast.
+ * Only required when GCS mode is enabled.
  * 
- * @throws {Error} If GCS_BUCKET is not set
+ * @param {boolean} required - If true, throws when bucket is not set
+ * @returns {string|null} Bucket name or null if not configured
+ * @throws {Error} If required=true and GCS_BUCKET is not set
  */
-export function initGCS() {
+export function initGCS(required = false) {
   GCS_BUCKET = process.env.GCS_BUCKET;
   
   if (!GCS_BUCKET) {
-    throw new Error(
-      'GCS_BUCKET environment variable is required but not set.\n' +
-      'Set GCS_BUCKET=your-bucket-name in your .env file.\n' +
-      'Use GCS_ENABLED=false to write to local disk instead of uploading.'
-    );
+    if (required || process.env.GCS_ENABLED === 'true') {
+      throw new Error(
+        'GCS_BUCKET environment variable is required but not set.\n' +
+        'Set GCS_BUCKET=your-bucket-name in your .env file.\n' +
+        'Or remove GCS_ENABLED=true to use local disk instead.'
+      );
+    }
+    console.log(`📂 [gcs-upload] GCS_BUCKET not set - using local disk mode`);
+    return null;
   }
   
   const gcsEnabled = isGCSEnabled();
@@ -134,11 +140,15 @@ export function initGCS() {
 
 /**
  * Check if GCS uploads are enabled.
- * GCS_ENABLED defaults to true; set to 'false' to write to disk only.
+ * GCS is enabled when GCS_BUCKET is set AND GCS_ENABLED is not 'false'.
  * 
  * @returns {boolean} True if GCS uploads should happen
  */
 export function isGCSEnabled() {
+  // Require GCS_BUCKET to be set for GCS mode
+  if (!process.env.GCS_BUCKET) {
+    return false;
+  }
   return process.env.GCS_ENABLED !== 'false';
 }
 
