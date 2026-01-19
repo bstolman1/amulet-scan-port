@@ -178,7 +178,10 @@ export function cleanupOldSnapshots(migrationId, keepCount = MAX_SNAPSHOTS_PER_M
           const dayPath = join(monthPath, day);
           if (!statSync(dayPath).isDirectory()) continue;
           
-          const snapshotDirs = readdirSync(dayPath).filter(f => f.startsWith('snapshot='));
+          // Support both legacy snapshot= and new snapshot_id= formats
+          const snapshotDirs = readdirSync(dayPath).filter(f => 
+            f.startsWith('snapshot_id=') || f.startsWith('snapshot=')
+          );
           
           for (const snapshot of snapshotDirs) {
             const snapshotPath = join(dayPath, snapshot);
@@ -187,7 +190,8 @@ export function cleanupOldSnapshots(migrationId, keepCount = MAX_SNAPSHOTS_PER_M
             const y = year.replace('year=', '');
             const m = month.replace('month=', '');
             const d = day.replace('day=', '');
-            const s = snapshot.replace('snapshot=', '');
+            // Handle both snapshot_id= and legacy snapshot= formats
+            const s = snapshot.replace('snapshot_id=', '').replace('snapshot=', '');
             const hh = s.substring(0, 2);
             const mm = s.substring(2, 4);
             const ss = s.substring(4, 6) || '00';
