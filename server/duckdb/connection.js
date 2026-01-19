@@ -349,60 +349,57 @@ function queryWindows(sql, params = []) {
         let localDb;
         let conn;
 
-        try {
-          localDb = new duckdb.Database(DB_FILE);
-          conn = localDb.connect();
-        } catch (err) {
-          poolMetrics.totalErrors++;
-          try {
-            conn?.close?.();
-          } catch {}
-          try {
-            localDb?.close?.();
-          } catch {}
-          reject(err);
-          return;
-        }
-
-        const finish = (err, rows = []) => {
-          const queryMs = Date.now() - queryStart;
-          recordQueryTime(queryMs);
-
-          // Always close connection and db
-          try {
-            conn.close();
-          } catch {
-            /* ignore */
-          }
-          try {
-            localDb.close();
-          } catch {
-            /* ignore */
-          }
-
-          if (err) {
+        // On Windows, opening the DB file can be async-initializing; use the constructor callback
+        // to avoid transient "Connection was never established" failures.
+        localDb = new duckdb.Database(DB_FILE, (openErr) => {
+          if (openErr) {
             poolMetrics.totalErrors++;
-            reject(err);
-          } else {
-            resolve(rows);
+            reject(openErr);
+            return;
           }
-        };
 
-        try {
-          const expectsRows = isRowReturningSql(sql);
-          const hasParams = Array.isArray(params) && params.length > 0;
-
-          if (expectsRows) {
-            if (hasParams) conn.all(sql, params, finish);
-            else conn.all(sql, finish);
-          } else {
-            // DDL/DML: use run() which is more stable than all() on Windows.
-            if (hasParams) conn.run(sql, params, (err) => finish(err, []));
-            else conn.run(sql, (err) => finish(err, []));
+          try {
+            conn = localDb.connect();
+          } catch (connErr) {
+            poolMetrics.totalErrors++;
+            try { conn?.close?.(); } catch {}
+            try { localDb?.close?.(); } catch {}
+            reject(connErr);
+            return;
           }
-        } catch (err) {
-          finish(err, []);
-        }
+
+          const finish = (err, rows = []) => {
+            const queryMs = Date.now() - queryStart;
+            recordQueryTime(queryMs);
+
+            // Always close connection and db
+            try { conn.close(); } catch { /* ignore */ }
+            try { localDb.close(); } catch { /* ignore */ }
+
+            if (err) {
+              poolMetrics.totalErrors++;
+              reject(err);
+            } else {
+              resolve(rows);
+            }
+          };
+
+          try {
+            const expectsRows = isRowReturningSql(sql);
+            const hasParams = Array.isArray(params) && params.length > 0;
+
+            if (expectsRows) {
+              if (hasParams) conn.all(sql, params, finish);
+              else conn.all(sql, finish);
+            } else {
+              // DDL/DML: use run() which is more stable than all() on Windows.
+              if (hasParams) conn.run(sql, params, (err) => finish(err, []));
+              else conn.run(sql, (err) => finish(err, []));
+            }
+          } catch (err) {
+            finish(err, []);
+          }
+        });
       });
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
