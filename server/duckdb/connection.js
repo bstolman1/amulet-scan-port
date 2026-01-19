@@ -321,11 +321,14 @@ function enqueueWindowsQuery(task) {
  * Serialized via enqueueWindowsQuery().
  */
 function queryWindows(sql, params = []) {
-  return enqueueWindowsQuery(() => {
-    const queryStart = Date.now();
-    poolMetrics.totalQueries++;
+  return enqueueWindowsQuery(async () => {
+    const MAX_ATTEMPTS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_RETRIES || '3', 10);
+    const BASE_BACKOFF_MS = parseInt(process.env.DUCKDB_WINDOWS_QUERY_BACKOFF_MS || '25', 10);
 
-    return new Promise((resolve, reject) => {
+    const attemptOnce = () => new Promise((resolve, reject) => {
+      const queryStart = Date.now();
+      poolMetrics.totalQueries++;
+
       let localDb;
       let conn;
 
@@ -366,6 +369,19 @@ function queryWindows(sql, params = []) {
         cb(err);
       }
     });
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await attemptOnce();
+      } catch (err) {
+        const msg = String(err?.message || err);
+        const isTransientWindowsConn = msg.includes('Connection was never established') || msg.includes('DUCKDB_NODEJS_ERROR');
+        if (!isTransientWindowsConn || attempt === MAX_ATTEMPTS) throw err;
+
+        const backoff = BASE_BACKOFF_MS * attempt;
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
   });
 }
 
