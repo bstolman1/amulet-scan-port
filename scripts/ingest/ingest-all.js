@@ -12,8 +12,8 @@
  *   node ingest-all.js --keep-raw   # Also write to .pb.zst files (passed to both scripts)
  * 
  * Environment variables:
- *   GCS_ENABLED=true/false   - Enable/disable GCS uploads
- *   GCS_BUCKET=bucket-name   - GCS bucket name (required)
+ *   GCS_BUCKET=bucket-name   - GCS bucket name (GCS enabled by default when set)
+ *   GCS_ENABLED=false        - Set to disable GCS even when bucket is set
  *   SCAN_URL=...             - Canton Scan API URL
  *   BATCH_SIZE=1000          - API batch size (max 1000)
  */
@@ -74,9 +74,13 @@ async function main() {
   console.log("\n" + "═".repeat(80));
   console.log("📦 CANTON LEDGER UNIFIED INGESTION");
   console.log("═".repeat(80));
+  const gcsBucket = process.env.GCS_BUCKET;
+  const gcsExplicitlyDisabled = process.env.GCS_ENABLED === 'false';
+  const gcsEnabled = gcsBucket && !gcsExplicitlyDisabled;
+  
   console.log(`Mode: ${LIVE_ONLY ? 'LIVE ONLY' : BACKFILL_ONLY ? 'BACKFILL ONLY' : 'BACKFILL → LIVE'}`);
-  console.log(`GCS Enabled: ${process.env.GCS_ENABLED || 'not set'}`);
-  console.log(`GCS Bucket: ${process.env.GCS_BUCKET || 'not set'}`);
+  console.log(`GCS Bucket: ${gcsBucket || '(not set - local disk mode)'}`);
+  console.log(`GCS Mode: ${gcsEnabled ? '☁️ ENABLED' : '📂 LOCAL DISK'}`);
   console.log(`Keep Raw: ${KEEP_RAW}`);
   console.log("═".repeat(80));
 
