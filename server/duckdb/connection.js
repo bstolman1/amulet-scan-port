@@ -354,6 +354,8 @@ function queryWindows(sql, params = []) {
         localDb = new duckdb.Database(DB_FILE, (openErr) => {
           if (openErr) {
             poolMetrics.totalErrors++;
+            // Ensure we don't leak a file handle/lock on failed open attempts
+            try { localDb?.close?.(); } catch {}
             reject(openErr);
             return;
           }
@@ -408,7 +410,12 @@ function queryWindows(sql, params = []) {
       } catch (err) {
         const msg = String(err?.message || err);
         const isTransientWindowsConn =
-          msg.includes('Connection was never established') || msg.includes('DUCKDB_NODEJS_ERROR');
+          msg.includes('Connection was never established') ||
+          msg.includes('DUCKDB_NODEJS_ERROR') ||
+          // Windows file-lock timing: close() can be async; rapid reopen may fail transiently
+          msg.includes('Cannot open file') ||
+          msg.includes('being used by another process') ||
+          msg.includes('The process cannot access the file');
         if (!isTransientWindowsConn || attempt === MAX_ATTEMPTS) throw err;
 
         const backoff = BASE_BACKOFF_MS * attempt;
