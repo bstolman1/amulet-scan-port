@@ -1108,7 +1108,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   console.log(`   Decode workers (auto-tuned): ${dynamicDecodeWorkers} (min=${MIN_DECODE_WORKERS}, max=${MAX_DECODE_WORKERS})`);
   
   // CRITICAL FIX: Use AtomicCursor for transactional cursor management
-  const atomicCursor = new AtomicCursor(CURSOR_DIR, migrationId, synchronizerId, shardIndex);
+  const atomicCursor = new AtomicCursor(migrationId, synchronizerId, shardIndex);
   
   // Load existing cursor state
   let cursorState = atomicCursor.load();
