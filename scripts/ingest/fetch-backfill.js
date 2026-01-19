@@ -26,8 +26,17 @@
  * - Multithreaded decode via Piscina worker pool
  */
 
+// CRITICAL: Load .env BEFORE any other imports that depend on env vars
+// Note: ESM hoists static imports, so we use a sync approach here
+// and rely on write-parquet.js using dynamic env checks, not module-level constants
 import dotenv from 'dotenv';
-dotenv.config();
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Get the directory of this script to find .env reliably
+const __filename_early = fileURLToPath(import.meta.url);
+const __dirname_early = dirname(__filename_early);
+dotenv.config({ path: join(__dirname_early, '.env') });
 
 import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
@@ -1563,6 +1572,11 @@ async function runBackfill() {
   // GCS / DISK MODE CONFIGURATION
   // ─────────────────────────────────────────────────────────────
   try {
+    // Initialize parquet writer with current env vars (after dotenv loaded)
+    if (USE_PARQUET) {
+      parquetWriter.initParquetWriter();
+    }
+    
     if (GCS_MODE) {
       // GCS mode requires bucket
       validateGCSBucket(true);
