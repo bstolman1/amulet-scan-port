@@ -16,24 +16,36 @@ const AGGREGATION_TTL = 30 * 60 * 1000; // 30 minutes
 
 function findACSFiles() {
   try {
-    if (!fs.existsSync(ACS_DATA_PATH)) return [];
+    if (!fs.existsSync(ACS_DATA_PATH)) return { jsonl: [], parquet: [] };
     const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
-    return allFiles
+    const jsonl = allFiles
       .map(f => String(f))
       .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'))
       .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/'));
+    const parquet = allFiles
+      .map(f => String(f))
+      .filter(f => f.endsWith('.parquet'))
+      .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/'));
+    return { jsonl, parquet };
   } catch {
-    return [];
+    return { jsonl: [], parquet: [] };
   }
 }
 
 function getACSSource() {
-  const files = findACSFiles();
-  if (files.length === 0) {
+  const { jsonl, parquet } = findACSFiles();
+
+  // Prefer Parquet if available
+  if (parquet.length > 0) {
+    const acsPath = ACS_DATA_PATH.replace(/\\/g, '/');
+    return `read_parquet('${acsPath}/**/*.parquet', union_by_name=true)`;
+  }
+
+  if (jsonl.length === 0) {
     return `(SELECT NULL as placeholder WHERE false)`;
   }
 
-  const uniqueFiles = [...new Set(files)];
+  const uniqueFiles = [...new Set(jsonl)];
 
   if (uniqueFiles.length <= 100) {
     const selects = uniqueFiles.map(
