@@ -2,6 +2,11 @@ import duckdb from 'duckdb';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import {
+  normalizeCrossPlatform,
+  WIN_DEFAULT as WIN_DEFAULT_DATA_DIR,
+  LINUX_DEFAULT as LINUX_DEFAULT_DATA_DIR,
+} from '../../scripts/ingest/path-utils.js';
 
 // Use process.cwd() for Vitest compatibility (fileURLToPath breaks under Vite SSR)
 const __dirname = path.join(process.cwd(), 'server', 'duckdb');
@@ -27,16 +32,18 @@ const TEST_FIXTURES_PATH = path.join(process.cwd(), 'data', 'test-fixtures').rep
 const REPO_DATA_DIR = path.join(__dirname, '../../data');
 const repoRawDir = path.join(REPO_DATA_DIR, 'raw');
 
-// DATA_DIR should point to the base directory
-// Default Windows path: C:\ledger_raw
-const WIN_DEFAULT_DATA_DIR = 'C:\\ledger_raw';
+// DATA_DIR should point to the base directory (the parent of /raw)
+const DATA_DIR_ENV = process.env.DATA_DIR;
+const PLATFORM_DEFAULT_DATA_DIR = IS_WINDOWS ? WIN_DEFAULT_DATA_DIR : LINUX_DEFAULT_DATA_DIR;
 
-// Final selection order:
-// 1) In test mode, use test-fixtures (skip raw data scan entirely)
-// 2) process.env.DATA_DIR (explicit override)
-// 3) repo-local data/ (if present)
-// 4) Windows default path
-const BASE_DATA_DIR = process.env.DATA_DIR || (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : WIN_DEFAULT_DATA_DIR);
+// Selection order:
+// 1) If DATA_DIR env is set, normalize it cross-platform (prevents "/home/..." on Windows and "C:\\..." on Linux)
+// 2) Otherwise, prefer repo-local data/ if present
+// 3) Otherwise, use platform default
+const BASE_DATA_DIR = DATA_DIR_ENV
+  ? normalizeCrossPlatform(DATA_DIR_ENV, LINUX_DEFAULT_DATA_DIR, WIN_DEFAULT_DATA_DIR)
+  : (fs.existsSync(repoRawDir) ? REPO_DATA_DIR : PLATFORM_DEFAULT_DATA_DIR);
+
 // Ledger events/updates live under: <BASE_DATA_DIR>/raw
 // In test mode, point to test-fixtures instead
 const DATA_PATH = IS_TEST ? TEST_FIXTURES_PATH : path.join(BASE_DATA_DIR, 'raw');
