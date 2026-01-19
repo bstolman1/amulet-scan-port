@@ -45,31 +45,57 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+// Configuration - LAZY INITIALIZATION
+// These are computed lazily to avoid ESM import hoisting issues where
+// env vars might not be loaded yet when this module is first imported.
+let _gcsMode = null;
+let _dataDir = null;
+let _initialized = false;
 
-// Configuration - use /tmp in GCS mode, DATA_DIR otherwise
-const GCS_MODE = isGCSMode();
-const BASE_DATA_DIR = GCS_MODE ? '/tmp/ledger_raw' : getBaseDataDir();
-const DATA_DIR = GCS_MODE ? getTmpRawDir() : getRawDir();
+function getGCSMode() {
+  if (_gcsMode === null) {
+    _gcsMode = isGCSMode();
+  }
+  return _gcsMode;
+}
+
+function getDataDir() {
+  if (_dataDir === null) {
+    _dataDir = getGCSMode() ? getTmpRawDir() : getRawDir();
+  }
+  return _dataDir;
+}
+
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
 const USE_CLI = process.env.PARQUET_USE_CLI === 'true';
 
-// Initialize GCS if enabled
-if (GCS_MODE) {
-  try {
-    initGCS();
-    ensureTmpDir();
-    console.log(`☁️ [write-parquet] GCS mode enabled`);
-    console.log(`☁️ [write-parquet] Local scratch: ${DATA_DIR}`);
-    console.log(`☁️ [write-parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
-  } catch (err) {
-    console.error(`❌ [write-parquet] GCS initialization failed: ${err.message}`);
-    throw err;
+/**
+ * Initialize the parquet writer (call once before first write)
+ */
+export function initParquetWriter() {
+  if (_initialized) return;
+  _initialized = true;
+  
+  const gcsMode = getGCSMode();
+  const dataDir = getDataDir();
+  
+  if (gcsMode) {
+    try {
+      initGCS();
+      ensureTmpDir();
+      console.log(`☁️ [write-parquet] GCS mode enabled`);
+      console.log(`☁️ [write-parquet] Local scratch: ${dataDir}`);
+      console.log(`☁️ [write-parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
+    } catch (err) {
+      console.error(`❌ [write-parquet] GCS initialization failed: ${err.message}`);
+      throw err;
+    }
+  } else {
+    console.log(`📂 [write-parquet] Local mode - output directory: ${dataDir}`);
   }
-} else {
-  console.log(`📂 [write-parquet] Local mode - output directory: ${DATA_DIR}`);
-}
 
-console.log(`📂 [write-parquet] Mode: ${USE_CLI ? 'CLI (synchronous)' : 'Worker Pool (parallel)'}`);
+  console.log(`📂 [write-parquet] Mode: ${USE_CLI ? 'CLI (synchronous)' : 'Worker Pool (parallel)'}`);
+}
 
 // In-memory buffers
 let updatesBuffer = [];
@@ -141,8 +167,9 @@ function generateFileName(prefix) {
  */
 function getRelativePath(fullPath) {
   // Remove the DATA_DIR prefix to get relative path
-  if (fullPath.startsWith(DATA_DIR)) {
-    return fullPath.substring(DATA_DIR.length).replace(/^[/\\]/, '');
+  const dataDir = getDataDir();
+  if (fullPath.startsWith(dataDir)) {
+    return fullPath.substring(dataDir.length).replace(/^[/\\]/, '');
   }
   return fullPath;
 }
@@ -151,7 +178,7 @@ function getRelativePath(fullPath) {
  * Upload file to GCS if in GCS mode
  */
 function uploadToGCSIfEnabled(localPath, partition, fileName) {
-  if (!GCS_MODE) return null;
+  if (!getGCSMode()) return null;
   
   const relativePath = join(partition, fileName).replace(/\\/g, '/');
   const gcsPath = getGCSPath(relativePath);
@@ -328,7 +355,7 @@ function writeToParquetCLI(records, filePath, type, partition, fileName) {
     console.log(`📝 Wrote ${records.length} ${type} to ${filePath}`);
     
     // Upload to GCS if enabled (this also deletes the local file)
-    if (GCS_MODE) {
+    if (getGCSMode()) {
       uploadToGCSIfEnabled(filePath, partition, fileName);
     }
     
@@ -339,7 +366,7 @@ function writeToParquetCLI(records, filePath, type, partition, fileName) {
       try { unlinkSync(tempNativePath); } catch {}
     }
     // In GCS mode, always clean up local file on error
-    if (GCS_MODE && existsSync(filePath)) {
+    if (getGCSMode() && existsSync(filePath)) {
       try { unlinkSync(filePath); } catch {}
     }
     console.error(`❌ Parquet write failed for ${filePath}:`, err.message);
@@ -386,7 +413,7 @@ async function writeToParquetPool(records, filePath, type, partition, fileName) 
     console.log(`📝 Wrote ${records.length} ${type} to ${filePath} (${(result.bytes / 1024).toFixed(1)}KB) ${validationStatus}`);
     
     // Upload to GCS if enabled (this also deletes the local file)
-    if (GCS_MODE) {
+    if (getGCSMode()) {
       uploadToGCSIfEnabled(filePath, partition, fileName);
     }
     
@@ -398,7 +425,7 @@ async function writeToParquetPool(records, filePath, type, partition, fileName) 
     };
   } catch (err) {
     // In GCS mode, always clean up local file on error
-    if (GCS_MODE && existsSync(filePath)) {
+    if (getGCSMode() && existsSync(filePath)) {
       try { unlinkSync(filePath); } catch {}
     }
     throw err;
@@ -441,7 +468,7 @@ export async function flushUpdates() {
   const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
   const partition = getPartitionPath(effectiveAt, migrationId);
-  const partitionDir = join(DATA_DIR, partition);
+  const partitionDir = join(getDataDir(), partition);
   
   ensureDir(partitionDir);
   
@@ -470,7 +497,7 @@ export async function flushEvents() {
   const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
   const partition = getPartitionPath(effectiveAt, migrationId);
-  const partitionDir = join(DATA_DIR, partition);
+  const partitionDir = join(getDataDir(), partition);
   
   ensureDir(partitionDir);
   
@@ -512,7 +539,7 @@ export function getBufferStats() {
     ? getParquetWriterPool().getStats() 
     : null;
   
-  const gcsStats = GCS_MODE ? getUploadStats() : null;
+  const gcsStats = getGCSMode() ? getUploadStats() : null;
   
   return {
     updates: updatesBuffer.length,
@@ -521,7 +548,7 @@ export function getBufferStats() {
     eventsBuffered: eventsBuffer.length,
     maxRowsPerFile: MAX_ROWS_PER_FILE,
     mode: USE_CLI ? 'cli' : 'pool',
-    gcsMode: GCS_MODE,
+    gcsMode: getGCSMode(),
     queuedJobs: poolStats?.queuedJobs || 0,
     activeWorkers: poolStats?.activeWorkers || 0,
     pendingWrites: pendingWrites.size,
@@ -582,7 +609,7 @@ export async function shutdown() {
     poolInitialized = false;
   }
   
-  if (GCS_MODE) {
+  if (getGCSMode()) {
     const gcsStats = getUploadStats();
     console.log(`☁️ [write-parquet] GCS shutdown - ${gcsStats.successfulUploads} files uploaded`);
   }
@@ -606,24 +633,25 @@ export function clearMigrationId() {
  * Purge migration data (local mode only)
  */
 export function purgeMigrationData(migrationId) {
-  if (GCS_MODE) {
+  if (getGCSMode()) {
     console.log(`   ⚠️ [write-parquet] Cannot purge GCS data from this command. Use gsutil.`);
     return { deletedFiles: 0, deletedDirs: 0 };
   }
   
+  const dataDir = getDataDir();
   const migrationPrefix = `migration=${migrationId}`;
   let deletedDirs = 0;
   
-  if (!existsSync(DATA_DIR)) {
+  if (!existsSync(dataDir)) {
     console.log(`   ℹ️ Data directory doesn't exist`);
     return { deletedFiles: 0, deletedDirs: 0 };
   }
   
-  const entries = readdirSync(DATA_DIR, { withFileTypes: true });
+  const entries = readdirSync(dataDir, { withFileTypes: true });
   
   for (const entry of entries) {
     if (entry.isDirectory() && entry.name.startsWith(migrationPrefix)) {
-      const dirPath = join(DATA_DIR, entry.name);
+      const dirPath = join(dataDir, entry.name);
       try {
         rmSync(dirPath, { recursive: true, force: true });
         deletedDirs++;
@@ -642,26 +670,28 @@ export function purgeMigrationData(migrationId) {
  * Purge all data (local mode only)
  */
 export function purgeAllData() {
-  if (GCS_MODE) {
+  if (getGCSMode()) {
     console.log(`   ⚠️ [write-parquet] Cannot purge GCS data from this command. Use gsutil.`);
     return;
   }
   
-  if (!existsSync(DATA_DIR)) {
+  const dataDir = getDataDir();
+  if (!existsSync(dataDir)) {
     console.log(`   ℹ️ Data directory doesn't exist`);
     return;
   }
   
   try {
-    rmSync(DATA_DIR, { recursive: true, force: true });
-    mkdirSync(DATA_DIR, { recursive: true });
-    console.log(`   ✅ Purged all data from ${DATA_DIR}`);
+    rmSync(dataDir, { recursive: true, force: true });
+    mkdirSync(dataDir, { recursive: true });
+    console.log(`   ✅ Purged all data from ${dataDir}`);
   } catch (err) {
     console.error(`   ❌ Failed to purge: ${err.message}`);
   }
 }
 
 export default {
+  initParquetWriter,
   bufferUpdates,
   bufferEvents,
   flushUpdates,
