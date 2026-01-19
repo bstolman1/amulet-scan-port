@@ -8,6 +8,7 @@
  * Usage:
  *   node fetch-acs.js            # Write to Parquet (default)
  *   node fetch-acs.js --keep-raw # Also write to .jsonl files
+ *   node fetch-acs.js --local    # Force local disk mode (ignore GCS_BUCKET)
  */
 
 import dotenv from 'dotenv';
@@ -23,8 +24,14 @@ import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, v
 const args = process.argv.slice(2);
 const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
 const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
+const LOCAL_MODE = args.includes('--local') || args.includes('--local-disk');
 const USE_PARQUET = !RAW_ONLY;
 const USE_JSONL = KEEP_RAW || RAW_ONLY;
+
+// If --local flag is set, force local disk mode by setting GCS_ENABLED=false
+if (LOCAL_MODE) {
+  process.env.GCS_ENABLED = 'false';
+}
 
 // Use Parquet writer by default, JSONL writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-acs-parquet.js';
