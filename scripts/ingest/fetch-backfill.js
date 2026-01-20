@@ -952,35 +952,50 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     }
   };
 
-  // Launch all slices in parallel with streaming
+  // Helper to run a single slice with retries
+  const SLICE_MAX_RETRIES = 3;
+  const runSliceWithRetry = async (sliceIndex, sliceBefore, sliceAfter) => {
+    let lastError;
+    for (let attempt = 0; attempt < SLICE_MAX_RETRIES; attempt++) {
+      try {
+        const result = await fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex, async (txs) => {
+          // Cross-slice dedup (cheap and safe)
+          const unique = [];
+          for (const tx of txs) {
+            const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+            if (!updateId) {
+              unique.push(tx);
+              continue;
+            }
+            if (globalSeenUpdateIds.has(updateId)) continue;
+            globalSeenUpdateIds.add(updateId);
+            unique.push(tx);
+          }
+          if (unique.length > 0) {
+            await processCallback(unique);
+          }
+        });
+        return result; // Success
+      } catch (err) {
+        lastError = err;
+        if (attempt < SLICE_MAX_RETRIES - 1) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 10000) + Math.random() * 1000;
+          console.log(`   ⏳ Slice ${sliceIndex} failed (attempt ${attempt + 1}/${SLICE_MAX_RETRIES}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+    // All retries exhausted
+    console.error(`   ❌ Slice ${sliceIndex} failed after ${SLICE_MAX_RETRIES} attempts: ${lastError.message}`);
+    return { sliceIndex, totalTxs: 0, earliestTime: sliceBefore, error: lastError };
+  };
+
+  // Launch all slices in parallel with retry logic
   const slicePromises = [];
   for (let i = 0; i < concurrency; i++) {
     const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
     const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
-
-    slicePromises.push(
-      fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, i, async (txs) => {
-        // Cross-slice dedup (cheap and safe)
-        const unique = [];
-        for (const tx of txs) {
-          const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
-          if (!updateId) {
-            unique.push(tx);
-            continue;
-          }
-          if (globalSeenUpdateIds.has(updateId)) continue;
-          globalSeenUpdateIds.add(updateId);
-          unique.push(tx);
-        }
-        if (unique.length > 0) {
-          await processCallback(unique);
-        }
-      })
-        .catch(err => {
-          console.error(`   ❌ Slice ${i} failed: ${err.message}`);
-          return { sliceIndex: i, totalTxs: 0, earliestTime: sliceBefore, error: err };
-        })
-    );
+    slicePromises.push(runSliceWithRetry(i, sliceBefore, sliceAfter));
   }
 
   // Wait for all slices to complete
