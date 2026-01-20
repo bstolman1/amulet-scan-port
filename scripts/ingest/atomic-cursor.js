@@ -412,6 +412,44 @@ export class AtomicCursor {
       inTransaction: this.inTransaction,
     };
   }
+  
+  /**
+   * Simple atomic save - convenience wrapper for backward compatibility
+   * 
+   * Use this for simple state updates without the full transaction pattern.
+   * Commits any pending transaction first, then updates confirmed state.
+   */
+  saveAtomic(state) {
+    // Commit any pending transaction first
+    if (this.inTransaction) {
+      this.commit();
+    }
+    
+    // Update confirmed state from provided state object
+    if (state.last_before !== undefined) {
+      this.confirmedState.lastBefore = state.last_before;
+    }
+    if (state.total_updates !== undefined) {
+      this.confirmedState.totalUpdates = state.total_updates;
+    }
+    if (state.total_events !== undefined) {
+      this.confirmedState.totalEvents = state.total_events;
+    }
+    if (state.min_time !== undefined) {
+      this.confirmedState.minTime = state.min_time;
+    }
+    if (state.max_time !== undefined) {
+      this.confirmedState.maxTime = state.max_time;
+    }
+    if (state.complete !== undefined) {
+      this.confirmedState.complete = state.complete;
+    }
+    
+    // Write to disk atomically
+    this._writeConfirmedState();
+    
+    return this.confirmedState;
+  }
 }
 
 /**
