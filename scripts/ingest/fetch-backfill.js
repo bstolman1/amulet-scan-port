@@ -930,7 +930,20 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       const elapsed = (Date.now() - streamStartTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
       const stats = getBufferStats();
-      console.log(`   📥 M${migrationId} Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | Q: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`);
+      
+      // Build progress string with upload queue info if in GCS mode
+      let progressLine = `   📥 M${migrationId} Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | W: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`;
+      
+      // Add upload queue stats if available
+      if (stats.uploadQueuePending !== undefined || stats.uploadQueueActive !== undefined) {
+        const pending = stats.uploadQueuePending || 0;
+        const active = stats.uploadQueueActive || 0;
+        const mbps = stats.uploadThroughputMBps || '0.00';
+        const pauseIndicator = stats.uploadQueuePaused ? ' ⏸️' : '';
+        progressLine += ` | ☁️ ${pending}+${active} @ ${mbps}MB/s${pauseIndicator}`;
+      }
+      
+      console.log(progressLine);
 
       // Save cursor every 100 pages for UI visibility
       if (cursorCallback && pageCount % 100 === 0) {
