@@ -77,12 +77,65 @@ export class ParquetWriterPool {
    * @param {object} job - { type, filePath, records }
    * @returns {Promise<object>} - { ok, filePath, count, bytes }
    */
-  writeJob(job) {
+  /**
+   * Enqueue a write job with retry logic
+   * 
+   * @param {object} job - { type, filePath, records }
+   * @param {number} maxRetries - Maximum retry attempts (default: 3)
+   * @returns {Promise<object>} - { ok, filePath, count, bytes }
+   */
+  async writeJob(job, maxRetries = 3) {
     this.stats.totalJobs++;
 
     // Attach row group size config
     job.rowGroupSize = ROW_GROUP_SIZE;
 
+    let lastError;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await this._executeJob(job);
+      } catch (err) {
+        lastError = err;
+        const isTransient = this._isTransientError(err);
+        
+        if (!isTransient || attempt >= maxRetries - 1) {
+          // Non-transient error or exhausted retries
+          throw err;
+        }
+        
+        const delay = Math.min(1000 * Math.pow(2, attempt), 10000) + Math.random() * 500;
+        console.log(`   ⏳ Parquet write retry (attempt ${attempt + 1}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Check if an error is transient and should be retried
+   */
+  _isTransientError(err) {
+    const msg = err.message || '';
+    const transientPatterns = [
+      /resource busy/i,
+      /disk full/i,
+      /no space left/i,
+      /ENOSPC/i,
+      /EMFILE/i,           // Too many open files
+      /ENFILE/i,           // File table overflow
+      /EAGAIN/i,           // Resource temporarily unavailable
+      /EBUSY/i,            // Device or resource busy
+      /timeout/i,
+      /timed out/i,
+      /worker crashed/i,
+    ];
+    return transientPatterns.some(p => p.test(msg));
+  }
+
+  /**
+   * Execute a single write job (no retry)
+   */
+  _executeJob(job) {
     return new Promise((resolve, reject) => {
       this.queue.push({ job, resolve, reject });
       this._pump();
