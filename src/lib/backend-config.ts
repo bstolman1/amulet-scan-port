@@ -14,28 +14,27 @@ interface BackendConfig {
 // - Non-local (Lovable preview / deployed): localhost is not reachable, so API features will be unavailable.
 const DEFAULT_DUCKDB_PORT = 3001;
 
-// Remote server URL for access from any environment (set to empty string to use default localhost behavior)
+// Remote server URL for access from non-local environments (set to empty string to disable)
 const REMOTE_SERVER_URL = 'http://34.56.191.157:3001';
 
 function computeDuckDbApiUrl(): string {
-  // If remote server is configured, always use it (works from any environment)
-  if (REMOTE_SERVER_URL) {
-    return REMOTE_SERVER_URL;
-  }
-  
   if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
 
   const host = window.location.hostname;
-  const protocol = window.location.protocol; // "http:" | "https:"
+  const protocol = window.location.protocol;
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
 
+  // When running locally, always use localhost backend
   if (isLocalHost) {
     return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
   }
 
-  // In Lovable preview / deployed environments the UI is typically served over HTTPS.
-  // Using the same protocol avoids mixed-content blocks (HTTPS page calling HTTP API).
-  // Note: This assumes the DuckDB API is reachable on the same host + port.
+  // For non-local environments, use remote server if configured
+  if (REMOTE_SERVER_URL) {
+    return REMOTE_SERVER_URL;
+  }
+
+  // Fallback: same host with DuckDB port
   const baseProtocol = protocol === 'https:' ? 'https' : 'http';
   return `${baseProtocol}://${host}:${DEFAULT_DUCKDB_PORT}`;
 }
