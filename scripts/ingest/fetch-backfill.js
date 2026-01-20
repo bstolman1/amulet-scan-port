@@ -42,8 +42,6 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import os from 'os';
 import Piscina from 'piscina';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
