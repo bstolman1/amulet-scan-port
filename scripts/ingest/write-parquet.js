@@ -39,9 +39,15 @@ import {
   initGCS,
   isGCSEnabled,
   getGCSPath,
-  uploadAndCleanupSync,
   getUploadStats,
 } from './gcs-upload.js';
+import {
+  getUploadQueue,
+  enqueueUpload,
+  drainUploads,
+  shutdownUploadQueue,
+  shouldPauseWrites,
+} from './gcs-upload-queue.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -83,7 +89,9 @@ export function initParquetWriter() {
     try {
       initGCS();
       ensureTmpDir();
-      console.log(`☁️ [write-parquet] GCS mode enabled`);
+      // Initialize upload queue for async background uploads
+      getUploadQueue();
+      console.log(`☁️ [write-parquet] GCS mode enabled (async queue)`);
       console.log(`☁️ [write-parquet] Local scratch: ${dataDir}`);
       console.log(`☁️ [write-parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
     } catch (err) {
@@ -175,7 +183,7 @@ function getRelativePath(fullPath) {
 }
 
 /**
- * Upload file to GCS if in GCS mode
+ * Upload file to GCS if in GCS mode (non-blocking, queued)
  */
 function uploadToGCSIfEnabled(localPath, partition, fileName) {
   if (!getGCSMode()) return null;
@@ -183,13 +191,11 @@ function uploadToGCSIfEnabled(localPath, partition, fileName) {
   const relativePath = join(partition, fileName).replace(/\\/g, '/');
   const gcsPath = getGCSPath(relativePath);
   
-  const result = uploadAndCleanupSync(localPath, gcsPath, { quiet: false });
+  // Enqueue for background upload (returns immediately)
+  enqueueUpload(localPath, gcsPath);
+  totalFilesUploaded++;
   
-  if (result.ok) {
-    totalFilesUploaded++;
-  }
-  
-  return result;
+  return { queued: true, gcsPath };
 }
 
 /**
@@ -540,6 +546,8 @@ export function getBufferStats() {
     : null;
   
   const gcsStats = getGCSMode() ? getUploadStats() : null;
+  const uploadQueue = getGCSMode() ? getUploadQueue() : null;
+  const queueStats = uploadQueue?.getStats() || null;
   
   return {
     updates: updatesBuffer.length,
@@ -556,6 +564,8 @@ export function getBufferStats() {
     totalEventsWritten,
     totalFilesWritten,
     totalFilesUploaded,
+    // Upload queue backpressure status
+    uploadQueuePaused: shouldPauseWrites(),
     // Pool-specific stats
     ...(poolStats && {
       poolCompletedJobs: poolStats.completedJobs,
@@ -569,7 +579,15 @@ export function getBufferStats() {
       validationRate: poolStats.validationRate,
       validationIssues: poolStats.validationIssues,
     }),
-    // GCS-specific stats
+    // Upload queue stats
+    ...(queueStats && {
+      uploadQueuePending: queueStats.pending,
+      uploadQueueActive: queueStats.active,
+      uploadQueueCompleted: queueStats.completed,
+      uploadQueueFailed: queueStats.failed,
+      uploadThroughputMBps: queueStats.throughputMBps,
+    }),
+    // GCS-specific stats (legacy, for backward compat)
     ...(gcsStats && {
       gcsUploads: gcsStats.totalUploads,
       gcsSuccessful: gcsStats.successfulUploads,
@@ -610,8 +628,8 @@ export async function shutdown() {
   }
   
   if (getGCSMode()) {
-    const gcsStats = getUploadStats();
-    console.log(`☁️ [write-parquet] GCS shutdown - ${gcsStats.successfulUploads} files uploaded`);
+    // Drain the async upload queue
+    await shutdownUploadQueue();
   }
 }
 
