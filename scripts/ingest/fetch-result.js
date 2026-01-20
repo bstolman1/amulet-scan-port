@@ -71,7 +71,8 @@ export function failure(error, retryable = true, metadata = {}) {
  * Check if an error is retryable (transient network/server issues)
  */
 export function isRetryableError(error) {
-  const retryableCodes = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN'];
+  // EPROTO = SSL/TLS handshake failures (transient, should retry)
+  const retryableCodes = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN', 'EPROTO'];
   const retryableStatuses = [429, 500, 502, 503, 504];
   
   if (error.code && retryableCodes.includes(error.code)) return true;
@@ -80,6 +81,9 @@ export function isRetryableError(error) {
   // Network socket disconnected
   if (error.message?.includes('socket disconnected')) return true;
   if (error.message?.includes('ECONNRESET')) return true;
+  // SSL/TLS protocol errors (wrong version, handshake interrupted)
+  if (error.message?.includes('ssl3_get_record')) return true;
+  if (error.message?.includes('wrong version number')) return true;
   
   return false;
 }
