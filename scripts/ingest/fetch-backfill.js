@@ -1316,16 +1316,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const activeWorkers = Number(stats.activeWorkers ?? 0);
 
       // CRITICAL FIX: Atomic cursor save AFTER data is confirmed buffered
-      atomicCursor.saveAtomic({
-        last_before: before,
-        total_updates: totalUpdates,
-        total_events: totalEvents,
-        pending_writes: pendingWritesAccurate,
-        buffered_records: (stats.updatesBuffered || 0) + (stats.eventsBuffered || 0),
-        complete: false,
-        min_time: minTime,
-        max_time: maxTime,
-      });
+      // Use transaction pattern: begin -> addPending -> commit
+      if (!atomicCursor.inTransaction) {
+        atomicCursor.beginTransaction(batchUpdates, batchEvents, before);
+      } else {
+        atomicCursor.addPending(batchUpdates, batchEvents, before);
+      }
+      atomicCursor.commit();
+      
+      // Update time bounds
+      atomicCursor.setTimeBounds(minTime, maxTime);
       
       // Structured batch log
       logBatch({
