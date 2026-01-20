@@ -994,7 +994,8 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   }
 
   const totalTxs = sliceResults.reduce((sum, s) => sum + (s.totalTxs || 0), 0);
-  const hasError = sliceResults.some(s => s.error);
+  const failedSlices = sliceResults.filter(s => s.error);
+  const hasError = failedSlices.length > 0;
 
   // Return stats-only result (transactions already processed via streaming)
   return {
@@ -1007,7 +1008,12 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     reachedEnd: !hasError,
     earliestTime,
     totalUpdates,
-    totalEvents
+    totalEvents,
+    // CRITICAL: Include failed slices for caller to handle
+    failedSlices: failedSlices.map(s => ({
+      sliceIndex: s.sliceIndex,
+      error: s.error?.message || 'Unknown error'
+    }))
   };
 }
 
@@ -1270,7 +1276,14 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         cursorCallback      // pass cursor callback for streaming updates
       );
       
-      const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents } = fetchResult;
+      const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents, failedSlices } = fetchResult;
+      
+      // CRITICAL DATA INTEGRITY FIX: If any slice failed, throw immediately
+      // This prevents advancing the cursor past unfetched data ranges
+      if (failedSlices && failedSlices.length > 0) {
+        const sliceList = failedSlices.map(s => `slice ${s.sliceIndex}: ${s.error}`).join(', ');
+        throw new Error(`${failedSlices.length} slice(s) failed: ${sliceList}. Cursor NOT advanced to prevent data gaps.`);
+      }
       
       if (results.length === 0 && !batchUpdates) {
         log('info', 'no_more_transactions', {
