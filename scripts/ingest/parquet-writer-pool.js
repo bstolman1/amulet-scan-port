@@ -27,23 +27,29 @@ const WORKER_SCRIPT = path.join(__dirname, 'parquet-worker.js');
 // Performance Configuration
 // -------------------------------
 
-// Priority: PARQUET_WORKERS > MAX_WORKERS > MAX_CONCURRENT_WRITES > WORKER_POOL_SIZE
-const ENV_MAX_WORKERS =
-  parseInt(process.env.PARQUET_WORKERS) ||
-  parseInt(process.env.MAX_WORKERS) ||
-  parseInt(process.env.MAX_CONCURRENT_WRITES) ||
-  parseInt(process.env.WORKER_POOL_SIZE);
-
-// Default: CPU threads minus 1 (leave 1 core for main thread)
+// CPU threads (static - doesn't change at runtime)
 const CPU_THREADS = os.cpus().length;
-const DEFAULT_MAX_WORKERS = ENV_MAX_WORKERS || Math.max(2, CPU_THREADS - 1);
+
+// LAZY env var reading - called at pool creation time, not module load time
+// This is critical because ESM hoists imports before dotenv.config() runs
+function getMaxWorkersFromEnv() {
+  // Priority: PARQUET_WORKERS > MAX_WORKERS > MAX_CONCURRENT_WRITES > WORKER_POOL_SIZE
+  const envValue =
+    parseInt(process.env.PARQUET_WORKERS) ||
+    parseInt(process.env.MAX_WORKERS) ||
+    parseInt(process.env.MAX_CONCURRENT_WRITES) ||
+    parseInt(process.env.WORKER_POOL_SIZE);
+  
+  // Default: CPU threads minus 1 (leave 1 core for main thread)
+  return envValue || Math.max(2, CPU_THREADS - 1);
+}
 
 // Row group size for Parquet files (affects read performance)
 const ROW_GROUP_SIZE = parseInt(process.env.PARQUET_ROW_GROUP) || 100000;
 
 
 export class ParquetWriterPool {
-  constructor(maxWorkers = DEFAULT_MAX_WORKERS) {
+  constructor(maxWorkers) {
     this.maxWorkers = maxWorkers;
     this.slots = maxWorkers;
     this.activeWorkers = new Set();
@@ -257,7 +263,8 @@ let poolInstance = null;
 
 export function getParquetWriterPool(sizeOverride) {
   if (!poolInstance) {
-    const finalSize = sizeOverride || DEFAULT_MAX_WORKERS;
+    // Read env vars NOW (after dotenv has loaded), not at module import time
+    const finalSize = sizeOverride || getMaxWorkersFromEnv();
     poolInstance = new ParquetWriterPool(finalSize);
   }
   return poolInstance;
