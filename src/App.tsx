@@ -78,6 +78,7 @@ const App = () => (
             <Route path="/snapshot-progress" element={<SnapshotProgress />} />
             <Route path="/templates" element={<Templates />} />
             <Route path="/template-docs" element={<TemplateDocumentation />} />
+            <Route path="/templates-docs" element={<TemplateDocumentation />} />
             <Route path="/template-audit" element={<TemplateAudit />} />
             <Route path="/member-traffic" element={<MemberTraffic />} />
             <Route path="/subscriptions" element={<Subscriptions />} />
