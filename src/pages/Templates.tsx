@@ -6,12 +6,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useACSTemplateData, useACSTemplates } from "@/hooks/use-acs-template-data";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle, Download } from "lucide-react";
+import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle, Download, FileText } from "lucide-react";
 import { useState } from "react";
 import { getPagesThatUseTemplate } from "@/lib/template-page-map";
 import { useACSStatus } from "@/hooks/use-local-acs";
 import { ACSStatusBanner } from "@/components/ACSStatusBanner";
 import { generateTemplateDocumentation, downloadMarkdown, getTemplateFilename } from "@/lib/template-documentation";
+import { Link } from "react-router-dom";
 const Templates = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const { data: acsStatus } = useACSStatus();
@@ -148,15 +149,23 @@ const Templates = () => {
       <div className="space-y-6">
         <ACSStatusBanner />
         <div>
-          <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
             <h2 className="text-3xl font-bold">Template Data Explorer</h2>
             {acsStatus?.available && (
-              <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
+              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
                 <Database className="h-3 w-3 mr-1" />
                 Local ACS
               </Badge>
             )}
           </div>
+          <Link to="/template-docs">
+            <Button variant="outline" size="sm">
+              <FileText className="h-4 w-4 mr-2" />
+              Download All Documentation
+            </Button>
+          </Link>
+        </div>
           <p className="text-muted-foreground mb-2">
             Explore available templates and their data structures from the latest ACS snapshot
           </p>
