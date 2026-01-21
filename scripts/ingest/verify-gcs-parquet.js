@@ -470,16 +470,23 @@ function verifyDataType(dataType, options = {}) {
   
   console.log(`\n📊 Verifying ${dataType.toUpperCase()} files...`);
 
-  // Build GCS prefix
+  // Build GCS prefix based on data type
+  // Structure: raw/acs/... or raw/backfill/...
   let prefix = 'raw/';
   if (dataType === 'acs') {
     prefix += 'acs/';
+  } else {
+    // events and updates go in backfill/
+    prefix += 'backfill/';
   }
   
-  // Add date filter if specified
+  // Add date filter if specified (using numeric month/day values)
   if (date) {
     const [year, month, day] = date.split('-');
-    prefix += `migration=*/year=${year}/month=${month}/day=${day}/`;
+    // Convert to numeric (strip leading zeros) for new partition format
+    const numMonth = parseInt(month, 10);
+    const numDay = parseInt(day, 10);
+    prefix += `migration=*/year=${year}/month=${numMonth}/day=${numDay}/`;
   }
 
   // List files

@@ -69,7 +69,7 @@ function ensureModuleInitialized() {
       ensureTmpDir();
       console.log(`☁️ [ACS-Parquet] GCS mode enabled`);
       console.log(`☁️ [ACS-Parquet] Local scratch: ${DATA_DIR}`);
-      console.log(`☁️ [ACS-Parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/acs/`);
+      console.log(`☁️ [ACS-Parquet] GCS destination: gs://${process.env.GCS_BUCKET}/raw/`);
     } else {
       console.log(`📂 [ACS-Parquet] Local mode - output directory: ${DATA_DIR}`);
     }
@@ -412,7 +412,7 @@ export async function flushContracts() {
   const timestamp = currentSnapshotTime || contractsBuffer[0]?.snapshot_time || new Date();
   const migrationId = currentMigrationId ?? contractsBuffer[0]?.migration_id ?? null;
   const partition = getACSPartitionPath(timestamp, migrationId);
-  const partitionDir = join(DATA_DIR, 'acs', partition);
+  const partitionDir = join(DATA_DIR, partition);  // partition already includes 'acs/'
   
   ensureDir(partitionDir);
   
@@ -484,7 +484,7 @@ export async function writeCompletionMarker(snapshotTime, migrationId, stats = {
   const timestamp = snapshotTime || currentSnapshotTime || new Date();
   const migration = migrationId ?? currentMigrationId;
   const partition = getACSPartitionPath(timestamp, migration);
-  const partitionDir = join(DATA_DIR, 'acs', partition);
+  const partitionDir = join(DATA_DIR, partition);  // partition already includes 'acs/'
   
   ensureDir(partitionDir);
   
@@ -506,7 +506,7 @@ export async function writeCompletionMarker(snapshotTime, migrationId, stats = {
   
   // Upload marker to GCS if enabled
   if (GCS_MODE) {
-    const relativePath = join('acs', partition, '_COMPLETE').replace(/\\/g, '/');
+    const relativePath = join(partition, '_COMPLETE').replace(/\\/g, '/');  // partition already includes 'acs/'
     const gcsPath = getGCSPath(relativePath);
     uploadAndCleanupSync(markerPath, gcsPath, { quiet: true });
   }
@@ -522,7 +522,7 @@ export function isSnapshotComplete(snapshotTime, migrationId) {
   ensureModuleInitialized();
   
   const partition = getACSPartitionPath(snapshotTime, migrationId);
-  const markerPath = join(DATA_DIR, 'acs', partition, '_COMPLETE');
+  const markerPath = join(DATA_DIR, partition, '_COMPLETE');  // partition already includes 'acs/'
   return existsSync(markerPath);
 }
 

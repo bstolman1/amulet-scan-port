@@ -44,7 +44,7 @@ function listGCSFiles(migrationId) {
     throw new Error('GCS_BUCKET not set');
   }
   
-  const prefix = `raw/migration=${migrationId}/`;
+  const prefix = `raw/backfill/migration=${migrationId}/`;
   
   try {
     // List all parquet files for this migration
