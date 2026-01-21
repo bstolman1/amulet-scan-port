@@ -373,12 +373,16 @@ function extractPackageName(templateId) {
  * 
  * Uses migration_id in path because record_time can overlap across migrations
  * (per API docs, record_time is only monotonic within a migration+synchronizer)
+ * 
+ * IMPORTANT: Partition values are numeric (not zero-padded strings) to ensure
+ * BigQuery/DuckDB infer them as INT64 rather than STRING/BYTE_ARRAY.
+ * This means paths are: migration=0/year=2025/month=6/day=22 (not month=06)
  */
 export function getPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
   const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const month = d.getMonth() + 1;  // 1-12, no padding for INT64 inference
+  const day = d.getDate();          // 1-31, no padding for INT64 inference
   
   // Always include migration_id in path (default to 0 if not provided)
   // This keeps partition structure consistent: migration=N/year=.../month=.../day=...

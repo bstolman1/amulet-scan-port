@@ -343,19 +343,25 @@ export function validateTemplates(templateCounts) {
  * Get partition path for ACS snapshots (by date, time, and migration)
  * Each snapshot gets its own partition to preserve historical snapshots
  * Uses Hive-compliant key=value folder names for BigQuery compatibility
+ * 
+ * IMPORTANT: Partition values are numeric (not zero-padded strings) to ensure
+ * BigQuery/DuckDB infer them as INT64 rather than STRING/BYTE_ARRAY.
+ * This means paths are: year=2025/month=6/day=22 (not month=06)
+ * Only snapshot_id uses padding since it's meant to be a string identifier.
  */
 export function getACSPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
   const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const month = d.getMonth() + 1;  // 1-12, no padding for INT64 inference
+  const day = d.getDate();          // 1-31, no padding for INT64 inference
   const hour = String(d.getHours()).padStart(2, '0');
   const minute = String(d.getMinutes()).padStart(2, '0');
   const second = String(d.getSeconds()).padStart(2, '0');
   
   // Include full timestamp with seconds to keep each snapshot separate
-  // Format: acs/migration=X/year=YYYY/month=MM/day=DD/snapshot_id=HHMMSS
+  // Format: acs/migration=X/year=YYYY/month=M/day=D/snapshot_id=HHMMSS
   // Uses snapshot_id= (not snapshot-) for BigQuery Hive partitioning compatibility
+  // snapshot_id is padded because it's a string identifier, not a numeric partition
   const snapshotId = `${hour}${minute}${second}`;
   
   if (migrationId) {
