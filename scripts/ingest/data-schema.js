@@ -376,7 +376,8 @@ function extractPackageName(templateId) {
  * 
  * IMPORTANT: Partition values are numeric (not zero-padded strings) to ensure
  * BigQuery/DuckDB infer them as INT64 rather than STRING/BYTE_ARRAY.
- * This means paths are: migration=0/year=2025/month=6/day=22 (not month=06)
+ * 
+ * Structure: raw/backfill/migration=X/year=YYYY/month=M/day=D/
  */
 export function getPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
@@ -385,9 +386,8 @@ export function getPartitionPath(timestamp, migrationId = null) {
   const day = d.getDate();          // 1-31, no padding for INT64 inference
   
   // Always include migration_id in path (default to 0 if not provided)
-  // This keeps partition structure consistent: migration=N/year=.../month=.../day=...
   const mig = migrationId ?? 0;
-  return `migration=${mig}/year=${year}/month=${month}/day=${day}`;
+  return `backfill/migration=${mig}/year=${year}/month=${month}/day=${day}`;
 }
 
 /**
