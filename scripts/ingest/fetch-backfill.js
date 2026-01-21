@@ -43,6 +43,7 @@ import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import os from 'os';
+import v8 from 'v8';
 import Piscina from 'piscina';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
 
@@ -184,6 +185,98 @@ const GCS_CHECKPOINT_INTERVAL = parseInt(process.env.GCS_CHECKPOINT_INTERVAL) ||
 
 // Import GCS upload queue functions for checkpoint draining
 import { drainUploads, getUploadQueue } from './gcs-upload-queue.js';
+
+// ==========================================
+// MEMORY-AWARE THROTTLING (Heap Pressure)
+// ==========================================
+// Prevents OOM crashes by pausing ingestion when heap usage exceeds threshold
+const HEAP_PRESSURE_THRESHOLD = parseFloat(process.env.HEAP_PRESSURE_THRESHOLD) || 0.80; // 80% of max heap
+const HEAP_CRITICAL_THRESHOLD = parseFloat(process.env.HEAP_CRITICAL_THRESHOLD) || 0.90; // 90% = emergency
+const HEAP_CHECK_INTERVAL_MS = parseInt(process.env.HEAP_CHECK_INTERVAL_MS) || 5000; // Check every 5s minimum
+
+let lastHeapCheck = 0;
+let heapPressureEvents = 0;
+
+/**
+ * Get current heap usage as a fraction of max heap size
+ */
+function getHeapUsage() {
+  const { heapUsed } = process.memoryUsage();
+  const { heap_size_limit } = v8.getHeapStatistics();
+  return {
+    used: heapUsed,
+    limit: heap_size_limit,
+    ratio: heapUsed / heap_size_limit,
+    usedMB: Math.round(heapUsed / 1024 / 1024),
+    limitMB: Math.round(heap_size_limit / 1024 / 1024),
+  };
+}
+
+/**
+ * Check if heap is under memory pressure
+ */
+function checkMemoryPressure() {
+  const now = Date.now();
+  // Throttle checks to avoid overhead
+  if (now - lastHeapCheck < HEAP_CHECK_INTERVAL_MS) {
+    return { pressure: false, critical: false };
+  }
+  lastHeapCheck = now;
+  
+  const heap = getHeapUsage();
+  const pressure = heap.ratio > HEAP_PRESSURE_THRESHOLD;
+  const critical = heap.ratio > HEAP_CRITICAL_THRESHOLD;
+  
+  if (pressure) {
+    heapPressureEvents++;
+  }
+  
+  return { pressure, critical, heap };
+}
+
+/**
+ * Wait for memory pressure to subside by draining queues
+ * Returns when heap usage drops below threshold or timeout
+ */
+async function waitForMemoryRelief(shardLabel = '') {
+  const maxWaitMs = 60000; // Max 60 seconds waiting
+  const startWait = Date.now();
+  let drainCycles = 0;
+  
+  while (Date.now() - startWait < maxWaitMs) {
+    const heap = getHeapUsage();
+    
+    if (heap.ratio <= HEAP_PRESSURE_THRESHOLD * 0.9) {
+      // Below 90% of threshold = safe to continue
+      if (drainCycles > 0) {
+        console.log(`   ✅ Memory pressure relieved: ${heap.usedMB}MB / ${heap.limitMB}MB (${(heap.ratio * 100).toFixed(1)}%)${shardLabel}`);
+      }
+      return;
+    }
+    
+    drainCycles++;
+    console.log(`   ⚠️ Memory pressure (${heap.usedMB}MB / ${heap.limitMB}MB = ${(heap.ratio * 100).toFixed(1)}%) - draining queues (cycle ${drainCycles})...${shardLabel}`);
+    
+    // Flush and drain all pending work
+    await flushAll();
+    await waitForWrites();
+    if (GCS_MODE) {
+      await drainUploads();
+    }
+    
+    // Give GC a chance to run
+    if (global.gc) {
+      global.gc();
+    }
+    
+    // Brief pause before re-checking
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  
+  // Timeout - log warning but continue (let it crash naturally if truly OOM)
+  const heap = getHeapUsage();
+  console.warn(`   ⚠️ Memory pressure timeout after ${maxWaitMs}ms - continuing at ${heap.usedMB}MB / ${heap.limitMB}MB${shardLabel}`);
+}
 
 // Sharding configuration
 const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
@@ -1274,6 +1367,13 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   
   while (true) {
     const batchStartTime = Date.now();
+    
+    // MEMORY SAFETY: Check heap pressure before starting new batch
+    const memCheck = checkMemoryPressure();
+    if (memCheck.pressure) {
+      console.log(`   ⚠️ Heap pressure detected: ${memCheck.heap.usedMB}MB / ${memCheck.heap.limitMB}MB (${(memCheck.heap.ratio * 100).toFixed(1)}%)${shardLabel}`);
+      await waitForMemoryRelief(shardLabel);
+    }
     
     try {
       // Use current dynamic concurrency values
