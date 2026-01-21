@@ -280,7 +280,7 @@ function uploadToGCSIfEnabled(localPath, partition, fileName) {
   // but check again for safety
   if (!moduleInitialized || !GCS_MODE) return null;
   
-  const relativePath = join('acs', partition, fileName).replace(/\\/g, '/');
+  const relativePath = join(partition, fileName).replace(/\\/g, '/');
   const gcsPath = getGCSPath(relativePath);
   
   const result = uploadAndCleanupSync(localPath, gcsPath, { quiet: false });
