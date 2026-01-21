@@ -92,6 +92,22 @@ async function main() {
   console.log("═".repeat(80));
 
   try {
+    // GCS CRASH SAFETY: Run reconciliation check before starting
+    if (gcsEnabled && !LIVE_ONLY) {
+      console.log("\n🔍 PHASE 0: GCS RECONCILIATION");
+      console.log("   Checking for data gaps from previous VM crashes...\n");
+      
+      const reconcileScript = join(__dirname, 'reconcile-gcs.js');
+      try {
+        // Run reconciliation in fix mode to auto-repair any gaps
+        await runScript(reconcileScript, ['--fix']);
+      } catch (err) {
+        // Reconciliation failure is non-fatal - log and continue
+        console.warn(`   ⚠️ GCS reconciliation check failed: ${err.message}`);
+        console.warn(`   Continuing with backfill - cursor may resume from GCS-confirmed position.\n`);
+      }
+    }
+
     // Step 1: Run backfill (unless --live-only)
     if (!LIVE_ONLY) {
       console.log("\n📥 PHASE 1: BACKFILL");

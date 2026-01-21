@@ -178,6 +178,13 @@ const CURSOR_DIR = getCursorDir();
 const GCS_MODE = isGCSMode();
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5;
 
+// GCS checkpoint interval: drain upload queue every N batches for crash safety
+// Lower = safer but slower, Higher = faster but larger re-fetch window on crash
+const GCS_CHECKPOINT_INTERVAL = parseInt(process.env.GCS_CHECKPOINT_INTERVAL) || 50;
+
+// Import GCS upload queue functions for checkpoint draining
+import { drainUploads, getUploadQueue } from './gcs-upload-queue.js';
+
 // Sharding configuration
 const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
 const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
@@ -1400,6 +1407,22 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         await flushAll();
       }
       
+      // GCS CRASH SAFETY: Periodic checkpoint - drain upload queue and confirm GCS position
+      // This bounds the re-fetch window on VM crash to ~GCS_CHECKPOINT_INTERVAL batches
+      if (GCS_MODE && batchCount % GCS_CHECKPOINT_INTERVAL === 0) {
+        const checkpointStart = Date.now();
+        console.log(`   ⏱️ GCS checkpoint: draining upload queue...${shardLabel}`);
+        
+        // Wait for all GCS uploads to complete
+        await drainUploads();
+        
+        // Confirm GCS position in cursor
+        atomicCursor.confirmGCS(before, totalUpdates, totalEvents);
+        
+        const checkpointMs = Date.now() - checkpointStart;
+        console.log(`   ✅ GCS checkpoint confirmed at ${before} (${checkpointMs}ms)${shardLabel}`);
+      }
+      
       // Auto-tune after processing this wave
       maybeTuneParallelFetches(shardLabel);
       await maybeTuneDecodeWorkers(shardLabel);
@@ -1472,6 +1495,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   console.log(`   ⏳ Waiting for all pending writes to complete...${shardLabel}`);
   await waitForWrites();
   
+  // GCS CRASH SAFETY: Final drain before marking complete
+  if (GCS_MODE) {
+    console.log(`   ⏱️ Final GCS drain before marking complete...${shardLabel}`);
+    await drainUploads();
+  }
+  
   // Get final write stats
   const finalStats = getBufferStats();
   console.log(`   ✅ All writes complete. Final queue: ${finalStats.queuedJobs || 0} pending, ${finalStats.activeWorkers || 0} active${shardLabel}`);
@@ -1479,6 +1508,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   const totalTime = (Date.now() - startTime) / 1000;
   
   // CRITICAL FIX: Atomic cursor save - mark complete ONLY after all writes confirmed
+  // Also confirms GCS position so restart will be from GCS-confirmed point
   atomicCursor.saveAtomic({
     last_before: before,
     total_updates: totalUpdates,
@@ -1488,6 +1518,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     min_time: minTime,
     max_time: maxTime,
   });
+  
+  // Confirm GCS for the final position
+  if (GCS_MODE) {
+    atomicCursor.confirmGCS(before, totalUpdates, totalEvents);
+    console.log(`   ✅ GCS cursor confirmed at final position${shardLabel}`);
+  }
   
   // Structured log: synchronizer complete
   logSynchronizer('complete', {
