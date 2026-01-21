@@ -21,6 +21,7 @@ import Transfers from "./pages/Transfers";
 import RichList from "./pages/RichList";
 import Templates from "./pages/Templates";
 import TemplateAudit from "./pages/TemplateAudit";
+import TemplateDocumentation from "./pages/TemplateDocumentation";
 import MemberTraffic from "./pages/MemberTraffic";
 import Subscriptions from "./pages/Subscriptions";
 import DSOState from "./pages/DSOState";
@@ -76,6 +77,7 @@ const App = () => (
             <Route path="/admin" element={<Admin />} />
             <Route path="/snapshot-progress" element={<SnapshotProgress />} />
             <Route path="/templates" element={<Templates />} />
+            <Route path="/template-docs" element={<TemplateDocumentation />} />
             <Route path="/template-audit" element={<TemplateAudit />} />
             <Route path="/member-traffic" element={<MemberTraffic />} />
             <Route path="/subscriptions" element={<Subscriptions />} />
