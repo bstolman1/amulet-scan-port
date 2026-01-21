@@ -20,13 +20,17 @@
 import { spawn } from 'child_process';
 import { existsSync, unlinkSync, statSync } from 'fs';
 import path from 'path';
-
-// Configuration from environment
-const MAX_CONCURRENT = parseInt(process.env.GCS_UPLOAD_CONCURRENCY) || 8;
-const QUEUE_HIGH_WATER = parseInt(process.env.GCS_QUEUE_HIGH_WATER) || 100;
-const QUEUE_LOW_WATER = parseInt(process.env.GCS_QUEUE_LOW_WATER) || 20;
-const DEFAULT_MAX_RETRIES = parseInt(process.env.GCS_MAX_RETRIES) || 3;
-const DEFAULT_BASE_DELAY_MS = parseInt(process.env.GCS_RETRY_BASE_DELAY_MS) || 1000;
+// LAZY env var reading - called at queue creation time, not module load time
+// This is critical because ESM hoists imports before dotenv.config() runs
+function getConfigFromEnv() {
+  return {
+    maxConcurrent: parseInt(process.env.GCS_UPLOAD_CONCURRENCY) || 8,
+    queueHighWater: parseInt(process.env.GCS_QUEUE_HIGH_WATER) || 100,
+    queueLowWater: parseInt(process.env.GCS_QUEUE_LOW_WATER) || 20,
+    maxRetries: parseInt(process.env.GCS_MAX_RETRIES) || 3,
+    baseDelayMs: parseInt(process.env.GCS_RETRY_BASE_DELAY_MS) || 1000,
+  };
+}
 
 // Transient error patterns
 const TRANSIENT_ERROR_PATTERNS = [
@@ -45,7 +49,7 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function calculateBackoffDelay(attempt, baseDelay = DEFAULT_BASE_DELAY_MS) {
+function calculateBackoffDelay(attempt, baseDelay = 1000) {
   const exponentialDelay = baseDelay * Math.pow(2, attempt);
   const jitter = exponentialDelay * 0.25 * (Math.random() * 2 - 1);
   return Math.min(exponentialDelay + jitter, 30000);
@@ -91,8 +95,14 @@ function gsutilUpload(localPath, gcsPath, timeout = 300000) {
 }
 
 class GCSUploadQueue {
-  constructor(maxConcurrent = MAX_CONCURRENT) {
-    this.maxConcurrent = maxConcurrent;
+  constructor(maxConcurrent) {
+    // Read config lazily at construction time (after dotenv has loaded)
+    const config = getConfigFromEnv();
+    this.maxConcurrent = maxConcurrent || config.maxConcurrent;
+    this.queueHighWater = config.queueHighWater;
+    this.queueLowWater = config.queueLowWater;
+    this.maxRetries = config.maxRetries;
+    this.baseDelayMs = config.baseDelayMs;
     this.queue = [];
     this.activeUploads = 0;
     this.isPaused = false;
@@ -114,8 +124,8 @@ class GCSUploadQueue {
     this.drainPromise = null;
     this.drainResolve = null;
 
-    console.log(`☁️ [upload-queue] Initialized with ${maxConcurrent} concurrent uploads`);
-    console.log(`☁️ [upload-queue] Backpressure: pause at ${QUEUE_HIGH_WATER}, resume at ${QUEUE_LOW_WATER}`);
+    console.log(`☁️ [upload-queue] Initialized with ${this.maxConcurrent} concurrent uploads`);
+    console.log(`☁️ [upload-queue] Backpressure: pause at ${this.queueHighWater}, resume at ${this.queueLowWater}`);
   }
 
   /**
@@ -138,7 +148,7 @@ class GCSUploadQueue {
     this.stats.peakQueueSize = Math.max(this.stats.peakQueueSize, this.queue.length);
 
     // Check for backpressure
-    if (this.queue.length >= QUEUE_HIGH_WATER && !this.isPaused) {
+    if (this.queue.length >= this.queueHighWater && !this.isPaused) {
       this.isPaused = true;
       console.warn(`⚠️ [upload-queue] Backpressure ON: queue at ${this.queue.length} items`);
     }
@@ -174,7 +184,7 @@ class GCSUploadQueue {
     }
 
     // Check for low water mark
-    if (this.isPaused && this.queue.length <= QUEUE_LOW_WATER) {
+    if (this.isPaused && this.queue.length <= this.queueLowWater) {
       this.isPaused = false;
       console.log(`✅ [upload-queue] Backpressure OFF: queue at ${this.queue.length} items`);
     }
@@ -192,7 +202,7 @@ class GCSUploadQueue {
    */
   async _processUpload(job) {
     const { localPath, gcsPath, options } = job;
-    const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const maxRetries = options.maxRetries ?? this.maxRetries;
 
     try {
       // Verify file exists
@@ -206,7 +216,7 @@ class GCSUploadQueue {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (attempt > 0) {
           this.stats.totalRetries++;
-          const delay = calculateBackoffDelay(attempt - 1);
+          const delay = calculateBackoffDelay(attempt - 1, this.baseDelayMs);
           console.log(`🔄 [upload-queue] Retry ${attempt}/${maxRetries} for ${path.basename(localPath)}`);
           await sleep(delay);
         }
