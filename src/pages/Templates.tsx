@@ -3,14 +3,15 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { useACSTemplateData, useACSTemplates } from "@/hooks/use-acs-template-data";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle } from "lucide-react";
+import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle, Download } from "lucide-react";
 import { useState } from "react";
 import { getPagesThatUseTemplate } from "@/lib/template-page-map";
 import { useACSStatus } from "@/hooks/use-local-acs";
 import { ACSStatusBanner } from "@/components/ACSStatusBanner";
-
+import { generateTemplateDocumentation, downloadMarkdown, getTemplateFilename } from "@/lib/template-documentation";
 const Templates = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const { data: acsStatus } = useACSStatus();
@@ -269,6 +270,33 @@ const Templates = () => {
                         <Skeleton className="h-96 w-full" />
                       ) : templateData && structure ? (
                         <>
+                          {/* Download Documentation Button */}
+                          <Card className="glass-card p-4">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h4 className="font-semibold">Template Documentation</h4>
+                                <p className="text-sm text-muted-foreground">
+                                  Download comprehensive documentation explaining the JSON structure and purpose of this template
+                                </p>
+                              </div>
+                              <Button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const doc = generateTemplateDocumentation(
+                                    template.template_id,
+                                    templateData.data[0],
+                                    template.contract_count
+                                  );
+                                  downloadMarkdown(doc, getTemplateFilename(template.template_id));
+                                }}
+                                className="flex items-center gap-2"
+                              >
+                                <Download className="h-4 w-4" />
+                                Download Documentation
+                              </Button>
+                            </div>
+                          </Card>
+
                           <Card className="glass-card p-6">
                             <h3 className="text-xl font-bold mb-4">Data Structure</h3>
                             <p className="text-sm text-muted-foreground mb-4">
