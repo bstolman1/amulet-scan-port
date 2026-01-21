@@ -150,6 +150,10 @@ export class AtomicCursor {
       minTime: null,
       maxTime: null,
       complete: false,
+      // GCS-aware crash safety: separate tracking for GCS-confirmed position
+      lastGCSConfirmed: null,
+      gcsConfirmedUpdates: 0,
+      gcsConfirmedEvents: 0,
     };
     
     // Pending state (not yet confirmed)
@@ -178,6 +182,10 @@ export class AtomicCursor {
         minTime: data.min_time || null,
         maxTime: data.max_time || null,
         complete: data.complete || false,
+        // GCS-aware fields
+        lastGCSConfirmed: data.last_gcs_confirmed || null,
+        gcsConfirmedUpdates: data.gcs_confirmed_updates || 0,
+        gcsConfirmedEvents: data.gcs_confirmed_events || 0,
       };
       
       // Log recovery if there was pending data
@@ -187,6 +195,19 @@ export class AtomicCursor {
           `Resuming from confirmed position: ${this.confirmedState.lastBefore}`
         );
       }
+      
+      // GCS crash safety: warn if local cursor ahead of GCS-confirmed
+      if (this.confirmedState.lastGCSConfirmed && this.confirmedState.lastBefore) {
+        const localTime = new Date(this.confirmedState.lastBefore).getTime();
+        const gcsTime = new Date(this.confirmedState.lastGCSConfirmed).getTime();
+        if (localTime < gcsTime) {
+          console.log(
+            `⚠️ GCS gap detected: local cursor at ${this.confirmedState.lastBefore} ` +
+            `but GCS only confirmed to ${this.confirmedState.lastGCSConfirmed}. ` +
+            `Will re-fetch ${this.confirmedState.totalUpdates - this.confirmedState.gcsConfirmedUpdates} updates.`
+          );
+        }
+      }
     }
     
     return this.confirmedState;
@@ -195,7 +216,37 @@ export class AtomicCursor {
   /**
    * Get current resume position
    */
-  getResumePosition() {
+  /**
+   * Get current resume position.
+   * 
+   * By default, returns the GCS-confirmed position (crash-safe).
+   * Pass useLocalPosition=true to get the local-disk position (faster but risky).
+   */
+  getResumePosition(useLocalPosition = false) {
+    // GCS-aware: prefer GCS-confirmed position for crash safety
+    if (!useLocalPosition && this.confirmedState.lastGCSConfirmed) {
+      return {
+        lastBefore: this.confirmedState.lastGCSConfirmed,
+        totalUpdates: this.confirmedState.gcsConfirmedUpdates,
+        totalEvents: this.confirmedState.gcsConfirmedEvents,
+        isGCSConfirmed: true,
+      };
+    }
+    
+    // Fallback to local position (legacy behavior or no GCS checkpoint yet)
+    return {
+      lastBefore: this.confirmedState.lastBefore,
+      totalUpdates: this.confirmedState.totalUpdates,
+      totalEvents: this.confirmedState.totalEvents,
+      isGCSConfirmed: false,
+    };
+  }
+  
+  /**
+   * Get the local (unsafe) resume position - for debugging only.
+   * This position may have data that never reached GCS.
+   */
+  getUnsafeResumePosition() {
     return {
       lastBefore: this.confirmedState.lastBefore,
       totalUpdates: this.confirmedState.totalUpdates,
@@ -302,12 +353,56 @@ export class AtomicCursor {
    * Mark cursor as complete
    * Only valid if no pending data
    */
+  /**
+   * Confirm GCS checkpoint - called after GCS queue is drained.
+   * 
+   * This advances the GCS-confirmed position to the current local position,
+   * making it safe to resume from this point even after a VM crash.
+   */
+  confirmGCS(timestamp = null, updates = null, events = null) {
+    // Use current local position if not specified
+    this.confirmedState.lastGCSConfirmed = timestamp || this.confirmedState.lastBefore;
+    this.confirmedState.gcsConfirmedUpdates = updates ?? this.confirmedState.totalUpdates;
+    this.confirmedState.gcsConfirmedEvents = events ?? this.confirmedState.totalEvents;
+    
+    this._writeConfirmedState();
+    
+    return {
+      lastGCSConfirmed: this.confirmedState.lastGCSConfirmed,
+      gcsConfirmedUpdates: this.confirmedState.gcsConfirmedUpdates,
+      gcsConfirmedEvents: this.confirmedState.gcsConfirmedEvents,
+    };
+  }
+  
+  /**
+   * Get GCS confirmation status.
+   */
+  getGCSStatus() {
+    const hasGCSCheckpoint = !!this.confirmedState.lastGCSConfirmed;
+    const localUpdates = this.confirmedState.totalUpdates;
+    const gcsUpdates = this.confirmedState.gcsConfirmedUpdates;
+    const pendingGCSUpdates = localUpdates - gcsUpdates;
+    
+    return {
+      hasGCSCheckpoint,
+      lastGCSConfirmed: this.confirmedState.lastGCSConfirmed,
+      gcsConfirmedUpdates: gcsUpdates,
+      localUpdates,
+      pendingGCSUpdates,
+      isSynced: pendingGCSUpdates === 0,
+    };
+  }
+  
   markComplete() {
     if (this.inTransaction || this.pendingState.updates > 0 || this.pendingState.events > 0) {
       throw new Error('Cannot mark complete with pending data. Call commit() first.');
     }
     
     this.confirmedState.complete = true;
+    // Also mark GCS as complete (assuming final drain was done)
+    this.confirmedState.lastGCSConfirmed = this.confirmedState.lastBefore;
+    this.confirmedState.gcsConfirmedUpdates = this.confirmedState.totalUpdates;
+    this.confirmedState.gcsConfirmedEvents = this.confirmedState.totalEvents;
     this._writeConfirmedState();
     
     console.log(
@@ -374,10 +469,15 @@ export class AtomicCursor {
       shard_index: this.shardIndex,
       shard_total: this.shardTotal,
       
-      // Confirmed state
+      // Confirmed state (local disk)
       last_confirmed_before: this.confirmedState.lastBefore,
       confirmed_updates: this.confirmedState.totalUpdates,
       confirmed_events: this.confirmedState.totalEvents,
+      
+      // GCS-confirmed state (crash-safe resume point)
+      last_gcs_confirmed: this.confirmedState.lastGCSConfirmed,
+      gcs_confirmed_updates: this.confirmedState.gcsConfirmedUpdates,
+      gcs_confirmed_events: this.confirmedState.gcsConfirmedEvents,
       
       // Legacy fields for compatibility
       last_before: this.confirmedState.lastBefore,
@@ -410,6 +510,7 @@ export class AtomicCursor {
       confirmed: { ...this.confirmedState },
       pending: { ...this.pendingState },
       inTransaction: this.inTransaction,
+      gcsStatus: this.getGCSStatus(),
     };
   }
   
