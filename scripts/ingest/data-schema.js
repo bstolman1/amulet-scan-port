@@ -147,6 +147,10 @@ export function normalizeUpdate(raw) {
   const update = raw.transaction || raw.reassignment || raw;
   const isReassignment = !!raw.reassignment;
   
+  // Detect if this is a transaction when no wrapper exists
+  // Transactions have events_by_id, reassignments don't
+  const isTransaction = !!raw.transaction || (!isReassignment && !!update.events_by_id);
+  
   // Extract root event IDs - CRITICAL for tree traversal
   const rootEventIds = update.root_event_ids || [];
   
@@ -163,7 +167,7 @@ export function normalizeUpdate(raw) {
   
   return {
     update_id: update.update_id || raw.update_id,
-    update_type: raw.transaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown',
+    update_type: isTransaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown',
     migration_id: parseInt(raw.migration_id) || null,
     synchronizer_id: update.synchronizer_id || null,
     // These fields are optional per API docs
