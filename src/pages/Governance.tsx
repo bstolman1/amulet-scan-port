@@ -260,28 +260,10 @@ const Governance = () => {
       const targetEffectiveAt = payload.targetEffectiveAt;
       const trackingCid = payload.trackingCid || voteRequest.contract_id;
 
-      // STATUS DERIVATION FOR LIVE ACTIVE PROPOSALS
-      // ⚠️ Client-side derivation is ACCEPTABLE here because:
-      // - Live API represents CURRENT active contract state
-      // - There are no exercised events - only active contracts exist
-      // - This threshold-based logic approximates what an active proposal looks like
-      const threshold = votingThreshold || svCount || 1;
-      let status: "approved" | "rejected" | "pending" = "pending";
-      
-      // Check if voting deadline has passed
-      const now = new Date();
-      const voteDeadline = voteBefore ? new Date(voteBefore) : null;
-      const isExpired = voteDeadline && voteDeadline < now;
-      
-      // Only mark as approved if enough votes FOR
-      if (votesFor >= threshold) {
-        status = "approved";
-      } 
-      // Only mark as rejected if deadline passed AND not enough votes
-      else if (isExpired && votesFor < threshold) {
-        status = "rejected";
-      }
-      // Otherwise it's still pending (deadline not reached or voting ongoing)
+      // STATUS: All proposals from GET /v0/admin/sv/voterequests are ACTIVE by definition
+      // The API endpoint explicitly "Lists all active VoteRequests" - completed votes are not returned
+      // No client-side status derivation needed - these are all pending/in-progress
+      const status: "approved" | "rejected" | "pending" = "pending";
 
       return {
         id: trackingCid?.slice(0, 12) || voteRequest.contract_id?.slice(0, 12) || "unknown",
