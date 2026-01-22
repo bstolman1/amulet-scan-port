@@ -28,6 +28,17 @@ import { getCacheStats } from './cache/stats-cache.js';
 // Warehouse engine imports
 import { startEngineWorker, getEngineStatus } from './engine/worker.js';
 import engineRouter from './engine/api.js';
+// Server protection
+import {
+  apiLimiter,
+  expensiveLimiter,
+  securityHeaders,
+  startMemoryMonitor,
+  getMemoryStatus,
+  memoryGuard,
+  requestTimeout,
+  globalErrorHandler,
+} from './lib/server-protection.js';
 
 // Use process.cwd() for Vitest/Vite SSR compatibility
 const __dirname = path.join(process.cwd(), 'server');
@@ -47,8 +58,20 @@ if (IS_WINDOWS && process.env.ENGINE_ENABLED === 'true' && !ENGINE_ENABLED) {
   console.warn('⚠️ ENGINE_ENABLED=true ignored on Windows (set ENGINE_FORCE_WINDOWS=true to override)');
 }
 
+// Security and protection middleware
+app.use(securityHeaders);
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Limit request body size
+app.use(requestTimeout(30000)); // 30 second timeout on all requests
+app.use(memoryGuard); // Reject requests when memory is critical
+
+// Rate limiting
+app.use('/api/', apiLimiter); // General rate limiting for all API routes
+
+// Stricter limits for expensive operations
+app.use('/api/search', expensiveLimiter);
+app.use('/api/refresh-aggregations', expensiveLimiter);
+app.use('/api/refresh-views', expensiveLimiter);
 
 // Global BigInt serialization safety net - prevents "Do not know how to serialize a BigInt" errors
 app.set('json replacer', (key, value) => 
@@ -120,6 +143,7 @@ app.get('/health/detailed', async (req, res) => {
     timestamp: new Date().toISOString(),
     engine: ENGINE_ENABLED ? 'enabled' : 'disabled',
     engineStatus,
+    memory: getMemoryStatus(),
     cache: {
       entries: cacheStats.totalEntries,
     }
@@ -198,6 +222,9 @@ app.use('/api/rewards', rewardsRouter);
 // Engine API routes
 app.use('/api/engine', engineRouter);
 
+// Global error handler - must be last middleware
+app.use(globalErrorHandler);
+
 // Schedule governance data refresh every 4 hours
 cron.schedule('0 */4 * * *', async () => {
   console.log('⏰ Scheduled governance data refresh starting...');
@@ -273,8 +300,12 @@ app.listen(PORT, HOST, async () => {
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
   console.log(`📝 Crash logs written to ${LOG_PATHS.crash}`);
+  console.log(`🛡️ Rate limiting: 100 req/min general, 20 req/min for expensive ops`);
   console.log(`⏰ Governance data refresh scheduled every 4 hours`);
   console.log(`⏰ ACS snapshot scheduled every 3 hours (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)`);
+  
+  // Start memory monitoring
+  startMemoryMonitor();
   
   if (ENGINE_ENABLED) {
     console.log(`⚙️ Warehouse engine ENABLED - starting background worker...`);
