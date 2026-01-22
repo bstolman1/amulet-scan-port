@@ -45,9 +45,9 @@ function listGCSFiles(migrationId) {
     throw new Error('GCS_BUCKET not set');
   }
   
-  // List files from both updates and events folders for this migration
-  const updatePrefix = `raw/updates/migration=${migrationId}/`;
-  const eventPrefix = `raw/events/migration=${migrationId}/`;
+  // List files from both updates and events folders for this migration (nested under backfill/)
+  const updatePrefix = `raw/backfill/updates/migration=${migrationId}/`;
+  const eventPrefix = `raw/backfill/events/migration=${migrationId}/`;
   
   try {
     // List all parquet files for this migration from both folders

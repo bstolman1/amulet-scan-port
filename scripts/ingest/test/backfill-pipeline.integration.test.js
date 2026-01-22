@@ -284,7 +284,7 @@ describe('Backfill Pipeline Integration', () => {
       
       // All items are from same date, should have same partition
       expect(paths.size).toBe(1);
-      expect([...paths][0]).toBe('updates/migration=0/year=2024/month=6/day=15');
+      expect([...paths][0]).toBe('backfill/updates/migration=0/year=2024/month=6/day=15');
     });
     
     it('should separate items by migration', () => {

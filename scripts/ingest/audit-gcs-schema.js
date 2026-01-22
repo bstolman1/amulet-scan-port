@@ -291,8 +291,8 @@ async function auditMigration(migrationId) {
     sampleFiles: [],
   };
   
-  // Find update files SPECIFICALLY from the updates folder
-  const updateFileList = listGCSFilesWithPrefix(`raw/updates/migration=${migrationId}/`, 'updates-', 3);
+  // Find update files SPECIFICALLY from the updates folder (nested under backfill/)
+  const updateFileList = listGCSFilesWithPrefix(`raw/backfill/updates/migration=${migrationId}/`, 'updates-', 3);
   const updateFile = updateFileList[0];
   
   if (updateFile) {
@@ -325,8 +325,8 @@ async function auditMigration(migrationId) {
     console.log(`\n  ⚠️ No update files found for migration ${migrationId}`);
   }
   
-  // Find event files SPECIFICALLY from the events folder
-  const eventFileList = listGCSFilesWithPrefix(`raw/events/migration=${migrationId}/`, 'events-', 3);
+  // Find event files SPECIFICALLY from the events folder (nested under backfill/)
+  const eventFileList = listGCSFilesWithPrefix(`raw/backfill/events/migration=${migrationId}/`, 'events-', 3);
   const eventFile = eventFileList[0];
   
   if (eventFile) {
