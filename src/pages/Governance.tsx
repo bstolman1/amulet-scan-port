@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useLiveVoteRequests, LiveVoteRequest } from "@/hooks/use-live-vote-requests";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
@@ -90,12 +91,12 @@ const Governance = () => {
     staleTime: 60 * 1000,
   });
 
-  // Fetch vote requests from LOCAL ACS only
+  // Fetch vote requests from LIVE SV Node API
   const {
-    data: voteRequestsData,
+    data: liveVoteRequestsData,
     isLoading,
     isError,
-  } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
+  } = useLiveVoteRequests();
 
   // Fetch DsoRules from LOCAL ACS
   const { data: dsoRulesData } = useAggregatedTemplateData(
@@ -232,38 +233,37 @@ const Governance = () => {
     return { votesFor, votesAgainst, votedSvs };
   };
 
-  // Process proposals from ACS data with full JSON parsing
+  // Process proposals from LIVE SV Node API data
   const proposals =
-    voteRequestsData?.data?.map((voteRequest: any) => {
-      // Handle both flat structure and nested payload structure from DuckDB
-      const payload = voteRequest.payload || voteRequest;
+    liveVoteRequestsData?.data?.map((voteRequest: LiveVoteRequest) => {
+      // Live API returns data in payload field directly
+      const payload = voteRequest.payload || {};
       
       // Parse action
-      const action = payload.action || voteRequest.action || {};
+      const action = payload.action || {};
       const { title, actionType, actionDetails } = parseAction(action);
       
       // Parse votes
-      const votesRaw = payload.votes || voteRequest.votes || [];
+      const votesRaw = payload.votes || [];
       const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
 
       // Extract requester information
-      const requester = payload.requester || voteRequest.requester || "Unknown";
+      const requester = payload.requester || "Unknown";
 
       // Extract reason (has url and body)
-      const reasonObj = payload.reason || voteRequest.reason || {};
-      const reasonBody = reasonObj?.body || (typeof reasonObj === "string" ? reasonObj : "");
-      const reasonUrl = reasonObj?.url || "";
+      const reasonObj = payload.reason || {};
+      const reasonBody = typeof reasonObj === "object" ? reasonObj?.body : (typeof reasonObj === "string" ? reasonObj : "");
+      const reasonUrl = typeof reasonObj === "object" ? reasonObj?.url : "";
 
       // Extract timing fields
-      const voteBefore = payload.voteBefore || voteRequest.voteBefore;
-      const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
-      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
+      const voteBefore = payload.voteBefore;
+      const targetEffectiveAt = payload.targetEffectiveAt;
+      const trackingCid = payload.trackingCid || voteRequest.contract_id;
 
-      // STATUS DERIVATION FOR ACS ACTIVE PROPOSALS
+      // STATUS DERIVATION FOR LIVE ACTIVE PROPOSALS
       // ⚠️ Client-side derivation is ACCEPTABLE here because:
-      // - ACS data represents CURRENT active contract state (live data)
-      // - There are no exercised events in ACS - only created contracts exist
-      // - For indexed/historical data, status MUST come from backend (ledger model)
+      // - Live API represents CURRENT active contract state
+      // - There are no exercised events - only active contracts exist
       // - This threshold-based logic approximates what an active proposal looks like
       const threshold = votingThreshold || svCount || 1;
       let status: "approved" | "rejected" | "pending" = "pending";
@@ -284,7 +284,7 @@ const Governance = () => {
       // Otherwise it's still pending (deadline not reached or voting ongoing)
 
       return {
-        id: trackingCid?.slice(0, 12) || "unknown",
+        id: trackingCid?.slice(0, 12) || voteRequest.contract_id?.slice(0, 12) || "unknown",
         contractId: voteRequest.contract_id || trackingCid,
         trackingCid,
         title,
@@ -409,7 +409,7 @@ const Governance = () => {
             ) : (
               <>
                 <p className="text-3xl font-bold text-chart-2 mb-1">{totalProposals}</p>
-                <p className="text-xs text-muted-foreground">Local ACS</p>
+                <p className="text-xs text-muted-foreground">SV Node API</p>
               </>
             )}
           </Card>
@@ -503,10 +503,10 @@ const Governance = () => {
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">
-                  Unable to load proposals from local ACS data.
+                  Unable to load proposals from SV Node API.
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Ensure the local server is running (cd server && npm start) or check network connectivity.
+                  Check network connectivity to sv-1.global.canton.network.sync.global
                 </p>
               </div>
             ) : isLoading ? (
