@@ -18,7 +18,7 @@ export const TMP_DIR = '/tmp/ledger_raw';
 // Platform detection
 export const isWindows = process.platform === 'win32';
 export const isWindowsPath = (p) => /^[A-Za-z]:[\\/]/.test(p);
-export const isLinuxPath = (p) => p && p.startsWith('/');
+export const isLinuxPath = (p) => !!p && p.startsWith('/');
 
 // Default paths per platform
 export const WIN_DEFAULT = 'C:\\ledger_raw';
