@@ -413,6 +413,90 @@ describe('normalizeEvent', () => {
       expect(typeof result.raw_event).toBe('string');
     });
   });
+
+  describe('reassignment fields extraction', () => {
+    it('should extract reassignment fields from updateInfo (priority over event)', () => {
+      const event = {
+        created_event: {
+          event_id: 'reassign:0',
+          contract_id: 'contract123',
+          template_id: 'pkg:Module:Template',
+        },
+      };
+      const updateInfo = {
+        record_time: '2024-10-07T11:30:12Z',
+        synchronizer_id: 'sync1',
+        source: 'source-sync-001',
+        target: 'target-sync-002',
+        unassign_id: 'unassign-abc',
+        submitter: 'party1',
+        counter: 5,
+      };
+
+      const result = normalizeEvent(event, 'reassign', 0, event, updateInfo);
+      
+      expect(result.source_synchronizer).toBe('source-sync-001');
+      expect(result.target_synchronizer).toBe('target-sync-002');
+      expect(result.unassign_id).toBe('unassign-abc');
+      expect(result.submitter).toBe('party1');
+      expect(result.reassignment_counter).toBe(5);
+    });
+
+    it('should handle reassignment_counter of 0 correctly', () => {
+      const event = {
+        created_event: {
+          event_id: 'reassign:0',
+          contract_id: 'contract123',
+        },
+      };
+      const updateInfo = {
+        counter: 0,  // Should not be treated as falsy
+      };
+
+      const result = normalizeEvent(event, 'reassign', 0, event, updateInfo);
+      
+      expect(result.reassignment_counter).toBe(0);
+    });
+  });
+
+  describe('exercised event field extraction', () => {
+    it('should extract choice and interface_id from exercised event', () => {
+      const event = {
+        exercised_event: {
+          event_id: 'test:0',
+          contract_id: 'contract123',
+          template_id: 'pkg:Module:Template',
+          choice: 'DsoRules_ExecuteConfirmedAction',
+          interface_id: 'pkg:Interface:DsoRulesInterface',
+          consuming: true,
+          acting_parties: ['party1'],
+        },
+      };
+
+      const result = normalizeEvent(event, 'test', 0);
+      
+      expect(result.choice).toBe('DsoRules_ExecuteConfirmedAction');
+      expect(result.interface_id).toBe('pkg:Interface:DsoRulesInterface');
+      expect(result.consuming).toBe(true);
+    });
+
+    it('should extract witness_parties from created event', () => {
+      const event = {
+        created_event: {
+          event_id: 'test:0',
+          contract_id: 'contract123',
+          template_id: 'pkg:Module:Template',
+          signatories: ['party1'],
+          observers: ['party2'],
+          witness_parties: ['party1', 'party2', 'party3'],
+        },
+      };
+
+      const result = normalizeEvent(event, 'test', 0);
+      
+      expect(result.witness_parties).toEqual(['party1', 'party2', 'party3']);
+    });
+  });
 });
 
 describe('flattenEventsInTreeOrder', () => {

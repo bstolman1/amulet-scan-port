@@ -348,24 +348,31 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
   // Created event specific fields (optional for other event types)
   const signatories = createdEvent?.signatories || event.signatories || null;
   const observers = createdEvent?.observers || event.observers || null;
-  const witnessParties = createdEvent?.witness_parties || event.witness_parties || null;
-  const contractKey = createdEvent?.contract_key || event.contract_key || null;
+  // witness_parties can be at multiple locations in the API response
+  const witnessParties = createdEvent?.witness_parties || 
+    innerEvent?.witness_parties || 
+    event.witness_parties || 
+    null;
+  const contractKey = createdEvent?.contract_key || innerEvent?.contract_key || event.contract_key || null;
   
   // Exercised event specific fields (optional for other event types)
-  const actingParties = exercisedEvent?.acting_parties || event.acting_parties || null;
-  const choice = exercisedEvent?.choice || event.choice || null;
-  const consuming = exercisedEvent?.consuming ?? event.consuming ?? null;
-  const interfaceId = exercisedEvent?.interface_id || event.interface_id || null;
+  const actingParties = exercisedEvent?.acting_parties || innerEvent?.acting_parties || event.acting_parties || null;
+  // CRITICAL: choice field must be extracted for governance analysis
+  const choice = exercisedEvent?.choice || innerEvent?.choice || event.choice || null;
+  const consuming = exercisedEvent?.consuming ?? innerEvent?.consuming ?? event.consuming ?? null;
+  // interface_id for interface-based exercises
+  const interfaceId = exercisedEvent?.interface_id || innerEvent?.interface_id || event.interface_id || null;
   // CRITICAL: child_event_ids for tree traversal
-  const childEventIds = exercisedEvent?.child_event_ids || event.child_event_ids || null;
-  const exerciseResult = exercisedEvent?.exercise_result || event.exercise_result || null;
+  const childEventIds = exercisedEvent?.child_event_ids || innerEvent?.child_event_ids || event.child_event_ids || null;
+  const exerciseResult = exercisedEvent?.exercise_result || innerEvent?.exercise_result || event.exercise_result || null;
   
-  // Reassignment-specific fields (optional)
-  const sourceSynchronizer = event.source || updateInfo?.source || null;
-  const targetSynchronizer = event.target || updateInfo?.target || null;
-  const unassignId = event.unassign_id || updateInfo?.unassign_id || null;
-  const submitter = event.submitter || updateInfo?.submitter || null;
-  const reassignmentCounter = event.counter ?? updateInfo?.counter ?? null;
+  // Reassignment-specific fields - PRIORITY: updateInfo (from reassignment wrapper) over event
+  // For reassignment events, the fields are on the reassignment wrapper, not the inner created/archived event
+  const sourceSynchronizer = updateInfo?.source || event.source || null;
+  const targetSynchronizer = updateInfo?.target || event.target || null;
+  const unassignId = updateInfo?.unassign_id || event.unassign_id || null;
+  const submitter = updateInfo?.submitter || event.submitter || null;
+  const reassignmentCounter = updateInfo?.counter ?? event.counter ?? null;
   
   return {
     event_id: eventId,
