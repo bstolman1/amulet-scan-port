@@ -445,7 +445,8 @@ export function getPartitionPath(timestamp, migrationId = null, type = 'updates'
   
   // Always include migration_id in path (default to 0 if not provided)
   const mig = migrationId ?? 0;
-  return `${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
+  // Nest updates and events under backfill/
+  return `backfill/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
 }
 
 /**

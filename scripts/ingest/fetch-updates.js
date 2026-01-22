@@ -375,24 +375,29 @@ function findLatestFromCursors() {
  * Find latest timestamp from raw binary data files
  * Scans directories to find the most recent data
  * Supports both structures:
- *   - raw/updates/migration=X/year=YYYY/month=M/day=D/ (new separated format)
- *   - raw/events/migration=X/year=YYYY/month=M/day=D/ (new separated format)
+ *   - raw/backfill/updates/migration=X/year=YYYY/month=M/day=D/ (new nested format)
+ *   - raw/backfill/events/migration=X/year=YYYY/month=M/day=D/ (new nested format)
+ *   - raw/updates/migration=X/year=YYYY/month=M/day=D/ (legacy separated format)
  *   - raw/backfill/migration=X/year=YYYY/month=M/day=D/ (legacy combined format)
- *   - raw/migration=X/year=YYYY/month=MM/day=DD/ (legacy format without backfill/)
  */
 async function findLatestFromRawData(rawDir) {
   let latestResult = null;
   
-  // Check for new separated format: raw/updates/migration=X/...
-  // Also check legacy raw/backfill/migration=X/... for backward compat
+  // Check for new nested format: raw/backfill/updates/migration=X/...
+  // Also check legacy formats for backward compat
   let searchDir = rawDir;
+  const backfillUpdatesDir = path.join(rawDir, 'backfill', 'updates');
   const updatesDir = path.join(rawDir, 'updates');
   const backfillDir = path.join(rawDir, 'backfill');
   
-  if (fs.existsSync(updatesDir)) {
+  if (fs.existsSync(backfillUpdatesDir)) {
+    // New nested format: raw/backfill/updates/
+    searchDir = backfillUpdatesDir;
+  } else if (fs.existsSync(updatesDir)) {
+    // Legacy separated format: raw/updates/
     searchDir = updatesDir;
   } else if (fs.existsSync(backfillDir)) {
-    // Legacy format fallback
+    // Legacy combined format: raw/backfill/
     searchDir = backfillDir;
   }
   

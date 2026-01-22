@@ -27,23 +27,23 @@ describe('GCS Upload', () => {
     }
     
     it('should generate correct GCS URI for updates folder', () => {
-      expect(getGCSPath('my-bucket', 'updates/migration=0/updates.parquet'))
-        .toBe('gs://my-bucket/raw/updates/migration=0/updates.parquet');
+      expect(getGCSPath('my-bucket', 'backfill/updates/migration=0/updates.parquet'))
+        .toBe('gs://my-bucket/raw/backfill/updates/migration=0/updates.parquet');
     });
     
     it('should generate correct GCS URI for events folder', () => {
-      expect(getGCSPath('my-bucket', 'events/migration=0/events.parquet'))
-        .toBe('gs://my-bucket/raw/events/migration=0/events.parquet');
+      expect(getGCSPath('my-bucket', 'backfill/events/migration=0/events.parquet'))
+        .toBe('gs://my-bucket/raw/backfill/events/migration=0/events.parquet');
     });
     
     it('should not double-prefix raw/', () => {
-      expect(getGCSPath('my-bucket', 'raw/updates/updates.parquet'))
-        .toBe('gs://my-bucket/raw/updates/updates.parquet');
+      expect(getGCSPath('my-bucket', 'raw/backfill/updates/updates.parquet'))
+        .toBe('gs://my-bucket/raw/backfill/updates/updates.parquet');
     });
     
     it('should normalize Windows paths', () => {
-      expect(getGCSPath('my-bucket', 'updates\\migration=0\\updates.parquet'))
-        .toBe('gs://my-bucket/raw/updates/migration=0/updates.parquet');
+      expect(getGCSPath('my-bucket', 'backfill\\updates\\migration=0\\updates.parquet'))
+        .toBe('gs://my-bucket/raw/backfill/updates/migration=0/updates.parquet');
     });
     
     it('should throw when bucket not configured', () => {
@@ -60,13 +60,13 @@ describe('GCS Upload', () => {
     }
     
     it('should generate tmp path correctly for updates', () => {
-      expect(getTmpPath('updates/migration=0/updates.parquet'))
-        .toBe('/tmp/ledger_raw/updates/migration=0/updates.parquet');
+      expect(getTmpPath('backfill/updates/migration=0/updates.parquet'))
+        .toBe('/tmp/ledger_raw/backfill/updates/migration=0/updates.parquet');
     });
     
     it('should generate tmp path correctly for events', () => {
-      expect(getTmpPath('events/migration=0/events.parquet'))
-        .toBe('/tmp/ledger_raw/events/migration=0/events.parquet');
+      expect(getTmpPath('backfill/events/migration=0/events.parquet'))
+        .toBe('/tmp/ledger_raw/backfill/events/migration=0/events.parquet');
     });
   });
   

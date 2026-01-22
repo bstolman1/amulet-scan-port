@@ -17,27 +17,27 @@ describe('Hive Partition Paths', () => {
     it('should generate correct path structure for updates (default)', () => {
       const path = getPartitionPath('2024-06-15T10:30:00Z', 0);
       
-      expect(path).toBe('updates/migration=0/year=2024/month=6/day=15');
+      expect(path).toBe('backfill/updates/migration=0/year=2024/month=6/day=15');
     });
     
     it('should generate correct path structure for updates (explicit)', () => {
       const path = getPartitionPath('2024-06-15T10:30:00Z', 0, 'updates');
       
-      expect(path).toBe('updates/migration=0/year=2024/month=6/day=15');
+      expect(path).toBe('backfill/updates/migration=0/year=2024/month=6/day=15');
     });
     
     it('should generate correct path structure for events', () => {
       const path = getPartitionPath('2024-06-15T10:30:00Z', 0, 'events');
       
-      expect(path).toBe('events/migration=0/year=2024/month=6/day=15');
+      expect(path).toBe('backfill/events/migration=0/year=2024/month=6/day=15');
     });
     
-    it('should keep updates and events in separate top-level folders', () => {
+    it('should nest updates and events under backfill/', () => {
       const updatesPath = getPartitionPath('2024-06-15T10:30:00Z', 0, 'updates');
       const eventsPath = getPartitionPath('2024-06-15T10:30:00Z', 0, 'events');
       
-      expect(updatesPath).toMatch(/^updates\//);
-      expect(eventsPath).toMatch(/^events\//);
+      expect(updatesPath).toMatch(/^backfill\/updates\//);
+      expect(eventsPath).toMatch(/^backfill\/events\//);
       expect(updatesPath).not.toBe(eventsPath);
     });
     
@@ -72,13 +72,13 @@ describe('Hive Partition Paths', () => {
     it('should handle end-of-year dates', () => {
       const path = getPartitionPath('2024-12-31T23:59:59Z', 0, 'events');
       
-      expect(path).toBe('events/migration=0/year=2024/month=12/day=31');
+      expect(path).toBe('backfill/events/migration=0/year=2024/month=12/day=31');
     });
     
     it('should handle leap year February', () => {
       const path = getPartitionPath('2024-02-29T12:00:00Z', 0, 'updates');
       
-      expect(path).toBe('updates/migration=0/year=2024/month=2/day=29');
+      expect(path).toBe('backfill/updates/migration=0/year=2024/month=2/day=29');
     });
     
     it('should handle different years', () => {
