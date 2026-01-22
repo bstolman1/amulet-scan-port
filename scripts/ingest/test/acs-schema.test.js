@@ -47,7 +47,8 @@ describe('parseTemplateId', () => {
       const templateId = 'Splice.Amulet:Amulet';
       const result = parseTemplateId(templateId);
       
-      expect(result.packageName).toBe('');
+      // packageName is null when there's no hash prefix (only 2 parts)
+      expect(result.packageName).toBeNull();
       expect(result.moduleName).toBe('Splice.Amulet');
       expect(result.entityName).toBe('Amulet');
     });
@@ -239,8 +240,8 @@ describe('normalizeACSContract', () => {
 
     it('should include context in ACSValidationError', () => {
       const event = {
-        event_id: 'evt999',
-        // Missing contract_id and template_id
+        // Missing both contract_id AND event_id (no fallback)
+        // Also missing template_id
       };
 
       try {

@@ -210,7 +210,7 @@ export function normalizeUpdate(raw, options = {}) {
   return {
     update_id: update.update_id || raw.update_id,
     update_type: updateType,
-    migration_id: parseInt(raw.migration_id) || null,
+    migration_id: raw.migration_id != null ? parseInt(raw.migration_id) : null,
     synchronizer_id: update.synchronizer_id || null,
     // These fields are optional per API docs
     workflow_id: update.workflow_id || null,
@@ -375,7 +375,7 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     contract_id: contractId,
     template_id: templateId,
     package_name: packageName,
-    migration_id: parseInt(migrationId) || null,
+    migration_id: migrationId != null ? parseInt(migrationId) : null,
     synchronizer_id: synchronizer,
     effective_at: effectiveAt,
     recorded_at: new Date(),

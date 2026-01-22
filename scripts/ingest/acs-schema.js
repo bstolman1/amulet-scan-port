@@ -254,7 +254,7 @@ export function normalizeACSContract(event, migrationId, recordTime, snapshotTim
     package_name: packageName,
     module_name: moduleName,
     entity_name: entityName,
-    migration_id: parseInt(migrationId) || null,
+    migration_id: migrationId != null ? parseInt(migrationId) : null,
     record_time: recordTime ? new Date(recordTime) : null,
     snapshot_time: snapshotTime ? new Date(snapshotTime) : new Date(),
     signatories: event.signatories || [],

@@ -13,12 +13,14 @@ export default defineConfig({
       'server/**/*.{test,spec}.{js,ts}',
       'scripts/ingest/test/**/*.{test,spec}.js',
     ],
-    // Exclude integration/e2e tests (require running server) and node_modules
+    // Exclude integration/e2e tests (require running server) and standalone scripts
     exclude: [
       '**/node_modules/**',
       'dist',
       'server/test/integration/**',
       'server/test/e2e/**',
+      // This file uses a custom check() runner, not vitest
+      'scripts/ingest/test/pipeline-health.test.js',
     ],
 coverage: {
       provider: 'v8',
