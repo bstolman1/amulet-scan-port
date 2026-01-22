@@ -8,13 +8,45 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  isWindows,
+  isWindowsPath,
+  isLinuxPath,
+  WIN_DEFAULT,
+  LINUX_DEFAULT,
+  TMP_DIR,
+  normalizeCrossPlatform,
+  getBaseDataDir,
+  getRawDir,
+  getCursorDir,
+  getTmpDir,
+  getTmpRawDir,
+  toDuckDBPath,
+  isGCSMode,
+  validateGCSBucket,
+  getGCSBucket,
+  logPathConfig,
+} from '../path-utils.js';
 
 describe('Path Utilities', () => {
+  // Store original env values
+  const originalEnv = { ...process.env };
+  
+  beforeEach(() => {
+    // Reset env vars before each test
+    delete process.env.DATA_DIR;
+    delete process.env.CURSOR_DIR;
+    delete process.env.GCS_BUCKET;
+    delete process.env.GCS_ENABLED;
+  });
+  
+  afterEach(() => {
+    // Restore original env
+    process.env = { ...originalEnv };
+  });
   
   describe('Platform Detection', () => {
     it('should detect Windows paths correctly', () => {
-      const isWindowsPath = (p) => /^[A-Za-z]:[\\/]/.test(p);
-      
       expect(isWindowsPath('C:\\ledger_data')).toBe(true);
       expect(isWindowsPath('D:/data/raw')).toBe(true);
       expect(isWindowsPath('E:\\Users\\test')).toBe(true);
@@ -24,8 +56,6 @@ describe('Path Utilities', () => {
     });
     
     it('should detect Linux paths correctly', () => {
-      const isLinuxPath = (p) => !!p && p.startsWith('/');
-      
       expect(isLinuxPath('/home/user/data')).toBe(true);
       expect(isLinuxPath('/tmp/ledger_raw')).toBe(true);
       expect(isLinuxPath('/var/log')).toBe(true);
@@ -34,70 +64,98 @@ describe('Path Utilities', () => {
       expect(isLinuxPath('')).toBe(false);
       expect(isLinuxPath(null)).toBe(false);
     });
+    
+    it('should export platform constants', () => {
+      expect(typeof isWindows).toBe('boolean');
+      expect(WIN_DEFAULT).toBe('C:\\ledger_raw');
+      expect(LINUX_DEFAULT).toBe('/home/ben/ledger_data');
+      expect(TMP_DIR).toBe('/tmp/ledger_raw');
+    });
   });
   
   describe('Cross-Platform Normalization', () => {
-    const WIN_DEFAULT = 'C:\\ledger_raw';
-    const LINUX_DEFAULT = '/home/ben/ledger_data';
-    
-    function normalizeCrossPlatform(inputPath, isWindows, customLinuxDefault = LINUX_DEFAULT, customWinDefault = WIN_DEFAULT) {
-      const isWindowsPath = (p) => /^[A-Za-z]:[\\/]/.test(p);
-      const isLinuxPath = (p) => p && p.startsWith('/');
-      
-      if (!inputPath) {
-        return isWindows ? customWinDefault : customLinuxDefault;
-      }
-      
-      if (!isWindows && isWindowsPath(inputPath)) {
-        return customLinuxDefault;
-      }
-      
-      if (isWindows && isLinuxPath(inputPath)) {
-        return customWinDefault;
-      }
-      
-      return inputPath;
-    }
-    
-    it('should return Linux default when no input on Linux', () => {
-      const result = normalizeCrossPlatform(null, false);
-      expect(result).toBe(LINUX_DEFAULT);
+    it('should return default when no input provided', () => {
+      const result = normalizeCrossPlatform(null);
+      // Should return platform-appropriate default
+      expect(result).toBe(isWindows ? WIN_DEFAULT : LINUX_DEFAULT);
     });
     
-    it('should return Windows default when no input on Windows', () => {
-      const result = normalizeCrossPlatform(null, true);
-      expect(result).toBe(WIN_DEFAULT);
+    it('should return empty string default when no input provided', () => {
+      const result = normalizeCrossPlatform('');
+      expect(result).toBe(isWindows ? WIN_DEFAULT : LINUX_DEFAULT);
     });
     
-    it('should fallback to Linux default when given Windows path on Linux', () => {
-      const result = normalizeCrossPlatform('C:\\Users\\data', false);
-      expect(result).toBe(LINUX_DEFAULT);
-    });
-    
-    it('should fallback to Windows default when given Linux path on Windows', () => {
-      const result = normalizeCrossPlatform('/home/user/data', true);
-      expect(result).toBe(WIN_DEFAULT);
-    });
-    
-    it('should preserve path when format matches platform', () => {
-      expect(normalizeCrossPlatform('/custom/path', false)).toBe('/custom/path');
-      expect(normalizeCrossPlatform('D:\\custom\\path', true)).toBe('D:\\custom\\path');
-    });
-    
-    it('should allow custom defaults', () => {
+    it('should use custom defaults when provided', () => {
       const customLinux = '/var/ledger';
       const customWin = 'E:\\ledger';
       
-      expect(normalizeCrossPlatform(null, false, customLinux, customWin)).toBe(customLinux);
-      expect(normalizeCrossPlatform(null, true, customLinux, customWin)).toBe(customWin);
+      const result = normalizeCrossPlatform(null, customLinux, customWin);
+      expect(result).toBe(isWindows ? customWin : customLinux);
+    });
+    
+    it('should preserve valid paths for current platform', () => {
+      if (isWindows) {
+        expect(normalizeCrossPlatform('D:\\custom\\path')).toBe('D:\\custom\\path');
+      } else {
+        expect(normalizeCrossPlatform('/custom/path')).toBe('/custom/path');
+      }
+    });
+    
+    it('should handle cross-platform path mismatch', () => {
+      // On Linux, Windows paths should fallback to Linux default
+      // On Windows, Linux paths should fallback to Windows default
+      if (!isWindows) {
+        // We're on Linux, test Windows path input
+        const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const result = normalizeCrossPlatform('C:\\Users\\data');
+        expect(result).toBe(LINUX_DEFAULT);
+        spy.mockRestore();
+      } else {
+        // We're on Windows, test Linux path input
+        const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const result = normalizeCrossPlatform('/home/user/data');
+        expect(result).toBe(WIN_DEFAULT);
+        spy.mockRestore();
+      }
+    });
+  });
+  
+  describe('Directory Functions', () => {
+    it('should get base data dir with default', () => {
+      const result = getBaseDataDir();
+      expect(typeof result).toBe('string');
+      expect(result.length).toBeGreaterThan(0);
+    });
+    
+    it('should get base data dir with custom env', () => {
+      const customPath = isWindows ? 'D:\\custom' : '/custom/data';
+      const result = getBaseDataDir(customPath);
+      expect(result).toContain('custom');
+    });
+    
+    it('should derive raw directory from base', () => {
+      const result = getRawDir();
+      expect(result).toContain('raw');
+    });
+    
+    it('should get cursor dir with fallback to DATA_DIR', () => {
+      const result = getCursorDir();
+      expect(result).toContain('cursors');
+    });
+    
+    it('should use CURSOR_DIR when provided', () => {
+      const customCursor = isWindows ? 'D:\\cursors' : '/custom/cursors';
+      const result = getCursorDir(customCursor);
+      expect(result).toContain('cursors');
+    });
+    
+    it('should get tmp directories', () => {
+      expect(getTmpDir()).toBe('/tmp/ledger_raw');
+      expect(getTmpRawDir()).toBe('/tmp/ledger_raw/raw');
     });
   });
   
   describe('DuckDB Path Conversion', () => {
-    function toDuckDBPath(filePath) {
-      return filePath.replace(/\\/g, '/');
-    }
-    
     it('should convert Windows backslashes to forward slashes', () => {
       expect(toDuckDBPath('C:\\data\\raw\\file.parquet')).toBe('C:/data/raw/file.parquet');
       expect(toDuckDBPath('D:\\ledger\\migration=0\\updates.parquet')).toBe('D:/ledger/migration=0/updates.parquet');
@@ -112,107 +170,82 @@ describe('Path Utilities', () => {
     });
   });
   
-  describe('Directory Derivation', () => {
-    it('should derive raw directory from base', () => {
-      const getBaseDataDir = () => '/home/ben/ledger_data';
-      const getRawDir = () => getBaseDataDir() + '/raw';
-      
-      expect(getRawDir()).toBe('/home/ben/ledger_data/raw');
-    });
-    
-    it('should derive cursor directory from base', () => {
-      const getBaseDataDir = () => '/home/ben/ledger_data';
-      const getCursorDir = (cursorEnv) => cursorEnv || getBaseDataDir() + '/cursors';
-      
-      expect(getCursorDir()).toBe('/home/ben/ledger_data/cursors');
-      expect(getCursorDir('/custom/cursors')).toBe('/custom/cursors');
-    });
-    
-    it('should derive tmp directories correctly', () => {
-      const TMP_DIR = '/tmp/ledger_raw';
-      const getTmpRawDir = () => TMP_DIR + '/raw';
-      
-      expect(getTmpRawDir()).toBe('/tmp/ledger_raw/raw');
-    });
-  });
-  
   describe('GCS Mode Detection', () => {
     it('should be disabled when GCS_BUCKET is not set', () => {
-      const isGCSMode = (bucket, enabled) => {
-        if (!bucket) return false;
-        return enabled !== 'false';
-      };
-      
-      expect(isGCSMode(null, null)).toBe(false);
-      expect(isGCSMode('', null)).toBe(false);
-      expect(isGCSMode(undefined, 'true')).toBe(false);
+      delete process.env.GCS_BUCKET;
+      expect(isGCSMode()).toBe(false);
     });
     
-    it('should be enabled when GCS_BUCKET is set and not disabled', () => {
-      const isGCSMode = (bucket, enabled) => {
-        if (!bucket) return false;
-        return enabled !== 'false';
-      };
-      
-      expect(isGCSMode('my-bucket', null)).toBe(true);
-      expect(isGCSMode('my-bucket', 'true')).toBe(true);
-      expect(isGCSMode('my-bucket', undefined)).toBe(true);
+    it('should be enabled when GCS_BUCKET is set', () => {
+      process.env.GCS_BUCKET = 'my-bucket';
+      expect(isGCSMode()).toBe(true);
     });
     
-    it('should be disabled when explicitly set to false', () => {
-      const isGCSMode = (bucket, enabled) => {
-        if (!bucket) return false;
-        return enabled !== 'false';
-      };
-      
-      expect(isGCSMode('my-bucket', 'false')).toBe(false);
+    it('should be disabled when GCS_ENABLED is false', () => {
+      process.env.GCS_BUCKET = 'my-bucket';
+      process.env.GCS_ENABLED = 'false';
+      expect(isGCSMode()).toBe(false);
+    });
+    
+    it('should remain enabled when GCS_ENABLED is true', () => {
+      process.env.GCS_BUCKET = 'my-bucket';
+      process.env.GCS_ENABLED = 'true';
+      expect(isGCSMode()).toBe(true);
     });
   });
   
   describe('GCS Bucket Validation', () => {
     it('should throw when required but not set', () => {
-      const validateGCSBucket = (bucket, required, enabled) => {
-        if (!bucket) {
-          if (required || enabled === 'true') {
-            throw new Error('GCS_BUCKET environment variable is required');
-          }
-          return null;
-        }
-        return bucket;
-      };
-      
-      expect(() => validateGCSBucket(null, true, null)).toThrow();
-      expect(() => validateGCSBucket(null, false, 'true')).toThrow();
+      delete process.env.GCS_BUCKET;
+      expect(() => validateGCSBucket(true)).toThrow('GCS_BUCKET environment variable is required');
+    });
+    
+    it('should throw when GCS_ENABLED is true but bucket not set', () => {
+      delete process.env.GCS_BUCKET;
+      process.env.GCS_ENABLED = 'true';
+      expect(() => validateGCSBucket(false)).toThrow('GCS_BUCKET environment variable is required');
     });
     
     it('should return null when not required and not set', () => {
-      const validateGCSBucket = (bucket, required, enabled) => {
-        if (!bucket) {
-          if (required || enabled === 'true') {
-            throw new Error('GCS_BUCKET environment variable is required');
-          }
-          return null;
-        }
-        return bucket;
-      };
-      
-      expect(validateGCSBucket(null, false, null)).toBeNull();
-      expect(validateGCSBucket(null, false, 'false')).toBeNull();
+      delete process.env.GCS_BUCKET;
+      expect(validateGCSBucket(false)).toBeNull();
     });
     
     it('should return bucket name when set', () => {
-      const validateGCSBucket = (bucket, required, enabled) => {
-        if (!bucket) {
-          if (required || enabled === 'true') {
-            throw new Error('GCS_BUCKET environment variable is required');
-          }
-          return null;
-        }
-        return bucket;
-      };
+      process.env.GCS_BUCKET = 'my-bucket';
+      expect(validateGCSBucket(false)).toBe('my-bucket');
+      expect(validateGCSBucket(true)).toBe('my-bucket');
+    });
+    
+    it('getGCSBucket should return bucket via validateGCSBucket', () => {
+      process.env.GCS_BUCKET = 'test-bucket';
+      expect(getGCSBucket()).toBe('test-bucket');
+    });
+  });
+  
+  describe('Log Path Config', () => {
+    it('should log configuration without throwing', () => {
+      const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
       
-      expect(validateGCSBucket('my-bucket', false, null)).toBe('my-bucket');
-      expect(validateGCSBucket('my-bucket', true, null)).toBe('my-bucket');
+      expect(() => logPathConfig()).not.toThrow();
+      expect(() => logPathConfig('test-module')).not.toThrow();
+      
+      // Should have logged multiple lines
+      expect(spy).toHaveBeenCalled();
+      spy.mockRestore();
+    });
+    
+    it('should log GCS mode info when bucket is set', () => {
+      process.env.GCS_BUCKET = 'test-bucket';
+      const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      
+      logPathConfig('gcs-test');
+      
+      // Verify GCS-related logs were made
+      const calls = spy.mock.calls.map(c => c[0]);
+      expect(calls.some(c => c.includes('GCS_BUCKET'))).toBe(true);
+      
+      spy.mockRestore();
     });
   });
 });
