@@ -103,20 +103,33 @@ function downloadFile(gcsPath, localName) {
 
 /**
  * Get schema from a Parquet file using DuckDB
+ * Uses -noheader and -list mode for reliable parsing
  */
 function getParquetSchema(filePath) {
   try {
+    // Use -list mode with | separator for reliable parsing
     const output = exec(
-      `duckdb -c "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '${filePath}')" -csv`
+      `duckdb -list -separator '|' -noheader -c "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '${filePath}')"`
     );
     
-    const lines = output.trim().split('\n').slice(1); // Skip header
+    const lines = output.trim().split('\n');
     const schema = {};
     
     for (const line of lines) {
-      const [name, type] = line.split(',').map(s => s.replace(/"/g, '').trim());
-      if (name) {
-        schema[name] = type;
+      // Skip empty lines and box-drawing characters
+      if (!line || line.includes('─') || line.includes('┼') || line.includes('┤') || line.includes('├')) {
+        continue;
+      }
+      
+      // Parse pipe-separated values
+      const parts = line.split('|').map(s => s.trim());
+      if (parts.length >= 2) {
+        const name = parts[0];
+        const type = parts[1];
+        // Skip header row if it slipped through
+        if (name && name !== 'column_name' && !name.includes('varchar')) {
+          schema[name] = type;
+        }
       }
     }
     
