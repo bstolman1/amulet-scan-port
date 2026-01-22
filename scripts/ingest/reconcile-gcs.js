@@ -18,7 +18,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { execSync } from 'child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,6 +33,7 @@ const CURSOR_DIR = getCursorDir();
 // Parse args
 const args = process.argv.slice(2);
 const FIX_MODE = args.includes('--fix');
+const RESET_EMPTY = args.includes('--reset-empty'); // Reset cursors when GCS has no files
 const MIGRATION_ARG = args.find(a => a.startsWith('--migration='));
 const TARGET_MIGRATION = MIGRATION_ARG ? parseInt(MIGRATION_ARG.split('=')[1]) : null;
 
@@ -131,18 +132,45 @@ function loadCursorsForMigration(migrationId) {
 function reconcileMigration(migrationId) {
   console.log(`\n🔍 Reconciling migration ${migrationId}...`);
   
+  // Load cursors first to check if any exist
+  const cursors = loadCursorsForMigration(migrationId);
+  
   // Find latest GCS timestamp
   const gcsResult = findLatestGCSTimestamp(migrationId);
   
   if (gcsResult.timestamp === null) {
     console.log(`   ℹ️ No GCS files found for migration ${migrationId}`);
+    
+    // If GCS is empty but cursors exist, optionally reset them
+    if (cursors.length > 0 && RESET_EMPTY) {
+      console.log(`   ⚠️ GCS is empty but ${cursors.length} cursor(s) exist - resetting...`);
+      
+      for (const { file, cursor } of cursors) {
+        console.log(`   🔧 Deleting cursor ${file}...`);
+        const cursorPath = join(CURSOR_DIR, file);
+        try {
+          unlinkSync(cursorPath);
+          // Also delete backup if exists
+          if (existsSync(cursorPath + '.bak')) {
+            unlinkSync(cursorPath + '.bak');
+          }
+          console.log(`   ✅ Deleted ${file}`);
+        } catch (err) {
+          console.error(`   ❌ Failed to delete ${file}: ${err.message}`);
+        }
+      }
+      
+      return { ok: true, message: 'Cursors reset (GCS empty)', migrationId, reset: true };
+    } else if (cursors.length > 0) {
+      console.log(`   ⚠️ GCS is empty but ${cursors.length} cursor(s) exist!`);
+      console.log(`      Run with --reset-empty to delete cursors and start fresh.`);
+      return { ok: false, message: 'GCS empty but cursors exist', migrationId, needsReset: true };
+    }
+    
     return { ok: true, message: 'No GCS files', migrationId };
   }
   
   console.log(`   ☁️ GCS: ${gcsResult.fileCount} files, earliest timestamp: ${new Date(gcsResult.timestamp).toISOString()}`);
-  
-  // Load cursors
-  const cursors = loadCursorsForMigration(migrationId);
   
   if (cursors.length === 0) {
     console.log(`   ℹ️ No cursors found for migration ${migrationId}`);
@@ -256,6 +284,7 @@ async function main() {
   console.log(`GCS Bucket: ${GCS_BUCKET}`);
   console.log(`Cursor Dir: ${CURSOR_DIR}`);
   console.log(`Fix Mode: ${FIX_MODE ? 'ENABLED (will reset cursors)' : 'disabled (dry run)'}`);
+  console.log(`Reset Empty: ${RESET_EMPTY ? 'ENABLED (will delete cursors if GCS empty)' : 'disabled'}`);
   console.log("═".repeat(80));
   
   // Discover or use specified migration
