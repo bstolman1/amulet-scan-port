@@ -33,7 +33,7 @@ function sanitize(str) {
 /**
  * Get cursor file path (shard-aware)
  */
-function getCursorPath(migrationId, synchronizerId, shardIndex = null) {
+export function getCursorPath(migrationId, synchronizerId, shardIndex = null) {
   const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
   return join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
 }
@@ -49,7 +49,7 @@ function getCursorPath(migrationId, synchronizerId, shardIndex = null) {
  * If crash happens during write: .tmp file is incomplete, original intact
  * If crash happens during rename: atomic, so either old or new is complete
  */
-function atomicWriteFile(filePath, data) {
+export function atomicWriteFile(filePath, data) {
   const tempPath = filePath + '.tmp';
   const backupPath = filePath + '.bak';
   
