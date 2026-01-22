@@ -11,6 +11,7 @@ import {
   normalizeEvent,
   flattenEventsInTreeOrder,
   getPartitionPath,
+  SchemaValidationError,
 } from '../data-schema.js';
 
 describe('normalizeUpdate', () => {
@@ -85,15 +86,54 @@ describe('normalizeUpdate', () => {
       expect(result.target_synchronizer).toBe('target-sync');
     });
 
-    it('should return unknown for unrecognized format', () => {
+    it('should throw SchemaValidationError for unrecognized format in strict mode', () => {
       const raw = {
         update_id: 'mystery',
         migration_id: 0,
         // No transaction wrapper, no reassignment wrapper, no events_by_id
       };
 
-      const result = normalizeUpdate(raw);
+      expect(() => normalizeUpdate(raw)).toThrow(SchemaValidationError);
+      expect(() => normalizeUpdate(raw)).toThrow(/Unknown update_type/);
+    });
+
+    it('should include context in SchemaValidationError', () => {
+      const raw = {
+        update_id: 'mystery123',
+        migration_id: 0,
+        some_field: 'test',
+      };
+
+      try {
+        normalizeUpdate(raw);
+        expect.fail('Should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(SchemaValidationError);
+        expect(e.context.update_id).toBe('mystery123');
+        expect(e.context.has_events_by_id).toBe(false);
+        expect(e.context.top_level_keys).toContain('some_field');
+      }
+    });
+
+    it('should allow unknown type with strict=false', () => {
+      const raw = {
+        update_id: 'mystery',
+        migration_id: 0,
+      };
+
+      const result = normalizeUpdate(raw, { strict: false });
       
+      expect(result.update_type).toBe('unknown');
+    });
+
+    it('should warn but not throw with warnOnly=true', () => {
+      const raw = {
+        update_id: 'mystery',
+        migration_id: 0,
+      };
+
+      // Should not throw
+      const result = normalizeUpdate(raw, { strict: true, warnOnly: true });
       expect(result.update_type).toBe('unknown');
     });
   });
