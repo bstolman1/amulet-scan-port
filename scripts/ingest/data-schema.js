@@ -135,21 +135,63 @@ export const EVENTS_COLUMNS = [
 ];
 
 /**
+ * Custom error for schema validation failures
+ */
+export class SchemaValidationError extends Error {
+  constructor(message, context = {}) {
+    super(message);
+    this.name = 'SchemaValidationError';
+    this.context = context;
+  }
+}
+
+/**
  * Normalize a ledger update for parquet storage
  * 
  * IMPORTANT: record_time is the canonical ordering key per API docs.
  * It is monotonically increasing within a given migration_id + synchronizer_id.
  * 
  * @param {object} raw - Raw update from Scan API
+ * @param {object} options - Validation options
+ * @param {boolean} options.strict - If true (default), throws on unknown update_type
+ * @param {boolean} options.warnOnly - If true, logs warning instead of throwing
  * @returns {object} Normalized update object
+ * @throws {SchemaValidationError} If update_type is 'unknown' and strict mode enabled
  */
-export function normalizeUpdate(raw) {
+export function normalizeUpdate(raw, options = {}) {
+  const { strict = true, warnOnly = false } = options;
+  
   const update = raw.transaction || raw.reassignment || raw;
   const isReassignment = !!raw.reassignment;
   
   // Detect if this is a transaction when no wrapper exists
   // Transactions have events_by_id, reassignments don't
   const isTransaction = !!raw.transaction || (!isReassignment && !!update.events_by_id);
+  
+  // Determine update type
+  const updateType = isTransaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown';
+  
+  // Validate update_type - catch schema mismatches early
+  if (updateType === 'unknown') {
+    const updateId = update.update_id || raw.update_id || 'NO_ID';
+    const context = {
+      update_id: updateId,
+      has_transaction_wrapper: !!raw.transaction,
+      has_reassignment_wrapper: !!raw.reassignment,
+      has_events_by_id: !!update.events_by_id,
+      top_level_keys: Object.keys(raw).slice(0, 10),
+    };
+    
+    const message = `Unknown update_type detected for update ${updateId}. ` +
+      `This indicates a schema mismatch - the update is neither a transaction (no events_by_id) ` +
+      `nor a reassignment (no reassignment wrapper). Keys: [${context.top_level_keys.join(', ')}]`;
+    
+    if (strict && !warnOnly) {
+      throw new SchemaValidationError(message, context);
+    } else if (warnOnly) {
+      console.warn(`[SCHEMA WARNING] ${message}`);
+    }
+  }
   
   // Extract root event IDs - CRITICAL for tree traversal
   const rootEventIds = update.root_event_ids || [];
@@ -167,7 +209,7 @@ export function normalizeUpdate(raw) {
   
   return {
     update_id: update.update_id || raw.update_id,
-    update_type: isTransaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown',
+    update_type: updateType,
     migration_id: parseInt(raw.migration_id) || null,
     synchronizer_id: update.synchronizer_id || null,
     // These fields are optional per API docs
