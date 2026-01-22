@@ -430,9 +430,14 @@ function extractPackageName(templateId) {
  * IMPORTANT: Partition values are numeric (not zero-padded strings) to ensure
  * BigQuery/DuckDB infer them as INT64 rather than STRING/BYTE_ARRAY.
  * 
- * Structure: raw/backfill/migration=X/year=YYYY/month=M/day=D/
+ * Structure: raw/{type}/migration=X/year=YYYY/month=M/day=D/
+ * Where type is 'updates' or 'events' for clean BigQuery external table setup
+ * 
+ * @param {Date|string|number} timestamp - Timestamp for partitioning
+ * @param {number|null} migrationId - Migration ID (defaults to 0)
+ * @param {string} type - Data type: 'updates' or 'events' (defaults to 'updates' for backward compat)
  */
-export function getPartitionPath(timestamp, migrationId = null) {
+export function getPartitionPath(timestamp, migrationId = null, type = 'updates') {
   const d = new Date(timestamp);
   const year = d.getFullYear();
   const month = d.getMonth() + 1;  // 1-12, no padding for INT64 inference
@@ -440,7 +445,7 @@ export function getPartitionPath(timestamp, migrationId = null) {
   
   // Always include migration_id in path (default to 0 if not provided)
   const mig = migrationId ?? 0;
-  return `backfill/migration=${mig}/year=${year}/month=${month}/day=${day}`;
+  return `${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
 }
 
 /**

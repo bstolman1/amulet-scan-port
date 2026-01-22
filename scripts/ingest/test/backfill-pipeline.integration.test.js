@@ -278,18 +278,18 @@ describe('Backfill Pipeline Integration', () => {
         const recordTime = update.record_time;
         const migrationId = raw.migration_id;
         
-        const path = getPartitionPath(recordTime, migrationId);
+        const path = getPartitionPath(recordTime, migrationId, 'updates');
         paths.add(path);
       }
       
       // All items are from same date, should have same partition
       expect(paths.size).toBe(1);
-      expect([...paths][0]).toBe('backfill/migration=0/year=2024/month=6/day=15');
+      expect([...paths][0]).toBe('updates/migration=0/year=2024/month=6/day=15');
     });
     
     it('should separate items by migration', () => {
-      const path0 = getPartitionPath('2024-06-15T10:00:00Z', 0);
-      const path1 = getPartitionPath('2024-06-15T10:00:00Z', 1);
+      const path0 = getPartitionPath('2024-06-15T10:00:00Z', 0, 'updates');
+      const path1 = getPartitionPath('2024-06-15T10:00:00Z', 1, 'updates');
       
       expect(path0).toContain('migration=0');
       expect(path1).toContain('migration=1');

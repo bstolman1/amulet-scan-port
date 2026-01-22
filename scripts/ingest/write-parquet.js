@@ -480,7 +480,8 @@ export async function flushUpdates() {
   const firstRecord = updatesBuffer[0];
   const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  const partition = getPartitionPath(effectiveAt, migrationId);
+  // Use 'updates' type for separate top-level folder
+  const partition = getPartitionPath(effectiveAt, migrationId, 'updates');
   const partitionDir = join(getDataDir(), partition);
   
   ensureDir(partitionDir);
@@ -509,7 +510,8 @@ export async function flushEvents() {
   const firstRecord = eventsBuffer[0];
   const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  const partition = getPartitionPath(effectiveAt, migrationId);
+  // Use 'events' type for separate top-level folder
+  const partition = getPartitionPath(effectiveAt, migrationId, 'events');
   const partitionDir = join(getDataDir(), partition);
   
   ensureDir(partitionDir);
