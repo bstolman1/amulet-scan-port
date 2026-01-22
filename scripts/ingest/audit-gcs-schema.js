@@ -141,6 +141,97 @@ function getParquetSchema(filePath) {
 }
 
 /**
+ * Get data population stats for each column in a Parquet file
+ * Returns count of non-null values for each column
+ */
+function getColumnPopulation(filePath, columns) {
+  try {
+    const results = {};
+    const columnList = columns.slice(0, 20); // Limit to avoid huge queries
+    
+    // Build a query that counts non-null values for each column
+    const countExprs = columnList.map(col => 
+      `COUNT("${col}") AS "${col}_count", COUNT(*) - COUNT("${col}") AS "${col}_nulls"`
+    ).join(', ');
+    
+    const output = exec(
+      `duckdb -list -separator '|' -noheader -c "SELECT ${countExprs} FROM '${filePath}' LIMIT 10000"`,
+      { throwOnError: false }
+    );
+    
+    if (!output || output.includes('Error')) {
+      // Fallback: just get row count and sample values
+      const rowCountOutput = exec(
+        `duckdb -list -separator '|' -noheader -c "SELECT COUNT(*) FROM '${filePath}'"`,
+        { throwOnError: false }
+      );
+      const totalRows = parseInt(rowCountOutput?.trim() || '0');
+      
+      return { 
+        totalRows, 
+        columns: {},
+        error: 'Could not get detailed column stats'
+      };
+    }
+    
+    const values = output.trim().split('|');
+    let totalRows = 0;
+    
+    for (let i = 0; i < columnList.length; i++) {
+      const countIdx = i * 2;
+      const nullIdx = i * 2 + 1;
+      const count = parseInt(values[countIdx] || '0');
+      const nulls = parseInt(values[nullIdx] || '0');
+      const total = count + nulls;
+      if (total > totalRows) totalRows = total;
+      
+      results[columnList[i]] = {
+        populated: count,
+        nulls: nulls,
+        populationRate: total > 0 ? ((count / total) * 100).toFixed(1) : '0.0'
+      };
+    }
+    
+    return { totalRows, columns: results };
+  } catch (err) {
+    return { totalRows: 0, columns: {}, error: err.message };
+  }
+}
+
+/**
+ * Get sample values for critical columns
+ */
+function getSampleValues(filePath, columns) {
+  try {
+    const criticalCols = columns.filter(c => 
+      ['event_id', 'update_id', 'contract_id', 'template_id', 'payload', 'raw_event', 'raw'].includes(c)
+    ).slice(0, 5);
+    
+    if (criticalCols.length === 0) return {};
+    
+    const selectExpr = criticalCols.map(c => `"${c}"`).join(', ');
+    const output = exec(
+      `duckdb -list -separator '|' -noheader -c "SELECT ${selectExpr} FROM '${filePath}' WHERE \"${criticalCols[0]}\" IS NOT NULL LIMIT 1"`,
+      { throwOnError: false }
+    );
+    
+    if (!output) return {};
+    
+    const values = output.trim().split('|');
+    const samples = {};
+    criticalCols.forEach((col, i) => {
+      const val = values[i] || '';
+      // Truncate long values
+      samples[col] = val.length > 80 ? val.substring(0, 80) + '...' : val;
+    });
+    
+    return samples;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Compare actual schema against expected schema
  */
 function compareSchemas(actual, expected, label) {
@@ -176,6 +267,7 @@ async function auditMigration(migrationId) {
     migrationId,
     updates: null,
     events: null,
+    dataPopulation: {},
     sampleFiles: [],
   };
   
@@ -193,6 +285,21 @@ async function auditMigration(migrationId) {
       result.sampleFiles.push(updateFile);
       
       printSchemaComparison(result.updates, schema, LEDGER_UPDATES_SCHEMA);
+      
+      // Check data population
+      console.log(`\n   📊 DATA POPULATION CHECK:`);
+      const population = getColumnPopulation(localPath, Object.keys(schema));
+      result.dataPopulation.updates = population;
+      printDataPopulation(population, 'updates');
+      
+      // Show sample values
+      const samples = getSampleValues(localPath, Object.keys(schema));
+      if (Object.keys(samples).length > 0) {
+        console.log(`\n   🔍 SAMPLE VALUES:`);
+        for (const [col, val] of Object.entries(samples)) {
+          console.log(`      ${col}: ${val || '(empty)'}`);
+        }
+      }
     }
   } else {
     console.log(`\n  ⚠️ No update files found for migration ${migrationId}`);
@@ -211,12 +318,79 @@ async function auditMigration(migrationId) {
       result.sampleFiles.push(eventFile);
       
       printSchemaComparison(result.events, schema, LEDGER_EVENTS_SCHEMA);
+      
+      // Check data population
+      console.log(`\n   📊 DATA POPULATION CHECK:`);
+      const population = getColumnPopulation(localPath, Object.keys(schema));
+      result.dataPopulation.events = population;
+      printDataPopulation(population, 'events');
+      
+      // Show sample values
+      const samples = getSampleValues(localPath, Object.keys(schema));
+      if (Object.keys(samples).length > 0) {
+        console.log(`\n   🔍 SAMPLE VALUES:`);
+        for (const [col, val] of Object.entries(samples)) {
+          console.log(`      ${col}: ${val || '(empty)'}`);
+        }
+      }
     }
   } else {
     console.log(`\n  ⚠️ No event files found for migration ${migrationId}`);
   }
   
   return result;
+}
+
+/**
+ * Print data population stats
+ */
+function printDataPopulation(population, label) {
+  if (population.error) {
+    console.log(`      ⚠️ ${population.error}`);
+    return;
+  }
+  
+  console.log(`      Total rows sampled: ${population.totalRows}`);
+  
+  const columns = population.columns;
+  const populated = [];
+  const sparse = [];
+  const empty = [];
+  
+  for (const [col, stats] of Object.entries(columns)) {
+    const rate = parseFloat(stats.populationRate);
+    if (rate >= 90) {
+      populated.push({ col, rate });
+    } else if (rate > 0) {
+      sparse.push({ col, rate, nulls: stats.nulls });
+    } else {
+      empty.push(col);
+    }
+  }
+  
+  if (populated.length > 0) {
+    console.log(`      ✅ Well-populated (>90%): ${populated.length} columns`);
+  }
+  
+  if (sparse.length > 0) {
+    console.log(`      ⚠️ SPARSE COLUMNS (has data but <90%):`);
+    for (const { col, rate, nulls } of sparse.slice(0, 10)) {
+      console.log(`         - ${col}: ${rate}% populated (${nulls} nulls)`);
+    }
+    if (sparse.length > 10) {
+      console.log(`         ... and ${sparse.length - 10} more`);
+    }
+  }
+  
+  if (empty.length > 0) {
+    console.log(`      ❌ EMPTY COLUMNS (0% populated):`);
+    for (const col of empty.slice(0, 10)) {
+      console.log(`         - ${col}`);
+    }
+    if (empty.length > 10) {
+      console.log(`         ... and ${empty.length - 10} more`);
+    }
+  }
 }
 
 /**
@@ -229,6 +403,7 @@ async function auditACS() {
   
   const result = {
     contracts: null,
+    dataPopulation: {},
     sampleFiles: [],
   };
   
@@ -246,6 +421,21 @@ async function auditACS() {
       result.sampleFiles.push(contractFile);
       
       printSchemaComparison(result.contracts, schema, ACS_CONTRACTS_SCHEMA);
+      
+      // Check data population
+      console.log(`\n   📊 DATA POPULATION CHECK:`);
+      const population = getColumnPopulation(localPath, Object.keys(schema));
+      result.dataPopulation.contracts = population;
+      printDataPopulation(population, 'contracts');
+      
+      // Show sample values
+      const samples = getSampleValues(localPath, Object.keys(schema));
+      if (Object.keys(samples).length > 0) {
+        console.log(`\n   🔍 SAMPLE VALUES:`);
+        for (const [col, val] of Object.entries(samples)) {
+          console.log(`      ${col}: ${val || '(empty)'}`);
+        }
+      }
     }
   } else {
     console.log(`\n  ⚠️ No ACS files found in gs://${GCS_BUCKET}/raw/acs/`);
