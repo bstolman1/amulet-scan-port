@@ -24,7 +24,7 @@ describe('Path Utilities', () => {
     });
     
     it('should detect Linux paths correctly', () => {
-      const isLinuxPath = (p) => p && p.startsWith('/');
+      const isLinuxPath = (p) => !!p && p.startsWith('/');
       
       expect(isLinuxPath('/home/user/data')).toBe(true);
       expect(isLinuxPath('/tmp/ledger_raw')).toBe(true);
