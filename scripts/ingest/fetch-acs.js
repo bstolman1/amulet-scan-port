@@ -18,13 +18,14 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import BigNumber from 'bignumber.js';
-import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat } from './acs-schema.js';
+import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat, ACSValidationError } from './acs-schema.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
 const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
 const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
 const LOCAL_MODE = args.includes('--local') || args.includes('--local-disk');
+const STRICT_MODE = args.includes('--strict'); // Halt on schema validation errors
 const USE_PARQUET = !RAW_ONLY;
 const USE_JSONL = KEEP_RAW || RAW_ONLY;
 
@@ -297,8 +298,11 @@ async function runMigrationSnapshot(migrationId) {
       if (seen.has(id)) continue;
       seen.add(id);
       
-      // Normalize for storage
-      const contract = normalizeACSContract(event, migrationId, recordTime, recordTime);
+      // Normalize for storage (strict mode throws on missing critical fields)
+      const contract = normalizeACSContract(event, migrationId, recordTime, recordTime, { 
+        strict: STRICT_MODE, 
+        warnOnly: false 
+      });
       contracts.push(contract);
       
       // Validate contract fields
