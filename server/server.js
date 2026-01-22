@@ -1,6 +1,10 @@
 // MUST be first - loads .env before other modules capture process.env
 import './env.js';
 
+// Install crash handlers early to catch startup errors
+import { installCrashHandlers, LOG_PATHS } from './lib/crash-logger.js';
+installCrashHandlers();
+
 import express from 'express';
 import cors from 'cors';
 import cron from 'node-cron';
@@ -268,6 +272,7 @@ app.listen(PORT, HOST, async () => {
   console.log(`🦆 DuckDB API server running on http://${HOST}:${PORT}`);
   console.log(`🦆 DuckDB API server running on http://localhost:${PORT}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
+  console.log(`📝 Crash logs written to ${LOG_PATHS.crash}`);
   console.log(`⏰ Governance data refresh scheduled every 4 hours`);
   console.log(`⏰ ACS snapshot scheduled every 3 hours (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC)`);
   
