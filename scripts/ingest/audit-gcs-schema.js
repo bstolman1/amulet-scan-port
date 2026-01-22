@@ -256,6 +256,26 @@ function compareSchemas(actual, expected, label) {
 }
 
 /**
+ * List files matching a specific prefix pattern
+ */
+function listGCSFilesWithPrefix(basePath, filePrefix, limit = 5) {
+  if (!GCS_BUCKET) {
+    throw new Error('GCS_BUCKET not set');
+  }
+  
+  try {
+    // Use glob pattern to search across all date partitions
+    const output = exec(
+      `gsutil ls "gs://${GCS_BUCKET}/${basePath}**/${filePrefix}*.parquet" 2>/dev/null | head -${limit}`,
+      { throwOnError: false }
+    );
+    return output.trim().split('\n').filter(line => line.includes('.parquet'));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Audit a single migration's backfill data
  */
 async function auditMigration(migrationId) {
@@ -271,9 +291,9 @@ async function auditMigration(migrationId) {
     sampleFiles: [],
   };
   
-  // Find update files
-  const updateFiles = listGCSFiles(`raw/backfill/migration=${migrationId}/`, 3);
-  const updateFile = updateFiles.find(f => f.includes('updates-'));
+  // Find update files SPECIFICALLY (not just any file from the migration)
+  const updateFileList = listGCSFilesWithPrefix(`raw/backfill/migration=${migrationId}/`, 'updates-', 3);
+  const updateFile = updateFileList[0];
   
   if (updateFile) {
     console.log(`\n📄 Updates Schema (sampled from ${updateFile.split('/').pop()})`);
@@ -305,8 +325,9 @@ async function auditMigration(migrationId) {
     console.log(`\n  ⚠️ No update files found for migration ${migrationId}`);
   }
   
-  // Find event files
-  const eventFile = updateFiles.find(f => f.includes('events-'));
+  // Find event files SPECIFICALLY (separate query from updates)
+  const eventFileList = listGCSFilesWithPrefix(`raw/backfill/migration=${migrationId}/`, 'events-', 3);
+  const eventFile = eventFileList[0];
   
   if (eventFile) {
     console.log(`\n📄 Events Schema (sampled from ${eventFile.split('/').pop()})`);
