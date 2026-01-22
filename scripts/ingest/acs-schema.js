@@ -188,15 +188,67 @@ export function detectTemplateFormat(templateId) {
 }
 
 /**
- * Normalize an ACS contract event for storage
+ * Custom error for ACS validation failures
  */
-export function normalizeACSContract(event, migrationId, recordTime, snapshotTime) {
+export class ACSValidationError extends Error {
+  constructor(message, context = {}) {
+    super(message);
+    this.name = 'ACSValidationError';
+    this.context = context;
+  }
+}
+
+/**
+ * Normalize an ACS contract event for storage
+ * 
+ * @param {object} event - Raw contract event from Scan API
+ * @param {number} migrationId - Migration ID
+ * @param {string} recordTime - Record time from API
+ * @param {string} snapshotTime - Snapshot time
+ * @param {object} options - Validation options
+ * @param {boolean} options.strict - If true, throws on missing critical fields
+ * @param {boolean} options.warnOnly - If true, logs warning instead of throwing
+ * @returns {object} Normalized contract object
+ * @throws {ACSValidationError} If critical fields missing and strict mode enabled
+ */
+export function normalizeACSContract(event, migrationId, recordTime, snapshotTime, options = {}) {
+  const { strict = false, warnOnly = false } = options;
+  
   const templateId = event.template_id || 'unknown';
   const { packageName, moduleName, entityName } = parseTemplateId(templateId);
   
+  const contractId = event.contract_id || event.event_id;
+  
+  // Strict validation for critical fields
+  if (strict) {
+    const missingCritical = [];
+    
+    if (!contractId) missingCritical.push('contract_id');
+    if (!event.template_id || event.template_id === 'unknown') missingCritical.push('template_id');
+    
+    if (missingCritical.length > 0) {
+      const context = {
+        missingCritical,
+        event_id: event.event_id || 'NO_ID',
+        has_contract_id: !!event.contract_id,
+        has_template_id: !!event.template_id,
+        top_level_keys: Object.keys(event).slice(0, 10),
+      };
+      
+      const message = `ACS contract missing critical fields: [${missingCritical.join(', ')}]. ` +
+        `Event ID: ${context.event_id}. Keys: [${context.top_level_keys.join(', ')}]`;
+      
+      if (!warnOnly) {
+        throw new ACSValidationError(message, context);
+      } else {
+        console.warn(`[ACS SCHEMA WARNING] ${message}`);
+      }
+    }
+  }
+  
   return {
     // Preserve BOTH contract_id and event_id (API returns both)
-    contract_id: event.contract_id || event.event_id,
+    contract_id: contractId,
     event_id: event.event_id || null,
     template_id: templateId,
     package_name: packageName,
