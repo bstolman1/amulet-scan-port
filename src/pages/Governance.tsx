@@ -234,60 +234,69 @@ const Governance = () => {
   };
 
   // Process proposals from LIVE SV Node API data
+  // Filter to only show ACTIVE proposals (voteBefore deadline not yet passed)
+  const now = new Date();
+  
   const proposals =
-    liveVoteRequestsData?.data?.map((voteRequest: LiveVoteRequest) => {
-      // Live API returns data in payload field directly
-      const payload = voteRequest.payload || {};
-      
-      // Parse action
-      const action = payload.action || {};
-      const { title, actionType, actionDetails } = parseAction(action);
-      
-      // Parse votes
-      const votesRaw = payload.votes || [];
-      const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
+    liveVoteRequestsData?.data
+      ?.filter((voteRequest: LiveVoteRequest) => {
+        // Only include proposals where voting is still open
+        const voteBefore = voteRequest.payload?.voteBefore;
+        if (!voteBefore) return true; // Include if no deadline specified
+        const deadline = new Date(voteBefore);
+        return deadline > now; // Only include if deadline is in the future
+      })
+      ?.map((voteRequest: LiveVoteRequest) => {
+        // Live API returns data in payload field directly
+        const payload = voteRequest.payload || {};
+        
+        // Parse action
+        const action = payload.action || {};
+        const { title, actionType, actionDetails } = parseAction(action);
+        
+        // Parse votes
+        const votesRaw = payload.votes || [];
+        const { votesFor, votesAgainst, votedSvs } = parseVotes(votesRaw);
 
-      // Extract requester information
-      const requester = payload.requester || "Unknown";
+        // Extract requester information
+        const requester = payload.requester || "Unknown";
 
-      // Extract reason (has url and body)
-      const reasonObj = payload.reason || {};
-      const reasonBody = typeof reasonObj === "object" ? reasonObj?.body : (typeof reasonObj === "string" ? reasonObj : "");
-      const reasonUrl = typeof reasonObj === "object" ? reasonObj?.url : "";
+        // Extract reason (has url and body)
+        const reasonObj = payload.reason || {};
+        const reasonBody = typeof reasonObj === "object" ? reasonObj?.body : (typeof reasonObj === "string" ? reasonObj : "");
+        const reasonUrl = typeof reasonObj === "object" ? reasonObj?.url : "";
 
-      // Extract timing fields
-      const voteBefore = payload.voteBefore;
-      const targetEffectiveAt = payload.targetEffectiveAt;
-      const trackingCid = payload.trackingCid || voteRequest.contract_id;
+        // Extract timing fields
+        const voteBefore = payload.voteBefore;
+        const targetEffectiveAt = payload.targetEffectiveAt;
+        const trackingCid = payload.trackingCid || voteRequest.contract_id;
 
-      // STATUS: All proposals from GET /v0/admin/sv/voterequests are ACTIVE by definition
-      // The API endpoint explicitly "Lists all active VoteRequests" - completed votes are not returned
-      // No client-side status derivation needed - these are all pending/in-progress
-      const status: "approved" | "rejected" | "pending" = "pending";
+        // All filtered proposals are ACTIVE (pending) - deadline hasn't passed
+        const status: "approved" | "rejected" | "pending" = "pending";
 
-      return {
-        id: trackingCid?.slice(0, 12) || voteRequest.contract_id?.slice(0, 12) || "unknown",
-        contractId: voteRequest.contract_id || trackingCid,
-        trackingCid,
-        title,
-        actionType,
-        actionDetails,
-        action, // Keep full action for detailed display
-        reasonBody,
-        reasonUrl,
-        requester,
-        status,
-        votesFor,
-        votesAgainst,
-        votedSvs,
-        voteBefore,
-        targetEffectiveAt,
-        rawData: voteRequest,
-      };
-    }) || [];
+        return {
+          id: trackingCid?.slice(0, 12) || voteRequest.contract_id?.slice(0, 12) || "unknown",
+          contractId: voteRequest.contract_id || trackingCid,
+          trackingCid,
+          title,
+          actionType,
+          actionDetails,
+          action, // Keep full action for detailed display
+          reasonBody,
+          reasonUrl,
+          requester,
+          status,
+          votesFor,
+          votesAgainst,
+          votedSvs,
+          voteBefore,
+          targetEffectiveAt,
+          rawData: voteRequest,
+        };
+      }) || [];
 
   const totalProposals = proposals?.length || 0;
-  const activeProposals = proposals?.filter((p: any) => p.status === "pending").length || 0;
+  const activeProposals = totalProposals; // All filtered proposals are active
 
   const getStatusColor = (status: string) => {
     switch (status) {
