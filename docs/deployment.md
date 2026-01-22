@@ -73,7 +73,34 @@ MAX_ROWS_PER_FILE=20000
 EOF
 ```
 
-## Systemd Service
+## Process Management (Choose One)
+
+### Option A: PM2 (Recommended)
+
+PM2 provides auto-restart, monitoring, log management, and zero-downtime reloads.
+
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start the server
+cd ~/app/server
+pm2 start ecosystem.config.cjs --env production
+
+# Enable auto-start on boot
+pm2 startup
+pm2 save
+
+# View logs
+pm2 logs duckdb-api
+
+# Monitor in real-time
+pm2 monit
+```
+
+See `server/pm2-setup.md` for detailed PM2 configuration and commands.
+
+### Option B: Systemd
 
 Create a service to keep the API server running:
 
@@ -87,10 +114,14 @@ After=network.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/YOUR_USERNAME/app/server
-ExecStart=/usr/bin/node server.js
-Restart=on-failure
+ExecStart=/usr/bin/node --expose-gc --max-old-space-size=4096 server.js
+Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
+
+# Crash recovery with backoff
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
