@@ -1,14 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 /**
  * Live Vote Requests Hook
  * 
- * Fetches active vote requests from the SV Node API instead of local ACS snapshots.
- * API: GET /v0/admin/sv/voterequests
+ * Fetches active vote requests from the SV Node API via backend proxy.
+ * This avoids CORS issues by routing through our server.
+ * API: GET /api/sv-proxy/voterequests -> proxies to SV Node /v0/admin/sv/voterequests
  */
-
-// SV Node API Base URL
-const SV_API_BASE = "https://sv-1.global.canton.network.sync.global/api/sv";
 
 interface VoteRequestPayload {
   requester?: string;
@@ -43,7 +42,8 @@ export function useLiveVoteRequests() {
   return useQuery({
     queryKey: ["liveVoteRequests"],
     queryFn: async (): Promise<{ data: LiveVoteRequest[]; source: string }> => {
-      const response = await fetch(`${SV_API_BASE}/v0/admin/sv/voterequests`, {
+      const backendUrl = getDuckDBApiUrl();
+      const response = await fetch(`${backendUrl}/api/sv-proxy/voterequests`, {
         method: "GET",
         headers: {
           "Accept": "application/json",

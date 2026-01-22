@@ -234,18 +234,10 @@ const Governance = () => {
   };
 
   // Process proposals from LIVE SV Node API data
-  // Filter to only show ACTIVE proposals (voteBefore deadline not yet passed)
-  const now = new Date();
-  
+  // The API endpoint GET /v0/admin/sv/voterequests explicitly "Lists all active VoteRequests"
+  // so no client-side filtering is needed - all returned items are active by definition
   const proposals =
     liveVoteRequestsData?.data
-      ?.filter((voteRequest: LiveVoteRequest) => {
-        // Only include proposals where voting is still open
-        const voteBefore = voteRequest.payload?.voteBefore;
-        if (!voteBefore) return true; // Include if no deadline specified
-        const deadline = new Date(voteBefore);
-        return deadline > now; // Only include if deadline is in the future
-      })
       ?.map((voteRequest: LiveVoteRequest) => {
         // Live API returns data in payload field directly
         const payload = voteRequest.payload || {};
