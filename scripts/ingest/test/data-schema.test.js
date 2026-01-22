@@ -549,22 +549,31 @@ describe('flattenEventsInTreeOrder', () => {
 });
 
 describe('getPartitionPath', () => {
-  it('should generate correct Hive partition path', () => {
+  it('should generate correct Hive partition path for updates (default)', () => {
     const timestamp = new Date('2024-10-07T11:30:12Z');
     const migrationId = 0;
 
     const result = getPartitionPath(timestamp, migrationId);
     
-    expect(result).toBe('backfill/migration=0/year=2024/month=10/day=7');
+    expect(result).toBe('updates/migration=0/year=2024/month=10/day=7');
+  });
+
+  it('should generate correct Hive partition path for events', () => {
+    const timestamp = new Date('2024-10-07T11:30:12Z');
+    const migrationId = 0;
+
+    const result = getPartitionPath(timestamp, migrationId, 'events');
+    
+    expect(result).toBe('events/migration=0/year=2024/month=10/day=7');
   });
 
   it('should use numeric (non-padded) values for BigQuery INT64 inference', () => {
     const timestamp = new Date('2024-01-05T11:30:12Z');
     
-    const result = getPartitionPath(timestamp, 1);
+    const result = getPartitionPath(timestamp, 1, 'updates');
     
     // month=1 not month=01, day=5 not day=05
-    expect(result).toBe('backfill/migration=1/year=2024/month=1/day=5');
+    expect(result).toBe('updates/migration=1/year=2024/month=1/day=5');
   });
 
   it('should default migration to 0 when not provided', () => {
@@ -573,5 +582,16 @@ describe('getPartitionPath', () => {
     const result = getPartitionPath(timestamp);
     
     expect(result).toContain('migration=0');
+  });
+
+  it('should put updates and events in separate top-level folders', () => {
+    const timestamp = new Date('2024-06-15T00:00:00Z');
+
+    const updatesPath = getPartitionPath(timestamp, 0, 'updates');
+    const eventsPath = getPartitionPath(timestamp, 0, 'events');
+    
+    expect(updatesPath).toMatch(/^updates\//);
+    expect(eventsPath).toMatch(/^events\//);
+    expect(updatesPath).not.toBe(eventsPath);
   });
 });

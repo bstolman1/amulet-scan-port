@@ -375,17 +375,24 @@ function findLatestFromCursors() {
  * Find latest timestamp from raw binary data files
  * Scans directories to find the most recent data
  * Supports both structures:
- *   - raw/backfill/migration=X/year=YYYY/month=M/day=D/ (new partitioned format)
+ *   - raw/updates/migration=X/year=YYYY/month=M/day=D/ (new separated format)
+ *   - raw/events/migration=X/year=YYYY/month=M/day=D/ (new separated format)
+ *   - raw/backfill/migration=X/year=YYYY/month=M/day=D/ (legacy combined format)
  *   - raw/migration=X/year=YYYY/month=MM/day=DD/ (legacy format without backfill/)
- *   - raw/events/migration-X/YYYY-MM-DD/ (legacy format)
  */
 async function findLatestFromRawData(rawDir) {
   let latestResult = null;
   
-  // Check for new partitioned format: raw/backfill/migration=X/...
+  // Check for new separated format: raw/updates/migration=X/...
+  // Also check legacy raw/backfill/migration=X/... for backward compat
   let searchDir = rawDir;
+  const updatesDir = path.join(rawDir, 'updates');
   const backfillDir = path.join(rawDir, 'backfill');
-  if (fs.existsSync(backfillDir)) {
+  
+  if (fs.existsSync(updatesDir)) {
+    searchDir = updatesDir;
+  } else if (fs.existsSync(backfillDir)) {
+    // Legacy format fallback
     searchDir = backfillDir;
   }
   

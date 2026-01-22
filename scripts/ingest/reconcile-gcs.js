@@ -45,16 +45,28 @@ function listGCSFiles(migrationId) {
     throw new Error('GCS_BUCKET not set');
   }
   
-  const prefix = `raw/backfill/migration=${migrationId}/`;
+  // List files from both updates and events folders for this migration
+  const updatePrefix = `raw/updates/migration=${migrationId}/`;
+  const eventPrefix = `raw/events/migration=${migrationId}/`;
   
   try {
-    // List all parquet files for this migration
-    const output = execSync(
-      `gsutil ls -r "gs://${GCS_BUCKET}/${prefix}**/*.parquet" 2>/dev/null || true`,
+    // List all parquet files for this migration from both folders
+    const updatesOutput = execSync(
+      `gsutil ls -r "gs://${GCS_BUCKET}/${updatePrefix}**/*.parquet" 2>/dev/null || true`,
       { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }
     );
     
-    return output.trim().split('\n').filter(line => line.includes('.parquet'));
+    const eventsOutput = execSync(
+      `gsutil ls -r "gs://${GCS_BUCKET}/${eventPrefix}**/*.parquet" 2>/dev/null || true`,
+      { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }
+    );
+    
+    const allFiles = [
+      ...updatesOutput.trim().split('\n').filter(line => line.includes('.parquet')),
+      ...eventsOutput.trim().split('\n').filter(line => line.includes('.parquet')),
+    ];
+    
+    return allFiles;
   } catch (err) {
     console.error(`❌ Failed to list GCS files: ${err.message}`);
     return [];
