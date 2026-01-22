@@ -18,7 +18,6 @@ import announcementsRouter from './api/announcements.js';
 import governanceLifecycleRouter, { fetchFreshData, writeCache } from './api/governance-lifecycle.js';
 import kaikoRouter from './api/kaiko.js';
 import rewardsRouter from './api/rewards.js';
-import svProxyRouter from './api/sv-proxy.js';
 import db, { initializeViews } from './duckdb/connection.js';
 import { refreshAllAggregations, invalidateACSCache } from './cache/aggregation-worker.js';
 import { getCacheStats } from './cache/stats-cache.js';
@@ -191,7 +190,6 @@ app.use('/api/announcements', announcementsRouter);
 app.use('/api/governance-lifecycle', governanceLifecycleRouter);
 app.use('/api/kaiko', kaikoRouter);
 app.use('/api/rewards', rewardsRouter);
-app.use('/api/sv-proxy', svProxyRouter);
 
 // Engine API routes
 app.use('/api/engine', engineRouter);
