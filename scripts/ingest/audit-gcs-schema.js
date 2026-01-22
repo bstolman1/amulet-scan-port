@@ -428,9 +428,9 @@ async function auditACS() {
     sampleFiles: [],
   };
   
-  // Find ACS files
-  const acsFiles = listGCSFiles(`raw/acs/`, 5);
-  const contractFile = acsFiles.find(f => f.includes('.parquet'));
+  // Find ACS contract files specifically
+  const acsFiles = listGCSFilesWithPrefix(`raw/acs/`, 'contracts-', 5);
+  const contractFile = acsFiles[0];
   
   if (contractFile) {
     console.log(`\n📄 ACS Contracts Schema (sampled from ${contractFile.split('/').pop()})`);
