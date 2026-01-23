@@ -3,13 +3,12 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { Vote, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Input } from "@/components/ui/input";
 import { PaginationControls } from "@/components/PaginationControls";
+import { useActiveVoteRequests } from "@/hooks/use-canton-scan-api";
 
 const Elections = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -17,24 +16,11 @@ const Elections = () => {
   const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
   const itemsPerPage = 20;
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
+  const { data: elections, isLoading } = useActiveVoteRequests();
 
-  const electionsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:DsoRules:ElectionRequest",
-  );
+  const allElections = elections || [];
 
-  const getField = (obj: any, fieldNames: string[]) => {
-    for (const name of fieldNames) {
-      if (obj?.[name] !== undefined && obj?.[name] !== null) return obj[name];
-      if (obj?.payload?.[name] !== undefined && obj?.payload?.[name] !== null) return obj.payload[name];
-    }
-    return null;
-  };
-
-  const elections = electionsQuery.data?.data || [];
-
-  const filteredElections = elections.filter((election: any) => {
+  const filteredElections = allElections.filter((election: any) => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     const jsonString = JSON.stringify(election).toLowerCase();
@@ -49,20 +35,20 @@ const Elections = () => {
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <h2 className="text-3xl font-bold mb-2">Election Requests</h2>
-          <p className="text-muted-foreground">DSO governance election requests and voting data</p>
+          <h2 className="text-3xl font-bold mb-2">Active Vote Requests</h2>
+          <p className="text-muted-foreground">DSO governance vote requests and voting data</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card className="glass-card p-6">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-muted-foreground">Total Elections</h3>
+              <h3 className="text-sm font-medium text-muted-foreground">Total Active Requests</h3>
               <Vote className="h-5 w-5 text-primary" />
             </div>
-            {electionsQuery.isLoading ? (
+            {isLoading ? (
               <Skeleton className="h-10 w-full" />
             ) : (
-              <p className="text-3xl font-bold text-primary">{elections.length.toLocaleString()}</p>
+              <p className="text-3xl font-bold text-primary">{allElections.length.toLocaleString()}</p>
             )}
           </Card>
 
@@ -71,7 +57,7 @@ const Elections = () => {
               <h3 className="text-sm font-medium text-muted-foreground">Filtered Results</h3>
               <Vote className="h-5 w-5 text-primary" />
             </div>
-            {electionsQuery.isLoading ? (
+            {isLoading ? (
               <Skeleton className="h-10 w-full" />
             ) : (
               <p className="text-3xl font-bold text-primary">{filteredElections.length.toLocaleString()}</p>
@@ -82,19 +68,19 @@ const Elections = () => {
         <Input
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search elections..."
+          placeholder="Search vote requests..."
           className="max-w-md"
         />
 
-        {electionsQuery.isLoading ? (
+        {isLoading ? (
           <div className="grid gap-4">
             <Skeleton className="h-32 w-full" />
             <Skeleton className="h-32 w-full" />
           </div>
-        ) : elections.length === 0 ? (
+        ) : allElections.length === 0 ? (
           <Card className="p-8 text-center">
             <Vote className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-            <p className="text-muted-foreground">No election requests found in this snapshot</p>
+            <p className="text-muted-foreground">No active vote requests found</p>
           </Card>
         ) : (
           <div className="space-y-4">
@@ -116,7 +102,7 @@ const Elections = () => {
                             <ChevronRight className="h-4 w-4" />
                           )}
                           <CardTitle className="text-base font-medium">
-                            Election Request {(currentPage - 1) * itemsPerPage + index + 1}
+                            Vote Request {(currentPage - 1) * itemsPerPage + index + 1}
                           </CardTitle>
                         </div>
                         <Badge variant="secondary">View Details</Badge>
@@ -147,9 +133,9 @@ const Elections = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
-          templateSuffixes={["Splice:DsoRules:ElectionRequest"]}
-          isProcessing={latestSnapshot?.status === "processing"}
+          snapshotId={undefined}
+          templateSuffixes={[]}
+          isProcessing={false}
         />
       </div>
     </DashboardLayout>

@@ -5,21 +5,18 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Search, Users, Clock } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
+import { useStateAcs } from "@/hooks/use-canton-scan-api";
 
 const ExternalPartySetup = () => {
   const [searchTerm, setSearchTerm] = useState("");
-  const { data: latestSnapshot } = useLatestACSSnapshot();
 
-  const proposalsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:AmuletRules:ExternalPartySetupProposal",
+  const { data: proposalsData, isLoading } = useStateAcs(
+    ["Splice.AmuletRules:ExternalPartySetupProposal"],
+    1000
   );
 
-  const proposalsData = proposalsQuery.data?.data || [];
-  const isLoading = proposalsQuery.isLoading;
+  const proposals = proposalsData || [];
 
   const formatParty = (party: string) => {
     if (!party || party.length <= 30) return party || "Unknown";
@@ -39,11 +36,11 @@ const ExternalPartySetup = () => {
     }
   };
 
-  const filteredProposals = proposalsData
+  const filteredProposals = proposals
     .filter((proposal: any) => {
       if (!searchTerm) return true;
-      const party = proposal.payload?.externalParty || proposal.externalParty || "";
-      const requester = proposal.payload?.requester || proposal.requester || "";
+      const party = proposal.create_arguments?.externalParty || "";
+      const requester = proposal.create_arguments?.requester || "";
       return (
         party.toLowerCase().includes(searchTerm.toLowerCase()) ||
         requester.toLowerCase().includes(searchTerm.toLowerCase())
@@ -51,12 +48,12 @@ const ExternalPartySetup = () => {
     })
     .slice(0, 100);
 
-  const pendingCount = proposalsData.filter(
-    (p: any) => (p.payload?.status || p.status || "pending").toLowerCase() === "pending",
+  const pendingCount = proposals.filter(
+    (p: any) => (p.create_arguments?.status || "pending").toLowerCase() === "pending",
   ).length;
 
-  const approvedCount = proposalsData.filter(
-    (p: any) => (p.payload?.status || p.status || "pending").toLowerCase() === "approved",
+  const approvedCount = proposals.filter(
+    (p: any) => (p.create_arguments?.status || "pending").toLowerCase() === "approved",
   ).length;
 
   return (
@@ -78,7 +75,7 @@ const ExternalPartySetup = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{proposalsQuery.data?.totalContracts || 0}</p>
+              <p className="text-2xl font-bold">{proposals.length}</p>
             )}
           </Card>
 
@@ -87,7 +84,7 @@ const ExternalPartySetup = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold text-yellow-500">{pendingCount}</p>
+              <p className="text-2xl font-bold text-warning">{pendingCount}</p>
             )}
           </Card>
 
@@ -96,7 +93,7 @@ const ExternalPartySetup = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold text-green-500">{approvedCount}</p>
+              <p className="text-2xl font-bold text-success">{approvedCount}</p>
             )}
           </Card>
         </div>
@@ -126,10 +123,10 @@ const ExternalPartySetup = () => {
           ) : (
             <div className="space-y-3">
               {filteredProposals.map((proposal: any, idx: number) => {
-                const externalParty = proposal.payload?.externalParty || proposal.externalParty;
-                const requester = proposal.payload?.requester || proposal.requester;
-                const status = proposal.payload?.status || proposal.status || "pending";
-                const createdAt = proposal.payload?.createdAt || proposal.createdAt;
+                const externalParty = proposal.create_arguments?.externalParty;
+                const requester = proposal.create_arguments?.requester;
+                const status = proposal.create_arguments?.status || "pending";
+                const createdAt = proposal.created_at;
 
                 return (
                   <div key={idx} className="p-4 bg-muted/30 rounded-lg space-y-3">
@@ -154,10 +151,16 @@ const ExternalPartySetup = () => {
 
           {!isLoading && filteredProposals.length > 0 && (
             <div className="mt-4 text-xs text-muted-foreground">
-              Showing {filteredProposals.length} of {proposalsData.length} proposals
+              Showing {filteredProposals.length} of {proposals.length} proposals
             </div>
           )}
         </Card>
+
+        <DataSourcesFooter
+          snapshotId={undefined}
+          templateSuffixes={[]}
+          isProcessing={false}
+        />
       </div>
     </DashboardLayout>
   );

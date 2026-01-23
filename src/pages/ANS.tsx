@@ -4,42 +4,28 @@ import { Input } from "@/components/ui/input";
 import { Search, Globe } from "lucide-react";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { PaginationControls } from "@/components/PaginationControls";
+import { useAnsEntries } from "@/hooks/use-canton-scan-api";
 
 const ANS = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
 
-  const { data: snapshot } = useLatestACSSnapshot();
+  const { data: ansEntries, isLoading } = useAnsEntries(undefined, 1000);
 
-  const ansEntriesQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntry");
-  const ansContextsQuery = useAggregatedTemplateData(snapshot?.id, "Splice:Ans:AnsEntryContext");
-
-  const isLoading = ansEntriesQuery.isLoading || ansContextsQuery.isLoading;
-  const ansEntries = ansEntriesQuery.data?.data || [];
-  const ansContexts = ansContextsQuery.data?.data || [];
-
-  const enrichedEntries = ansEntries.map((entry: any) => {
-    const context = ansContexts.find(
-      (ctx: any) => ctx.payload?.name === entry.payload?.name || ctx.name === entry.payload?.name,
-    );
-    return {
-      name: entry.payload?.name || entry.name,
-      user: entry.payload?.user || entry.user,
-      url: entry.payload?.url || entry.url,
-      description: entry.payload?.description || entry.description,
-      expiresAt: entry.payload?.expiresAt || entry.expiresAt,
-      reference: context?.payload?.reference || context?.reference,
-      ...entry,
-    };
-  });
+  const enrichedEntries = (ansEntries || []).map((entry) => ({
+    name: entry.name,
+    user: entry.user,
+    url: entry.url,
+    description: entry.description,
+    expiresAt: entry.expires_at,
+    contractId: entry.contract_id,
+  }));
 
   const filteredEntries = enrichedEntries.filter(
-    (entry: any) =>
+    (entry) =>
       (entry.name?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
       (entry.user?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
       (entry.description?.toLowerCase() || "").includes(searchQuery.toLowerCase()),
@@ -88,7 +74,7 @@ const ANS = () => {
         {!isLoading && filteredEntries.length > 0 && (
           <>
             <div className="space-y-4">
-              {paginatedEntries.map((entry: any, i: number) => (
+              {paginatedEntries.map((entry, i: number) => (
                 <Card key={i} className="p-6">
                   <h3 className="text-xl font-semibold text-primary mb-2">{entry.name}</h3>
                   {entry.expiresAt && (
@@ -127,8 +113,8 @@ const ANS = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={snapshot?.id}
-          templateSuffixes={["Splice:Ans:AnsEntry", "Splice:Ans:AnsEntryContext"]}
+          snapshotId={undefined}
+          templateSuffixes={[]}
           isProcessing={false}
         />
       </div>

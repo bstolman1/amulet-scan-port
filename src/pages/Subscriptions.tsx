@@ -6,56 +6,36 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Search, Package, Code } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { useStateAcs } from "@/hooks/use-canton-scan-api";
 
 const Subscriptions = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [expandedRequests, setExpandedRequests] = useState<Set<number>>(new Set());
   const pageSize = 100;
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-
-  const subscriptionsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Wallet:Subscriptions:Subscription",
+  const { data: subscriptionsData, isLoading: subLoading } = useStateAcs(
+    ["Wallet.Subscriptions:Subscription"],
+    1000
   );
 
-  const idleStatesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Wallet:Subscriptions:SubscriptionIdleState",
+  const { data: idleStatesData, isLoading: idleLoading } = useStateAcs(
+    ["Wallet.Subscriptions:SubscriptionIdleState"],
+    1000
   );
 
-  const requestsQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Wallet:Subscriptions:SubscriptionRequest",
+  const { data: requestsData, isLoading: reqLoading } = useStateAcs(
+    ["Wallet.Subscriptions:SubscriptionRequest"],
+    1000
   );
 
-  const subscriptionsData = subscriptionsQuery.data?.data || [];
-  const idleStatesData = idleStatesQuery.data?.data || [];
-  const requestsData = requestsQuery.data?.data || [];
-  const isLoading = subscriptionsQuery.isLoading || idleStatesQuery.isLoading || requestsQuery.isLoading;
-
-  // Helper to safely extract field values from nested structure
-  const getField = (record: any, ...fieldNames: string[]) => {
-    for (const field of fieldNames) {
-      if (record[field] !== undefined && record[field] !== null) return record[field];
-      if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
-    }
-    return undefined;
-  };
-
-  // Debug logging for requests data
-  console.log("🔍 DEBUG: Total requestsData count:", requestsData.length);
-  console.log("🔍 DEBUG: First 3 requests raw data:", requestsData.slice(0, 3));
-  if (requestsData.length > 0) {
-    console.log("🔍 DEBUG: First request structure:", JSON.stringify(requestsData[0], null, 2));
-  }
+  const subscriptions = subscriptionsData || [];
+  const idleStates = idleStatesData || [];
+  const requests = requestsData || [];
+  const isLoading = subLoading || idleLoading || reqLoading;
 
   const formatParty = (party: string) => {
     if (!party) return "Unknown";
@@ -65,36 +45,33 @@ const Subscriptions = () => {
     return party;
   };
 
-  const filteredSubscriptions = subscriptionsData.filter((sub: any) => {
+  const filteredSubscriptions = subscriptions.filter((sub: any) => {
     if (!searchTerm) return true;
-    const reference = getField(sub, "subscription")?.reference || getField(sub, "reference");
-    const subscriber = getField(sub, "subscription")?.subscriber || getField(sub, "subscriber");
+    const reference = sub.create_arguments?.subscription?.reference || sub.create_arguments?.reference;
+    const subscriber = sub.create_arguments?.subscription?.subscriber || sub.create_arguments?.subscriber;
     return (
       (reference?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
       (subscriber?.toLowerCase() || "").includes(searchTerm.toLowerCase())
     );
   });
 
-  const filteredIdleStates = idleStatesData.filter((state: any) => {
+  const filteredIdleStates = idleStates.filter((state: any) => {
     if (!searchTerm) return true;
-    const reference = getField(state, "subscriptionReference", "reference");
+    const reference = state.create_arguments?.subscriptionReference || state.create_arguments?.reference;
     return (reference?.toLowerCase() || "").includes(searchTerm.toLowerCase());
   });
 
-  const filteredRequests = requestsData.filter((req: any) => {
+  const filteredRequests = requests.filter((req: any) => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
-    const subscriptionData = getField(req, "subscriptionData");
-    const sender = subscriptionData?.sender || getField(req, "sender");
-    const receiver = subscriptionData?.receiver || getField(req, "receiver");
-    const description = subscriptionData?.description || getField(req, "description");
-    const subscription = getField(req, "subscription");
-    const reference = subscription?.reference || getField(req, "reference");
+    const subscriptionData = req.create_arguments?.subscriptionData;
+    const sender = subscriptionData?.sender;
+    const receiver = subscriptionData?.receiver;
+    const description = subscriptionData?.description;
     return (
       (sender?.toLowerCase() || "").includes(search) ||
       (receiver?.toLowerCase() || "").includes(search) ||
-      (description?.toLowerCase() || "").includes(search) ||
-      (reference?.toLowerCase() || "").includes(search)
+      (description?.toLowerCase() || "").includes(search)
     );
   });
 
@@ -121,7 +98,7 @@ const Subscriptions = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{subscriptionsData.length}</p>
+              <p className="text-2xl font-bold">{subscriptions.length}</p>
             )}
           </Card>
 
@@ -130,7 +107,7 @@ const Subscriptions = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{idleStatesData.length}</p>
+              <p className="text-2xl font-bold">{idleStates.length}</p>
             )}
           </Card>
 
@@ -139,7 +116,7 @@ const Subscriptions = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{requestsData.length}</p>
+              <p className="text-2xl font-bold">{requests.length}</p>
             )}
           </Card>
         </div>
@@ -190,13 +167,13 @@ const Subscriptions = () => {
                             <p className="text-sm text-muted-foreground">Reference</p>
                             <p className="font-mono text-sm">
                               {formatParty(
-                                sub.payload?.subscription?.reference || sub.subscription?.reference || sub.reference,
+                                sub.create_arguments?.subscription?.reference || sub.create_arguments?.reference,
                               )}
                             </p>
                             <p className="text-sm text-muted-foreground mt-2">Subscriber</p>
                             <p className="font-mono text-sm">
                               {formatParty(
-                                sub.payload?.subscription?.subscriber || sub.subscription?.subscriber || sub.subscriber,
+                                sub.create_arguments?.subscription?.subscriber || sub.create_arguments?.subscriber,
                               )}
                             </p>
                           </div>
@@ -236,7 +213,7 @@ const Subscriptions = () => {
                           <div>
                             <p className="text-sm text-muted-foreground">Reference</p>
                             <p className="font-mono text-sm">
-                              {formatParty(idle.payload?.subscriptionReference || idle.subscriptionReference)}
+                              {formatParty(idle.create_arguments?.subscriptionReference)}
                             </p>
                           </div>
                           <Badge variant="secondary">Idle</Badge>
@@ -270,25 +247,10 @@ const Subscriptions = () => {
                 <>
                   <div className="space-y-3">
                     {paginateData(filteredRequests).map((req: any, i: number) => {
-                      // Debug logging for each request
-                      console.log(`🔍 DEBUG: Request ${i}:`, {
-                        hasPayload: !!req.payload,
-                        hasSubscriptionData: !!(req.payload?.subscriptionData || req.subscriptionData),
-                        hasPayData: !!(req.payload?.payData || req.payData),
-                        keys: Object.keys(req),
-                        fullObject: req,
-                      });
-
-                      const subData = req.payload?.subscriptionData || req.subscriptionData || {};
-                      const payData = req.payload?.payData || req.payData || {};
+                      const subData = req.create_arguments?.subscriptionData || {};
+                      const payData = req.create_arguments?.payData || {};
                       const paymentAmount = payData.paymentAmount?.amount || "N/A";
                       const paymentUnit = payData.paymentAmount?.unit || "";
-                      const paymentInterval = payData.paymentInterval?.microseconds
-                        ? (parseInt(payData.paymentInterval.microseconds) / 1000000 / 60 / 60 / 24).toFixed(0) + " days"
-                        : "N/A";
-                      const paymentDuration = payData.paymentDuration?.microseconds
-                        ? (parseInt(payData.paymentDuration.microseconds) / 1000000 / 60 / 60 / 24).toFixed(0) + " days"
-                        : "N/A";
 
                       return (
                         <Card key={i} className="p-4 space-y-3">
@@ -313,33 +275,13 @@ const Subscriptions = () => {
                                     {formatParty(subData.receiver || "Unknown")}
                                   </p>
                                 </div>
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Provider</p>
-                                  <p className="font-mono text-xs break-all">
-                                    {formatParty(subData.provider || "Unknown")}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-xs text-muted-foreground">DSO</p>
-                                  <p className="font-mono text-xs break-all">{formatParty(subData.dso || "Unknown")}</p>
-                                </div>
                               </div>
 
-                              <div className="grid grid-cols-3 gap-3 pt-2 border-t">
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Payment Amount</p>
-                                  <p className="text-sm font-semibold">
-                                    {paymentAmount} {paymentUnit}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Interval</p>
-                                  <p className="text-sm">{paymentInterval}</p>
-                                </div>
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Duration</p>
-                                  <p className="text-sm">{paymentDuration}</p>
-                                </div>
+                              <div className="pt-2 border-t">
+                                <p className="text-xs text-muted-foreground">Payment Amount</p>
+                                <p className="text-sm font-semibold">
+                                  {paymentAmount} {paymentUnit}
+                                </p>
                               </div>
 
                               <Collapsible className="mt-3 pt-3 border-t">
@@ -377,12 +319,8 @@ const Subscriptions = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
-          templateSuffixes={[
-            "Wallet:Subscriptions:Subscription",
-            "Wallet:Subscriptions:SubscriptionIdleState",
-            "Wallet:Subscriptions:SubscriptionRequest",
-          ]}
+          snapshotId={undefined}
+          templateSuffixes={[]}
           isProcessing={false}
         />
       </div>
