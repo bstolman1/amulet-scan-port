@@ -1,53 +1,30 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Package, Star, Code, Database, FileText, ExternalLink, Clock, CheckCircle2, MessageCircle } from "lucide-react";
+import { Package, Star, Code, FileText, ExternalLink, Clock, CheckCircle2, MessageCircle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useACSStatus } from "@/hooks/use-local-acs";
-import { ACSStatusBanner } from "@/components/ACSStatusBanner";
 import { useFeaturedAppGovernance, STAGE_CONFIG, getCurrentStage, getLatestTopic } from "@/hooks/use-governance-lifecycle";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useFeaturedApps } from "@/hooks/use-canton-scan-api";
 
 const Apps = () => {
-  const { data: acsStatus } = useACSStatus();
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-
-  const appsQuery = useAggregatedTemplateData(latestSnapshot?.id, "Splice:Amulet:FeaturedAppRight");
-  const activityQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:Amulet:FeaturedAppActivityMarker",
-  );
+  const { data: featuredApps, isLoading } = useFeaturedApps();
   const governanceQuery = useFeaturedAppGovernance();
 
-  const isLoading = appsQuery.isLoading || activityQuery.isLoading;
-  const apps = appsQuery.data?.data || [];
-  const activities = activityQuery.data?.data || [];
+  const apps = featuredApps || [];
   const governanceItems = governanceQuery.data?.lifecycleItems || [];
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
     for (const field of fieldNames) {
-      // Check top level
       if (record[field] !== undefined && record[field] !== null) return record[field];
-      // Check payload
       if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
-      // Check payload.payload (sometimes double-nested)
-      if (record.payload?.payload?.[field] !== undefined && record.payload?.payload?.[field] !== null) return record.payload.payload[field];
-      // Check contract_data
-      if (record.contract_data?.[field] !== undefined && record.contract_data?.[field] !== null) return record.contract_data[field];
     }
     return undefined;
   };
-
-  // Debug: log first app structure
-  if (apps.length > 0 && !isLoading) {
-    console.log("🔍 Apps page - First app structure:", JSON.stringify(apps[0], null, 2));
-  }
 
   // Normalize app name for comparison
   const normalizeAppName = (name: string) => {
@@ -59,7 +36,6 @@ const Apps = () => {
     const normalizedAppName = normalizeAppName(appName);
     return governanceItems.find(item => {
       const normalizedPrimaryId = normalizeAppName(item.primaryId);
-      // Also check identifiers.appName from topics
       const topicAppNames = item.topics?.map(t => normalizeAppName(t.identifiers?.appName || '')) || [];
       return normalizedPrimaryId === normalizedAppName || 
              normalizedPrimaryId.includes(normalizedAppName) ||
@@ -70,13 +46,12 @@ const Apps = () => {
 
   // Get set of on-chain app names for filtering pending apps
   const onChainAppNames = new Set(
-    apps.map((app: any) => normalizeAppName(getField(app, "appName", "name", "applicationName") || ""))
+    apps.map((app: any) => normalizeAppName(getField(app, "appName", "name", "applicationName") || app.payload?.provider || ""))
   );
 
   // Filter governance items that are NOT on-chain yet (pending apps)
   const pendingApps = governanceItems.filter(item => {
     const normalizedName = normalizeAppName(item.primaryId);
-    // Check if any on-chain app matches this governance item
     return !Array.from(onChainAppNames).some(onChainName => 
       onChainName === normalizedName || 
       onChainName.includes(normalizedName) || 
@@ -114,17 +89,10 @@ const Apps = () => {
     <DashboardLayout>
       <TooltipProvider>
         <div className="space-y-8">
-          <ACSStatusBanner />
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Package className="h-8 w-8 text-primary" />
               <h1 className="text-3xl font-bold">Canton Network Apps</h1>
-              {acsStatus?.available && (
-                <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
-                  <Database className="h-3 w-3 mr-1" />
-                  Local ACS
-                </Badge>
-              )}
             </div>
             <p className="text-muted-foreground">Featured applications on the Canton Network</p>
           </div>
@@ -153,11 +121,10 @@ const Apps = () => {
               </div>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {apps.map((app: any, i: number) => {
-                  // Extract app name from various possible locations
                   const appName = getField(app, "appName", "name", "applicationName", "app_name") 
                     || app.payload?.appName 
-                    || app.payload?.app_name
-                    || Object.keys(app.payload || {}).find(k => k.toLowerCase().includes('appname') && app.payload[k]);
+                    || app.payload?.provider?.split("::")[0]
+                    || "Unknown App";
                   const provider = getField(app, "provider", "providerId", "providerParty", "provider_id")
                     || app.payload?.provider;
                   const dso = getField(app, "dso")
@@ -171,7 +138,7 @@ const Apps = () => {
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <Package className="h-5 w-5 text-primary" />
-                          <h3 className="font-semibold text-lg">{appName || "Unknown App"}</h3>
+                          <h3 className="font-semibold text-lg">{appName}</h3>
                         </div>
                         <Badge className="gradient-primary">
                           <Star className="h-3 w-3 mr-1" />
@@ -312,8 +279,8 @@ const Apps = () => {
           )}
 
           <DataSourcesFooter
-            snapshotId={latestSnapshot?.id}
-            templateSuffixes={["Splice:Amulet:FeaturedAppRight", "Splice:Amulet:FeaturedAppActivityMarker"]}
+            snapshotId={undefined}
+            templateSuffixes={[]}
             isProcessing={false}
           />
         </div>

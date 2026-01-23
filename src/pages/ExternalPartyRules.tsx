@@ -3,13 +3,12 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { Shield, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { Input } from "@/components/ui/input";
 import { PaginationControls } from "@/components/PaginationControls";
+import { useStateAcs } from "@/hooks/use-canton-scan-api";
 
 const ExternalPartyRules = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -17,22 +16,12 @@ const ExternalPartyRules = () => {
   const [openItems, setOpenItems] = useState<Record<number, boolean>>({});
   const itemsPerPage = 20;
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-
-  const rulesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice:ExternalPartyAmuletRules:ExternalPartyAmuletRules",
+  const { data: rulesData, isLoading } = useStateAcs(
+    ["Splice.ExternalPartyAmuletRules:ExternalPartyAmuletRules"],
+    1000
   );
 
-  const getField = (obj: any, fieldNames: string[]) => {
-    for (const name of fieldNames) {
-      if (obj?.[name] !== undefined && obj?.[name] !== null) return obj[name];
-      if (obj?.payload?.[name] !== undefined && obj?.payload?.[name] !== null) return obj.payload[name];
-    }
-    return null;
-  };
-
-  const rules = rulesQuery.data?.data || [];
+  const rules = rulesData || [];
 
   const filteredRules = rules.filter((rule: any) => {
     if (!searchTerm) return true;
@@ -59,7 +48,7 @@ const ExternalPartyRules = () => {
               <h3 className="text-sm font-medium text-muted-foreground">Total Rules</h3>
               <Shield className="h-5 w-5 text-primary" />
             </div>
-            {rulesQuery.isLoading ? (
+            {isLoading ? (
               <Skeleton className="h-10 w-full" />
             ) : (
               <p className="text-3xl font-bold text-primary">{rules.length.toLocaleString()}</p>
@@ -71,7 +60,7 @@ const ExternalPartyRules = () => {
               <h3 className="text-sm font-medium text-muted-foreground">Filtered Results</h3>
               <Shield className="h-5 w-5 text-primary" />
             </div>
-            {rulesQuery.isLoading ? (
+            {isLoading ? (
               <Skeleton className="h-10 w-full" />
             ) : (
               <p className="text-3xl font-bold text-primary">{filteredRules.length.toLocaleString()}</p>
@@ -86,7 +75,7 @@ const ExternalPartyRules = () => {
           className="max-w-md"
         />
 
-        {rulesQuery.isLoading ? (
+        {isLoading ? (
           <div className="grid gap-4">
             <Skeleton className="h-32 w-full" />
             <Skeleton className="h-32 w-full" />
@@ -94,7 +83,7 @@ const ExternalPartyRules = () => {
         ) : rules.length === 0 ? (
           <Card className="p-8 text-center">
             <Shield className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-            <p className="text-muted-foreground">No external party rules found in this snapshot</p>
+            <p className="text-muted-foreground">No external party rules found</p>
           </Card>
         ) : (
           <div className="space-y-4">
@@ -147,9 +136,9 @@ const ExternalPartyRules = () => {
         )}
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
-          templateSuffixes={["Splice:ExternalPartyAmuletRules:ExternalPartyAmuletRules"]}
-          isProcessing={latestSnapshot?.status === "processing"}
+          snapshotId={undefined}
+          templateSuffixes={[]}
+          isProcessing={false}
         />
       </div>
     </DashboardLayout>

@@ -3,13 +3,12 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowRightLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { PaginationControls } from "@/components/PaginationControls";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
+import { useStateAcs } from "@/hooks/use-canton-scan-api";
 
 const Transfers = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -18,22 +17,25 @@ const Transfers = () => {
   const [instructionsPage, setInstructionsPage] = useState(1);
   const pageSize = 50;
 
-  const { data: snapshot } = useLatestACSSnapshot();
-
-  const preapprovalsQuery = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:AmuletRules:TransferPreapproval",
-  );
-  const commandsQuery = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:ExternalPartyAmuletRules:TransferCommand",
-  );
-  const instructionsQuery = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:AmuletTransferInstruction:AmuletTransferInstruction",
+  const { data: preapprovalsData, isLoading: preapprovalsLoading } = useStateAcs(
+    ["Splice.AmuletRules:TransferPreapproval"],
+    1000
   );
 
-  const isLoading = preapprovalsQuery.isLoading || commandsQuery.isLoading || instructionsQuery.isLoading;
+  const { data: commandsData, isLoading: commandsLoading } = useStateAcs(
+    ["Splice.ExternalPartyAmuletRules:TransferCommand"],
+    1000
+  );
+
+  const { data: instructionsData, isLoading: instructionsLoading } = useStateAcs(
+    ["Splice.AmuletTransferInstruction:AmuletTransferInstruction"],
+    1000
+  );
+
+  const preapprovals = preapprovalsData || [];
+  const commands = commandsData || [];
+  const instructions = instructionsData || [];
+  const isLoading = preapprovalsLoading || commandsLoading || instructionsLoading;
 
   const formatAmount = (amount: any) => {
     if (!amount) return "0.00";
@@ -55,50 +57,48 @@ const Transfers = () => {
       : partyStr;
   };
 
-  const filteredPreapprovals = (preapprovalsQuery.data?.data || []).filter((p: any) => {
+  const filteredPreapprovals = preapprovals.filter((p: any) => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     return (
-      formatParty(p.payload?.provider || p.provider)
+      formatParty(p.create_arguments?.provider)
         .toLowerCase()
         .includes(search) ||
-      formatParty(p.payload?.consumer || p.consumer)
+      formatParty(p.create_arguments?.consumer)
         .toLowerCase()
         .includes(search)
     );
   });
 
-  const filteredCommands = (commandsQuery.data?.data || []).filter((c: any) => {
+  const filteredCommands = commands.filter((c: any) => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     return (
-      formatParty(c.payload?.sender || c.sender)
+      formatParty(c.create_arguments?.sender)
         .toLowerCase()
         .includes(search) ||
-      formatParty(c.payload?.provider || c.provider)
+      formatParty(c.create_arguments?.provider)
         .toLowerCase()
         .includes(search)
     );
   });
 
-  const filteredInstructions = (instructionsQuery.data?.data || []).filter((i: any) => {
+  const filteredInstructions = instructions.filter((i: any) => {
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     return (
-      formatParty(i.payload?.transfer?.sender || i.transfer?.sender)
+      formatParty(i.create_arguments?.transfer?.sender)
         .toLowerCase()
         .includes(search) ||
-      formatParty(i.payload?.transfer?.receiver?.receiver || i.transfer?.receiver)
+      formatParty(i.create_arguments?.transfer?.receiver?.receiver)
         .toLowerCase()
         .includes(search)
     );
   });
 
-  const preapprovalsData = filteredPreapprovals.slice((preapprovalsPage - 1) * pageSize, preapprovalsPage * pageSize);
-
-  const commandsData = filteredCommands.slice((commandsPage - 1) * pageSize, commandsPage * pageSize);
-
-  const instructionsData = filteredInstructions.slice((instructionsPage - 1) * pageSize, instructionsPage * pageSize);
+  const preapprovalsDataPage = filteredPreapprovals.slice((preapprovalsPage - 1) * pageSize, preapprovalsPage * pageSize);
+  const commandsDataPage = filteredCommands.slice((commandsPage - 1) * pageSize, commandsPage * pageSize);
+  const instructionsDataPage = filteredInstructions.slice((instructionsPage - 1) * pageSize, instructionsPage * pageSize);
 
   return (
     <DashboardLayout>
@@ -117,7 +117,7 @@ const Transfers = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{preapprovalsQuery.data?.totalContracts || 0}</p>
+              <p className="text-2xl font-bold">{preapprovals.length}</p>
             )}
           </Card>
           <Card className="p-6">
@@ -125,7 +125,7 @@ const Transfers = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{commandsQuery.data?.totalContracts || 0}</p>
+              <p className="text-2xl font-bold">{commands.length}</p>
             )}
           </Card>
           <Card className="p-6">
@@ -133,7 +133,7 @@ const Transfers = () => {
             {isLoading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold">{instructionsQuery.data?.totalContracts || 0}</p>
+              <p className="text-2xl font-bold">{instructions.length}</p>
             )}
           </Card>
         </div>
@@ -151,11 +151,11 @@ const Transfers = () => {
           <Tabs defaultValue="preapprovals" className="w-full">
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="preapprovals">
-                Preapprovals ({preapprovalsQuery.data?.totalContracts || 0})
+                Preapprovals ({preapprovals.length})
               </TabsTrigger>
-              <TabsTrigger value="commands">Commands ({commandsQuery.data?.totalContracts || 0})</TabsTrigger>
+              <TabsTrigger value="commands">Commands ({commands.length})</TabsTrigger>
               <TabsTrigger value="instructions">
-                Instructions ({instructionsQuery.data?.totalContracts || 0})
+                Instructions ({instructions.length})
               </TabsTrigger>
             </TabsList>
 
@@ -166,22 +166,22 @@ const Transfers = () => {
                     <Skeleton key={i} className="h-24 w-full" />
                   ))}
                 </div>
-              ) : preapprovalsData.length === 0 ? (
+              ) : preapprovalsDataPage.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">No preapprovals found</p>
               ) : (
                 <>
-                  {preapprovalsData.map((p: any, i: number) => (
+                  {preapprovalsDataPage.map((p: any, i: number) => (
                     <div key={i} className="p-4 bg-muted/30 rounded-lg space-y-2">
                       <div className="flex justify-between">
                         <span className="text-sm font-medium">
-                          Provider: {formatParty(p.payload?.provider || p.provider)}
+                          Provider: {formatParty(p.create_arguments?.provider)}
                         </span>
                         <span className="text-sm text-muted-foreground">
-                          Amount: {formatAmount(p.payload?.amount || p.amount)}
+                          Amount: {formatAmount(p.create_arguments?.amount)}
                         </span>
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        Consumer: {formatParty(p.payload?.consumer || p.consumer)}
+                        Consumer: {formatParty(p.create_arguments?.consumer)}
                       </div>
                     </div>
                   ))}
@@ -202,22 +202,22 @@ const Transfers = () => {
                     <Skeleton key={i} className="h-24 w-full" />
                   ))}
                 </div>
-              ) : commandsData.length === 0 ? (
+              ) : commandsDataPage.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">No commands found</p>
               ) : (
                 <>
-                  {commandsData.map((c: any, i: number) => (
+                  {commandsDataPage.map((c: any, i: number) => (
                     <div key={i} className="p-4 bg-muted/30 rounded-lg space-y-2">
                       <div className="flex justify-between">
                         <span className="text-sm font-medium">
-                          Sender: {formatParty(c.payload?.sender || c.sender)}
+                          Sender: {formatParty(c.create_arguments?.sender)}
                         </span>
                         <span className="text-sm text-muted-foreground">
-                          Nonce: {c.payload?.nonce || c.nonce || "N/A"}
+                          Nonce: {c.create_arguments?.nonce || "N/A"}
                         </span>
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        Provider: {formatParty(c.payload?.provider || c.provider)}
+                        Provider: {formatParty(c.create_arguments?.provider)}
                       </div>
                     </div>
                   ))}
@@ -238,25 +238,25 @@ const Transfers = () => {
                     <Skeleton key={i} className="h-24 w-full" />
                   ))}
                 </div>
-              ) : instructionsData.length === 0 ? (
+              ) : instructionsDataPage.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">No instructions found</p>
               ) : (
                 <>
-                  {instructionsData.map((ins: any, i: number) => (
+                  {instructionsDataPage.map((ins: any, i: number) => (
                     <div key={i} className="p-4 bg-muted/30 rounded-lg space-y-2">
                       <div className="flex justify-between">
                         <span className="text-sm font-medium">
-                          Transfer ID: {(ins.contract?.contractId || "Unknown").substring(0, 16)}...
+                          Transfer ID: {(ins.contract_id || "Unknown").substring(0, 16)}...
                         </span>
                         <span className="text-sm text-muted-foreground">
-                          Amount: {formatAmount(ins.payload?.transfer?.amount || ins.transfer?.amount)}
+                          Amount: {formatAmount(ins.create_arguments?.transfer?.amount)}
                         </span>
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        Sender: {formatParty(ins.payload?.transfer?.sender || ins.transfer?.sender)}
+                        Sender: {formatParty(ins.create_arguments?.transfer?.sender)}
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        Receiver: {formatParty(ins.payload?.transfer?.receiver?.receiver || ins.transfer?.receiver)}
+                        Receiver: {formatParty(ins.create_arguments?.transfer?.receiver?.receiver)}
                       </div>
                     </div>
                   ))}
@@ -273,12 +273,8 @@ const Transfers = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={snapshot?.id}
-          templateSuffixes={[
-            "Splice:AmuletRules:TransferPreapproval",
-            "Splice:ExternalPartyAmuletRules:TransferCommand",
-            "Splice:AmuletTransferInstruction:AmuletTransferInstruction",
-          ]}
+          snapshotId={undefined}
+          templateSuffixes={[]}
           isProcessing={false}
         />
       </div>
