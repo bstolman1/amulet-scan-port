@@ -1011,6 +1011,11 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
 
   // Global dedup across slices to avoid duplicates at slice boundaries
   const globalSeenUpdateIds = new Set();
+  // IMPORTANT: This set can grow without bound on large ranges and eventually
+  // throw "Set maximum size exceeded". We cap it and clear opportunistically.
+  // Clearing is safe here because it only guards boundary duplicates; correctness
+  // is still ensured by cursor-based pagination.
+  const GLOBAL_DEDUP_MAX = Number(process.env.GLOBAL_DEDUP_MAX || 250_000);
 
   // Process callback that handles transactions immediately with progress logging
   const processCallback = async (transactions) => {
@@ -1066,6 +1071,12 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
             if (!updateId) {
               unique.push(tx);
               continue;
+            }
+            if (globalSeenUpdateIds.size >= GLOBAL_DEDUP_MAX) {
+              // Keep memory bounded. This may allow some duplicates at slice boundaries
+              // after the clear, but downstream processing can handle occasional dups,
+              // and cursor advancement remains conservative.
+              globalSeenUpdateIds.clear();
             }
             if (globalSeenUpdateIds.has(updateId)) continue;
             globalSeenUpdateIds.add(updateId);
@@ -1127,7 +1138,9 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     // CRITICAL: Include failed slices for caller to handle
     failedSlices: failedSlices.map(s => ({
       sliceIndex: s.sliceIndex,
-      error: s.error?.message || 'Unknown error'
+      error: s.error?.message || 'Unknown error',
+      status: s.error?.response?.status || null,
+      code: s.error?.code || null,
     }))
   };
 }
@@ -1404,7 +1417,22 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       // This prevents advancing the cursor past unfetched data ranges
       if (failedSlices && failedSlices.length > 0) {
         const sliceList = failedSlices.map(s => `slice ${s.sliceIndex}: ${s.error}`).join(', ');
-        throw new Error(`${failedSlices.length} slice(s) failed: ${sliceList}. Cursor NOT advanced to prevent data gaps.`);
+
+        // Treat slice failures as transient if they are predominantly retryable
+        // (e.g. 503 from upstream). This ensures the existing batch backoff
+        // logic runs instead of hard-failing batch 0.
+        const statuses = failedSlices.map(s => s.status).filter(Boolean);
+        const has503 = statuses.includes(503) || sliceList.includes('status code 503');
+        const has429 = statuses.includes(429) || sliceList.includes('status code 429');
+        const has5xx = statuses.some(s => [500, 502, 503, 504].includes(s));
+        const isTransient = has503 || has429 || has5xx;
+
+        const e = new Error(`${failedSlices.length} slice(s) failed: ${sliceList}. Cursor NOT advanced to prevent data gaps.`);
+        if (isTransient) {
+          // Mimic axios error shape so the catch block treats it as transient.
+          e.response = { status: has503 ? 503 : (has429 ? 429 : 503) };
+        }
+        throw e;
       }
       
       if (results.length === 0 && !batchUpdates) {
