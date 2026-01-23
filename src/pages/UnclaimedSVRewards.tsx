@@ -3,10 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Award, Users, TrendingUp, Search, Code, History } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
+import { useStateAcs } from "@/hooks/use-canton-scan-api";
 import { useRewardClaimEvents } from "@/hooks/use-governance-events";
-import { DataSourcesFooter } from "@/components/DataSourcesFooter";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,81 +13,42 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
 
-interface ValidatorInfo {
-  user: string;
-  validator: string;
-  count: number;
-}
-
 const UnclaimedSVRewards = () => {
   const [searchTerm, setSearchTerm] = useState("");
 
-  const { data: snapshot } = useLatestACSSnapshot();
   const { data: rewardEvents, isLoading: eventsLoading } = useRewardClaimEvents();
 
-  // Fetch ValidatorRewardCoupon contracts - the actual unclaimed rewards
-  const { data: rewardCouponsData, isLoading: couponsLoading } = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:Amulet:ValidatorRewardCoupon",
-  );
-
-  // Fetch SvRewardCoupon contracts
-  const { data: svRewardCouponsData, isLoading: svCouponsLoading } = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:Amulet:SvRewardCoupon",
-  );
-
-  // Fetch AppRewardCoupon contracts
-  const { data: appRewardCouponsData, isLoading: appCouponsLoading } = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:Amulet:AppRewardCoupon",
-  );
-
-  // Fetch UnclaimedReward contracts
-  const { data: unclaimedRewardsData, isLoading: unclaimedLoading } = useAggregatedTemplateData(
-    snapshot?.id,
-    "Splice:Amulet:UnclaimedReward",
-  );
-
-  const isLoading = couponsLoading || svCouponsLoading || appCouponsLoading || unclaimedLoading;
-  const rewardCoupons = [
-    ...(rewardCouponsData?.data || []),
-    ...(svRewardCouponsData?.data || []),
-    ...(appRewardCouponsData?.data || []),
-    ...(unclaimedRewardsData?.data || []),
+  // Fetch reward coupons from live ACS
+  const rewardTemplates = [
+    "Splice.Amulet:ValidatorRewardCoupon",
+    "Splice.Amulet:SvRewardCoupon",
+    "Splice.Amulet:AppRewardCoupon",
   ];
+  const { data: rewardCoupons, isLoading: couponsLoading } = useStateAcs(rewardTemplates);
+
+  const isLoading = couponsLoading;
+  const allCoupons = rewardCoupons || [];
 
   // Helper to safely extract field values from nested structure
   const getField = (record: any, ...fieldNames: string[]) => {
     for (const field of fieldNames) {
       if (record[field] !== undefined && record[field] !== null) return record[field];
-      if (record.payload?.[field] !== undefined && record.payload?.[field] !== null) return record.payload[field];
+      if (record.create_arguments?.[field] !== undefined) return record.create_arguments[field];
+      if (record.payload?.[field] !== undefined) return record.payload[field];
     }
     return undefined;
   };
-
-  // Debug logging
-  console.log("🔍 DEBUG UnclaimedSVRewards: Total reward coupons:", rewardCoupons.length);
-  console.log("🔍 DEBUG UnclaimedSVRewards: First 3 coupons:", rewardCoupons.slice(0, 3));
-  if (rewardCoupons.length > 0) {
-    console.log("🔍 DEBUG UnclaimedSVRewards: First coupon structure:", JSON.stringify(rewardCoupons[0], null, 2));
-  }
 
   // Aggregate reward coupons by user
   const aggregatedRewards = (() => {
     const userMap = new Map<string, { user: string; totalAmount: number; coupons: any[] }>();
 
-    rewardCoupons.forEach((coupon: any) => {
+    allCoupons.forEach((coupon: any) => {
       const user = getField(coupon, "user", "validator", "validatorUser");
-
-      if (!user) return; // Skip if no user identifier found
+      if (!user) return;
 
       if (!userMap.has(user)) {
-        userMap.set(user, {
-          user,
-          totalAmount: 0,
-          coupons: [],
-        });
+        userMap.set(user, { user, totalAmount: 0, coupons: [] });
       }
       const info = userMap.get(user)!;
       const amount = parseFloat(getField(coupon, "amount", "rewardAmount") || "0");
@@ -106,17 +65,17 @@ const UnclaimedSVRewards = () => {
   })();
 
   // Calculate totals
-  const totalCoupons = rewardCoupons.length;
+  const totalCoupons = allCoupons.length;
   const uniqueUsers = aggregatedRewards.length;
   const totalRewardAmount = aggregatedRewards.reduce((sum, r) => sum + r.totalAmount, 0);
 
   // Process historical reward events
-  const claimedRewards = (rewardEvents || []).filter((event: any) => 
+  const claimedRewards = (rewardEvents || []).filter((event: any) =>
     (event.event_type || "").toLowerCase().includes("claim") ||
     (event.template_id || "").includes("ClaimReward")
   );
 
-  const expiredRewards = (rewardEvents || []).filter((event: any) => 
+  const expiredRewards = (rewardEvents || []).filter((event: any) =>
     (event.event_type || "").toLowerCase().includes("expire") ||
     (event.payload?.status || "").toLowerCase() === "expired"
   );
@@ -136,7 +95,7 @@ const UnclaimedSVRewards = () => {
         <div>
           <h2 className="text-3xl font-bold mb-2">SV Rewards</h2>
           <p className="text-muted-foreground">
-            Overview of validator reward coupons including unclaimed, claimed, and expired rewards
+            Overview of validator reward coupons from live network data
           </p>
         </div>
 
@@ -163,7 +122,7 @@ const UnclaimedSVRewards = () => {
                   ) : (
                     <>
                       <p className="text-3xl font-bold text-primary">{totalCoupons.toLocaleString()}</p>
-                      <p className="text-xs text-muted-foreground mt-1">Unclaimed reward coupons</p>
+                      <p className="text-xs text-muted-foreground mt-1">Live unclaimed coupons</p>
                     </>
                   )}
                 </CardContent>
@@ -200,7 +159,7 @@ const UnclaimedSVRewards = () => {
                     <Skeleton className="h-10 w-full" />
                   ) : (
                     <>
-                      <p className="text-3xl font-bold text-success">{totalRewardAmount.toFixed(4)}</p>
+                      <p className="text-3xl font-bold text-green-500">{totalRewardAmount.toFixed(4)}</p>
                       <p className="text-xs text-muted-foreground mt-1">Total unclaimed CC</p>
                     </>
                   )}
@@ -214,7 +173,7 @@ const UnclaimedSVRewards = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Unclaimed Reward Coupons</CardTitle>
-                    <CardDescription className="mt-1">Validator reward coupons awaiting collection</CardDescription>
+                    <CardDescription className="mt-1">Validator reward coupons from live ACS state</CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
                     <Search className="h-4 w-4 text-muted-foreground" />
@@ -243,7 +202,7 @@ const UnclaimedSVRewards = () => {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {aggregatedRewards.map((reward, i) => (
+                    {aggregatedRewards.slice(0, 50).map((reward, i) => (
                       <Card key={i} className="p-4">
                         <div className="flex justify-between items-start mb-3">
                           <div className="flex-1">
@@ -260,50 +219,35 @@ const UnclaimedSVRewards = () => {
                           <Badge variant="secondary">{reward.coupons.length} Coupons</Badge>
                         </div>
 
-                        {/* Individual Coupons */}
-                        <div className="space-y-2 mt-3 pt-3 border-t">
-                          {reward.coupons.map((coupon: any, idx: number) => {
-                            const amount = getField(coupon, "amount", "rewardAmount");
-                            const roundNum = getField(coupon, "round")?.number;
-                            const dso = getField(coupon, "dso");
-
-                            return (
-                              <div key={idx} className="bg-muted/30 p-3 rounded space-y-2">
-                                <div className="grid grid-cols-2 gap-3 text-sm">
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="w-full justify-start">
+                              <Code className="h-4 w-4 mr-2" />
+                              Show Details
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-2 space-y-2">
+                            {reward.coupons.slice(0, 5).map((coupon: any, idx: number) => (
+                              <div key={idx} className="bg-muted/30 p-3 rounded text-sm">
+                                <div className="grid grid-cols-2 gap-2">
                                   <div>
                                     <p className="text-xs text-muted-foreground">Amount</p>
-                                    <p className="font-semibold">{parseFloat(amount || "0").toFixed(4)} CC</p>
+                                    <p>{parseFloat(getField(coupon, "amount", "rewardAmount") || "0").toFixed(4)} CC</p>
                                   </div>
                                   <div>
                                     <p className="text-xs text-muted-foreground">Round</p>
-                                    <p className="font-mono">{roundNum || "N/A"}</p>
+                                    <p>{getField(coupon, "round")?.number || "—"}</p>
                                   </div>
                                 </div>
-
-                                {dso && (
-                                  <div>
-                                    <p className="text-xs text-muted-foreground">DSO</p>
-                                    <p className="font-mono text-xs break-all">{dso}</p>
-                                  </div>
-                                )}
-
-                                <Collapsible>
-                                  <CollapsibleTrigger asChild>
-                                    <Button variant="ghost" size="sm" className="w-full justify-start">
-                                      <Code className="h-4 w-4 mr-2" />
-                                      Show Raw JSON
-                                    </Button>
-                                  </CollapsibleTrigger>
-                                  <CollapsibleContent className="mt-2">
-                                    <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-96">
-                                      {JSON.stringify(coupon, null, 2)}
-                                    </pre>
-                                  </CollapsibleContent>
-                                </Collapsible>
                               </div>
-                            );
-                          })}
-                        </div>
+                            ))}
+                            {reward.coupons.length > 5 && (
+                              <p className="text-xs text-muted-foreground">
+                                ... and {reward.coupons.length - 5} more coupons
+                              </p>
+                            )}
+                          </CollapsibleContent>
+                        </Collapsible>
                       </Card>
                     ))}
                   </div>
@@ -319,7 +263,7 @@ const UnclaimedSVRewards = () => {
                   <History className="h-5 w-5" />
                   Claimed Rewards History
                 </CardTitle>
-                <CardDescription>Rewards that have been successfully claimed by validators from historical data</CardDescription>
+                <CardDescription>Rewards that have been successfully claimed (from historical data)</CardDescription>
               </CardHeader>
               <CardContent>
                 {eventsLoading ? (
@@ -350,7 +294,7 @@ const UnclaimedSVRewards = () => {
                       {claimedRewards.slice(0, 50).map((event: any) => (
                         <TableRow key={event.id}>
                           <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                          <TableCell>{event.round.toLocaleString()}</TableCell>
+                          <TableCell>{event.round?.toLocaleString()}</TableCell>
                           <TableCell className="font-semibold">
                             {parseFloat(event.payload?.amount || "0").toFixed(4)} CC
                           </TableCell>
@@ -373,7 +317,7 @@ const UnclaimedSVRewards = () => {
                   <History className="h-5 w-5" />
                   Expired Rewards History
                 </CardTitle>
-                <CardDescription>Rewards that expired before being claimed from historical data</CardDescription>
+                <CardDescription>Rewards that expired before being claimed (from historical data)</CardDescription>
               </CardHeader>
               <CardContent>
                 {eventsLoading ? (
@@ -404,8 +348,8 @@ const UnclaimedSVRewards = () => {
                       {expiredRewards.slice(0, 50).map((event: any) => (
                         <TableRow key={event.id}>
                           <TableCell className="font-mono text-xs">{event.event_type}</TableCell>
-                          <TableCell>{event.round.toLocaleString()}</TableCell>
-                          <TableCell className="font-semibold text-muted-foreground">
+                          <TableCell>{event.round?.toLocaleString()}</TableCell>
+                          <TableCell className="font-semibold">
                             {parseFloat(event.payload?.amount || "0").toFixed(4)} CC
                           </TableCell>
                           <TableCell className="text-xs">
@@ -421,16 +365,11 @@ const UnclaimedSVRewards = () => {
           </TabsContent>
         </Tabs>
 
-        <DataSourcesFooter
-          snapshotId={snapshot?.id}
-          templateSuffixes={[
-            "Splice:Amulet:ValidatorRewardCoupon",
-            "Splice:Amulet:SvRewardCoupon",
-            "Splice:Amulet:AppRewardCoupon",
-            "Splice:Amulet:UnclaimedReward",
-          ]}
-          isProcessing={false}
-        />
+        <Card className="p-4 text-xs text-muted-foreground">
+          <p>
+            Unclaimed rewards sourced from Canton Scan API <code>/v0/state/acs</code> endpoint. Historical data from local DuckDB.
+          </p>
+        </Card>
       </div>
     </DashboardLayout>
   );

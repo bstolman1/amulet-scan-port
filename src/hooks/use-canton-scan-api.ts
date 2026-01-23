@@ -348,3 +348,72 @@ export function useHoldingsSummary(partyIds: string[], asOfRound?: number) {
     staleTime: 60 * 1000,
   });
 }
+
+// ============ Amulet Rules ============
+export function useAmuletRules() {
+  return useQuery({
+    queryKey: ["scan-api", "amulet-rules"],
+    queryFn: async () => {
+      const dsoInfo = await scanApi.fetchDsoInfo();
+      return dsoInfo.amulet_rules;
+    },
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useExternalPartyAmuletRules() {
+  return useQuery({
+    queryKey: ["scan-api", "external-party-amulet-rules"],
+    queryFn: async () => {
+      const response = await fetch(
+        `${import.meta.env.VITE_SCAN_API_URL || "https://scan.sv-1.global.canton.network.sync.global/api/scan"}/v0/external-party-amulet-rules`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+          mode: "cors",
+        }
+      );
+      if (!response.ok) throw new Error("Failed to fetch external party amulet rules");
+      const data = await response.json();
+      return data.external_party_amulet_rules_update;
+    },
+    staleTime: 60 * 1000,
+  });
+}
+
+// ============ DSO State - SV Nodes ============
+export function useSvNodeStates() {
+  return useQuery({
+    queryKey: ["scan-api", "sv-node-states"],
+    queryFn: async () => {
+      const dsoInfo = await scanApi.fetchDsoInfo();
+      return dsoInfo.sv_node_states || [];
+    },
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useDsoRules() {
+  return useQuery({
+    queryKey: ["scan-api", "dso-rules"],
+    queryFn: async () => {
+      const dsoInfo = await scanApi.fetchDsoInfo();
+      return dsoInfo.dso_rules;
+    },
+    staleTime: 60 * 1000,
+  });
+}
+
+// ============ Traffic Status ============
+export function useTrafficStatus(domainId: string | undefined, memberId: string | undefined) {
+  return useQuery({
+    queryKey: ["scan-api", "traffic-status", domainId, memberId],
+    queryFn: async () => {
+      if (!domainId || !memberId) throw new Error("Domain ID and Member ID required");
+      return scanApi.fetchTrafficStatus(domainId, memberId);
+    },
+    enabled: !!domainId && !!memberId,
+    staleTime: 30 * 1000,
+  });
+}

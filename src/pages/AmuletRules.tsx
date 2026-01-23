@@ -9,9 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
-import { DataSourcesFooter } from "@/components/DataSourcesFooter";
+import { useAmuletRules } from "@/hooks/use-canton-scan-api";
 
 interface NormalizedTransferStep {
   amount?: string;
@@ -75,15 +73,8 @@ const normalizeTransferSteps = (steps: any): NormalizedTransferStep[] => {
   if (!Array.isArray(steps)) return [];
   return steps
     .map((step) => {
-      const amount = pickFirstDefined(
-        step?.amount,
-        step?.volume,
-        step?.threshold,
-        step?._1,
-        step?.Amount,
-        step?.Volume,
-      );
-      const rate = pickFirstDefined(step?.rate, step?.fee, step?._2, step?.Rate);
+      const amount = pickFirstDefined(step?.amount, step?.volume, step?.threshold, step?._1);
+      const rate = pickFirstDefined(step?.rate, step?.fee, step?._2);
       if (amount === undefined && rate === undefined) return null;
       return { amount, rate };
     })
@@ -93,12 +84,7 @@ const normalizeTransferSteps = (steps: any): NormalizedTransferStep[] => {
 const normalizeIssuanceValue = (value: any): NormalizedIssuanceValue | undefined => {
   if (!value || typeof value !== "object") return undefined;
   return {
-    amuletToIssuePerYear: pickFirstDefined(
-      value.amuletToIssuePerYear,
-      value.amulet_to_issue_per_year,
-      value._1,
-      value.amuletIssuance,
-    ),
+    amuletToIssuePerYear: pickFirstDefined(value.amuletToIssuePerYear, value.amulet_to_issue_per_year),
     validatorRewardPercentage: pickFirstDefined(value.validatorRewardPercentage, value.validator_reward_percentage),
     appRewardPercentage: pickFirstDefined(value.appRewardPercentage, value.app_reward_percentage),
     validatorRewardCap: pickFirstDefined(value.validatorRewardCap, value.validator_reward_cap),
@@ -112,78 +98,38 @@ const normalizeFutureValues = (futureValues: any): NormalizedIssuanceFutureValue
   if (!Array.isArray(futureValues)) return [];
   return futureValues
     .map((item) => {
-      const effectiveAfterMicroseconds = pickFirstDefined(
-        item?.effectiveAfterMicroseconds,
-        item?.microseconds,
-        item?.time,
-        item?._1?.microseconds,
-        item?._1,
-        item?.effective_after_microseconds,
-      );
-      const values = pickFirstDefined(item?.values, item?._2, item?.futureValue, item?.value);
+      const effectiveAfterMicroseconds = pickFirstDefined(item?.effectiveAfterMicroseconds, item?._1?.microseconds, item?._1);
+      const values = pickFirstDefined(item?.values, item?._2);
       const normalizedValues = normalizeIssuanceValue(values);
       if (!effectiveAfterMicroseconds && !normalizedValues) return null;
-      return {
-        effectiveAfterMicroseconds,
-        values: normalizedValues,
-      } as NormalizedIssuanceFutureValue;
+      return { effectiveAfterMicroseconds, values: normalizedValues } as NormalizedIssuanceFutureValue;
     })
     .filter(Boolean) as NormalizedIssuanceFutureValue[];
 };
 
 const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
   if (!raw) return null;
-  const source = raw.payload ?? raw;
-  const transferConfig = pickFirstDefined(
-    source.transferConfig,
-    source.transfer_config,
-    source.TransferConfig,
-    source.transfer_configSchedule,
-  );
+  const source = raw.contract?.payload ?? raw.payload ?? raw;
+  const transferConfig = pickFirstDefined(source.transferConfig, source.transfer_config);
   const issuanceCurve = pickFirstDefined(source.issuanceCurve, source.issuance_curve);
-  const decentralizedSynchronizer = pickFirstDefined(
-    source.decentralizedSynchronizer,
-    source.decentralized_synchronizer,
-  );
+  const decentralizedSynchronizer = pickFirstDefined(source.decentralizedSynchronizer, source.decentralized_synchronizer);
 
   return {
     dso: pickFirstDefined(source.dso, source.DSO, source.owner),
-    templateIdSuffix: pickFirstDefined(source.templateIdSuffix, source.template_id_suffix, "AmuletRules"),
-    isDevNet: pickFirstDefined(source.isDevNet, source.is_devnet, source.is_dev_net, false),
-    featuredAppActivityMarkerAmount: pickFirstDefined(
-      source.featuredAppActivityMarkerAmount,
-      source.featured_app_activity_marker_amount,
-    ),
+    templateIdSuffix: "AmuletRules",
+    isDevNet: pickFirstDefined(source.isDevNet, source.is_devnet, false),
+    featuredAppActivityMarkerAmount: pickFirstDefined(source.featuredAppActivityMarkerAmount, source.featured_app_activity_marker_amount),
     transferConfig: transferConfig
       ? {
           createFee: { fee: pickFirstDefined(transferConfig.createFee?.fee, transferConfig.create_fee?.fee) },
           holdingFee: { rate: pickFirstDefined(transferConfig.holdingFee?.rate, transferConfig.holding_fee?.rate) },
           transferFee: {
-            initialRate: pickFirstDefined(
-              transferConfig.transferFee?.initialRate,
-              transferConfig.transfer_fee?.initialRate,
-              transferConfig.transfer_fee?.initial_rate,
-              transferConfig.transferFee?.initial_rate,
-            ),
-            steps: normalizeTransferSteps(
-              pickFirstDefined(
-                transferConfig.transferFee?.steps,
-                transferConfig.transfer_fee?.steps,
-                transferConfig.transfer_fee_steps,
-              ),
-            ),
+            initialRate: pickFirstDefined(transferConfig.transferFee?.initialRate, transferConfig.transfer_fee?.initial_rate),
+            steps: normalizeTransferSteps(pickFirstDefined(transferConfig.transferFee?.steps, transferConfig.transfer_fee?.steps)),
           },
-          lockHolderFee: {
-            fee: pickFirstDefined(transferConfig.lockHolderFee?.fee, transferConfig.lock_holder_fee?.fee),
-          },
-          transferPreapprovalFee: pickFirstDefined(
-            transferConfig.transferPreapprovalFee,
-            transferConfig.transfer_preapproval_fee,
-          ),
-          extraFeaturedAppRewardAmount: pickFirstDefined(
-            transferConfig.extraFeaturedAppRewardAmount,
-            transferConfig.extra_featured_app_reward_amount,
-          ),
+          lockHolderFee: { fee: pickFirstDefined(transferConfig.lockHolderFee?.fee, transferConfig.lock_holder_fee?.fee) },
+          transferPreapprovalFee: pickFirstDefined(transferConfig.transferPreapprovalFee, transferConfig.transfer_preapproval_fee),
+          extraFeaturedAppRewardAmount: pickFirstDefined(transferConfig.extraFeaturedAppRewardAmount, transferConfig.extra_featured_app_reward_amount),
           maxNumInputs: pickFirstDefined(transferConfig.maxNumInputs, transferConfig.max_num_inputs),
           maxNumOutputs: pickFirstDefined(transferConfig.maxNumOutputs, transferConfig.max_num_outputs),
           maxNumLockHolders: pickFirstDefined(transferConfig.maxNumLockHolders, transferConfig.max_num_lock_holders),
@@ -191,20 +137,13 @@ const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
       : undefined,
     issuanceCurve: issuanceCurve
       ? {
-          initialValue: normalizeIssuanceValue(
-            pickFirstDefined(issuanceCurve.initialValue, issuanceCurve.initial_value),
-          ),
-          futureValues: normalizeFutureValues(
-            pickFirstDefined(issuanceCurve.futureValues, issuanceCurve.future_values),
-          ),
+          initialValue: normalizeIssuanceValue(pickFirstDefined(issuanceCurve.initialValue, issuanceCurve.initial_value)),
+          futureValues: normalizeFutureValues(pickFirstDefined(issuanceCurve.futureValues, issuanceCurve.future_values)),
         }
       : undefined,
     decentralizedSynchronizer: decentralizedSynchronizer
       ? {
-          requiredSynchronizers: pickFirstDefined(
-            decentralizedSynchronizer.requiredSynchronizers,
-            decentralizedSynchronizer.required_synchronizers,
-          ),
+          requiredSynchronizers: pickFirstDefined(decentralizedSynchronizer.requiredSynchronizers, decentralizedSynchronizer.required_synchronizers),
           fees: decentralizedSynchronizer.fees,
         }
       : undefined,
@@ -225,31 +164,11 @@ const truncateIdentifier = (value?: string) =>
   value && value.length > 24 ? `${value.slice(0, 18)}…${value.slice(-6)}` : value || "—";
 
 const AmuletRules = () => {
-  const { data: latestSnapshot, isLoading: snapshotLoading } = useLatestACSSnapshot();
+  const { data: amuletRulesData, isLoading } = useAmuletRules();
 
-  // The on-disk ACS uses module/entity format like "Splice.AmuletRules:AmuletRules".
-  const amuletRulesQuery = useAggregatedTemplateData(
-    latestSnapshot?.id,
-    "Splice.AmuletRules:AmuletRules",
-  );
-
-  const rawRule = useMemo(() => {
-    const rows = amuletRulesQuery.data?.data ?? [];
-    // Prefer the exact module/entity match if the backend returns more than one row.
-    return (
-      rows.find((r: any) => r?.entity_name === "AmuletRules" && r?.module_name === "Splice.AmuletRules") ??
-      rows[0]
-    );
-  }, [amuletRulesQuery.data]);
-
-  const normalizedRule = useMemo(() => normalizeAmuletRule(rawRule), [rawRule]);
-
+  const normalizedRule = useMemo(() => normalizeAmuletRule(amuletRulesData), [amuletRulesData]);
   const transferConfig = normalizedRule?.transferConfig;
   const issuanceCurve = normalizedRule?.issuanceCurve;
-  const synchronizer = normalizedRule?.decentralizedSynchronizer;
-
-
-  const isLoading = snapshotLoading || amuletRulesQuery.isLoading;
   const hasData = !!normalizedRule;
 
   return (
@@ -263,16 +182,10 @@ const AmuletRules = () => {
             <Badge variant="secondary" className="text-xs">
               {normalizedRule?.isDevNet ? "Development" : "Production"}
             </Badge>
-            {amuletRulesQuery.data?.templateCount !== undefined && (
-              <Badge variant="outline" className="text-xs">
-                {amuletRulesQuery.data.templateCount} template package(s)
-              </Badge>
-            )}
           </div>
-          <h2 className="text-3xl font-bold">Amulet Rules Template</h2>
+          <h2 className="text-3xl font-bold">Amulet Rules</h2>
           <p className="text-muted-foreground max-w-3xl">
-            Live configuration values pulled from the latest ACS snapshot for templates ending in AmuletRules. This view
-            updates automatically when new snapshots are available, so values stay current.
+            Live configuration values from the Canton Scan API <code>/v0/dso</code> endpoint. This view updates automatically when new data is available.
           </p>
         </div>
 
@@ -287,8 +200,7 @@ const AmuletRules = () => {
           <Alert>
             <AlertTitle>No AmuletRules data found</AlertTitle>
             <AlertDescription>
-              We couldn't find any AmuletRules contracts in the latest snapshot. Trigger a new snapshot or verify that
-              the template exists in the environment.
+              Unable to fetch AmuletRules configuration from the Canton Scan API.
             </AlertDescription>
           </Alert>
         )}
@@ -402,209 +314,88 @@ const AmuletRules = () => {
                       This template currently {transferConfig?.transferPreapprovalFee ? "charges" : "does not charge"} a
                       fee for preapproving transfers.
                     </p>
-                    {transferConfig?.extraFeaturedAppRewardAmount && (
-                      <div className="text-sm">
-                        <p className="text-muted-foreground text-xs uppercase mb-1">Extra Featured App Reward</p>
-                        <p className="font-semibold">{transferConfig.extraFeaturedAppRewardAmount}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {issuanceCurve && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Issuance Curve</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="p-4 rounded-lg bg-muted/50">
+                    <h3 className="font-semibold mb-3">Initial Values</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Amulet/Year</p>
+                        <p className="font-semibold">{issuanceCurve.initialValue?.amuletToIssuePerYear || "—"}</p>
                       </div>
-                    )}
+                      <div>
+                        <p className="text-xs text-muted-foreground">Validator %</p>
+                        <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardPercentage || "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">App %</p>
+                        <p className="font-semibold">{issuanceCurve.initialValue?.appRewardPercentage || "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Validator Cap</p>
+                        <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardCap || "—"}</p>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Issuance Curve</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Yearly issuance</p>
-                    <p className="text-2xl font-semibold">{issuanceCurve?.initialValue?.amuletToIssuePerYear || "—"}</p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Validator reward %</p>
-                    <p className="text-2xl font-semibold">
-                      {issuanceCurve?.initialValue?.validatorRewardPercentage || "—"}
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">App reward %</p>
-                    <p className="text-2xl font-semibold">{issuanceCurve?.initialValue?.appRewardPercentage || "—"}</p>
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold">Future Values</h3>
-                    <Badge variant="outline">{issuanceCurve?.futureValues?.length || 0} scheduled</Badge>
-                  </div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Effective After</TableHead>
-                        <TableHead className="text-right">Yearly Issuance</TableHead>
-                        <TableHead className="text-right">Validator %</TableHead>
-                        <TableHead className="text-right">App %</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(issuanceCurve?.futureValues || []).length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={4} className="text-center text-muted-foreground">
-                            No future issuance values configured
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        issuanceCurve?.futureValues?.map((future, index) => (
-                          <TableRow key={`${future.effectiveAfterMicroseconds}-${index}`}>
-                            <TableCell>{formatMicroseconds(future.effectiveAfterMicroseconds)}</TableCell>
-                            <TableCell className="text-right">{future.values?.amuletToIssuePerYear || "—"}</TableCell>
-                            <TableCell className="text-right">
-                              {future.values?.validatorRewardPercentage || "—"}
-                            </TableCell>
-                            <TableCell className="text-right">{future.values?.appRewardPercentage || "—"}</TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Synchronizer Traffic</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Burst amount</p>
-                    <p className="text-xl font-semibold">
-                      {synchronizer?.fees?.baseRateTrafficLimits?.burstAmount || "—"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Window {formatMicroseconds(synchronizer?.fees?.baseRateTrafficLimits?.burstWindow?.microseconds)}
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Tick duration</p>
-                    <p className="text-xl font-semibold">
-                      {formatMicroseconds(synchronizer?.fees?.tickDuration?.microseconds)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Read vs write scaling {synchronizer?.fees?.readVsWriteScalingFactor || "—"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Extra traffic price</p>
-                    <p className="text-xl font-semibold">{synchronizer?.fees?.extraTrafficPrice || "—"}</p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Min top-up</p>
-                    <p className="text-xl font-semibold">{synchronizer?.fees?.minTopupAmount || "—"}</p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase">Synchronizers</p>
-                    <p className="text-xl font-semibold">{synchronizer?.requiredSynchronizers?.length || 0}</p>
-                  </div>
-                </div>
-
-                {(synchronizer?.requiredSynchronizers || []).length > 0 && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-semibold">Synchronizer endpoints</h4>
-                    <div className="space-y-2">
-                      {synchronizer?.requiredSynchronizers?.map((sync, index) => (
-                        <div key={`${sync.required}-${index}`} className="p-3 rounded-md border text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Required</span>
-                            <span className="font-mono">{truncateIdentifier(sync.required)}</span>
+                  {issuanceCurve.futureValues && issuanceCurve.futureValues.length > 0 && (
+                    <div>
+                      <h3 className="font-semibold mb-3">Future Value Schedule ({issuanceCurve.futureValues.length} entries)</h3>
+                      <div className="space-y-2">
+                        {issuanceCurve.futureValues.slice(0, 5).map((fv, idx) => (
+                          <div key={idx} className="p-3 rounded bg-muted/30 text-sm">
+                            <p className="text-xs text-muted-foreground">
+                              Effective after: {formatMicroseconds(fv.effectiveAfterMicroseconds)}
+                            </p>
+                            <p className="font-medium">
+                              Amulet/Year: {fv.values?.amuletToIssuePerYear || "—"}
+                            </p>
                           </div>
-                          {sync.activeSynchronizer && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Active</span>
-                              <span className="font-mono">{truncateIdentifier(sync.activeSynchronizer)}</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                        {issuanceCurve.futureValues.length > 5 && (
+                          <p className="text-xs text-muted-foreground">
+                            ... and {issuanceCurve.futureValues.length - 5} more entries
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Package Versions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Package</TableHead>
-                      <TableHead className="text-right">Version</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {normalizedRule?.packageConfig ? (
-                      Object.entries(normalizedRule.packageConfig).map(([pkg, version]) => (
-                        <TableRow key={pkg}>
-                          <TableCell className="font-medium">{pkg}</TableCell>
-                          <TableCell className="text-right">{version}</TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={2} className="text-center text-muted-foreground">
-                          No package config found
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                <CardTitle className="text-base">Raw AmuletRules Contract</CardTitle>
-                <Badge variant="outline">{amuletRulesQuery.data?.totalContracts || 0} total</Badge>
-              </CardHeader>
-              <CardContent>
-                <Collapsible>
-                  <CollapsibleTrigger asChild>
-                    <Button variant="ghost" size="sm" className="group flex items-center gap-2">
-                      <ChevronRight className="h-4 w-4 group-data-[state=open]:hidden" />
-                      <ChevronDown className="h-4 w-4 hidden group-data-[state=open]:block" />
-                      Toggle raw JSON
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-3">
-                    <div className="p-4 rounded-lg bg-muted/50">
-                      <pre className="text-xs overflow-auto max-h-96">
-                        {JSON.stringify(normalizedRule?.raw, null, 2)}
-                      </pre>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              </CardContent>
-            </Card>
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <Button variant="outline" className="w-full justify-start">
+                  <ChevronRight className="h-4 w-4 mr-2" />
+                  View Raw JSON
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <Card className="mt-2">
+                  <CardContent className="pt-4">
+                    <pre className="text-xs overflow-auto max-h-96 bg-muted p-4 rounded">
+                      {JSON.stringify(normalizedRule?.raw, null, 2)}
+                    </pre>
+                  </CardContent>
+                </Card>
+              </CollapsibleContent>
+            </Collapsible>
           </>
         )}
 
-        <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
-          templateSuffixes={["Splice:AmuletRules:AmuletRules"]}
-          isProcessing={latestSnapshot?.status === "processing"}
-        />
+        <Card className="p-4 text-xs text-muted-foreground">
+          <p>Data sourced directly from Canton Scan API <code>/v0/dso</code> endpoint.</p>
+        </Card>
       </div>
     </DashboardLayout>
   );

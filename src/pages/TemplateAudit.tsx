@@ -3,25 +3,23 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useACSTemplateData, useACSTemplates } from "@/hooks/use-acs-template-data";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { Database, FileJson, ChevronRight, ChevronDown } from "lucide-react";
+import { useDsoInfo, useStateAcs } from "@/hooks/use-canton-scan-api";
+import { Database, FileJson, ChevronRight, ChevronDown, Code } from "lucide-react";
 import { useState } from "react";
 import { getPagesThatUseTemplate } from "@/lib/template-page-map";
+import { Button } from "@/components/ui/button";
 
 const TemplateRow = ({
-  snapshotId,
   templateId,
-  contractCount,
 }: {
-  snapshotId: string;
   templateId: string;
-  contractCount: number;
 }) => {
   const [open, setOpen] = useState(false);
-  const suffix = templateId.split(":").slice(-3).join(":");
+  const suffix = templateId.split(":").slice(-2).join(":");
   const pages = getPagesThatUseTemplate(templateId);
-  const { data, isLoading } = useACSTemplateData(snapshotId, templateId, open);
+
+  // Only fetch data when expanded
+  const { data, isLoading } = useStateAcs(open ? [templateId] : [], 3);
 
   return (
     <Card className="p-0 overflow-hidden">
@@ -43,9 +41,6 @@ const TemplateRow = ({
               <div className="flex items-center gap-2">
                 <FileJson className="h-4 w-4 text-primary" />
                 <code className="text-sm font-mono">{suffix}</code>
-                <Badge variant="secondary" className="text-xs">
-                  {contractCount} entries
-                </Badge>
               </div>
               <div className="flex flex-wrap gap-2">
                 {pages.length > 0 ? (
@@ -69,13 +64,13 @@ const TemplateRow = ({
               <Skeleton className="h-16 w-full" />
             ) : (
               <div className="space-y-3">
-                {data?.data && data.data.length > 0 ? (
+                {data && data.length > 0 ? (
                   <>
                     <p className="text-xs text-muted-foreground">
-                      Showing first {Math.min(3, data.data.length)} of {data.data.length} records
+                      Showing {Math.min(3, data.length)} sample record(s) from live network
                     </p>
                     <div className="grid gap-3 md:grid-cols-2">
-                      {data.data.slice(0, 3).map((entry: any, idx: number) => (
+                      {data.slice(0, 3).map((entry: any, idx: number) => (
                         <Card key={idx} className="p-3 overflow-auto">
                           <pre className="text-xs leading-snug">{JSON.stringify(entry, null, 2)}</pre>
                         </Card>
@@ -83,7 +78,7 @@ const TemplateRow = ({
                     </div>
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No data found for this template.</p>
+                  <p className="text-sm text-muted-foreground">No active contracts found for this template.</p>
                 )}
               </div>
             )}
@@ -95,11 +90,27 @@ const TemplateRow = ({
 };
 
 const TemplateAudit = () => {
-  const { data: latestSnapshot } = useLatestACSSnapshot();
-  const { data: templates, isLoading } = useACSTemplates(latestSnapshot?.id);
-
+  const { data: dsoInfo, isLoading } = useDsoInfo();
   const [query, setQuery] = useState("");
-  const filtered = (templates || []).filter((t: any) => t.template_id.toLowerCase().includes(query.toLowerCase()));
+
+  // Common templates to audit
+  const auditTemplates = [
+    "Splice.AmuletRules:AmuletRules",
+    "Splice.Amulet:Amulet",
+    "Splice.Amulet:ValidatorRewardCoupon",
+    "Splice.Amulet:SvRewardCoupon",
+    "Splice.Amulet:AppRewardCoupon",
+    "Splice.ValidatorLicense:ValidatorLicense",
+    "Splice.Ans:AnsEntry",
+    "Splice.ExternalPartyAmuletRules:TransferCommandCounter",
+    "Splice.ExternalPartyAmuletRules:ExternalPartySetupProposal",
+    "Splice.FeaturedAppRight:FeaturedAppRight",
+    "Splice.Wallet:LockedAmulet",
+    "Splice.Subscription:SubscriptionRequest",
+    "Splice.Subscription:SubscriptionInitialPayment",
+  ];
+
+  const filtered = auditTemplates.filter((t) => t.toLowerCase().includes(query.toLowerCase()));
 
   return (
     <DashboardLayout>
@@ -108,14 +119,31 @@ const TemplateAudit = () => {
           <div className="space-y-1">
             <h1 className="text-2xl font-bold">Template Coverage Audit</h1>
             <p className="text-sm text-muted-foreground">
-              Verify every template's data is discoverable and which pages consume it.
+              Verify template data availability from the live Canton network.
             </p>
           </div>
           <Badge variant="secondary" className="gap-2">
             <Database className="h-4 w-4" />
-            Snapshot {latestSnapshot?.id ? `${latestSnapshot.id.substring(0, 8)}...` : "loading"}
+            Live API
           </Badge>
         </div>
+
+        {dsoInfo && (
+          <Card className="p-4">
+            <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Latest Round:</span>
+                <code className="text-foreground font-semibold">
+                  {dsoInfo.latest_mining_round?.contract?.payload?.round?.number || "—"}
+                </code>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">SV Nodes:</span>
+                <code className="text-foreground font-semibold">{dsoInfo.sv_node_states?.length || 0}</code>
+              </div>
+            </div>
+          </Card>
+        )}
 
         <div className="grid gap-4">
           <div className="flex items-center gap-3">
@@ -125,11 +153,9 @@ const TemplateAudit = () => {
               placeholder="Search templates"
               className="w-full md:w-80 rounded-md border bg-background px-3 py-2 text-sm"
             />
-            {templates && (
-              <Badge variant="outline" className="text-xs">
-                {filtered.length} of {templates.length} templates
-              </Badge>
-            )}
+            <Badge variant="outline" className="text-xs">
+              {filtered.length} of {auditTemplates.length} templates
+            </Badge>
           </div>
 
           {isLoading ? (
@@ -140,17 +166,18 @@ const TemplateAudit = () => {
             </div>
           ) : (
             <div className="grid gap-3">
-              {filtered.map((t: any) => (
-                <TemplateRow
-                  key={t.template_id}
-                  snapshotId={latestSnapshot.id}
-                  templateId={t.template_id}
-                  contractCount={t.contract_count}
-                />
+              {filtered.map((templateId) => (
+                <TemplateRow key={templateId} templateId={templateId} />
               ))}
             </div>
           )}
         </div>
+
+        <Card className="p-4 text-xs text-muted-foreground">
+          <p>
+            Data sourced from Canton Scan API <code>/v0/state/acs</code> endpoint.
+          </p>
+        </Card>
       </div>
     </DashboardLayout>
   );
