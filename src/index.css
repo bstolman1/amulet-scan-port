@@ -2,72 +2,133 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here.
-All colors MUST be HSL.
+/* Canton Foundation Design System
+   Based on official Canton Network brand guidelines
+   Clean, professional, modern with purple accents
 */
 
 @layer base {
   :root {
-    --background: 222 47% 11%;
-    --foreground: 210 40% 98%;
+    /* Light mode (Canton white theme) */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 10%;
 
-    --card: 222 47% 14%;
-    --card-foreground: 210 40% 98%;
+    --card: 0 0% 97%;
+    --card-foreground: 0 0% 10%;
 
-    --popover: 222 47% 14%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
 
-    --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 11%;
-    --primary-glow: 189 100% 60%;
+    /* Canton Purple - Primary brand color */
+    --primary: 263 70% 58%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 263 60% 70%;
 
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 98%;
+    /* Canton Taupe - Secondary brand color */
+    --secondary: 30 12% 75%;
+    --secondary-foreground: 0 0% 20%;
 
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 45%;
 
-    --accent: 189 100% 60%;
-    --accent-foreground: 222 47% 11%;
+    /* Canton Purple as accent */
+    --accent: 263 70% 58%;
+    --accent-foreground: 0 0% 100%;
 
     --success: 142 76% 36%;
-    --success-foreground: 210 40% 98%;
+    --success-foreground: 0 0% 100%;
 
     --warning: 38 92% 50%;
-    --warning-foreground: 222 47% 11%;
+    --warning-foreground: 0 0% 10%;
 
     --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 217 33% 22%;
-    --input: 217 33% 22%;
-    --ring: 217 91% 60%;
+    /* Canton Lime/Yellow accent */
+    --highlight: 65 70% 75%;
+    --highlight-foreground: 0 0% 10%;
+
+    /* Canton Lavender accent */
+    --lavender: 280 40% 75%;
+    --lavender-foreground: 0 0% 10%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 263 70% 58%;
 
     --radius: 0.75rem;
 
-    --chart-1: 217 91% 60%;
-    --chart-2: 189 100% 60%;
-    --chart-3: 271 91% 65%;
+    /* Chart colors */
+    --chart-1: 263 70% 58%;
+    --chart-2: 280 40% 75%;
+    --chart-3: 65 70% 75%;
     --chart-4: 142 76% 36%;
-    --chart-5: 38 92% 50%;
+    --chart-5: 30 12% 60%;
 
-    /* Gradients */
-    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%) 0%, hsl(271 91% 65%) 100%);
-    --gradient-accent: linear-gradient(135deg, hsl(189 100% 60%) 0%, hsl(217 91% 60%) 100%);
-    --gradient-card: linear-gradient(135deg, hsl(222 47% 14% / 0.5) 0%, hsl(222 47% 16% / 0.5) 100%);
+    /* Canton Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(263 70% 58%) 0%, hsl(280 60% 65%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(263 70% 58%) 0%, hsl(263 50% 45%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(0 0% 97%) 0%, hsl(0 0% 95%) 100%);
+    --gradient-taupe: linear-gradient(135deg, hsl(30 12% 70%) 0%, hsl(30 12% 60%) 100%);
 
-    /* Shadows */
-    --shadow-glow: 0 0 40px hsl(217 91% 60% / 0.3);
-    --shadow-card: 0 8px 32px hsl(222 47% 8% / 0.4);
+    /* Canton Shadows */
+    --shadow-glow: 0 0 40px hsl(263 70% 58% / 0.15);
+    --shadow-card: 0 4px 24px hsl(0 0% 0% / 0.06);
+    --shadow-hover: 0 8px 32px hsl(0 0% 0% / 0.1);
 
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    /* Sidebar (for darker sidebar if needed) */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 0 0% 10%;
+    --sidebar-primary: 263 70% 58%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 0 0% 94%;
+    --sidebar-accent-foreground: 0 0% 10%;
+    --sidebar-border: 0 0% 90%;
+    --sidebar-ring: 263 70% 58%;
+  }
+
+  /* Dark mode override if needed */
+  .dark {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 95%;
+
+    --card: 0 0% 10%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 0 0% 10%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 263 70% 65%;
+    --primary-foreground: 0 0% 10%;
+    --primary-glow: 263 60% 75%;
+
+    --secondary: 30 12% 30%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 60%;
+
+    --accent: 263 70% 65%;
+    --accent-foreground: 0 0% 10%;
+
+    --highlight: 65 70% 65%;
+    --highlight-foreground: 0 0% 10%;
+
+    --lavender: 280 40% 65%;
+    --lavender-foreground: 0 0% 10%;
+
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 263 70% 65%;
+
+    --shadow-glow: 0 0 40px hsl(263 70% 58% / 0.3);
+    --shadow-card: 0 4px 24px hsl(0 0% 0% / 0.3);
+
+    --sidebar-background: 0 0% 8%;
+    --sidebar-foreground: 0 0% 95%;
+    --sidebar-accent: 0 0% 15%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 0 0% 20%;
   }
 }
 
@@ -78,31 +139,69 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground antialiased;
-    background: linear-gradient(180deg, hsl(222 47% 11%) 0%, hsl(222 47% 8%) 100%);
-    background-attachment: fixed;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
   }
 }
 
 @layer components {
+  /* Canton glass card - light frosted effect */
   .glass-card {
-    @apply bg-card/50 backdrop-blur-xl border border-border/50 rounded-lg shadow-lg;
-    background: var(--gradient-card);
-    backdrop-filter: blur(12px);
+    @apply bg-card border border-border rounded-xl;
+    box-shadow: var(--shadow-card);
   }
 
+  .glass-card:hover {
+    box-shadow: var(--shadow-hover);
+  }
+
+  /* Canton primary gradient */
   .gradient-primary {
     background: var(--gradient-primary);
   }
 
+  /* Canton accent gradient */
   .gradient-accent {
     background: var(--gradient-accent);
   }
 
+  /* Canton taupe gradient (for secondary buttons) */
+  .gradient-taupe {
+    background: var(--gradient-taupe);
+  }
+
+  /* Canton purple glow effect */
   .glow-primary {
     box-shadow: var(--shadow-glow);
   }
 
+  /* Smooth transitions */
   .transition-smooth {
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Canton stat card styling */
+  .canton-stat-card {
+    @apply bg-card border border-border rounded-xl p-6;
+    box-shadow: var(--shadow-card);
+  }
+
+  .canton-stat-card:hover {
+    box-shadow: var(--shadow-hover);
+    transform: translateY(-2px);
+  }
+
+  /* Canton purple separator line */
+  .canton-separator {
+    @apply h-0.5 w-full;
+    background: var(--gradient-primary);
+  }
+
+  /* Canton headline text with purple gradient */
+  .canton-headline {
+    @apply font-bold;
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 }
