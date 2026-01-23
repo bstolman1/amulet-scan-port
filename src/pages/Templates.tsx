@@ -2,37 +2,39 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { useACSTemplateData, useACSTemplates } from "@/hooks/use-acs-template-data";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
-import { FileJson, Database, ChevronDown, ChevronRight, AlertCircle, Download, FileText } from "lucide-react";
+import { FileJson, Database, ChevronDown, ChevronRight, Download, FileText, Code } from "lucide-react";
 import { useState } from "react";
 import { getPagesThatUseTemplate } from "@/lib/template-page-map";
-import { useACSStatus } from "@/hooks/use-local-acs";
-import { ACSStatusBanner } from "@/components/ACSStatusBanner";
-import { generateTemplateDocumentation, downloadMarkdown, getTemplateFilename } from "@/lib/template-documentation";
+import { useDsoInfo, useStateAcs } from "@/hooks/use-canton-scan-api";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Link } from "react-router-dom";
+
 const Templates = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
-  const { data: acsStatus } = useACSStatus();
 
-  // Fetch latest completed snapshot
-  const { data: latestSnapshot, isLoading: snapshotLoading, error: snapshotError } = useLatestACSSnapshot();
+  // Fetch DSO info to get available templates from the network
+  const { data: dsoInfo, isLoading: dsoLoading } = useDsoInfo();
 
-  // Fetch all templates
-  const { data: templates, isLoading: templatesLoading, error: templatesError } = useACSTemplates(latestSnapshot?.id);
+  // Common Canton templates that are typically available
+  const commonTemplates = [
+    "Splice.AmuletRules:AmuletRules",
+    "Splice.Amulet:Amulet",
+    "Splice.Amulet:ValidatorRewardCoupon",
+    "Splice.Amulet:SvRewardCoupon",
+    "Splice.Amulet:AppRewardCoupon",
+    "Splice.ValidatorLicense:ValidatorLicense",
+    "Splice.Ans:AnsEntry",
+    "Splice.ExternalPartyAmuletRules:TransferCommandCounter",
+    "Splice.ExternalPartyAmuletRules:ExternalPartySetupProposal",
+    "Splice.FeaturedAppRight:FeaturedAppRight",
+  ];
 
-  // Fetch data for selected template
-  const { data: templateData, isLoading: dataLoading } = useACSTemplateData(
-    latestSnapshot?.id,
-    selectedTemplate || "",
-    !!selectedTemplate,
+  // Fetch sample data for the selected template
+  const { data: templateData, isLoading: dataLoading } = useStateAcs(
+    selectedTemplate ? [selectedTemplate] : [],
+    10 // Limit to 10 samples
   );
-
-  // Check for data source errors
-  const hasError = snapshotError || templatesError;
-  const errorMessage = (snapshotError as Error)?.message || (templatesError as Error)?.message;
 
   const analyzeDataStructure = (data: any[]): any => {
     if (!data || data.length === 0) return null;
@@ -70,7 +72,6 @@ const Templates = () => {
       }
 
       if (typeof value === "string") {
-        // Detect if it looks like a number
         if (!isNaN(Number(value)) && value !== "") {
           return { type: "string (numeric)", example: value };
         }
@@ -142,202 +143,148 @@ const Templates = () => {
     });
   };
 
-  const structure = templateData?.data ? analyzeDataStructure(templateData.data) : null;
+  const structure = templateData ? analyzeDataStructure(templateData) : null;
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <ACSStatusBanner />
         <div>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h2 className="text-3xl font-bold">Template Data Explorer</h2>
-            {acsStatus?.available && (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-3xl font-bold">Template Data Explorer</h2>
               <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
                 <Database className="h-3 w-3 mr-1" />
-                Local ACS
+                Live API
               </Badge>
-            )}
+            </div>
+            <Link to="/template-docs">
+              <Button variant="outline" size="sm">
+                <FileText className="h-4 w-4 mr-2" />
+                Download All Documentation
+              </Button>
+            </Link>
           </div>
-          <Link to="/template-docs">
-            <Button variant="outline" size="sm">
-              <FileText className="h-4 w-4 mr-2" />
-              Download All Documentation
-            </Button>
-          </Link>
-        </div>
           <p className="text-muted-foreground mb-2">
-            Explore available templates and their data structures from the latest ACS snapshot
+            Explore available templates and their data structures from the live Canton network
           </p>
           <p className="text-xs text-muted-foreground bg-muted/30 p-3 rounded-lg">
             <strong>Template ID Format:</strong>{" "}
-            <code className="bg-background px-1 rounded">package-hash:Module:Entity:Template</code>
+            <code className="bg-background px-1 rounded">Module:Entity</code>
             <br />
-            The hash prefix identifies the package/version, while the suffix (e.g., "Splice:Amulet:Amulet") identifies
-            the module, entity, and template name within Canton. Different packages may contain templates with the same
-            names but different implementations.
+            Templates are fetched directly from the Canton Scan API <code>/v0/state/acs</code> endpoint.
           </p>
         </div>
 
-        {/* Error State */}
-        {hasError && (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Data Source Unavailable</AlertTitle>
-            <AlertDescription>
-              {errorMessage?.includes('Failed to fetch') ? (
-                <>
-                  Unable to connect to data sources. The local server may not be running.
-                  <br />
-                  <span className="text-xs mt-1 block opacity-75">
-                    Start the server with: cd server && npm start
-                  </span>
-                </>
-              ) : (
-                errorMessage || 'Unable to load template data'
-              )}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* Snapshot Info */}
-        {latestSnapshot && (
+        {/* DSO Info */}
+        {dsoInfo && (
           <Card className="glass-card p-4">
             <div className="flex items-center gap-4 text-sm">
               <div className="flex items-center gap-2">
                 <Database className="h-4 w-4 text-primary" />
-                <span className="text-muted-foreground">Snapshot:</span>
-                <code className="text-foreground">{latestSnapshot.id.substring(0, 8)}...</code>
+                <span className="text-muted-foreground">Latest Round:</span>
+                <code className="text-foreground">
+                  {dsoInfo.latest_mining_round?.contract?.payload?.round?.number || "—"}
+                </code>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Migration:</span>
-                <code className="text-foreground">{latestSnapshot.migration_id}</code>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Recorded:</span>
-                <code className="text-foreground">{new Date(latestSnapshot.timestamp).toLocaleString()}</code>
+                <span className="text-muted-foreground">SVs:</span>
+                <code className="text-foreground">{dsoInfo.sv_node_states?.length || 0}</code>
               </div>
             </div>
           </Card>
         )}
 
-        {/* Loading State for Snapshot */}
-        {snapshotLoading && !hasError && (
-          <Skeleton className="h-16 w-full" />
-        )}
+        {dsoLoading && <Skeleton className="h-16 w-full" />}
 
         <div className="space-y-4">
-          {templatesLoading ? (
-            <div className="grid gap-4">
-              {[...Array(5)].map((_, i) => (
-                <Skeleton key={i} className="h-20 w-full" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              {templates?.map((template) => (
-                <div key={template.template_id}>
-                  <Card
-                    className={`glass-card p-6 cursor-pointer transition-all hover:border-primary ${
-                      selectedTemplate === template.template_id ? "border-primary" : ""
-                    }`}
-                    onClick={() =>
-                      setSelectedTemplate(selectedTemplate === template.template_id ? null : template.template_id)
-                    }
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          {selectedTemplate === template.template_id ? (
-                            <ChevronDown className="h-5 w-5 text-primary" />
-                          ) : (
-                            <ChevronRight className="h-5 w-5 text-muted-foreground" />
-                          )}
-                          <FileJson className="h-5 w-5 text-primary" />
-                          <code className="text-lg font-mono text-foreground">{template.template_id}</code>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground ml-10 flex-wrap">
-                          <Badge variant="outline" className="text-xs">
-                            {template.contract_count.toLocaleString()} contracts
-                          </Badge>
-                          {getPagesThatUseTemplate(template.template_id).map((page) => (
-                            <Badge key={page} variant="secondary" className="text-xs">
-                              Used in: {page}
-                            </Badge>
-                          ))}
-                        </div>
+          <div className="grid gap-4">
+            {commonTemplates.map((templateId) => (
+              <div key={templateId}>
+                <Card
+                  className={`glass-card p-6 cursor-pointer transition-all hover:border-primary ${
+                    selectedTemplate === templateId ? "border-primary" : ""
+                  }`}
+                  onClick={() => setSelectedTemplate(selectedTemplate === templateId ? null : templateId)}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        {selectedTemplate === templateId ? (
+                          <ChevronDown className="h-5 w-5 text-primary" />
+                        ) : (
+                          <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                        )}
+                        <FileJson className="h-5 w-5 text-primary" />
+                        <code className="text-lg font-mono text-foreground">{templateId}</code>
                       </div>
-                      <Badge variant={selectedTemplate === template.template_id ? "default" : "outline"}>
-                        {selectedTemplate === template.template_id ? "Expanded" : "Click to expand"}
-                      </Badge>
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground ml-10 flex-wrap">
+                        {getPagesThatUseTemplate(templateId).map((page) => (
+                          <Badge key={page} variant="secondary" className="text-xs">
+                            Used in: {page}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
-                  </Card>
+                    <Badge variant={selectedTemplate === templateId ? "default" : "outline"}>
+                      {selectedTemplate === templateId ? "Expanded" : "Click to expand"}
+                    </Badge>
+                  </div>
+                </Card>
 
-                  {selectedTemplate === template.template_id && (
-                    <div className="ml-6 mt-2 space-y-4">
-                      {dataLoading ? (
-                        <Skeleton className="h-96 w-full" />
-                      ) : templateData && structure ? (
-                        <>
-                          {/* Download Documentation Button */}
-                          <Card className="glass-card p-4">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <h4 className="font-semibold">Template Documentation</h4>
-                                <p className="text-sm text-muted-foreground">
-                                  Download comprehensive documentation explaining the JSON structure and purpose of this template
-                                </p>
-                              </div>
-                              <Button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const doc = generateTemplateDocumentation(
-                                    template.template_id,
-                                    templateData.data[0],
-                                    template.contract_count
-                                  );
-                                  downloadMarkdown(doc, getTemplateFilename(template.template_id));
-                                }}
-                                className="flex items-center gap-2"
-                              >
-                                <Download className="h-4 w-4" />
-                                Download Documentation
-                              </Button>
-                            </div>
-                          </Card>
-
-                          <Card className="glass-card p-6">
-                            <h3 className="text-xl font-bold mb-4">Data Structure</h3>
-                            <p className="text-sm text-muted-foreground mb-4">
-                              Analyzed from sample entry. Fields and types may vary across entries.
-                            </p>
-                            <div className="bg-muted/30 rounded-lg p-4 font-mono text-sm overflow-x-auto">
-                              {renderStructure(structure)}
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-4">
-                              Based on {templateData.data.length} sample contract(s)
-                            </p>
-                          </Card>
-
-                          <Card className="glass-card p-6">
-                            <h4 className="text-lg font-semibold mb-4">Sample Entry (First Record)</h4>
-                            <div className="bg-muted/30 rounded-lg p-4 overflow-x-auto">
-                              <pre className="text-xs font-mono">{JSON.stringify(templateData.data[0], null, 2)}</pre>
-                            </div>
-                          </Card>
-                        </>
-                      ) : (
+                {selectedTemplate === templateId && (
+                  <div className="ml-6 mt-2 space-y-4">
+                    {dataLoading ? (
+                      <Skeleton className="h-96 w-full" />
+                    ) : templateData && templateData.length > 0 && structure ? (
+                      <>
                         <Card className="glass-card p-6">
-                          <p className="text-muted-foreground">No data available for this template.</p>
+                          <h3 className="text-xl font-bold mb-4">Data Structure</h3>
+                          <p className="text-sm text-muted-foreground mb-4">
+                            Analyzed from sample entry. Fields and types may vary across entries.
+                          </p>
+                          <div className="bg-muted/30 rounded-lg p-4 font-mono text-sm overflow-x-auto">
+                            {renderStructure(structure)}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-4">
+                            Based on {templateData.length} sample contract(s)
+                          </p>
                         </Card>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="outline" className="w-full justify-start">
+                              <Code className="h-4 w-4 mr-2" />
+                              View Sample Entry (First Record)
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <Card className="glass-card p-6 mt-2">
+                              <div className="bg-muted/30 rounded-lg p-4 overflow-x-auto">
+                                <pre className="text-xs font-mono">{JSON.stringify(templateData[0], null, 2)}</pre>
+                              </div>
+                            </Card>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </>
+                    ) : (
+                      <Card className="glass-card p-6">
+                        <p className="text-muted-foreground">
+                          No data available for this template. The template may not have active contracts in the current network state.
+                        </p>
+                      </Card>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
+
+        <Card className="p-4 text-xs text-muted-foreground">
+          <p>
+            Data sourced from Canton Scan API <code>/v0/state/acs</code> endpoint.
+          </p>
+        </Card>
       </div>
     </DashboardLayout>
   );
