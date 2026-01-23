@@ -1378,6 +1378,10 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     });
   }
   
+  // Transient error tracking for exponential backoff and cooldown mode
+  let consecutiveTransientErrors = 0;
+  let cooldownUntil = 0;
+  
   while (true) {
     const batchStartTime = Date.now();
     
@@ -1487,6 +1491,15 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }
       atomicCursor.commit();
       
+      // SUCCESS: Reset transient error tracking
+      consecutiveTransientErrors = 0;
+      
+      // Check if cooldown expired - allow auto-tuner to scale back up
+      if (cooldownUntil && Date.now() > cooldownUntil) {
+        console.log(`   🔥 Cooldown expired, auto-tuner will scale up if API is healthy${shardLabel}`);
+        cooldownUntil = 0;
+      }
+      
       // Update time bounds
       atomicCursor.setTimeBounds(minTime, maxTime);
       
@@ -1586,7 +1599,18 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       
       // Save cursor and retry for transient errors
       if ([429, 500, 502, 503, 504].includes(status)) {
-        console.log(`   ⏳ Transient error, backing off...${shardLabel}`);
+        consecutiveTransientErrors++;
+        
+        // COOLDOWN MODE: After 3 consecutive transient errors, drop to minimal concurrency
+        if (consecutiveTransientErrors >= 3 && dynamicParallelFetches > 1) {
+          console.log(`   🧊 Cooldown mode: Dropping to 1 parallel fetch for 60s${shardLabel}`);
+          dynamicParallelFetches = 1;
+          cooldownUntil = Date.now() + 60000; // 60 second cooldown
+        }
+        
+        // EXPONENTIAL BACKOFF: 5s, 10s, 20s, 40s, max 60s
+        const backoffDelay = Math.min(5000 * Math.pow(2, consecutiveTransientErrors - 1), 60000);
+        console.log(`   ⏳ Transient error #${consecutiveTransientErrors}, backing off ${Math.round(backoffDelay / 1000)}s...${shardLabel}`);
         
         atomicCursor.saveAtomic({
           last_before: before,
@@ -1598,7 +1622,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           max_time: maxTime,
         });
         
-        await sleep(5000);
+        await sleep(backoffDelay);
         continue;
       }
       
