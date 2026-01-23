@@ -3,6 +3,7 @@ import { StatCard } from "@/components/StatCard";
 import { Activity, Coins, TrendingUp, Users, Zap, Package, Database, Clock, Lock, FileText } from "lucide-react";
 import { SearchBar } from "@/components/SearchBar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+// import { TriggerACSSnapshotButton } from "@/components/TriggerACSSnapshotButton";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -127,30 +128,30 @@ const Dashboard = () => {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        {/* Hero Section - Canton style */}
+        {/* Hero Section */}
         <div className="relative">
-          <div className="bg-card rounded-2xl p-8 border border-border">
-            <div className="flex justify-between items-start mb-6">
+          <div className="absolute inset-0 gradient-primary rounded-2xl blur-3xl opacity-20" />
+          <div className="relative glass-card p-8">
+            <div className="flex justify-between items-start mb-4">
               <div className="flex items-center gap-2">
                 {localApiAvailable && (
-                  <Badge variant="outline" className="bg-success/10 text-success border-success/30">
+                  <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
                     <Database className="h-3 w-3 mr-1" />
                     Local Data Connected
                   </Badge>
                 )}
               </div>
+              {/* <TriggerACSSnapshotButton /> */}
             </div>
-            <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground mb-2">Network Analytics</p>
-                <h2 className="text-4xl md:text-5xl font-bold text-foreground mb-3">
-                  Canton Network
-                </h2>
+                <h2 className="text-4xl font-bold mb-2">Welcome to SCANTON</h2>
                 <p className="text-lg text-muted-foreground">
                   Explore transactions, validators, and network statistics
                 </p>
               </div>
               <div className="w-full md:w-[420px]">
+                {/* Local search beside hero title */}
                 <SearchBar />
               </div>
             </div>
@@ -159,7 +160,7 @@ const Dashboard = () => {
 
         {/* Live Network Stats Grid */}
         <div>
-          <h3 className="text-xl font-semibold mb-4 flex items-center gap-2 text-foreground">
+          <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
             <Activity className="h-5 w-5 text-primary" />
             Live Network Stats
           </h3>
@@ -180,9 +181,233 @@ const Dashboard = () => {
             <StatCard title="Cumulative App Rewards" value={stats.totalRewards} icon={TrendingUp} gradient />
           </div>
         </div>
+
+        {/* Local Backfill Stats - Only shown if local API is available */}
+        {/* {localApiAvailable && (
+          <div>
+            <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <Database className="h-5 w-5 text-primary" />
+              Local Backfill Data
+              {localStatsFormatted?.dataSource && (
+                <Badge variant="secondary" className="text-xs">
+                  Source: {localStatsFormatted.dataSource}
+                </Badge>
+              )}
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Total Events</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">{localStatsFormatted?.totalEvents || "0"}</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Unique Contracts</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">{localStatsFormatted?.uniqueContracts || "0"}</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Unique Templates</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">{localStatsFormatted?.uniqueTemplates || "0"}</p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    Data Range
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {localStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <div className="text-sm">
+                      <p className="font-medium">{localStatsFormatted?.earliestEvent}</p>
+                      <p className="text-muted-foreground">to {localStatsFormatted?.latestEvent}</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+            
+            {weekActivity > 0 && (
+              <Card className="glass-card mt-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Last 7 Days Activity
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold">{weekActivity.toLocaleString()} events</p>
+                  <div className="mt-2 flex gap-1">
+                    {dailyStats?.slice(0, 7).reverse().map((day, i) => {
+                      const maxCount = Math.max(...(dailyStats?.map(d => d.event_count) || [1]));
+                      const height = Math.max(4, (day.event_count / maxCount) * 40);
+                      return (
+                        <div
+                          key={day.date}
+                          className="flex-1 bg-primary/20 rounded-t"
+                          style={{ height: `${height}px` }}
+                          title={`${day.date}: ${day.event_count} events`}
+                        />
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )} */}
+
+        {/* Local ACS Snapshot Data - Only shown if ACS data is available */}
+        {/* {acsStatus?.available && (
+          <div>
+            <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" />
+              Active Contract Set (ACS)
+              {latestAcsSnapshot && (
+                <Badge variant="secondary" className="text-xs">
+                  Snapshot: {new Date(latestAcsSnapshot.record_time).toLocaleString()}
+                </Badge>
+              )}
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-4">
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Package className="h-3 w-3" />
+                    Total Contracts
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold text-primary">
+                      {acsStats?.total_contracts?.toLocaleString() || "0"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <FileText className="h-3 w-3" />
+                    Total Templates
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsStatsLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {acsStats?.total_templates?.toLocaleString() || "0"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Coins className="h-3 w-3" />
+                    Migration ID
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsSnapshotLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {latestAcsSnapshot?.migration_id ?? "N/A"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+              
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    Entry Count
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {acsSnapshotLoading ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {latestAcsSnapshot?.entry_count?.toLocaleString() ?? "0"}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+            
+            {acsTemplates && acsTemplates.length > 0 && (
+              <Card className="glass-card">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Top Templates by Contract Count
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {acsTemplatesLoading ? (
+                      <>
+                        <Skeleton className="h-6 w-full" />
+                        <Skeleton className="h-6 w-full" />
+                        <Skeleton className="h-6 w-full" />
+                      </>
+                    ) : (
+                      acsTemplates.slice(0, 5).map((template, i) => (
+                        <div key={template.template_id || i} className="flex items-center justify-between text-sm">
+                          <span className="font-mono text-xs truncate max-w-[60%]" title={template.template_id}>
+                            {template.entity_name || template.template_id?.split(':').pop() || 'Unknown'}
+                          </span>
+                          <Badge variant="secondary">
+                            {template.contract_count?.toLocaleString() || 0} contracts
+                          </Badge>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )} */}
+
+        {/* Canton Coin Price placeholder */}
+        <Card className="glass-card"></Card>
       </div>
     </DashboardLayout>
   );
 };
-
 export default Dashboard;

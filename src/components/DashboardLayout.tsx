@@ -69,20 +69,29 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const location = useLocation();
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen">
       {/* Header */}
-      <header className="bg-background border-b border-border sticky top-0 z-50">
+      <header className="glass-card border-b border-border/50 sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
-          {/* Top row: Logo */}
+          {/* Top row: Logo and Search */}
           <div className="flex items-center justify-between mb-4">
             <Link to="/" className="flex items-center space-x-3 group">
-              <h1 className="text-3xl font-bold text-foreground tracking-tight">
-                Canton
-              </h1>
+              <div className="relative">
+                <div className="absolute inset-0 gradient-primary rounded-lg blur-xl opacity-50 group-hover:opacity-100 transition-smooth" />
+                <div className="relative gradient-primary p-2 rounded-lg">
+                  <Database className="h-6 w-6 text-primary-foreground" />
+                </div>
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+                  SCANTON
+                </h1>
+                <p className="text-xs text-muted-foreground">Canton Network Analytics</p>
+              </div>
             </Link>
           </div>
 
-          {/* Navigation tabs */}
+          {/* Bottom row: Navigation tabs with wrapping */}
           <nav className="flex flex-wrap gap-1">
             {navigation.map((item) => {
               const isActive = location.pathname === item.href;
@@ -93,8 +102,8 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                   to={item.href}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-smooth ${
                     isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   }`}
                 >
                   <Icon className="h-4 w-4" />
@@ -107,34 +116,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 container mx-auto px-6 py-8">{children}</main>
-      
-      {/* Footer with Canton branding */}
-      <footer className="mt-auto">
-        {/* Purple gradient separator */}
-        <div className="canton-separator" />
-        
-        <div className="bg-background py-6">
-          <div className="container mx-auto px-6">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-              {/* Canton wordmark */}
-              <span className="text-2xl font-bold text-foreground tracking-tight">
-                Canton
-              </span>
-              
-              {/* Tagline */}
-              <span className="text-muted-foreground">
-                where finance <em className="text-primary not-italic">flows</em>
-              </span>
-              
-              {/* Copyright */}
-              <span className="text-sm text-muted-foreground">
-                © {new Date().getFullYear()} Canton Network. All rights reserved.
-              </span>
-            </div>
-          </div>
-        </div>
-      </footer>
+      <main className="container mx-auto px-6 py-8">{children}</main>
       
       {/* Connection Status Indicator */}
       <ConnectionStatusIndicator />
