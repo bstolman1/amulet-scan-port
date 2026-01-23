@@ -7,14 +7,12 @@ import { useKaikoOHLCV } from "@/hooks/use-kaiko-ohlcv";
 import { Line, LineChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 import { CalendarRange, TrendingDown, TrendingUp } from "lucide-react";
 
-type Timeframe = "1D" | "7D" | "30D" | "90D" | "MAX";
+type Timeframe = "1D" | "7D" | "30D";
 
 const TIMEFRAMES: Array<{ key: Timeframe; label: string }> = [
   { key: "1D", label: "1D" },
   { key: "7D", label: "7D" },
   { key: "30D", label: "30D" },
-  { key: "90D", label: "90D" },
-  { key: "MAX", label: "Max" },
 ];
 
 function startTimeFor(timeframe: Timeframe): { startTime?: string; interval: string; pageSize: number } {
@@ -25,9 +23,9 @@ function startTimeFor(timeframe: Timeframe): { startTime?: string; interval: str
     return { startTime: start.toISOString(), interval: "1h", pageSize: 48 };
   }
 
-  const days = timeframe === "7D" ? 7 : timeframe === "30D" ? 30 : timeframe === "90D" ? 90 : 365 * 3;
+  const days = timeframe === "7D" ? 7 : 30;
   const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  return { startTime: start.toISOString(), interval: "1d", pageSize: timeframe === "MAX" ? 1100 : 200 };
+  return { startTime: start.toISOString(), interval: "1d", pageSize: 200 };
 }
 
 function formatPct(value: number) {
