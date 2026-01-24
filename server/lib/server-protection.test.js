@@ -150,6 +150,154 @@ describe('Server Protection', () => {
     });
   });
   
+  describe('memoryGuard critical path', () => {
+    let originalMemoryUsage;
+    
+    beforeEach(() => {
+      originalMemoryUsage = process.memoryUsage;
+    });
+    
+    afterEach(() => {
+      process.memoryUsage = originalMemoryUsage;
+      stopMemoryMonitor();
+    });
+    
+    it('should reject requests with 503 when memory is critical (95% heap)', async () => {
+      // Mock process.memoryUsage to return 95% heap usage
+      process.memoryUsage = () => ({
+        heapUsed: 950 * 1024 * 1024,    // 950 MB used
+        heapTotal: 1000 * 1024 * 1024,  // 1000 MB total = 95%
+        rss: 1200 * 1024 * 1024,
+        external: 10 * 1024 * 1024,
+        arrayBuffers: 5 * 1024 * 1024,
+      });
+      
+      // Start memory monitor with a very short interval to trigger the check
+      vi.useFakeTimers();
+      startMemoryMonitor();
+      
+      // Advance time to trigger the memory check (30 seconds default interval)
+      vi.advanceTimersByTime(30001);
+      
+      // Now test memoryGuard
+      const req = { path: '/api/test' };
+      const res = { 
+        status: vi.fn().mockReturnThis(), 
+        json: vi.fn() 
+      };
+      const next = vi.fn();
+      
+      memoryGuard(req, res, next);
+      
+      // Should reject with 503
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: expect.stringContaining('memory pressure'),
+        retryAfter: 30,
+      }));
+      expect(next).not.toHaveBeenCalled();
+      
+      vi.useRealTimers();
+    });
+    
+    it('should include retryAfter in 503 response', async () => {
+      process.memoryUsage = () => ({
+        heapUsed: 920 * 1024 * 1024,
+        heapTotal: 1000 * 1024 * 1024, // 92%
+        rss: 1200 * 1024 * 1024,
+        external: 10 * 1024 * 1024,
+        arrayBuffers: 5 * 1024 * 1024,
+      });
+      
+      vi.useFakeTimers();
+      startMemoryMonitor();
+      vi.advanceTimersByTime(30001);
+      
+      const req = { path: '/api/heavy' };
+      const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+      const next = vi.fn();
+      
+      memoryGuard(req, res, next);
+      
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ retryAfter: 30 })
+      );
+      
+      vi.useRealTimers();
+    });
+    
+    it('should log warning when rejecting due to memory pressure', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      
+      process.memoryUsage = () => ({
+        heapUsed: 950 * 1024 * 1024,
+        heapTotal: 1000 * 1024 * 1024,
+        rss: 1200 * 1024 * 1024,
+        external: 10 * 1024 * 1024,
+        arrayBuffers: 5 * 1024 * 1024,
+      });
+      
+      vi.useFakeTimers();
+      startMemoryMonitor();
+      vi.advanceTimersByTime(30001);
+      
+      const req = { path: '/api/resource' };
+      const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+      const next = vi.fn();
+      
+      memoryGuard(req, res, next);
+      
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Rejecting request due to memory pressure')
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/resource')
+      );
+      
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    });
+    
+    it('should allow requests after memory drops below critical', async () => {
+      // Start with high memory
+      process.memoryUsage = () => ({
+        heapUsed: 950 * 1024 * 1024,
+        heapTotal: 1000 * 1024 * 1024,
+        rss: 1200 * 1024 * 1024,
+        external: 10 * 1024 * 1024,
+        arrayBuffers: 5 * 1024 * 1024,
+      });
+      
+      vi.useFakeTimers();
+      startMemoryMonitor();
+      vi.advanceTimersByTime(30001);
+      
+      // Now simulate memory dropping
+      process.memoryUsage = () => ({
+        heapUsed: 500 * 1024 * 1024,
+        heapTotal: 1000 * 1024 * 1024, // 50% - healthy
+        rss: 800 * 1024 * 1024,
+        external: 10 * 1024 * 1024,
+        arrayBuffers: 5 * 1024 * 1024,
+      });
+      
+      // Advance to next check
+      vi.advanceTimersByTime(30001);
+      
+      const req = { path: '/api/test' };
+      const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+      const next = vi.fn();
+      
+      memoryGuard(req, res, next);
+      
+      // Should allow through
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+      
+      vi.useRealTimers();
+    });
+  });
+  
   describe('requestTimeout middleware', () => {
     it('should return a middleware function', () => {
       const middleware = requestTimeout();
