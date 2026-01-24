@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node --max-old-space-size=8192 --env-file=../scripts/ingest/.env server.js",
-    "dev": "node --max-old-space-size=8192 --env-file=../scripts/ingest/.env --watch server.js"
+    "dev": "node --max-old-space-size=8192 --env-file=../scripts/ingest/.env --watch server.js",
+    "test": "node --experimental-vm-modules ../node_modules/vitest/vitest.mjs run --config ../vitest.config.ts --testPathPattern='server/'"
   },
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0",

@@ -102,14 +102,8 @@ run_ingest_test() {
 
 run_server_tests() {
     print_header "Running Server Tests"
-    cd "$SERVER_DIR"
-    
-    if [ ! -d "node_modules" ]; then
-        print_info "Installing server dependencies..."
-        npm install
-    fi
-    
-    npm test
+    cd "$PROJECT_ROOT"
+    npx vitest run server/
 }
 
 run_frontend_tests() {
