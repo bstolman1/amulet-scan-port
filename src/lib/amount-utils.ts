@@ -9,7 +9,17 @@ export const CC_DIVISOR = Math.pow(10, CC_DECIMALS);
  * Convert raw ledger amount to human-readable CC value
  */
 export function toCC(rawAmount: number | string): number {
-  const parsed = typeof rawAmount === 'string' ? parseFloat(rawAmount) : rawAmount;
+  const parsed = (() => {
+    if (typeof rawAmount === 'string') {
+      const s = rawAmount.trim();
+      // Strict numeric parsing: reject strings that are only partially numeric (e.g. "100abc")
+      // Accepts integers and decimals; ledger amounts are expected to be plain base-10 values.
+      const isStrictNumber = /^-?\d+(?:\.\d+)?$/.test(s);
+      if (!isStrictNumber) return NaN;
+      return parseFloat(s);
+    }
+    return rawAmount;
+  })();
   if (isNaN(parsed)) return 0;
   return parsed / CC_DIVISOR;
 }
