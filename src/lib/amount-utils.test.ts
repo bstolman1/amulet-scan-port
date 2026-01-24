@@ -49,6 +49,41 @@ describe('toCC', () => {
   });
 });
 
+// Mutation-killing: strict type coercion tests
+describe('toCC strict type coercion', () => {
+  it('parses numeric strings but rejects non-numeric strings', () => {
+    expect(toCC("100")).toBe(100);
+    expect(toCC("100.5")).toBe(100.5);
+
+    // kills mutants where parseFloat is applied blindly
+    expect(toCC("100abc")).toBe(0);
+    expect(toCC("abc")).toBe(0);
+  });
+
+  it('handles large numbers via string path', () => {
+    // BigInt not supported, but large number strings are
+    expect(toCC("1000000000000")).toBe(100);
+  });
+});
+
+// Mutation-killing: null and zero distinction
+describe('pickAmount null and zero semantics', () => {
+  it('returns 0 for null and undefined but preserves numeric zero', () => {
+    expect(pickAmount({ amount: null })).toBe(0);
+    expect(pickAmount({ amount: undefined })).toBe(0);
+    expect(pickAmount({ amount: 0 })).toBe(0);
+  });
+
+  it('does not treat null as a valid amount path', () => {
+    const obj = {
+      amulet: { amount: { initialAmount: null } },
+      amount: 123
+    };
+
+    expect(pickAmount(obj)).toBe(123);
+  });
+});
+
 describe('pickAmount', () => {
   it('extracts from amount.initialAmount path', () => {
     expect(pickAmount({ amount: { initialAmount: '1000' } })).toBe(1000);

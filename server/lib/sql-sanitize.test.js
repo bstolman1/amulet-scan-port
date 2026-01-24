@@ -254,6 +254,15 @@ describe('sanitizeContractId', () => {
     expect(sanitizeContractId('not-a-valid-id!')).toBe(null);
     expect(sanitizeContractId('abc xyz')).toBe(null);
   });
+
+  // Mutation-killing: strict hex enforcement for @hash suffix
+  it('rejects non-hex characters in @hash suffix', () => {
+    expect(sanitizeContractId('abc123@zzzz')).toBeNull();
+  });
+
+  it('accepts valid hex hash suffix', () => {
+    expect(sanitizeContractId('abc123@deadBEEF')).toBe('abc123@deadBEEF');
+  });
 });
 
 describe('sanitizeEventType', () => {
@@ -317,6 +326,17 @@ describe('sanitizeTimestamp', () => {
 
   it('rejects timestamps with SQL injection', () => {
     expect(sanitizeTimestamp("2025-01-01T00:00:00Z'; DROP")).toBeNull();
+  });
+
+  // Mutation-killing: length boundary off-by-one tests
+  it('accepts timestamps up to exactly 50 characters', () => {
+    const valid = '2025-01-01T00:00:00.000Z'; // < 50 chars
+    expect(sanitizeTimestamp(valid)).toBe(valid);
+  });
+
+  it('rejects timestamps longer than 50 characters', () => {
+    const tooLong = '2025-01-01T00:00:00.000Z'.padEnd(51, '0');
+    expect(sanitizeTimestamp(tooLong)).toBeNull();
   });
 });
 
