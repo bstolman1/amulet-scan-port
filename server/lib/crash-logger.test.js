@@ -313,4 +313,187 @@ describe('Crash Logger', () => {
       expect(() => JSON.parse(memoryMatch[1])).not.toThrow();
     });
   });
+  
+  describe('installCrashHandlers', () => {
+    let processOnSpy;
+    let originalProcessOn;
+    let registeredHandlers;
+    
+    beforeEach(async () => {
+      registeredHandlers = {};
+      originalProcessOn = process.on.bind(process);
+      
+      // Spy on process.on to capture registered handlers
+      processOnSpy = vi.spyOn(process, 'on').mockImplementation((event, handler) => {
+        registeredHandlers[event] = registeredHandlers[event] || [];
+        registeredHandlers[event].push(handler);
+        return process;
+      });
+    });
+    
+    afterEach(() => {
+      processOnSpy.mockRestore();
+    });
+    
+    it('should register uncaughtException handler', async () => {
+      // Re-import to get installCrashHandlers
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      expect(processOnSpy).toHaveBeenCalledWith('uncaughtException', expect.any(Function));
+      expect(registeredHandlers['uncaughtException']).toBeDefined();
+      expect(registeredHandlers['uncaughtException'].length).toBeGreaterThan(0);
+    });
+    
+    it('should register unhandledRejection handler', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      expect(processOnSpy).toHaveBeenCalledWith('unhandledRejection', expect.any(Function));
+      expect(registeredHandlers['unhandledRejection']).toBeDefined();
+    });
+    
+    it('should register SIGTERM handler', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      expect(processOnSpy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+      expect(registeredHandlers['SIGTERM']).toBeDefined();
+    });
+    
+    it('should register SIGINT handler', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      expect(processOnSpy).toHaveBeenCalledWith('SIGINT', expect.any(Function));
+      expect(registeredHandlers['SIGINT']).toBeDefined();
+    });
+    
+    it('uncaughtException handler should call logCrash', async () => {
+      const { installCrashHandlers, logCrash } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      const handler = registeredHandlers['uncaughtException'][0];
+      const testError = new Error('Uncaught test error');
+      
+      // Mock setTimeout to prevent actual exit
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout').mockImplementation(() => ({ unref: () => {} }));
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      
+      handler(testError);
+      
+      // Verify logCrash was called (via the appendFileSync spy)
+      expect(appendFileSyncSpy).toHaveBeenCalled();
+      const [filePath, content] = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(filePath).toMatch(/crash\.log$/);
+      expect(content).toContain('Uncaught test error');
+      expect(content).toContain('UNCAUGHT_EXCEPTION');
+      
+      setTimeoutSpy.mockRestore();
+      consoleSpy.mockRestore();
+    });
+    
+    it('unhandledRejection handler should call logCrash with UNHANDLED_REJECTION type', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      const handler = registeredHandlers['unhandledRejection'][0];
+      const testError = new Error('Rejected promise');
+      
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      
+      handler(testError, Promise.reject(testError).catch(() => {}));
+      
+      expect(appendFileSyncSpy).toHaveBeenCalled();
+      const [filePath, content] = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(filePath).toMatch(/crash\.log$/);
+      expect(content).toContain('UNHANDLED_REJECTION');
+      expect(content).toContain('Rejected promise');
+      
+      consoleSpy.mockRestore();
+    });
+    
+    it('unhandledRejection handler should handle non-Error reasons', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      const handler = registeredHandlers['unhandledRejection'][0];
+      const stringReason = 'Simple string rejection';
+      
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      
+      handler(stringReason, Promise.reject(stringReason).catch(() => {}));
+      
+      expect(appendFileSyncSpy).toHaveBeenCalled();
+      const [, content] = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(content).toContain('Simple string rejection');
+      
+      consoleSpy.mockRestore();
+    });
+    
+    it('SIGTERM handler should log graceful shutdown', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      const handler = registeredHandlers['SIGTERM'][0];
+      
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {});
+      
+      handler();
+      
+      expect(appendFileSyncSpy).toHaveBeenCalled();
+      const calls = appendFileSyncSpy.mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[1]).toContain('SIGTERM');
+      expect(lastCall[1]).toContain('graceful shutdown');
+      
+      consoleSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+    
+    it('SIGINT handler should log graceful shutdown and exit with 0', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      installCrashHandlers();
+      
+      const handler = registeredHandlers['SIGINT'][0];
+      
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {});
+      
+      handler();
+      
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(appendFileSyncSpy).toHaveBeenCalled();
+      const calls = appendFileSyncSpy.mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[1]).toContain('SIGINT');
+      
+      consoleSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+    
+    it('should log confirmation message when handlers are installed', async () => {
+      const { installCrashHandlers } = await import('./crash-logger.js');
+      
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      
+      installCrashHandlers();
+      
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Crash logger installed')
+      );
+      
+      consoleSpy.mockRestore();
+    });
+  });
 });
