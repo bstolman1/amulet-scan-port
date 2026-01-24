@@ -3,16 +3,18 @@
 # Usage: ./scripts/run-tests.sh [test-type]
 #
 # Test types:
-#   all       - Run all ingest tests (default)
+#   all       - Run all Vitest tests (default)
+#   ingest    - Run ingest-specific tests
+#   server    - Run server tests
+#   frontend  - Run frontend tests
+#   full      - Run everything (Vitest + server + ingest standalone)
+#   chaos     - Run chaos resilience stress tests
 #   api       - Test Scan API connectivity
 #   backfill  - Test backfill data integrity
 #   acs       - Test ACS snapshot integrity
 #   gcs       - Test GCS upload integrity
 #   preflight - Run GCS preflight checks
 #   validate  - Run all validation scripts
-#   server    - Run server tests
-#   frontend  - Run frontend tests
-#   full      - Run everything (ingest + server + frontend)
 
 set -e
 
@@ -27,6 +29,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 print_header() {
@@ -49,30 +52,57 @@ print_info() {
     echo -e "${YELLOW}→ $1${NC}"
 }
 
+print_stats() {
+    echo -e "${CYAN}  $1${NC}"
+}
+
+# Run all Vitest tests (covers frontend, ingest vitest tests, hooks, libs)
+run_vitest_all() {
+    print_header "Running All Vitest Tests"
+    cd "$PROJECT_ROOT"
+    npx vitest run
+}
+
+# Run ingest Vitest tests only
+run_vitest_ingest() {
+    print_header "Running Ingest Vitest Tests"
+    cd "$PROJECT_ROOT"
+    npx vitest run scripts/ingest/test/
+}
+
+# Run chaos resilience tests
+run_chaos_tests() {
+    print_header "Running Chaos Resilience Tests"
+    cd "$PROJECT_ROOT"
+    npx vitest run scripts/ingest/test/chaos-resilience.test.js
+}
+
+# Run ingest standalone tests (Node.js based)
+run_ingest_standalone() {
+    print_header "Running Ingest Standalone Tests"
+    cd "$INGEST_DIR"
+    
+    if [ ! -d "node_modules" ]; then
+        print_info "Installing ingest dependencies..."
+        npm install
+    fi
+    
+    npm run test:api
+    npm run test:backfill
+    npm run test:acs
+}
+
 run_ingest_test() {
     local test_name=$1
     print_header "Running Ingest Test: $test_name"
     cd "$INGEST_DIR"
     
-    # Check if node_modules exists
     if [ ! -d "node_modules" ]; then
         print_info "Installing ingest dependencies..."
         npm install
     fi
     
     npm run "test:$test_name"
-}
-
-run_ingest_tests() {
-    print_header "Running All Ingest Tests"
-    cd "$INGEST_DIR"
-    
-    if [ ! -d "node_modules" ]; then
-        print_info "Installing ingest dependencies..."
-        npm install
-    fi
-    
-    npm test
 }
 
 run_server_tests() {
@@ -90,7 +120,7 @@ run_server_tests() {
 run_frontend_tests() {
     print_header "Running Frontend Tests"
     cd "$PROJECT_ROOT"
-    npm test
+    npx vitest run src/
 }
 
 run_preflight() {
@@ -122,20 +152,28 @@ show_help() {
     echo ""
     echo "Usage: $0 [test-type]"
     echo ""
-    echo "Test types:"
-    echo "  all        Run all ingest tests (api, backfill, acs) [default]"
-    echo "  api        Test Scan API connectivity and data structure"
+    echo "Quick Commands:"
+    echo "  all        Run all Vitest tests (frontend + ingest + libs) [default]"
+    echo "  full       Run EVERYTHING (Vitest + server + ingest standalone)"
+    echo "  chaos      Run chaos resilience stress tests only"
+    echo ""
+    echo "Component Tests:"
+    echo "  frontend   Run frontend component tests (Vitest)"
+    echo "  server     Run server API tests"
+    echo "  ingest     Run all ingest Vitest tests"
+    echo ""
+    echo "Ingest Standalone Tests:"
+    echo "  api        Test Scan API connectivity"
     echo "  backfill   Test backfill data integrity"
     echo "  acs        Test ACS snapshot integrity"
     echo "  gcs        Test GCS upload integrity (requires GCS_BUCKET)"
     echo "  health     Run end-to-end pipeline health check"
+    echo ""
+    echo "Validation:"
     echo "  preflight  Run GCS preflight checks"
     echo "  validate   Run all validation scripts"
-    echo "  server     Run server API tests"
-    echo "  frontend   Run frontend component tests"
-    echo "  full       Run everything (ingest + server + frontend)"
     echo ""
-echo "Coverage:"
+    echo "Coverage:"
     echo "  coverage   Run all tests with coverage reports"
     echo "  cov:front  Frontend coverage only"
     echo "  cov:server Server coverage only"
@@ -144,16 +182,13 @@ echo "Coverage:"
     echo "Quality & Mutation:"
     echo "  quality    Generate test quality report"
     echo "  mutate     Run Stryker mutation testing"
-    echo "  mutate:dry Dry run mutation testing (show what would be mutated)"
+    echo "  mutate:dry Dry run mutation testing"
     echo ""
     echo "Examples:"
-    echo "  $0              # Run all ingest tests"
-    echo "  $0 api          # Test API connectivity only"
-    echo "  $0 health       # Run full pipeline health check"
+    echo "  $0              # Run all Vitest tests"
+    echo "  $0 full         # Run absolutely everything"
+    echo "  $0 chaos        # Run chaos stress tests"
     echo "  $0 coverage     # Generate coverage reports"
-    echo "  $0 quality      # Generate test quality report"
-    echo "  $0 mutate       # Run mutation testing"
-    echo "  $0 full         # Run all test suites"
     echo ""
     echo "Environment variables:"
     echo "  GCS_BUCKET      Required for gcs, health, and preflight tests"
@@ -169,8 +204,16 @@ case "$TEST_TYPE" in
         show_help
         ;;
     all)
-        run_ingest_tests
-        print_success "All ingest tests passed!"
+        run_vitest_all
+        print_success "All Vitest tests passed!"
+        ;;
+    chaos)
+        run_chaos_tests
+        print_success "Chaos resilience tests passed!"
+        ;;
+    ingest)
+        run_vitest_ingest
+        print_success "Ingest Vitest tests passed!"
         ;;
     api)
         run_ingest_test "api"
@@ -213,22 +256,50 @@ case "$TEST_TYPE" in
         print_success "Frontend tests passed!"
         ;;
     full)
-        print_header "Running Full Test Suite"
+        print_header "Running FULL Comprehensive Test Suite"
+        echo ""
+        print_info "This will run ALL tests across the entire project..."
+        echo ""
         
-        # Ingest tests
-        run_ingest_tests
-        print_success "Ingest tests passed!"
+        # Track results
+        FAILED=0
         
-        # Server tests
-        run_server_tests
-        print_success "Server tests passed!"
+        # 1. All Vitest tests (frontend + ingest vitest + libs + hooks)
+        print_stats "Phase 1/3: Vitest Tests (frontend, ingest, libs, hooks)"
+        if run_vitest_all; then
+            print_success "Vitest tests passed!"
+        else
+            print_error "Vitest tests failed!"
+            FAILED=1
+        fi
         
-        # Frontend tests
-        run_frontend_tests
-        print_success "Frontend tests passed!"
+        # 2. Server tests
+        print_stats "Phase 2/3: Server API Tests"
+        if run_server_tests; then
+            print_success "Server tests passed!"
+        else
+            print_error "Server tests failed!"
+            FAILED=1
+        fi
+        
+        # 3. Ingest standalone tests (Node.js based - api, backfill, acs)
+        print_stats "Phase 3/3: Ingest Standalone Tests"
+        if run_ingest_standalone; then
+            print_success "Ingest standalone tests passed!"
+        else
+            print_error "Ingest standalone tests failed!"
+            FAILED=1
+        fi
         
         echo ""
-        print_success "All test suites passed!"
+        if [ $FAILED -eq 0 ]; then
+            print_header "✅ ALL TESTS PASSED"
+            print_success "Full comprehensive test suite completed successfully!"
+        else
+            print_header "❌ SOME TESTS FAILED"
+            print_error "Review the output above to identify failures."
+            exit 1
+        fi
         ;;
     coverage)
         print_header "Running All Tests with Coverage"
