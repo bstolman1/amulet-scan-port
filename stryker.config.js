@@ -48,8 +48,6 @@ export default {
   incremental: true,
   incrementalFile: '.stryker-cache/incremental.json',
   
-  // Ignore patterns (reduce noise)
-  ignorers: ['regex'],
   
   // Disable specific mutators that create too much noise
   mutator: {
