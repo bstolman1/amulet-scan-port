@@ -986,6 +986,11 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
  * Divides the time range into N non-overlapping slices and fetches each in parallel.
  * Each slice STREAMS its transactions to processBackfillItems immediately to avoid OOM.
  * Returns aggregated stats instead of raw transactions.
+ * 
+ * CRITICAL FIX: Cursor advancement is now CONSERVATIVE.
+ * - Tracks per-slice completion status and boundaries
+ * - Cursor only advances to the OLDEST INCOMPLETE slice boundary
+ * - Prevents data gaps if a newer slice fails after older slices complete
  */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency, cursorCallback = null) {
   const startMs = new Date(atOrAfter).getTime();
@@ -1017,8 +1022,71 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   // is still ensured by cursor-based pagination.
   const GLOBAL_DEDUP_MAX = Number(process.env.GLOBAL_DEDUP_MAX || 250_000);
 
+  // =========================================================================
+  // CRITICAL FIX: Track per-slice completion for safe cursor advancement
+  // =========================================================================
+  // Slices are numbered 0 (newest) to N-1 (oldest).
+  // We can ONLY safely advance cursor to the boundary of a CONTIGUOUS block
+  // of completed slices starting from slice 0.
+  // 
+  // Example with 4 slices covering time 1000 → 0:
+  //   Slice 0: 1000-750 (newest)
+  //   Slice 1: 750-500
+  //   Slice 2: 500-250
+  //   Slice 3: 250-0 (oldest)
+  // 
+  // If slices 1, 2, 3 complete but slice 0 is still running:
+  //   safeCursorBoundary = 1000 (can't advance past incomplete slice 0)
+  // 
+  // If slices 0, 1 complete but slices 2, 3 still running:
+  //   safeCursorBoundary = 500 (boundary of completed slice 1)
+  // =========================================================================
+  const sliceBoundaries = []; // [{ sliceBefore, sliceAfter }] indexed by slice
+  const sliceCompleted = [];  // boolean[] indexed by slice
+  const sliceEarliestTime = []; // ISO string[] indexed by slice (actual data processed)
+  
+  // Pre-compute slice boundaries
+  for (let i = 0; i < concurrency; i++) {
+    const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
+    const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
+    sliceBoundaries.push({ sliceBefore, sliceAfter });
+    sliceCompleted.push(false);
+    sliceEarliestTime.push(sliceBefore); // Initialize to slice start
+  }
+
+  /**
+   * Calculate safe cursor boundary based on contiguous completed slices.
+   * Only advances cursor to the oldest boundary of a contiguous block
+   * of completed slices starting from slice 0 (newest).
+   */
+  function getSafeCursorBoundary() {
+    // Find the first incomplete slice starting from 0
+    let contiguousCompleteCount = 0;
+    for (let i = 0; i < concurrency; i++) {
+      if (sliceCompleted[i]) {
+        contiguousCompleteCount++;
+      } else {
+        break; // Found first incomplete
+      }
+    }
+    
+    if (contiguousCompleteCount === 0) {
+      // No slices complete yet - cursor stays at startBefore
+      return startBefore;
+    }
+    
+    // Safe boundary is the END (sliceAfter) of the last contiguously completed slice
+    // This is the oldest timestamp we can safely claim as processed
+    const lastCompleteIdx = contiguousCompleteCount - 1;
+    
+    // Use actual earliest processed time if available, else use slice boundary
+    const safeTime = sliceEarliestTime[lastCompleteIdx] || sliceBoundaries[lastCompleteIdx].sliceAfter;
+    
+    return safeTime;
+  }
+
   // Process callback that handles transactions immediately with progress logging
-  const processCallback = async (transactions) => {
+  const processCallback = async (transactions, sliceIndex) => {
     const { updates, events } = await processBackfillItems(transactions, migrationId);
     totalUpdates += updates;
     totalEvents += events;
@@ -1028,6 +1096,10 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
     for (const tx of transactions) {
       const t = getEventTime(tx);
       if (t && t < earliestTime) earliestTime = t;
+      // Also track per-slice earliest for safe cursor calculation
+      if (t && t < sliceEarliestTime[sliceIndex]) {
+        sliceEarliestTime[sliceIndex] = t;
+      }
     }
 
     // Log progress every 10 pages
@@ -1051,8 +1123,10 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       console.log(progressLine);
 
       // Save cursor every 100 pages for UI visibility
+      // CRITICAL: Use SAFE cursor boundary, not raw earliestTime
       if (cursorCallback && pageCount % 100 === 0) {
-        cursorCallback(totalUpdates, totalEvents, earliestTime);
+        const safeBoundary = getSafeCursorBoundary();
+        cursorCallback(totalUpdates, totalEvents, safeBoundary);
       }
     }
   };
@@ -1083,9 +1157,14 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
             unique.push(tx);
           }
           if (unique.length > 0) {
-            await processCallback(unique);
+            // Pass sliceIndex to processCallback for per-slice tracking
+            await processCallback(unique, sliceIndex);
           }
         });
+        
+        // Mark slice as completed ONLY after all its data is processed
+        sliceCompleted[sliceIndex] = true;
+        
         return result; // Success
       } catch (err) {
         lastError = err;
@@ -1096,7 +1175,7 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
         }
       }
     }
-    // All retries exhausted
+    // All retries exhausted - slice NOT marked complete
     console.error(`   ❌ Slice ${sliceIndex} failed after ${SLICE_MAX_RETRIES} attempts: ${lastError.message}`);
     return { sliceIndex, totalTxs: 0, earliestTime: sliceBefore, error: lastError };
   };
@@ -1104,15 +1183,14 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   // Launch all slices in parallel with retry logic
   const slicePromises = [];
   for (let i = 0; i < concurrency; i++) {
-    const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
-    const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
+    const { sliceBefore, sliceAfter } = sliceBoundaries[i];
     slicePromises.push(runSliceWithRetry(i, sliceBefore, sliceAfter));
   }
 
   // Wait for all slices to complete
   const sliceResults = await Promise.all(slicePromises);
 
-  // Find earliest time across all slices
+  // Find earliest time across all slices (for stats only)
   for (const slice of sliceResults) {
     if (slice.earliestTime && slice.earliestTime < earliestTime) {
       earliestTime = slice.earliestTime;
@@ -1123,16 +1201,25 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   const failedSlices = sliceResults.filter(s => s.error);
   const hasError = failedSlices.length > 0;
 
+  // Calculate final safe cursor boundary
+  const safeCursorBoundary = getSafeCursorBoundary();
+  
+  // Log completion status for debugging
+  const completedCount = sliceCompleted.filter(Boolean).length;
+  if (completedCount < concurrency) {
+    console.log(`   ⚠️ Only ${completedCount}/${concurrency} slices completed. Safe cursor: ${safeCursorBoundary}`);
+  }
+
   // Return stats-only result (transactions already processed via streaming)
   return {
     results: totalTxs > 0 ? [{
       transactions: [], // Already processed
       processedUpdates: totalUpdates,
       processedEvents: totalEvents,
-      before: earliestTime
+      before: safeCursorBoundary // Use SAFE boundary, not raw earliestTime
     }] : [],
     reachedEnd: !hasError,
-    earliestTime,
+    earliestTime: safeCursorBoundary, // Use SAFE boundary for cursor advancement
     totalUpdates,
     totalEvents,
     // CRITICAL: Include failed slices for caller to handle
@@ -1141,7 +1228,14 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
       error: s.error?.message || 'Unknown error',
       status: s.error?.response?.status || null,
       code: s.error?.code || null,
-    }))
+    })),
+    // Additional metadata for debugging
+    sliceCompletionStatus: sliceCompleted.map((complete, i) => ({
+      sliceIndex: i,
+      complete,
+      boundary: sliceBoundaries[i],
+      earliestProcessed: sliceEarliestTime[i],
+    })),
   };
 }
 
