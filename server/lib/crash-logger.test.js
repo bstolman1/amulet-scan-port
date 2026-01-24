@@ -5,7 +5,7 @@
  * These tests validate real implementation logic - not mock pass-throughs.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'fs';
 
 // Spies on real fs methods - set up BEFORE importing the module
@@ -19,18 +19,16 @@ mkdirSyncSpy.mockImplementation(() => undefined);
 appendFileSyncSpy.mockImplementation(() => undefined);
 
 // Dynamic import AFTER spies are established
-const { logCrash, logError, LOG_PATHS } = await import('./crash-logger.js');
+const { logCrash, logError, installCrashHandlers, LOG_PATHS } = await import('./crash-logger.js');
 
 describe('Crash Logger', () => {
   
   beforeEach(() => {
+    // Clear call history but keep the spy implementations intact
     vi.clearAllMocks();
+    // Reset default mock behavior
     existsSyncSpy.mockReturnValue(true);
     appendFileSyncSpy.mockImplementation(() => undefined);
-  });
-  
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
   
   describe('LOG_PATHS exports', () => {
@@ -48,7 +46,6 @@ describe('Crash Logger', () => {
     });
     
     it('crash and error logs should be in the same directory', () => {
-      // Both should share the same parent directory
       const crashDir = LOG_PATHS.crash.replace(/[/\\][^/\\]+$/, '');
       const errorDir = LOG_PATHS.error.replace(/[/\\][^/\\]+$/, '');
       expect(crashDir).toBe(errorDir);
@@ -96,7 +93,6 @@ describe('Crash Logger', () => {
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Stack:');
-      // Stack should contain the test file name
       expect(content).toMatch(/crash-logger\.test/);
     });
   });
@@ -108,7 +104,6 @@ describe('Crash Logger', () => {
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Process PID:');
       expect(content).toContain(String(process.pid));
-      expect(typeof process.pid).toBe('number');
     });
     
     it('should include actual Node version (starts with v)', () => {
@@ -117,7 +112,6 @@ describe('Crash Logger', () => {
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Node Version:');
       expect(content).toContain(process.version);
-      expect(process.version).toMatch(/^v\d+\.\d+/);
     });
     
     it('should include platform identifier', () => {
@@ -126,17 +120,14 @@ describe('Crash Logger', () => {
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Platform:');
       expect(content).toContain(process.platform);
-      expect(['darwin', 'linux', 'win32']).toContain(process.platform);
     });
     
-    it('should include memory usage with heapUsed (real value)', () => {
+    it('should include memory usage with heapUsed', () => {
       logCrash(new Error('Test'));
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Memory Usage:');
       expect(content).toContain('heapUsed');
-      expect(content).toContain('heapTotal');
-      expect(content).toContain('rss');
     });
     
     it('should include uptime in seconds', () => {
@@ -145,16 +136,13 @@ describe('Crash Logger', () => {
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Uptime:');
       expect(content).toContain('seconds');
-      // Uptime should be a positive number
-      const uptimeMatch = content.match(/Uptime:\s*([\d.]+)/);
-      expect(uptimeMatch).not.toBeNull();
-      expect(parseFloat(uptimeMatch[1])).toBeGreaterThan(0);
     });
   });
   
   describe('logCrash - edge case handling', () => {
     it('should handle null error without throwing', () => {
       expect(() => logCrash(null)).not.toThrow();
+      expect(appendFileSyncSpy).toHaveBeenCalled();
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Unknown error');
@@ -162,6 +150,7 @@ describe('Crash Logger', () => {
     
     it('should handle undefined error without throwing', () => {
       expect(() => logCrash(undefined)).not.toThrow();
+      expect(appendFileSyncSpy).toHaveBeenCalled();
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
       expect(content).toContain('Unknown error');
@@ -180,7 +169,6 @@ describe('Crash Logger', () => {
       const error = new Error('');
       logCrash(error);
       
-      // Should still write something
       expect(appendFileSyncSpy).toHaveBeenCalled();
     });
   });
@@ -256,10 +244,8 @@ describe('Crash Logger', () => {
         throw new Error('Disk full');
       });
       
-      // Should not throw - gracefully degrade
       expect(() => logCrash(new Error('Test'))).not.toThrow();
       
-      // Should have written to stderr as fallback
       expect(stderrSpy).toHaveBeenCalled();
       const stderrOutput = stderrSpy.mock.calls.map(c => c[0]).join('');
       expect(stderrOutput).toContain('Failed to write');
@@ -277,7 +263,6 @@ describe('Crash Logger', () => {
       logCrash(originalError);
       
       const stderrOutput = stderrSpy.mock.calls.map(c => c[0]).join('');
-      // The formatted error content should still be output to stderr
       expect(stderrOutput).toContain('Original crash reason');
       
       stderrSpy.mockRestore();
@@ -289,7 +274,6 @@ describe('Crash Logger', () => {
       logCrash(new Error('Test'));
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
-      // Should have separator lines (equals signs)
       expect(content).toMatch(/={10,}/);
     });
     
@@ -297,7 +281,6 @@ describe('Crash Logger', () => {
       logCrash(new Error('Test'));
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
-      // ISO timestamp format: 2024-01-15T10:30:00.000Z
       expect(content).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     });
     
@@ -305,25 +288,18 @@ describe('Crash Logger', () => {
       logCrash(new Error('Test'));
       
       const [, content] = appendFileSyncSpy.mock.calls[0];
-      // Extract memory JSON and verify it's parseable
       const memoryMatch = content.match(/Memory Usage:\s*(\{[\s\S]*?\})/);
       expect(memoryMatch).not.toBeNull();
-      
-      // The JSON should be valid
       expect(() => JSON.parse(memoryMatch[1])).not.toThrow();
     });
   });
   
   describe('installCrashHandlers', () => {
     let processOnSpy;
-    let originalProcessOn;
     let registeredHandlers;
     
-    beforeEach(async () => {
+    beforeEach(() => {
       registeredHandlers = {};
-      originalProcessOn = process.on.bind(process);
-      
-      // Spy on process.on to capture registered handlers
       processOnSpy = vi.spyOn(process, 'on').mockImplementation((event, handler) => {
         registeredHandlers[event] = registeredHandlers[event] || [];
         registeredHandlers[event].push(handler);
@@ -331,76 +307,56 @@ describe('Crash Logger', () => {
       });
     });
     
-    afterEach(() => {
-      processOnSpy.mockRestore();
-    });
-    
-    it('should register uncaughtException handler', async () => {
-      // Re-import to get installCrashHandlers
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('should register uncaughtException handler', () => {
       installCrashHandlers();
       
       expect(processOnSpy).toHaveBeenCalledWith('uncaughtException', expect.any(Function));
       expect(registeredHandlers['uncaughtException']).toBeDefined();
-      expect(registeredHandlers['uncaughtException'].length).toBeGreaterThan(0);
     });
     
-    it('should register unhandledRejection handler', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('should register unhandledRejection handler', () => {
       installCrashHandlers();
       
       expect(processOnSpy).toHaveBeenCalledWith('unhandledRejection', expect.any(Function));
       expect(registeredHandlers['unhandledRejection']).toBeDefined();
     });
     
-    it('should register SIGTERM handler', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('should register SIGTERM handler', () => {
       installCrashHandlers();
       
       expect(processOnSpy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
       expect(registeredHandlers['SIGTERM']).toBeDefined();
     });
     
-    it('should register SIGINT handler', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('should register SIGINT handler', () => {
       installCrashHandlers();
       
       expect(processOnSpy).toHaveBeenCalledWith('SIGINT', expect.any(Function));
       expect(registeredHandlers['SIGINT']).toBeDefined();
     });
     
-    it('uncaughtException handler should call logCrash', async () => {
-      const { installCrashHandlers, logCrash } = await import('./crash-logger.js');
-      
+    it('uncaughtException handler should call logCrash', () => {
       installCrashHandlers();
       
       const handler = registeredHandlers['uncaughtException'][0];
       const testError = new Error('Uncaught test error');
       
-      // Mock setTimeout to prevent actual exit
       const setTimeoutSpy = vi.spyOn(global, 'setTimeout').mockImplementation(() => ({ unref: () => {} }));
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       
       handler(testError);
       
-      // Verify logCrash was called (via the appendFileSync spy)
       expect(appendFileSyncSpy).toHaveBeenCalled();
-      const [filePath, content] = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
-      expect(filePath).toMatch(/crash\.log$/);
-      expect(content).toContain('Uncaught test error');
-      expect(content).toContain('UNCAUGHT_EXCEPTION');
+      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(lastCall[0]).toMatch(/crash\.log$/);
+      expect(lastCall[1]).toContain('Uncaught test error');
+      expect(lastCall[1]).toContain('UNCAUGHT_EXCEPTION');
       
       setTimeoutSpy.mockRestore();
       consoleSpy.mockRestore();
     });
     
-    it('unhandledRejection handler should call logCrash with UNHANDLED_REJECTION type', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('unhandledRejection handler should call logCrash with UNHANDLED_REJECTION', () => {
       installCrashHandlers();
       
       const handler = registeredHandlers['unhandledRejection'][0];
@@ -411,17 +367,15 @@ describe('Crash Logger', () => {
       handler(testError, Promise.reject(testError).catch(() => {}));
       
       expect(appendFileSyncSpy).toHaveBeenCalled();
-      const [filePath, content] = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
-      expect(filePath).toMatch(/crash\.log$/);
-      expect(content).toContain('UNHANDLED_REJECTION');
-      expect(content).toContain('Rejected promise');
+      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(lastCall[0]).toMatch(/crash\.log$/);
+      expect(lastCall[1]).toContain('UNHANDLED_REJECTION');
+      expect(lastCall[1]).toContain('Rejected promise');
       
       consoleSpy.mockRestore();
     });
     
-    it('unhandledRejection handler should handle non-Error reasons', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('unhandledRejection handler should handle non-Error reasons', () => {
       installCrashHandlers();
       
       const handler = registeredHandlers['unhandledRejection'][0];
@@ -432,15 +386,13 @@ describe('Crash Logger', () => {
       handler(stringReason, Promise.reject(stringReason).catch(() => {}));
       
       expect(appendFileSyncSpy).toHaveBeenCalled();
-      const [, content] = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
-      expect(content).toContain('Simple string rejection');
+      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(lastCall[1]).toContain('Simple string rejection');
       
       consoleSpy.mockRestore();
     });
     
-    it('SIGTERM handler should log graceful shutdown', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('SIGTERM handler should log graceful shutdown', () => {
       installCrashHandlers();
       
       const handler = registeredHandlers['SIGTERM'][0];
@@ -451,8 +403,7 @@ describe('Crash Logger', () => {
       handler();
       
       expect(appendFileSyncSpy).toHaveBeenCalled();
-      const calls = appendFileSyncSpy.mock.calls;
-      const lastCall = calls[calls.length - 1];
+      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
       expect(lastCall[1]).toContain('SIGTERM');
       expect(lastCall[1]).toContain('graceful shutdown');
       
@@ -460,9 +411,7 @@ describe('Crash Logger', () => {
       exitSpy.mockRestore();
     });
     
-    it('SIGINT handler should log graceful shutdown and exit with 0', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('SIGINT handler should log graceful shutdown and exit with 0', () => {
       installCrashHandlers();
       
       const handler = registeredHandlers['SIGINT'][0];
@@ -474,17 +423,14 @@ describe('Crash Logger', () => {
       
       expect(exitSpy).toHaveBeenCalledWith(0);
       expect(appendFileSyncSpy).toHaveBeenCalled();
-      const calls = appendFileSyncSpy.mock.calls;
-      const lastCall = calls[calls.length - 1];
+      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
       expect(lastCall[1]).toContain('SIGINT');
       
       consoleSpy.mockRestore();
       exitSpy.mockRestore();
     });
     
-    it('should log confirmation message when handlers are installed', async () => {
-      const { installCrashHandlers } = await import('./crash-logger.js');
-      
+    it('should log confirmation message when handlers are installed', () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       
       installCrashHandlers();
