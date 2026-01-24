@@ -92,6 +92,18 @@ describe('pickAmount', () => {
       amount: { initialAmount: '1000' },
     })).toBe(1000);
   });
+
+  // Mutation-killing tests: verify NaN guard is required
+  it('returns 0 for non-numeric amount values', () => {
+    expect(pickAmount({ amount: 'not-a-number' })).toBe(0);
+    expect(pickAmount({ amount: 'NaN' })).toBe(0);
+    expect(pickAmount({ amount: { initialAmount: 'garbage' } })).toBe(0);
+  });
+
+  it('returns 0 for object without parseable values', () => {
+    expect(pickAmount({ amount: {} })).toBe(0);
+    expect(pickAmount({ amount: { initialAmount: {} } })).toBe(0);
+  });
 });
 
 describe('pickAmountAsCC', () => {
