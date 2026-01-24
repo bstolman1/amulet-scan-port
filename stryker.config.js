@@ -6,16 +6,12 @@ export default {
   // Test runner
   testRunner: 'vitest',
   
-  // Files to mutate (source code, not tests)
+  // Start with a focused subset for initial run (faster, more stable)
   mutate: [
-    'src/lib/**/*.ts',
-    'src/hooks/**/*.ts',
-    '!src/**/*.test.ts',
-    '!src/**/*.spec.ts',
-    '!src/**/*.d.ts',
-    'server/lib/**/*.js',
-    'server/engine/aggregations.js',
-    '!server/**/*.test.js',
+    'src/lib/amount-utils.ts',
+    'src/lib/utils.ts',
+    'server/lib/validate.js',
+    'server/lib/sql-sanitize.js',
   ],
   
   // Vitest configuration
@@ -24,46 +20,28 @@ export default {
   },
   
   // Reporters
-  reporters: ['html', 'clear-text', 'progress', 'json'],
-  htmlReporter: {
-    fileName: 'coverage/mutation/index.html',
-  },
-  jsonReporter: {
-    fileName: 'coverage/mutation/mutation-report.json',
-  },
+  reporters: ['clear-text', 'progress'],
   
   // Thresholds
   thresholds: {
     high: 80,
     low: 60,
-    break: null, // Don't fail CI on low mutation score (yet)
+    break: null,
   },
   
-  // Performance
-  concurrency: 4,
-  timeoutMS: 30000,
-  timeoutFactor: 2,
+  // Conservative performance settings for stability
+  concurrency: 1,
+  timeoutMS: 60000,
+  timeoutFactor: 3,
   
-  // Incremental mode for faster reruns
-  incremental: true,
-  incrementalFile: '.stryker-cache/incremental.json',
-  
+  // Disable incremental for clean run
+  incremental: false,
   
   // Disable specific mutators that create too much noise
   mutator: {
     excludedMutations: [
-      'StringLiteral', // Don't mutate string literals (too noisy)
-      'ObjectLiteral', // Don't mutate object literals
+      'StringLiteral',
+      'ObjectLiteral',
     ],
   },
-  
-  // Reduce scope for initial run
-  // Uncomment to run on specific files only
-  // mutate: ['src/lib/amount-utils.ts'],
-  
-  // Dashboard (optional - for CI integration)
-  // dashboard: {
-  //   project: 'github.com/your-org/amulet-scan',
-  //   version: 'main',
-  // },
 };
