@@ -74,11 +74,13 @@ describe('containsDangerousPatterns', () => {
     expect(containsDangerousPatterns("sp_executesql")).toBe(true);
   });
 
-  it('handles non-string inputs', () => {
+  // Mutation-killing: verify non-string guard is required (enforces input trust boundary)
+  it('returns false for non-string inputs', () => {
     expect(containsDangerousPatterns(null)).toBe(false);
     expect(containsDangerousPatterns(undefined)).toBe(false);
     expect(containsDangerousPatterns(123)).toBe(false);
     expect(containsDangerousPatterns({})).toBe(false);
+    expect(containsDangerousPatterns([])).toBe(false);
   });
 });
 
