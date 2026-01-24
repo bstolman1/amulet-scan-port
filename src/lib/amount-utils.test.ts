@@ -177,4 +177,15 @@ describe('pickLockedAmount', () => {
     expect(pickLockedAmount({ amulet: { amount: { initialAmount: 'NaN' } } })).toBe(0);
     expect(pickLockedAmount({ amulet: { amount: { initialAmount: 'garbage' } } })).toBe(0);
   });
+
+  // Regression: numeric zero should not be treated as missing
+  it('preserves numeric zero in locked amount path', () => {
+    expect(pickLockedAmount({ amulet: { amount: { initialAmount: 0 } } })).toBe(0);
+    expect(pickLockedAmount({ amulet: { amount: { initialAmount: '0' } } })).toBe(0);
+    // Ensure zero is returned from locked path, not fallback
+    expect(pickLockedAmount({ 
+      amulet: { amount: { initialAmount: 0 } },
+      amount: { initialAmount: 999 }
+    })).toBe(0);
+  });
 });
