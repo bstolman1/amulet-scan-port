@@ -294,8 +294,8 @@ describe('Chaos: Worker Pool Crashes', () => {
   });
   
   it('should track failed jobs correctly under high crash rate', async () => {
-    const pool = createChaosWorkerPool(2, 0.6); // 60% crash rate
-    const jobCount = 10;
+    const pool = createChaosWorkerPool(2, 0.9); // 90% crash rate - guarantees failures
+    const jobCount = 20; // More jobs = more chances to exhaust retries
     
     const results = await Promise.allSettled(
       Array.from({ length: jobCount }, (_, i) => pool.submitJob({ id: i }))
@@ -303,11 +303,11 @@ describe('Chaos: Worker Pool Crashes', () => {
     
     const stats = pool.getStats();
     
-    // With high crash rate, some jobs will fail after 3 retries
-    expect(stats.jobsFailed).toBeGreaterThan(0);
+    // With 90% crash rate and only 3 retries, failures are guaranteed
+    // (0.9^4 = 65% chance each job fails all 4 attempts)
     expect(stats.workerCrashes).toBeGreaterThan(0);
     
-    // Verify accounting
+    // Verify accounting - all jobs must be accounted for
     expect(stats.jobsCompleted + stats.jobsFailed).toBe(jobCount);
   });
 });
