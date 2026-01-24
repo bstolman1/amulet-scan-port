@@ -93,20 +93,25 @@ describe('SearchBar', () => {
       const button = getButton(container);
       if (button) await user.click(button);
       
-      await vi.waitFor(async () => {
-        const input = document.querySelector('input');
-        if (input) {
-          await user.type(input, 'validator::1220abc');
-          
-          // Find and click the search action
-          const searchAction = document.querySelector('[cmdk-item]');
-          const allItems = document.querySelectorAll('[cmdk-item]');
-          const actionItem = Array.from(allItems).find(item => 
-            item.textContent?.includes('Search for')
-          );
-          if (actionItem) await user.click(actionItem);
-        }
+      // Wait for input to appear first
+      await vi.waitFor(() => {
+        expect(document.querySelector('input')).not.toBeNull();
       });
+      
+      const input = document.querySelector('input')!;
+      await user.type(input, 'validator::1220abc');
+      
+      // Wait for command items to appear and click search action
+      await vi.waitFor(() => {
+        const allItems = document.querySelectorAll('[cmdk-item]');
+        expect(allItems.length).toBeGreaterThan(0);
+      });
+      
+      const allItems = document.querySelectorAll('[cmdk-item]');
+      const actionItem = Array.from(allItems).find(item => 
+        item.textContent?.includes('Search for')
+      );
+      if (actionItem) await user.click(actionItem as HTMLElement);
       
       await vi.waitFor(() => {
         expect(mockNavigate).toHaveBeenCalledWith('/party/validator%3A%3A1220abc');
