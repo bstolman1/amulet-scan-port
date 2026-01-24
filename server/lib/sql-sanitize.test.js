@@ -241,6 +241,12 @@ describe('sanitizeContractId', () => {
     expect(sanitizeContractId("00abc' OR 1=1")).toBe(null);
   });
 
+  // Mutation-killing: verify dangerous-pattern guard is required
+  it('rejects contract IDs containing SQL injection patterns', () => {
+    expect(sanitizeContractId("deadbeef::Tpl@abc'; DROP")).toBeNull();
+    expect(sanitizeContractId("00abc123' OR 1=1 --")).toBeNull();
+  });
+
   it('rejects malformed contract IDs', () => {
     expect(sanitizeContractId('')).toBe(null);
     expect(sanitizeContractId('not-a-valid-id!')).toBe(null);
@@ -300,6 +306,15 @@ describe('sanitizeTimestamp', () => {
   it('rejects trailing garbage after valid timestamp', () => {
     expect(sanitizeTimestamp('2025-01-01T00:00:00ZZ')).toBeNull();
     expect(sanitizeTimestamp('2025-01-01T00:00:00Z extra')).toBeNull();
+  });
+
+  // Mutation-killing: verify length + dangerous-pattern guards
+  it('rejects timestamps longer than max length', () => {
+    expect(sanitizeTimestamp('2025-01-01T00:00:00Z'.repeat(10))).toBeNull();
+  });
+
+  it('rejects timestamps with SQL injection', () => {
+    expect(sanitizeTimestamp("2025-01-01T00:00:00Z'; DROP")).toBeNull();
   });
 });
 
@@ -410,5 +425,12 @@ describe('buildInCondition', () => {
 
   it('returns null when all values are filtered out', () => {
     expect(buildInCondition('party', ['', '', ''])).toBeNull();
+  });
+
+  // Mutation-killing: verify dangerous values are filtered before building
+  it('filters out dangerous and empty values before building IN clause', () => {
+    const clause = buildInCondition('party', ['Alice', '', null, "' OR 1=1 --"]);
+    expect(clause).toContain("'Alice'");
+    expect(clause).not.toContain("1=1");
   });
 });

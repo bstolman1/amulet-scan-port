@@ -135,4 +135,10 @@ describe('pickLockedAmount', () => {
     expect(pickLockedAmount({})).toBe(0);
     expect(pickLockedAmount(null)).toBe(0);
   });
+
+  // Mutation-killing: verify NaN guard in locked amount path
+  it('returns 0 for NaN values in locked amount', () => {
+    expect(pickLockedAmount({ amulet: { amount: { initialAmount: 'NaN' } } })).toBe(0);
+    expect(pickLockedAmount({ amulet: { amount: { initialAmount: 'garbage' } } })).toBe(0);
+  });
 });
