@@ -77,19 +77,14 @@ run_chaos_tests() {
     npx vitest run scripts/ingest/test/chaos-resilience.test.js
 }
 
-# Run ingest standalone tests (Node.js based)
+# Note: The ingest test files (api.test.js, backfill.test.js, acs.test.js) 
+# use Vitest APIs and are already run by the Vitest suite.
+# This function is kept for backward compatibility but skips Vitest-based tests.
 run_ingest_standalone() {
-    print_header "Running Ingest Standalone Tests"
-    cd "$INGEST_DIR"
-    
-    if [ ! -d "node_modules" ]; then
-        print_info "Installing ingest dependencies..."
-        npm install
-    fi
-    
-    npm run test:api
-    npm run test:backfill
-    npm run test:acs
+    print_header "Ingest Standalone Tests"
+    print_info "Ingest tests use Vitest and are covered in Phase 1"
+    print_info "Skipping standalone execution (would fail with 'vi.mock not initialized')"
+    return 0
 }
 
 run_ingest_test() {
