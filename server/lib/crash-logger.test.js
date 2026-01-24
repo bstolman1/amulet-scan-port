@@ -6,19 +6,25 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import fs from 'fs';
 
-// Spies on real fs methods - set up BEFORE importing the module
-const existsSyncSpy = vi.spyOn(fs, 'existsSync');
-const mkdirSyncSpy = vi.spyOn(fs, 'mkdirSync');
-const appendFileSyncSpy = vi.spyOn(fs, 'appendFileSync');
+// IMPORTANT: Mock fs *before* importing crash-logger.js.
+// Using vi.mock here is more reliable than vi.spyOn(fs, ...) because it guarantees
+// crash-logger.js imports the mocked module instance.
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    default: {
+      ...actual,
+      existsSync: vi.fn(),
+      mkdirSync: vi.fn(),
+      appendFileSync: vi.fn(),
+    },
+  };
+});
 
-// Default: pretend directory exists, capture file writes
-existsSyncSpy.mockReturnValue(true);
-mkdirSyncSpy.mockImplementation(() => undefined);
-appendFileSyncSpy.mockImplementation(() => undefined);
+/** @type {any} */
+const fs = (await import('fs')).default;
 
-// Dynamic import AFTER spies are established
 const { logCrash, logError, installCrashHandlers, LOG_PATHS } = await import('./crash-logger.js');
 
 describe('Crash Logger', () => {
@@ -27,8 +33,9 @@ describe('Crash Logger', () => {
     // Clear call history but keep the spy implementations intact
     vi.clearAllMocks();
     // Reset default mock behavior
-    existsSyncSpy.mockReturnValue(true);
-    appendFileSyncSpy.mockImplementation(() => undefined);
+    fs.existsSync.mockReturnValue(true);
+    fs.mkdirSync.mockImplementation(() => undefined);
+    fs.appendFileSync.mockImplementation(() => undefined);
   });
   
   describe('LOG_PATHS exports', () => {
@@ -57,8 +64,8 @@ describe('Crash Logger', () => {
     it('should write to crash.log (not error.log)', () => {
       logCrash(new Error('Test'));
       
-      expect(appendFileSyncSpy).toHaveBeenCalledTimes(1);
-      const [filePath] = appendFileSyncSpy.mock.calls[0];
+      expect(fs.appendFileSync).toHaveBeenCalledTimes(1);
+      const [filePath] = fs.appendFileSync.mock.calls[0];
       expect(filePath).toMatch(/crash\.log$/);
       expect(filePath).not.toMatch(/error\.log$/);
     });
@@ -69,21 +76,21 @@ describe('Crash Logger', () => {
       const errorMessage = 'Database connection failed XYZ123';
       logCrash(new Error(errorMessage));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain(errorMessage);
     });
     
     it('should include custom type when provided', () => {
       logCrash(new Error('Test'), 'CUSTOM_CRASH_TYPE');
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('CUSTOM_CRASH_TYPE');
     });
     
     it('should default to UNCAUGHT_EXCEPTION when no type provided', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('UNCAUGHT_EXCEPTION');
     });
     
@@ -91,7 +98,7 @@ describe('Crash Logger', () => {
       const error = new Error('Stack test');
       logCrash(error);
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Stack:');
       expect(content).toMatch(/crash-logger\.test/);
     });
@@ -101,7 +108,7 @@ describe('Crash Logger', () => {
     it('should include process.pid as a number', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Process PID:');
       expect(content).toContain(String(process.pid));
     });
@@ -109,7 +116,7 @@ describe('Crash Logger', () => {
     it('should include actual Node version (starts with v)', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Node Version:');
       expect(content).toContain(process.version);
     });
@@ -117,7 +124,7 @@ describe('Crash Logger', () => {
     it('should include platform identifier', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Platform:');
       expect(content).toContain(process.platform);
     });
@@ -125,7 +132,7 @@ describe('Crash Logger', () => {
     it('should include memory usage with heapUsed', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Memory Usage:');
       expect(content).toContain('heapUsed');
     });
@@ -133,7 +140,7 @@ describe('Crash Logger', () => {
     it('should include uptime in seconds', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Uptime:');
       expect(content).toContain('seconds');
     });
@@ -142,17 +149,17 @@ describe('Crash Logger', () => {
   describe('logCrash - edge case handling', () => {
     it('should handle null error without throwing', () => {
       expect(() => logCrash(null)).not.toThrow();
-      expect(appendFileSyncSpy).toHaveBeenCalled();
+      expect(fs.appendFileSync).toHaveBeenCalled();
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Unknown error');
     });
     
     it('should handle undefined error without throwing', () => {
       expect(() => logCrash(undefined)).not.toThrow();
-      expect(appendFileSyncSpy).toHaveBeenCalled();
+      expect(fs.appendFileSync).toHaveBeenCalled();
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('Unknown error');
     });
     
@@ -160,7 +167,7 @@ describe('Crash Logger', () => {
       const errorLike = { message: 'No stack available' };
       logCrash(errorLike);
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('No stack available');
       expect(content).toContain('No stack trace');
     });
@@ -169,7 +176,7 @@ describe('Crash Logger', () => {
       const error = new Error('');
       logCrash(error);
       
-      expect(appendFileSyncSpy).toHaveBeenCalled();
+      expect(fs.appendFileSync).toHaveBeenCalled();
     });
   });
   
@@ -177,8 +184,8 @@ describe('Crash Logger', () => {
     it('should write to error.log (not crash.log)', () => {
       logError(new Error('Test'));
       
-      expect(appendFileSyncSpy).toHaveBeenCalledTimes(1);
-      const [filePath] = appendFileSyncSpy.mock.calls[0];
+      expect(fs.appendFileSync).toHaveBeenCalledTimes(1);
+      const [filePath] = fs.appendFileSync.mock.calls[0];
       expect(filePath).toMatch(/error\.log$/);
       expect(filePath).not.toMatch(/crash\.log$/);
     });
@@ -188,14 +195,14 @@ describe('Crash Logger', () => {
     it('should include custom context string', () => {
       logError(new Error('Test'), 'API_HANDLER');
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('API_HANDLER');
     });
     
     it('should default to ERROR context', () => {
       logError(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain('ERROR');
     });
     
@@ -203,44 +210,44 @@ describe('Crash Logger', () => {
       const detailedMessage = 'Connection refused at 127.0.0.1:5432';
       logError(new Error(detailedMessage));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toContain(detailedMessage);
     });
   });
   
   describe('Directory creation', () => {
     it('should create directory if it does not exist', () => {
-      existsSyncSpy.mockReturnValue(false);
+      fs.existsSync.mockReturnValue(false);
       
       logCrash(new Error('Test'));
       
-      expect(mkdirSyncSpy).toHaveBeenCalled();
+      expect(fs.mkdirSync).toHaveBeenCalled();
     });
     
     it('should use recursive option for nested directories', () => {
-      existsSyncSpy.mockReturnValue(false);
+      fs.existsSync.mockReturnValue(false);
       
       logCrash(new Error('Test'));
       
-      expect(mkdirSyncSpy).toHaveBeenCalledWith(
+      expect(fs.mkdirSync).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ recursive: true })
       );
     });
     
     it('should NOT create directory if it already exists', () => {
-      existsSyncSpy.mockReturnValue(true);
+      fs.existsSync.mockReturnValue(true);
       
       logCrash(new Error('Test'));
       
-      expect(mkdirSyncSpy).not.toHaveBeenCalled();
+      expect(fs.mkdirSync).not.toHaveBeenCalled();
     });
   });
   
   describe('Write failure handling', () => {
     it('should write to stderr if appendFileSync fails', () => {
       const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-      appendFileSyncSpy.mockImplementation(() => {
+      fs.appendFileSync.mockImplementation(() => {
         throw new Error('Disk full');
       });
       
@@ -255,7 +262,7 @@ describe('Crash Logger', () => {
     
     it('should include original error content in stderr fallback', () => {
       const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-      appendFileSyncSpy.mockImplementation(() => {
+      fs.appendFileSync.mockImplementation(() => {
         throw new Error('Permission denied');
       });
       
@@ -273,21 +280,21 @@ describe('Crash Logger', () => {
     it('should include separator lines for readability', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toMatch(/={10,}/);
     });
     
     it('should include ISO timestamp in log entry', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       expect(content).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     });
     
     it('should format memory usage as valid JSON', () => {
       logCrash(new Error('Test'));
       
-      const [, content] = appendFileSyncSpy.mock.calls[0];
+      const [, content] = fs.appendFileSync.mock.calls[0];
       const memoryMatch = content.match(/Memory Usage:\s*(\{[\s\S]*?\})/);
       expect(memoryMatch).not.toBeNull();
       expect(() => JSON.parse(memoryMatch[1])).not.toThrow();
@@ -346,8 +353,8 @@ describe('Crash Logger', () => {
       
       handler(testError);
       
-      expect(appendFileSyncSpy).toHaveBeenCalled();
-      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(fs.appendFileSync).toHaveBeenCalled();
+      const lastCall = fs.appendFileSync.mock.calls[fs.appendFileSync.mock.calls.length - 1];
       expect(lastCall[0]).toMatch(/crash\.log$/);
       expect(lastCall[1]).toContain('Uncaught test error');
       expect(lastCall[1]).toContain('UNCAUGHT_EXCEPTION');
@@ -366,8 +373,8 @@ describe('Crash Logger', () => {
       
       handler(testError, Promise.reject(testError).catch(() => {}));
       
-      expect(appendFileSyncSpy).toHaveBeenCalled();
-      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(fs.appendFileSync).toHaveBeenCalled();
+      const lastCall = fs.appendFileSync.mock.calls[fs.appendFileSync.mock.calls.length - 1];
       expect(lastCall[0]).toMatch(/crash\.log$/);
       expect(lastCall[1]).toContain('UNHANDLED_REJECTION');
       expect(lastCall[1]).toContain('Rejected promise');
@@ -385,8 +392,8 @@ describe('Crash Logger', () => {
       
       handler(stringReason, Promise.reject(stringReason).catch(() => {}));
       
-      expect(appendFileSyncSpy).toHaveBeenCalled();
-      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(fs.appendFileSync).toHaveBeenCalled();
+      const lastCall = fs.appendFileSync.mock.calls[fs.appendFileSync.mock.calls.length - 1];
       expect(lastCall[1]).toContain('Simple string rejection');
       
       consoleSpy.mockRestore();
@@ -402,8 +409,8 @@ describe('Crash Logger', () => {
       
       handler();
       
-      expect(appendFileSyncSpy).toHaveBeenCalled();
-      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(fs.appendFileSync).toHaveBeenCalled();
+      const lastCall = fs.appendFileSync.mock.calls[fs.appendFileSync.mock.calls.length - 1];
       expect(lastCall[1]).toContain('SIGTERM');
       expect(lastCall[1]).toContain('graceful shutdown');
       
@@ -422,8 +429,8 @@ describe('Crash Logger', () => {
       handler();
       
       expect(exitSpy).toHaveBeenCalledWith(0);
-      expect(appendFileSyncSpy).toHaveBeenCalled();
-      const lastCall = appendFileSyncSpy.mock.calls[appendFileSyncSpy.mock.calls.length - 1];
+      expect(fs.appendFileSync).toHaveBeenCalled();
+      const lastCall = fs.appendFileSync.mock.calls[fs.appendFileSync.mock.calls.length - 1];
       expect(lastCall[1]).toContain('SIGINT');
       
       consoleSpy.mockRestore();
