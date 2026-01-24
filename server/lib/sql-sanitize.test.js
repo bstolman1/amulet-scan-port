@@ -208,6 +208,21 @@ describe('sanitizeIdentifier', () => {
     const longId = 'a'.repeat(501);
     expect(sanitizeIdentifier(longId)).toBe(null);
   });
+
+  // Mutation-killing tests: explicitly verify dangerous pattern gate
+  it('rejects semicolon-based injection', () => {
+    expect(sanitizeIdentifier("abc; DROP TABLE users")).toBeNull();
+    expect(sanitizeIdentifier("id; DELETE FROM")).toBeNull();
+  });
+
+  it('rejects OR 1=1 tautology injection', () => {
+    expect(sanitizeIdentifier("' OR 1=1 --")).toBeNull();
+    expect(sanitizeIdentifier("admin' OR 1=1")).toBeNull();
+  });
+
+  it('rejects UNION injection', () => {
+    expect(sanitizeIdentifier("id UNION SELECT *")).toBeNull();
+  });
 });
 
 describe('sanitizeContractId', () => {
@@ -274,6 +289,18 @@ describe('sanitizeTimestamp', () => {
     expect(sanitizeTimestamp(null)).toBe(null);
     expect(sanitizeTimestamp(123)).toBe(null);
   });
+
+  // Mutation-killing tests: strict ISO format validation
+  it('rejects malformed time components', () => {
+    expect(sanitizeTimestamp('2025-01-01T99:99:99Z')).toBeNull();
+    expect(sanitizeTimestamp('2025-01-01T25:00:00Z')).toBeNull();
+    expect(sanitizeTimestamp('2025-01-01T12:60:00Z')).toBeNull();
+  });
+
+  it('rejects trailing garbage after valid timestamp', () => {
+    expect(sanitizeTimestamp('2025-01-01T00:00:00ZZ')).toBeNull();
+    expect(sanitizeTimestamp('2025-01-01T00:00:00Z extra')).toBeNull();
+  });
 });
 
 describe('sanitizeSearchQuery', () => {
@@ -322,6 +349,18 @@ describe('buildLikeCondition', () => {
   it('returns null for dangerous patterns', () => {
     expect(buildLikeCondition('name', "'; DROP TABLE")).toBe(null);
   });
+
+  // Mutation-killing tests: explicit LIKE injection bypass attempts
+  it('returns null for LIKE injection attempts', () => {
+    expect(buildLikeCondition('name', "' OR 1=1 --")).toBeNull();
+    expect(buildLikeCondition('name', "'; DROP TABLE users")).toBeNull();
+    expect(buildLikeCondition('name', "' UNION SELECT *")).toBeNull();
+  });
+
+  it('returns null for null/undefined values', () => {
+    expect(buildLikeCondition('name', null)).toBeNull();
+    expect(buildLikeCondition('name', undefined)).toBeNull();
+  });
 });
 
 describe('buildEqualCondition', () => {
@@ -359,5 +398,17 @@ describe('buildInCondition', () => {
   it('handles non-array inputs', () => {
     expect(buildInCondition('type', null)).toBe(null);
     expect(buildInCondition('type', 'string')).toBe(null);
+  });
+
+  // Mutation-killing tests: verify exact filtering logic
+  it('filters out null and empty values in IN condition', () => {
+    const clause = buildInCondition('party', ['Alice', '', 'Bob']);
+    expect(clause).toContain("'Alice'");
+    expect(clause).toContain("'Bob'");
+    expect(clause).not.toContain("''");
+  });
+
+  it('returns null when all values are filtered out', () => {
+    expect(buildInCondition('party', ['', '', ''])).toBeNull();
   });
 });
