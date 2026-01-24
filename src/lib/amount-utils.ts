@@ -67,9 +67,11 @@ export function pickAmountAsCC(obj: any): number {
 export function pickLockedAmount(obj: any): number {
   if (!obj) return 0;
 
-  // First try the locked-specific path
-  if (obj.amulet?.amount?.initialAmount) {
-    const parsed = parseFloat(obj.amulet.amount.initialAmount);
+  // First try the locked-specific path with explicit null/undefined check
+  // (truthy check would incorrectly skip numeric 0)
+  const lockedValue = obj.amulet?.amount?.initialAmount;
+  if (lockedValue !== undefined && lockedValue !== null) {
+    const parsed = parseFloat(lockedValue);
     if (!isNaN(parsed)) return parsed;
   }
 
