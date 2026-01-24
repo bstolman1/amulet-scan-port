@@ -52,8 +52,9 @@ describe('toCC', () => {
 // Mutation-killing: strict type coercion tests
 describe('toCC strict type coercion', () => {
   it('parses numeric strings but rejects non-numeric strings', () => {
-    expect(toCC("100")).toBe(100);
-    expect(toCC("100.5")).toBe(100.5);
+    // toCC divides by CC_DIVISOR (10^10), so 100 / 10^10 = 1e-8
+    expect(toCC("100")).toBe(100 / CC_DIVISOR);
+    expect(toCC("100.5")).toBe(100.5 / CC_DIVISOR);
 
     // kills mutants where parseFloat is applied blindly
     expect(toCC("100abc")).toBe(0);
@@ -61,7 +62,7 @@ describe('toCC strict type coercion', () => {
   });
 
   it('handles large numbers via string path', () => {
-    // BigInt not supported, but large number strings are
+    // 1 trillion / 10^10 = 100
     expect(toCC("1000000000000")).toBe(100);
   });
 });
