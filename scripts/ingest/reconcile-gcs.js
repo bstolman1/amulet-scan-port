@@ -39,15 +39,17 @@ const TARGET_MIGRATION = MIGRATION_ARG ? parseInt(MIGRATION_ARG.split('=')[1]) :
 
 /**
  * List files in GCS bucket for a migration
+ * @param {number} migrationId - Migration ID to list files for
+ * @param {string} source - Data source: 'backfill' or 'updates' (default: 'backfill')
  */
-function listGCSFiles(migrationId) {
+function listGCSFiles(migrationId, source = 'backfill') {
   if (!GCS_BUCKET) {
     throw new Error('GCS_BUCKET not set');
   }
   
-  // List files from both updates and events folders for this migration (nested under backfill/)
-  const updatePrefix = `raw/backfill/updates/migration=${migrationId}/`;
-  const eventPrefix = `raw/backfill/events/migration=${migrationId}/`;
+  // List files from both updates and events folders for this migration
+  const updatePrefix = `raw/${source}/updates/migration=${migrationId}/`;
+  const eventPrefix = `raw/${source}/events/migration=${migrationId}/`;
   
   try {
     // List all parquet files for this migration from both folders
@@ -71,6 +73,15 @@ function listGCSFiles(migrationId) {
     console.error(`❌ Failed to list GCS files: ${err.message}`);
     return [];
   }
+}
+
+/**
+ * List all files for both backfill and live updates
+ */
+function listAllGCSFiles(migrationId) {
+  const backfillFiles = listGCSFiles(migrationId, 'backfill');
+  const liveFiles = listGCSFiles(migrationId, 'updates');
+  return { backfillFiles, liveFiles, allFiles: [...backfillFiles, ...liveFiles] };
 }
 
 /**

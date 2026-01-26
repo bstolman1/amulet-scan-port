@@ -17,11 +17,31 @@ This directory contains BigQuery SQL queries to parse JSON payloads from Parquet
 2. Replace `YOUR_BUCKET` with your GCS bucket name
 3. Run scripts in order (01, 02, 03, etc.)
 
-## Data Source
+## Data Sources
 
-The queries expect Parquet files in this GCS structure:
+The queries expect Parquet files organized by data source:
+
+### Backfill (Historical Data)
 ```
 gs://YOUR_BUCKET/raw/backfill/events/migration=X/year=YYYY/month=M/day=D/*.parquet
 gs://YOUR_BUCKET/raw/backfill/updates/migration=X/year=YYYY/month=M/day=D/*.parquet
+```
+
+### Live Updates (Streaming Data)
+```
+gs://YOUR_BUCKET/raw/updates/events/migration=X/year=YYYY/month=M/day=D/*.parquet
+gs://YOUR_BUCKET/raw/updates/updates/migration=X/year=YYYY/month=M/day=D/*.parquet
+```
+
+### ACS Snapshots
+```
 gs://YOUR_BUCKET/raw/acs/migration=X/year=YYYY/month=M/day=D/snapshot_id=HHMMSS/*.parquet
 ```
+
+## Unified Views
+
+The `01-create-base-views.sql` script creates unified views that combine backfill and live data:
+- `events_raw` - Union of backfill_events_raw + live_events_raw with `data_source` column
+- `updates_raw` - Union of backfill_updates_raw + live_updates_raw with `data_source` column
+
+This allows queries to transparently access all data without caring about the source.

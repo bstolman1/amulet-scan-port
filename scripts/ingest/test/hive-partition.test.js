@@ -13,7 +13,7 @@ import { getACSPartitionPath } from '../acs-schema.js';
 
 describe('Hive Partition Paths', () => {
   
-  describe('Backfill Partition Paths', () => {
+  describe('Backfill Partition Paths (source=backfill)', () => {
     it('should generate correct path structure for updates (default)', () => {
       const path = getPartitionPath('2024-06-15T10:30:00Z', 0);
       
@@ -32,7 +32,7 @@ describe('Hive Partition Paths', () => {
       expect(path).toBe('backfill/events/migration=0/year=2024/month=6/day=15');
     });
     
-    it('should nest updates and events under backfill/', () => {
+    it('should nest updates and events under backfill/ by default', () => {
       const updatesPath = getPartitionPath('2024-06-15T10:30:00Z', 0, 'updates');
       const eventsPath = getPartitionPath('2024-06-15T10:30:00Z', 0, 'events');
       
@@ -87,6 +87,62 @@ describe('Hive Partition Paths', () => {
       
       expect(path2023).toContain('year=2023');
       expect(path2025).toContain('year=2025');
+    });
+  });
+  
+  describe('Live Updates Partition Paths (source=updates)', () => {
+    it('should generate correct path for live updates', () => {
+      const path = getPartitionPath('2025-01-20T10:30:00Z', 4, 'updates', 'updates');
+      
+      expect(path).toBe('updates/updates/migration=4/year=2025/month=1/day=20');
+    });
+    
+    it('should generate correct path for live events', () => {
+      const path = getPartitionPath('2025-01-20T10:30:00Z', 4, 'events', 'updates');
+      
+      expect(path).toBe('updates/events/migration=4/year=2025/month=1/day=20');
+    });
+    
+    it('should nest updates and events under updates/ when source is updates', () => {
+      const updatesPath = getPartitionPath('2025-01-20T10:30:00Z', 4, 'updates', 'updates');
+      const eventsPath = getPartitionPath('2025-01-20T10:30:00Z', 4, 'events', 'updates');
+      
+      expect(updatesPath).toMatch(/^updates\/updates\//);
+      expect(eventsPath).toMatch(/^updates\/events\//);
+      expect(updatesPath).not.toBe(eventsPath);
+    });
+    
+    it('should fallback to backfill for invalid source', () => {
+      const path = getPartitionPath('2025-01-20T10:30:00Z', 4, 'updates', 'invalid_source');
+      
+      expect(path).toMatch(/^backfill\//);
+    });
+  });
+  
+  describe('Backfill vs Updates Separation', () => {
+    it('should produce different paths for same timestamp with different sources', () => {
+      const timestamp = '2025-01-20T10:30:00Z';
+      const migration = 4;
+      
+      const backfillPath = getPartitionPath(timestamp, migration, 'updates', 'backfill');
+      const updatesPath = getPartitionPath(timestamp, migration, 'updates', 'updates');
+      
+      expect(backfillPath).not.toBe(updatesPath);
+      expect(backfillPath).toMatch(/^backfill\//);
+      expect(updatesPath).toMatch(/^updates\//);
+    });
+    
+    it('should allow historical backfill and live updates to coexist', () => {
+      // Backfill: Historical data up through Migration 3
+      const backfillPath = getPartitionPath('2025-12-10T23:59:00Z', 3, 'events', 'backfill');
+      
+      // Live updates: Start of Migration 4
+      const liveUpdatesPath = getPartitionPath('2025-12-11T00:00:00Z', 4, 'events', 'updates');
+      
+      expect(backfillPath).toContain('backfill/');
+      expect(backfillPath).toContain('migration=3');
+      expect(liveUpdatesPath).toContain('updates/');
+      expect(liveUpdatesPath).toContain('migration=4');
     });
   });
   

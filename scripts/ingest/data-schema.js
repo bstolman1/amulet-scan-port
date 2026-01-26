@@ -430,14 +430,18 @@ function extractPackageName(templateId) {
  * IMPORTANT: Partition values are numeric (not zero-padded strings) to ensure
  * BigQuery/DuckDB infer them as INT64 rather than STRING/BYTE_ARRAY.
  * 
- * Structure: raw/{type}/migration=X/year=YYYY/month=M/day=D/
- * Where type is 'updates' or 'events' for clean BigQuery external table setup
+ * Structure: raw/{source}/{type}/migration=X/year=YYYY/month=M/day=D/
+ * 
+ * Sources:
+ * - 'backfill': Historical data from backfill process (finite, ends when caught up)
+ * - 'updates': Live streaming data from v2/updates API (ongoing, never "done")
  * 
  * @param {Date|string|number} timestamp - Timestamp for partitioning
  * @param {number|null} migrationId - Migration ID (defaults to 0)
  * @param {string} type - Data type: 'updates' or 'events' (defaults to 'updates' for backward compat)
+ * @param {string} source - Data source: 'backfill' or 'updates' (defaults to 'backfill')
  */
-export function getPartitionPath(timestamp, migrationId = null, type = 'updates') {
+export function getPartitionPath(timestamp, migrationId = null, type = 'updates', source = 'backfill') {
   const d = new Date(timestamp);
   const year = d.getFullYear();
   const month = d.getMonth() + 1;  // 1-12, no padding for INT64 inference
@@ -445,8 +449,13 @@ export function getPartitionPath(timestamp, migrationId = null, type = 'updates'
   
   // Always include migration_id in path (default to 0 if not provided)
   const mig = migrationId ?? 0;
-  // Nest updates and events under backfill/
-  return `backfill/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
+  
+  // Validate source parameter
+  const validSources = ['backfill', 'updates'];
+  const normalizedSource = validSources.includes(source) ? source : 'backfill';
+  
+  // Structure: {source}/{type}/migration=X/year=YYYY/month=M/day=D
+  return `${normalizedSource}/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
 }
 
 /**

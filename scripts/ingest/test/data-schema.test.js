@@ -549,7 +549,7 @@ describe('flattenEventsInTreeOrder', () => {
 });
 
 describe('getPartitionPath', () => {
-  it('should generate correct Hive partition path for updates (default)', () => {
+  it('should generate correct Hive partition path for backfill updates (default)', () => {
     const timestamp = new Date('2024-10-07T11:30:12Z');
     const migrationId = 0;
 
@@ -558,7 +558,7 @@ describe('getPartitionPath', () => {
     expect(result).toBe('backfill/updates/migration=0/year=2024/month=10/day=7');
   });
 
-  it('should generate correct Hive partition path for events', () => {
+  it('should generate correct Hive partition path for backfill events', () => {
     const timestamp = new Date('2024-10-07T11:30:12Z');
     const migrationId = 0;
 
@@ -584,7 +584,7 @@ describe('getPartitionPath', () => {
     expect(result).toContain('migration=0');
   });
 
-  it('should nest updates and events under backfill/', () => {
+  it('should nest updates and events under backfill/ by default', () => {
     const timestamp = new Date('2024-06-15T00:00:00Z');
 
     const updatesPath = getPartitionPath(timestamp, 0, 'updates');
@@ -593,5 +593,53 @@ describe('getPartitionPath', () => {
     expect(updatesPath).toMatch(/^backfill\/updates\//);
     expect(eventsPath).toMatch(/^backfill\/events\//);
     expect(updatesPath).not.toBe(eventsPath);
+  });
+
+  describe('source parameter (backfill vs updates)', () => {
+    it('should use backfill source by default', () => {
+      const timestamp = new Date('2024-10-07T11:30:12Z');
+      
+      const result = getPartitionPath(timestamp, 3);
+      
+      expect(result).toMatch(/^backfill\//);
+      expect(result).toBe('backfill/updates/migration=3/year=2024/month=10/day=7');
+    });
+
+    it('should support updates source for live streaming data', () => {
+      const timestamp = new Date('2024-10-07T11:30:12Z');
+      
+      const result = getPartitionPath(timestamp, 4, 'updates', 'updates');
+      
+      expect(result).toMatch(/^updates\//);
+      expect(result).toBe('updates/updates/migration=4/year=2024/month=10/day=7');
+    });
+
+    it('should support updates source for events', () => {
+      const timestamp = new Date('2024-10-07T11:30:12Z');
+      
+      const result = getPartitionPath(timestamp, 4, 'events', 'updates');
+      
+      expect(result).toMatch(/^updates\//);
+      expect(result).toBe('updates/events/migration=4/year=2024/month=10/day=7');
+    });
+
+    it('should fall back to backfill for invalid source values', () => {
+      const timestamp = new Date('2024-10-07T11:30:12Z');
+      
+      const result = getPartitionPath(timestamp, 0, 'updates', 'invalid');
+      
+      expect(result).toMatch(/^backfill\//);
+    });
+
+    it('should isolate backfill and updates data by folder', () => {
+      const timestamp = new Date('2024-10-07T11:30:12Z');
+      
+      const backfillPath = getPartitionPath(timestamp, 3, 'updates', 'backfill');
+      const updatesPath = getPartitionPath(timestamp, 4, 'updates', 'updates');
+      
+      expect(backfillPath).not.toBe(updatesPath);
+      expect(backfillPath).toContain('backfill/');
+      expect(updatesPath).toContain('updates/');
+    });
   });
 });
