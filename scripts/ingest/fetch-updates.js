@@ -89,6 +89,13 @@ function setMigrationId(id) {
   }
 }
 
+function setDataSource(source) {
+  if (USE_PARQUET) {
+    parquetWriter.setDataSource(source);
+  }
+  // Binary writer always uses backfill path (legacy)
+}
+
 // Configuration
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 100;
@@ -700,6 +707,11 @@ async function runIngestion() {
   }
   console.log("=".repeat(60));
   
+  // IMPORTANT: Set data source to 'updates' for live streaming data
+  // This writes to raw/updates/ instead of raw/backfill/
+  setDataSource('updates');
+  console.log(`📁 Data source: 'updates' (writing to raw/updates/)`);
+  
   log('info', 'ingestion_start', { 
     mode: modeLabel,
     scan_url: SCAN_URL,
@@ -707,6 +719,7 @@ async function runIngestion() {
     poll_interval: POLL_INTERVAL,
     gcs_mode: GCS_MODE,
     gcs_bucket: process.env.GCS_BUCKET || null,
+    data_source: 'updates',
   });
   
   // Check for existing data from backfill first (sets lastMigrationId if found)

@@ -109,6 +109,7 @@ export function initParquetWriter() {
 let updatesBuffer = [];
 let eventsBuffer = [];
 let currentMigrationId = null;
+let currentDataSource = 'backfill';  // 'backfill' or 'updates'
 
 // Stats tracking
 let totalUpdatesWritten = 0;
@@ -480,8 +481,8 @@ export async function flushUpdates() {
   const firstRecord = updatesBuffer[0];
   const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  // Use 'updates' type for separate top-level folder
-  const partition = getPartitionPath(effectiveAt, migrationId, 'updates');
+  // Use 'updates' type with current data source (backfill or updates)
+  const partition = getPartitionPath(effectiveAt, migrationId, 'updates', currentDataSource);
   const partitionDir = join(getDataDir(), partition);
   
   ensureDir(partitionDir);
@@ -510,8 +511,8 @@ export async function flushEvents() {
   const firstRecord = eventsBuffer[0];
   const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
   const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  // Use 'events' type for separate top-level folder
-  const partition = getPartitionPath(effectiveAt, migrationId, 'events');
+  // Use 'events' type with current data source (backfill or updates)
+  const partition = getPartitionPath(effectiveAt, migrationId, 'events', currentDataSource);
   const partitionDir = join(getDataDir(), partition);
   
   ensureDir(partitionDir);
@@ -650,6 +651,22 @@ export function setMigrationId(id) {
 }
 
 /**
+ * Set current data source ('backfill' or 'updates')
+ * This controls which top-level folder data is written to.
+ */
+export function setDataSource(source) {
+  const validSources = ['backfill', 'updates'];
+  currentDataSource = validSources.includes(source) ? source : 'backfill';
+}
+
+/**
+ * Get current data source
+ */
+export function getDataSource() {
+  return currentDataSource;
+}
+
+/**
  * Clear migration ID
  */
 export function clearMigrationId() {
@@ -728,6 +745,8 @@ export default {
   waitForWrites,
   shutdown,
   setMigrationId,
+  setDataSource,
+  getDataSource,
   clearMigrationId,
   purgeMigrationData,
   purgeAllData,
