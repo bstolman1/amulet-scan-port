@@ -506,23 +506,28 @@ function printSchemaComparison(comparison, actual, expected) {
 
 /**
  * Detect available migrations in GCS
+ * Searches within both updates/ and events/ subdirectories
  */
 function detectMigrations() {
   try {
-    const output = exec(
-      `gsutil ls "gs://${GCS_BUCKET}/raw/backfill/" 2>/dev/null`,
-      { throwOnError: false }
-    );
+    const migrations = new Set();
     
-    const migrations = [];
-    for (const line of output.split('\n')) {
-      const match = line.match(/migration=(\d+)/);
-      if (match) {
-        migrations.push(parseInt(match[1]));
+    // Check both updates and events subdirectories for migration folders
+    for (const subdir of ['updates', 'events']) {
+      const output = exec(
+        `gsutil ls "gs://${GCS_BUCKET}/raw/backfill/${subdir}/" 2>/dev/null`,
+        { throwOnError: false }
+      );
+      
+      for (const line of output.split('\n')) {
+        const match = line.match(/migration=(\d+)/);
+        if (match) {
+          migrations.add(parseInt(match[1]));
+        }
       }
     }
     
-    return [...new Set(migrations)].sort((a, b) => a - b);
+    return [...migrations].sort((a, b) => a - b);
   } catch {
     return [];
   }
