@@ -20,10 +20,10 @@
     --popover: 245 45% 12%;
     --popover-foreground: 0 0% 100%;
 
-    /* Primary: Lime/Yellow neon accent */
-    --primary: 75 100% 50%;
+    /* Primary: Cyan neon accent */
+    --primary: 180 100% 50%;
     --primary-foreground: 245 50% 8%;
-    --primary-glow: 75 100% 60%;
+    --primary-glow: 190 100% 60%;
 
     /* Secondary: Vibrant magenta/purple */
     --secondary: 300 100% 60%;
@@ -54,12 +54,12 @@
     /* Borders with neon glow capability */
     --border: 270 50% 30%;
     --input: 270 50% 25%;
-    --ring: 75 100% 50%;
+    --ring: 180 100% 50%;
 
     --radius: 9999px; /* Pill-shaped by default */
 
     /* Chart colors - neon palette */
-    --chart-1: 75 100% 50%;   /* lime */
+    --chart-1: 180 100% 50%;  /* cyan */
     --chart-2: 190 100% 55%;  /* cyan */
     --chart-3: 320 100% 60%;  /* pink */
     --chart-4: 270 100% 65%;  /* purple */
@@ -67,26 +67,26 @@
 
     /* Gradients */
     --gradient-background: linear-gradient(135deg, hsl(245 50% 8%) 0%, hsl(270 50% 12%) 50%, hsl(245 50% 6%) 100%);
-    --gradient-primary: linear-gradient(135deg, hsl(75 100% 50%) 0%, hsl(65 100% 55%) 100%);
+    --gradient-primary: linear-gradient(135deg, hsl(180 100% 50%) 0%, hsl(200 100% 55%) 100%);
     --gradient-accent: linear-gradient(135deg, hsl(190 100% 55%) 0%, hsl(270 100% 65%) 100%);
     --gradient-card: linear-gradient(135deg, hsl(245 45% 12% / 0.8) 0%, hsl(270 45% 15% / 0.6) 100%);
     --gradient-neon: linear-gradient(90deg, hsl(320 100% 60%), hsl(270 100% 65%), hsl(190 100% 55%));
 
     /* Shadows with neon glow */
-    --shadow-glow-lime: 0 0 30px hsl(75 100% 50% / 0.4);
-    --shadow-glow-cyan: 0 0 30px hsl(190 100% 55% / 0.4);
+    --shadow-glow-primary: 0 0 30px hsl(180 100% 50% / 0.4);
+    --shadow-glow-cyan: 0 0 30px hsl(180 100% 55% / 0.4);
     --shadow-glow-pink: 0 0 30px hsl(320 100% 60% / 0.4);
     --shadow-glow-purple: 0 0 30px hsl(270 100% 65% / 0.4);
     --shadow-card: 0 8px 32px hsl(245 50% 5% / 0.6);
 
     --sidebar-background: 245 50% 10%;
     --sidebar-foreground: 0 0% 95%;
-    --sidebar-primary: 75 100% 50%;
+    --sidebar-primary: 180 100% 50%;
     --sidebar-primary-foreground: 245 50% 8%;
     --sidebar-accent: 270 50% 20%;
     --sidebar-accent-foreground: 0 0% 95%;
     --sidebar-border: 270 50% 25%;
-    --sidebar-ring: 75 100% 50%;
+    --sidebar-ring: 180 100% 50%;
   }
 }
 
@@ -132,7 +132,7 @@
 
   .glass-card:hover {
     border-color: hsl(var(--primary) / 0.5);
-    box-shadow: var(--shadow-glow-lime);
+    box-shadow: var(--shadow-glow-primary);
   }
 
   /* Neon border card */
@@ -159,7 +159,7 @@
 
   /* Glow effects */
   .glow-primary {
-    box-shadow: var(--shadow-glow-lime);
+    box-shadow: var(--shadow-glow-primary);
   }
 
   .glow-cyan {
@@ -175,7 +175,7 @@
   }
 
   /* Neon text effects */
-  .text-neon-lime {
+  .text-neon-primary {
     color: hsl(var(--primary));
     text-shadow: 0 0 10px hsl(var(--primary) / 0.5);
   }
@@ -223,7 +223,7 @@
   }
 
   .btn-pill-primary:hover {
-    box-shadow: var(--shadow-glow-lime);
+    box-shadow: var(--shadow-glow-primary);
     transform: translateY(-2px);
   }
 
@@ -235,7 +235,7 @@
 
   .btn-pill-outline:hover {
     background: hsl(var(--primary) / 0.1);
-    box-shadow: var(--shadow-glow-lime);
+    box-shadow: var(--shadow-glow-primary);
   }
 
   /* Stat number styling */
@@ -247,7 +247,7 @@
     background-clip: text;
   }
 
-  .stat-number-lime {
+  .stat-number-cyan {
     @apply text-4xl md:text-5xl font-bold;
     color: hsl(var(--primary));
     text-shadow: 0 0 20px hsl(var(--primary) / 0.4);
