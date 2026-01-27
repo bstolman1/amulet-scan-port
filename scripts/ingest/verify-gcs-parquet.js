@@ -26,6 +26,7 @@
  *   BQ_LOCATION     - BigQuery location (default: US)
  */
 
+import 'dotenv/config';
 import { execSync } from 'child_process';
 import { existsSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
