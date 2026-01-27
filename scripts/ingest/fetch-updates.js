@@ -800,6 +800,15 @@ async function runIngestion() {
       emptyPolls = 0;
       batchCount++;
       
+      // Reset error count on successful fetch (exit cooldown mode)
+      if (sessionErrorCount > 0) {
+        log('info', 'cooldown_exit', { 
+          previous_error_count: sessionErrorCount,
+          migration: afterMigrationId,
+        });
+        sessionErrorCount = 0;
+      }
+      
       const { updates, events } = await processUpdates(data.items);
       totalUpdates += updates;
       totalEvents += events;
@@ -859,22 +868,55 @@ async function runIngestion() {
       
     } catch (err) {
       sessionErrorCount++;
+      
+      // Check if this is a transient/timeout error
+      const isTimeout = err.code === 'ECONNABORTED' || 
+                        err.code === 'ETIMEDOUT' ||
+                        err.code === 'ECONNRESET' ||
+                        err.message?.includes('timeout');
+      const isTransient = isTimeout || 
+                          err.response?.status === 503 || 
+                          err.response?.status === 429 ||
+                          err.response?.status >= 500;
+      
       logError('fetch', err, { 
         migration: afterMigrationId, 
         cursor: afterRecordTime,
         error_count: sessionErrorCount,
+        is_transient: isTransient,
       });
       
-      // Fail hard after too many consecutive errors
-      if (sessionErrorCount >= 10) {
-        logFatal('too_many_errors', err, { 
-          error_count: sessionErrorCount,
+      if (isTransient) {
+        // COOLDOWN MODE: Never fatal on transient errors, just sleep and retry
+        // Exponential backoff: 10s, 20s, 40s, 60s, 60s, ...
+        const backoffMs = Math.min(60000, 10000 * Math.pow(2, Math.min(sessionErrorCount - 1, 3)));
+        const jitter = Math.random() * 5000; // 0-5s jitter
+        const cooldownMs = backoffMs + jitter;
+        
+        log('warn', 'cooldown_mode', {
           migration: afterMigrationId,
+          cursor: afterRecordTime,
+          error_count: sessionErrorCount,
+          cooldown_ms: Math.round(cooldownMs),
+          reason: err.code || err.response?.status || 'unknown',
         });
-        throw err;
+        
+        console.log(`⏳ Cooldown: sleeping ${Math.round(cooldownMs / 1000)}s before retry (error #${sessionErrorCount})...`);
+        await sleep(cooldownMs);
+        
+        // Reset error count after successful cooldown (will reset to 0 on next successful batch)
+        // Keep counting for logging purposes but don't fatal
+      } else {
+        // Non-transient error: fail after too many
+        if (sessionErrorCount >= 10) {
+          logFatal('too_many_errors', err, { 
+            error_count: sessionErrorCount,
+            migration: afterMigrationId,
+          });
+          throw err;
+        }
+        await sleep(10000); // Wait 10s on non-transient error
       }
-      
-      await sleep(10000); // Wait 10s on error
     }
   }
   
