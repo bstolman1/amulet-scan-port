@@ -97,7 +97,7 @@ function setDataSource(source) {
 }
 
 // Configuration
-const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-2.us.cip-testing.network.canton.global/api';
+const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 100;
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 5000;
 
@@ -628,16 +628,17 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       return { items: [], lastMigrationId: null, lastRecordTime: null };
     }
     
-    // Enhanced diagnostics for 403 errors
-    if (err.response?.status === 403) {
+    // Enhanced diagnostics for 4xx errors (especially 403)
+    if (err.response?.status >= 400 && err.response?.status < 500) {
       console.error('\n' + '='.repeat(60));
-      console.error('🔐 403 FORBIDDEN - Full diagnostic info:');
+      console.error(`🔐 ${err.response.status} ERROR - Full diagnostic info:`);
       console.error('='.repeat(60));
       console.error('Request URL:', SCAN_URL + '/v2/updates');
-      console.error('Request payload:', JSON.stringify(payload, null, 2));
+      console.error('After migration:', afterMigrationId);
+      console.error('After record_time:', afterRecordTime);
       console.error('\nResponse status:', err.response.status);
       console.error('Response statusText:', err.response.statusText);
-      console.error('Response headers:', JSON.stringify(err.response.headers, null, 2));
+      console.error('Response headers:', JSON.stringify(err.response.headers || {}, null, 2));
       console.error('Response body:', typeof err.response.data === 'string' 
         ? err.response.data 
         : JSON.stringify(err.response.data, null, 2));
