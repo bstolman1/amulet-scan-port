@@ -2101,17 +2101,57 @@ async function startLiveUpdates() {
   });
 }
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down... waiting for writes to complete');
-  await flushAll();
-  await waitForWrites();
-  await shutdown();
-  if (decodePool) {
-    await decodePool.destroy();
+// Graceful shutdown handler
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`);
+  
+  try {
+    console.log('   Flushing pending writes...');
+    await flushAll();
+    await waitForWrites();
+    await shutdown();
+    if (decodePool) {
+      await decodePool.destroy();
+    }
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error during shutdown:', err.message);
+    process.exit(1);
   }
-  console.log('✅ All writes complete');
-  process.exit(0);
+}
+
+// Handle multiple termination signals
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Catch uncaught exceptions to prevent exit code null
+process.on('uncaughtException', async (err) => {
+  console.error('\n💥 Uncaught exception:', err.message);
+  console.error(err.stack);
+  
+  try {
+    await flushAll();
+    await waitForWrites();
+    await shutdown();
+  } catch (shutdownErr) {
+    console.error('Error during emergency shutdown:', shutdownErr.message);
+  }
+  
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('\n💥 Unhandled rejection at:', promise);
+  console.error('Reason:', reason);
+  // Let the uncaughtException handler deal with it
+  throw reason;
 });
 
 // Run backfill, then start live updates ONLY if all migrations are complete
