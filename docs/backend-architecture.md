@@ -2,12 +2,13 @@
 
 ## Overview
 
-The backend uses a **DuckDB-based architecture** with local file storage:
+The backend uses a **read-only DuckDB API server** that queries pre-ingested data:
 
 - **DuckDB** for querying ledger events and ACS snapshots
-- **Binary files** (Protobuf + ZSTD compression) for raw ledger data
-- **Parquet files** for materialized analytics
+- **Parquet files** for ledger data (written by ingestion scripts)
 - **Local filesystem** for ACS snapshots and metadata
+
+**Key principle**: The API server is read-only and request-driven. All ingestion runs separately via scripts.
 
 ## Data Flow
 
@@ -17,18 +18,19 @@ Canton Network API
         ▼
 ┌───────────────────┐
 │  Ingestion Scripts │  (scripts/ingest/*.js)
+│  Run via cron/CI   │  Manual, scheduled, or CI-triggered
 └───────────────────┘
         │
         ▼
 ┌───────────────────┐
-│  Binary Storage   │  (*.pb.zst compressed Protobuf)
-│  Parquet Files    │  (optional for analytics)
+│  Parquet Files    │  (ledger_raw/...)
+│  ACS Snapshots    │
 └───────────────────┘
         │
         ▼
 ┌───────────────────┐
-│  DuckDB Server    │  (server/server.js)
-│  Port 3001        │
+│  DuckDB API       │  (server/server.js)
+│  Port 3001        │  READ-ONLY
 └───────────────────┘
         │
         ▼
@@ -39,14 +41,7 @@ Canton Network API
 
 ## Running Locally
 
-1. **Start the DuckDB API server:**
-   ```bash
-   cd server
-   npm install
-   npm start  # Runs on port 3001
-   ```
-
-2. **Run ingestion (in another terminal):**
+1. **Run ingestion (to populate data):**
    ```bash
    cd scripts/ingest
    npm install
@@ -55,16 +50,30 @@ Canton Network API
    node fetch-acs.js          # ACS snapshots
    ```
 
+2. **Start the API server:**
+   ```bash
+   cd server
+   npm install
+   npm start  # Runs on port 3001
+   ```
+
 3. **Access the frontend:**
    - Lovable preview: Uses the DuckDB API at localhost:3001
    - Or expose via Cloudflare Tunnel for team access
+
+## Server Characteristics
+
+- **Read-only**: No background loops, no ingestion, no file scanning
+- **Request-driven**: Only opens DuckDB and queries in response to HTTP requests
+- **Stateless**: Can run indefinitely with minimal memory usage
+- **Safe to restart**: No state to lose, no cursors to corrupt
 
 ## Security Features
 
 - **SQL Injection Prevention**: All queries use centralized sanitization utilities
 - **Dangerous Pattern Detection**: UNION injection, DROP/DELETE statements, and comment injection are rejected at input
 - **Input Validation**: Numeric parameters have enforced bounds; string inputs are validated against patterns
-- **Parameterized Queries**: Where possible, values are escaped rather than interpolated
+- **Rate Limiting**: 100 req/min general, 20 req/min for expensive operations
 
 ## API Endpoints
 
@@ -73,6 +82,8 @@ The DuckDB server exposes these endpoints:
 | Endpoint | Description |
 |----------|-------------|
 | `GET /health` | Health check |
+| `GET /health/detailed` | Detailed health with memory stats |
+| `GET /health/config` | Configuration debug info |
 | `GET /api/events/latest` | Latest ledger events |
 | `GET /api/events/by-type/:type` | Events by type |
 | `GET /api/events/by-template/:id` | Events by template |
@@ -88,6 +99,36 @@ The DuckDB server exposes these endpoints:
 | `GET /api/acs/stats` | ACS overview stats |
 | `GET /api/acs/supply` | Supply statistics |
 | `GET /api/acs/rich-list` | Top token holders |
+| `POST /api/refresh-views` | Refresh DuckDB views (after ingestion) |
+
+## Ingestion Scripts
+
+Ingestion runs **separately** from the API server:
+
+```bash
+# Manual execution
+node scripts/ingest/fetch-updates.js   # Live V2 updates
+node scripts/ingest/fetch-backfill.js  # Historical backfill
+node scripts/ingest/fetch-acs.js       # ACS snapshots
+
+# Or via PM2 for persistence
+pm2 start scripts/ingest/ingest-all.js --name ingest-all
+```
+
+Schedule via cron or CI for production. The API server does not need to be restarted after ingestion completes.
+
+## Environment Variables
+
+Configure the server via `server/.env`:
+
+```env
+# Required
+DATA_DIR=/path/to/ledger_raw
+
+# Optional
+PORT=3001
+LOG_LEVEL=info
+```
 
 ## Local ACS Snapshots
 
@@ -102,25 +143,4 @@ acs/
             contracts-Amulet.parquet
             contracts-LockedAmulet.parquet
             _COMPLETE
-```
-
-Run the ACS snapshot script to populate local data:
-```bash
-cd scripts/ingest
-node fetch-acs.js
-```
-
-## Environment Variables
-
-Configure the server via `server/.env`:
-
-```env
-# Required
-DATA_DIR=/path/to/ledger_raw
-
-# Optional
-PORT=3001
-ENGINE_ENABLED=true
-ENGINE_INTERVAL_MS=30000
-LOG_LEVEL=info
 ```
