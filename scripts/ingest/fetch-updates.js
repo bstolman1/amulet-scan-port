@@ -627,6 +627,23 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
     if (err.response?.status === 404) {
       return { items: [], lastMigrationId: null, lastRecordTime: null };
     }
+    
+    // Enhanced diagnostics for 403 errors
+    if (err.response?.status === 403) {
+      console.error('\n' + '='.repeat(60));
+      console.error('🔐 403 FORBIDDEN - Full diagnostic info:');
+      console.error('='.repeat(60));
+      console.error('Request URL:', SCAN_URL + '/v2/updates');
+      console.error('Request payload:', JSON.stringify(payload, null, 2));
+      console.error('\nResponse status:', err.response.status);
+      console.error('Response statusText:', err.response.statusText);
+      console.error('Response headers:', JSON.stringify(err.response.headers, null, 2));
+      console.error('Response body:', typeof err.response.data === 'string' 
+        ? err.response.data 
+        : JSON.stringify(err.response.data, null, 2));
+      console.error('='.repeat(60) + '\n');
+    }
+    
     throw err;
   }
 }
