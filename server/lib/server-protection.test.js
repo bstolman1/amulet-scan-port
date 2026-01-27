@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import v8 from 'v8';
 
 // Only mock crash-logger to avoid disk writes during tests
 vi.mock('./crash-logger.js', () => ({
@@ -152,17 +153,25 @@ describe('Server Protection', () => {
   
   describe('memoryGuard critical path', () => {
     let originalMemoryUsage;
+    let originalGetHeapStatistics;
     
     beforeEach(() => {
       originalMemoryUsage = process.memoryUsage;
+      originalGetHeapStatistics = v8.getHeapStatistics;
     });
     
     afterEach(() => {
       process.memoryUsage = originalMemoryUsage;
+      v8.getHeapStatistics = originalGetHeapStatistics;
       stopMemoryMonitor();
     });
     
     it('should reject requests with 503 when memory is critical (95% heap)', async () => {
+      // Force heap limit to match our synthetic numbers so the guard uses the same basis.
+      v8.getHeapStatistics = () => ({
+        heap_size_limit: 1000 * 1024 * 1024,
+      });
+
       // Mock process.memoryUsage to return 95% heap usage
       process.memoryUsage = () => ({
         heapUsed: 950 * 1024 * 1024,    // 950 MB used
@@ -201,6 +210,10 @@ describe('Server Protection', () => {
     });
     
     it('should include retryAfter in 503 response', async () => {
+      v8.getHeapStatistics = () => ({
+        heap_size_limit: 1000 * 1024 * 1024,
+      });
+
       process.memoryUsage = () => ({
         heapUsed: 920 * 1024 * 1024,
         heapTotal: 1000 * 1024 * 1024, // 92%
@@ -228,6 +241,10 @@ describe('Server Protection', () => {
     
     it('should log warning when rejecting due to memory pressure', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      v8.getHeapStatistics = () => ({
+        heap_size_limit: 1000 * 1024 * 1024,
+      });
       
       process.memoryUsage = () => ({
         heapUsed: 950 * 1024 * 1024,
@@ -259,6 +276,10 @@ describe('Server Protection', () => {
     });
     
     it('should allow requests after memory drops below critical', async () => {
+      v8.getHeapStatistics = () => ({
+        heap_size_limit: 1000 * 1024 * 1024,
+      });
+
       // Start with high memory
       process.memoryUsage = () => ({
         heapUsed: 950 * 1024 * 1024,

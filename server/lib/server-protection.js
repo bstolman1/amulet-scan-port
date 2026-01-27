@@ -4,6 +4,7 @@
  */
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import v8 from 'v8';
 import { logError } from './crash-logger.js';
 
 // ============= Rate Limiting =============
@@ -46,18 +47,40 @@ const MEMORY_CRITICAL_THRESHOLD = 0.90; // Critical at 90%
 let memoryMonitorInterval = null;
 let isMemoryCritical = false;
 
+function getHeapPressure() {
+  // process.memoryUsage().heapTotal is the *currently allocated* heap,
+  // which can be close to heapUsed right after startup and cause false
+  // "90%" readings. Use the V8 heap size limit instead.
+  const usage = process.memoryUsage();
+  const stats = v8.getHeapStatistics?.();
+
+  const heapSizeLimit = stats?.heap_size_limit;
+  const denom = typeof heapSizeLimit === 'number' && heapSizeLimit > 0
+    ? heapSizeLimit
+    : (usage.heapTotal || 1);
+
+  const heapPercent = usage.heapUsed / denom;
+
+  return {
+    usage,
+    heapSizeLimit,
+    heapPercent,
+    heapUsedMB: Math.round(usage.heapUsed / 1024 / 1024),
+    heapTotalMB: Math.round(usage.heapTotal / 1024 / 1024),
+    heapLimitMB: heapSizeLimit ? Math.round(heapSizeLimit / 1024 / 1024) : null,
+  };
+}
+
 export function startMemoryMonitor() {
   if (memoryMonitorInterval) return;
   
   memoryMonitorInterval = setInterval(() => {
-    const usage = process.memoryUsage();
-    const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024);
-    const heapTotalMB = Math.round(usage.heapTotal / 1024 / 1024);
-    const heapPercent = usage.heapUsed / usage.heapTotal;
+    const { heapUsedMB, heapTotalMB, heapLimitMB, heapPercent } = getHeapPressure();
     
     if (heapPercent >= MEMORY_CRITICAL_THRESHOLD) {
       if (!isMemoryCritical) {
-        console.error(`🚨 CRITICAL: Memory at ${(heapPercent * 100).toFixed(1)}% (${heapUsedMB}/${heapTotalMB}MB)`);
+        const denomLabel = heapLimitMB ? `${heapUsedMB}/${heapLimitMB}MB` : `${heapUsedMB}/${heapTotalMB}MB`;
+        console.error(`🚨 CRITICAL: Memory at ${(heapPercent * 100).toFixed(1)}% (${denomLabel})`);
         logError(new Error(`Critical memory pressure: ${heapPercent * 100}%`), 'MEMORY_CRITICAL');
         isMemoryCritical = true;
         
@@ -68,7 +91,8 @@ export function startMemoryMonitor() {
         }
       }
     } else if (heapPercent >= MEMORY_WARN_THRESHOLD) {
-      console.warn(`⚠️ Memory warning: ${(heapPercent * 100).toFixed(1)}% (${heapUsedMB}/${heapTotalMB}MB)`);
+      const denomLabel = heapLimitMB ? `${heapUsedMB}/${heapLimitMB}MB` : `${heapUsedMB}/${heapTotalMB}MB`;
+      console.warn(`⚠️ Memory warning: ${(heapPercent * 100).toFixed(1)}% (${denomLabel})`);
       isMemoryCritical = false;
     } else {
       isMemoryCritical = false;
@@ -86,11 +110,12 @@ export function stopMemoryMonitor() {
 }
 
 export function getMemoryStatus() {
-  const usage = process.memoryUsage();
+  const { usage, heapSizeLimit, heapPercent } = getHeapPressure();
   return {
     heapUsedMB: Math.round(usage.heapUsed / 1024 / 1024),
     heapTotalMB: Math.round(usage.heapTotal / 1024 / 1024),
-    heapPercent: (usage.heapUsed / usage.heapTotal * 100).toFixed(1),
+    heapLimitMB: heapSizeLimit ? Math.round(heapSizeLimit / 1024 / 1024) : null,
+    heapPercent: (heapPercent * 100).toFixed(1),
     rssMB: Math.round(usage.rss / 1024 / 1024),
     externalMB: Math.round(usage.external / 1024 / 1024),
     isCritical: isMemoryCritical,
@@ -99,8 +124,15 @@ export function getMemoryStatus() {
 
 // Memory check middleware - reject requests when memory is critical
 export function memoryGuard(req, res, next) {
+  // Recompute on-request so we don't get stuck in a stale critical state.
+  const { heapPercent } = getHeapPressure();
+  isMemoryCritical = heapPercent >= MEMORY_CRITICAL_THRESHOLD;
+
   if (isMemoryCritical) {
     console.warn(`⚠️ Rejecting request due to memory pressure: ${req.path}`);
+    // Express has res.set(); bare Node responses use res.setHeader().
+    if (typeof res.set === 'function') res.set('Retry-After', '30');
+    else if (typeof res.setHeader === 'function') res.setHeader('Retry-After', '30');
     return res.status(503).json({ 
       error: 'Server under memory pressure, please retry shortly',
       retryAfter: 30,
