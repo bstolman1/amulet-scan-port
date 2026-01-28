@@ -45,6 +45,9 @@ const {
 
 const PORT = process.env.PORT || 3001;
 
+// 🔍 DIAGNOSTIC: Confirm trust proxy is set BEFORE rate limiter is attached
+console.log('🔍 trust proxy at limiter attach =', app.get('trust proxy'));
+
 // Security and protection middleware
 app.use(securityHeaders);
 app.use(cors());
