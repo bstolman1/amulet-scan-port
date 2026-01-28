@@ -1,8 +1,21 @@
 // SCANTON API Client — COMPLETE FILE
 // ------------------------------------------------------------------
-// Base URL: prefer env override, otherwise use hosted default
-const DEFAULT_API_BASE = "https://scan.sv-1.global.canton.network.sync.global/api/scan";
-const API_BASE = import.meta.env.VITE_SCAN_API_URL || DEFAULT_API_BASE;
+// All Scan API calls are proxied through our backend to avoid CORS and rate-limit issues.
+// Rule: Browser → our API → Scan API (never browser → Scan directly)
+import { getDuckDBApiUrl } from "./backend-config";
+
+// Backend proxy base URL - all Scan API calls go through here
+// Use a getter function so it's evaluated at call time, not module load time
+const getApiBase = () => `${getDuckDBApiUrl()}/scan-proxy`;
+
+// For backwards compatibility with existing code using API_BASE
+// This is evaluated lazily when accessed
+const API_BASE = new Proxy({} as { toString: () => string }, {
+  get: () => getApiBase(),
+}) as unknown as string;
+
+// Helper to get the actual API base URL string
+const apiBase = () => getApiBase();
 
 /* =========================
  *         TYPES
@@ -1125,6 +1138,43 @@ export const scanApi = {
     const params = new URLSearchParams({ round: String(round) });
     const res = await fetch(`${API_BASE}/v0/amulet-config-for-round?${params.toString()}`, { mode: "cors" });
     if (!res.ok) throw new Error("Failed to fetch amulet config for round");
+    return res.json();
+  },
+
+  /* ---------- Governance Vote Requests & Results ---------- */
+
+  async fetchActiveVoteRequests(): Promise<{ dso_rules_vote_requests: any[] }> {
+    const res = await fetch(`${API_BASE}/v0/admin/sv/voterequests`, { mode: "cors" });
+    if (!res.ok) throw new Error("Failed to fetch active vote requests");
+    return res.json();
+  },
+
+  async fetchVoteResults(request: {
+    actionName?: string;
+    accepted?: boolean;
+    requester?: string;
+    effectiveFrom?: string;
+    effectiveTo?: string;
+    limit?: number;
+  } = {}): Promise<{ dso_rules_vote_results: any[] }> {
+    const res = await fetch(`${API_BASE}/v0/admin/sv/voteresults`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      mode: "cors",
+    });
+    if (!res.ok) throw new Error("Failed to fetch vote results");
+    return res.json();
+  },
+
+  async fetchExternalPartyAmuletRules(): Promise<{ external_party_amulet_rules_update: any }> {
+    const res = await fetch(`${API_BASE}/v0/external-party-amulet-rules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+      mode: "cors",
+    });
+    if (!res.ok) throw new Error("Failed to fetch external party amulet rules");
     return res.json();
   },
 

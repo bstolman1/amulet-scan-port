@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { getDuckDBApiUrl } from "@/lib/backend-config";
 
-const SCAN_API_BASE = "https://scan.sv-1.global.canton.network.sync.global/api/scan";
+// All Scan API calls are proxied through our backend to avoid CORS and rate-limit issues
+// Rule: Browser → our API → Scan API (never browser → Scan directly)
+const getScanApiBase = () => `${getDuckDBApiUrl()}/scan-proxy`;
 
 export interface VoteResultRequest {
   actionName?: string;
@@ -192,7 +195,7 @@ export function useScanVoteResults(request: VoteResultRequest = {}) {
   return useQuery({
     queryKey: ["scanVoteResults", request],
     queryFn: async (): Promise<ParsedVoteResult[]> => {
-      const res = await fetch(`${SCAN_API_BASE}/v0/admin/sv/voteresults`, {
+      const res = await fetch(`${getScanApiBase()}/v0/admin/sv/voteresults`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
