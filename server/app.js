@@ -5,6 +5,8 @@ import express from 'express';
 const app = express();
 
 // 🔴 MUST come before any rate limiter is imported
-app.set('trust proxy', true);
+// Trust only the local reverse proxy (nginx) to supply X-Forwarded-For.
+// Using `true` is too permissive and express-rate-limit will abort.
+app.set('trust proxy', 'loopback');
 
 export default app;
