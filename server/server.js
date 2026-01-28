@@ -43,12 +43,12 @@ app.use(express.json({ limit: '10mb' })); // Limit request body size
 app.use(requestTimeout(30000)); // 30 second timeout on all requests
 app.use(memoryGuard); // Reject requests when memory is critical
 
-// Rate limiting
-app.use('/api/', apiLimiter); // General rate limiting for all API routes
+// Rate limiting (nginx strips /api, so routes are at root)
+app.use('/', apiLimiter); // General rate limiting for all routes
 
 // Stricter limits for expensive operations
-app.use('/api/search', expensiveLimiter);
-app.use('/api/refresh-views', expensiveLimiter);
+app.use('/search', expensiveLimiter);
+app.use('/refresh-views', expensiveLimiter);
 
 // Global BigInt serialization safety net - prevents "Do not know how to serialize a BigInt" errors
 app.set('json replacer', (key, value) => 
@@ -67,12 +67,12 @@ app.get('/', (req, res) => {
       'GET /health',
       'GET /health/detailed',
       'GET /health/config',
-      'GET /api/events/latest',
-      'GET /api/stats/overview',
-      'GET /api/backfill/cursors',
-      'GET /api/backfill/stats',
-      'GET /api/acs/cache',
-      'POST /api/refresh-views',
+      'GET /events/latest',
+      'GET /stats/overview',
+      'GET /backfill/cursors',
+      'GET /backfill/stats',
+      'GET /acs/cache',
+      'POST /refresh-views',
     ],
     dataPath: db.DATA_PATH,
   });
@@ -123,7 +123,7 @@ app.get('/health/config', (req, res) => {
 });
 
 // Refresh DuckDB views (call after data ingestion)
-app.post('/api/refresh-views', async (req, res) => {
+app.post('/refresh-views', async (req, res) => {
   try {
     console.log('🔄 Refreshing DuckDB views...');
     await initializeViews();
@@ -134,19 +134,19 @@ app.post('/api/refresh-views', async (req, res) => {
   }
 });
 
-// API routes
-app.use('/api/events', eventsRouter);
-app.use('/api/updates', updatesRouter);
-app.use('/api/party', partyRouter);
-app.use('/api/contracts', contractsRouter);
-app.use('/api/stats', statsRouter);
-app.use('/api/search', searchRouter);
-app.use('/api/backfill', backfillRouter);
-app.use('/api/acs', acsRouter);
-app.use('/api/announcements', announcementsRouter);
-app.use('/api/governance-lifecycle', governanceLifecycleRouter);
-app.use('/api/kaiko', kaikoRouter);
-app.use('/api/rewards', rewardsRouter);
+// API routes (nginx strips /api prefix before proxying)
+app.use('/events', eventsRouter);
+app.use('/updates', updatesRouter);
+app.use('/party', partyRouter);
+app.use('/contracts', contractsRouter);
+app.use('/stats', statsRouter);
+app.use('/search', searchRouter);
+app.use('/backfill', backfillRouter);
+app.use('/acs', acsRouter);
+app.use('/announcements', announcementsRouter);
+app.use('/governance-lifecycle', governanceLifecycleRouter);
+app.use('/kaiko', kaikoRouter);
+app.use('/rewards', rewardsRouter);
 
 // Global error handler - must be last middleware
 app.use(globalErrorHandler);
