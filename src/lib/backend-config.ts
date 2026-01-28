@@ -11,33 +11,23 @@ interface BackendConfig {
 
 // Configuration
 // - Local dev: frontend on http://localhost:<vitePort> talks to API on http://localhost:3001
-// - Non-local (Lovable preview / deployed): localhost is not reachable, so API features will be unavailable.
+// - Production: use relative "/api" path - nginx proxies to localhost:3001
 const DEFAULT_DUCKDB_PORT = 3001;
-
-// Remote server URL for access from non-local environments (set to empty string to disable)
-// Use HTTPS domain - nginx proxies /api/* to localhost:3001
-const REMOTE_SERVER_URL = 'https://scanton.app';
 
 function computeDuckDbApiUrl(): string {
   if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
 
   const host = window.location.hostname;
-  const protocol = window.location.protocol;
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
 
-  // When running locally, always use localhost backend
+  // When running locally, use localhost backend directly
   if (isLocalHost) {
     return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
   }
 
-  // For non-local environments, use remote server if configured
-  if (REMOTE_SERVER_URL) {
-    return REMOTE_SERVER_URL;
-  }
-
-  // Fallback: same host with DuckDB port
-  const baseProtocol = protocol === 'https:' ? 'https' : 'http';
-  return `${baseProtocol}://${host}:${DEFAULT_DUCKDB_PORT}`;
+  // For all deployed environments, use relative /api path
+  // nginx proxies /api/* to localhost:3001
+  return '';
 }
 
 const config: BackendConfig = {
