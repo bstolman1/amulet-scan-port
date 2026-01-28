@@ -239,17 +239,14 @@ export function useTransferCommandCounter(party: string | undefined) {
 }
 
 // ============ Governance ============
+// All governance calls go through backend proxy to avoid CORS and rate-limits
 export function useActiveVoteRequests() {
   return useQuery({
     queryKey: ["scan-api", "active-vote-requests"],
     queryFn: async () => {
-      const response = await fetch(
-        `${import.meta.env.VITE_SCAN_API_URL || "https://scan.sv-1.global.canton.network.sync.global/api/scan"}/v0/admin/sv/voterequests`,
-        { mode: "cors" }
-      );
-      if (!response.ok) throw new Error("Failed to fetch vote requests");
-      const data = await response.json();
-      return data.dso_rules_vote_requests || [];
+      // Use scanApi which routes through backend proxy
+      const response = await scanApi.fetchActiveVoteRequests();
+      return response.dso_rules_vote_requests || [];
     },
     staleTime: 30 * 1000,
   });
@@ -268,18 +265,9 @@ export function useVoteResults(request: VoteResultsRequest = {}) {
   return useQuery({
     queryKey: ["scan-api", "vote-results", request],
     queryFn: async () => {
-      const response = await fetch(
-        `${import.meta.env.VITE_SCAN_API_URL || "https://scan.sv-1.global.canton.network.sync.global/api/scan"}/v0/admin/sv/voteresults`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-          mode: "cors",
-        }
-      );
-      if (!response.ok) throw new Error("Failed to fetch vote results");
-      const data = await response.json();
-      return data.dso_rules_vote_results || [];
+      // Use scanApi which routes through backend proxy
+      const response = await scanApi.fetchVoteResults(request);
+      return response.dso_rules_vote_results || [];
     },
     staleTime: 60 * 1000,
   });
@@ -365,18 +353,9 @@ export function useExternalPartyAmuletRules() {
   return useQuery({
     queryKey: ["scan-api", "external-party-amulet-rules"],
     queryFn: async () => {
-      const response = await fetch(
-        `${import.meta.env.VITE_SCAN_API_URL || "https://scan.sv-1.global.canton.network.sync.global/api/scan"}/v0/external-party-amulet-rules`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-          mode: "cors",
-        }
-      );
-      if (!response.ok) throw new Error("Failed to fetch external party amulet rules");
-      const data = await response.json();
-      return data.external_party_amulet_rules_update;
+      // Use scanApi which routes through backend proxy
+      const response = await scanApi.fetchExternalPartyAmuletRules();
+      return response.external_party_amulet_rules_update;
     },
     staleTime: 60 * 1000,
   });

@@ -1,15 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { Wifi, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { getDuckDBApiUrl } from "@/lib/backend-config";
 
-const SCAN_API_URL = "https://scan.sv-1.global.canton.network.sync.global/api/scan";
+// Connection status checks our backend health, not Scan API directly
+// Rule: Browser → our API → Scan API (never browser → Scan directly)
 
 export const ConnectionStatusIndicator = () => {
   const { data: isConnected, isLoading } = useQuery({
-    queryKey: ["scan-api-health"],
+    queryKey: ["backend-api-health"],
     queryFn: async () => {
       try {
-        const response = await fetch(`${SCAN_API_URL}/v0/round-of-latest-data`, {
+        const baseUrl = getDuckDBApiUrl();
+        const response = await fetch(`${baseUrl}/health`, {
           method: "GET",
           signal: AbortSignal.timeout(5000),
         });
@@ -47,10 +50,10 @@ export const ConnectionStatusIndicator = () => {
         <TooltipContent side="left">
           <p>
             {isLoading
-              ? "Checking Scan API..."
+              ? "Checking API..."
               : isConnected
-              ? "Connected to Scan API"
-              : "Scan API Disconnected"}
+              ? "Connected to Backend API"
+              : "Backend API Disconnected"}
           </p>
         </TooltipContent>
       </Tooltip>
