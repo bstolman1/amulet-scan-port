@@ -121,7 +121,7 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
 
   const SortableHeader = ({ label, sortKeyName }: { label: string; sortKeyName: SortKey }) => (
     <TableHead 
-      className="cursor-pointer hover:bg-muted/50 transition-colors text-right"
+      className="cursor-pointer hover:bg-muted/50 transition-colors text-right whitespace-nowrap px-4"
       onClick={() => handleSort(sortKeyName)}
     >
       <div className="flex items-center justify-end gap-1">
@@ -133,7 +133,7 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="pb-4">
         <CardTitle className="flex items-center gap-2">
           <Building2 className="h-5 w-5" />
           CC Exchange Comparison
@@ -143,17 +143,17 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="rounded-md border">
+        <div className="rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Exchange</TableHead>
-                <TableHead>Pair</TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead className="whitespace-nowrap px-4 min-w-[140px]">Exchange</TableHead>
+                <TableHead className="whitespace-nowrap px-4 min-w-[100px]">Pair</TableHead>
+                <TableHead className="whitespace-nowrap px-4 min-w-[70px]">Type</TableHead>
                 <SortableHeader label="Price" sortKeyName="price" />
                 <SortableHeader label="24h Change" sortKeyName="change24h" />
                 <SortableHeader label="Volume" sortKeyName="volume" />
-                <TableHead className="w-[150px]">Volume Share</TableHead>
+                <TableHead className="whitespace-nowrap px-4 min-w-[180px]">Volume Share</TableHead>
                 <SortableHeader label="Trades" sortKeyName="tradeCount" />
               </TableRow>
             </TableHeader>
@@ -171,36 +171,36 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
                   
                   return (
                     <TableRow key={`${exchange.exchange}-${exchange.instrument}`}>
-                      <TableCell>
+                      <TableCell className="px-4">
                         <div className="flex items-center gap-2">
                           {idx < 3 && (
-                            <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-primary/10 text-primary border-primary/30">
+                            <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-primary/10 text-primary border-primary/30 shrink-0">
                               #{idx + 1}
                             </Badge>
                           )}
-                          <span className="font-medium">{exchange.exchangeName}</span>
+                          <span className="font-medium truncate">{exchange.exchangeName}</span>
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary" className="font-mono">
+                      <TableCell className="px-4">
+                        <Badge variant="secondary" className="font-mono text-xs">
                           {exchange.instrument.toUpperCase()}
                         </Badge>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="px-4">
                         <Badge 
                           variant={exchange.instrumentClass === 'spot' ? 'outline' : 'default'}
-                          className="text-xs"
+                          className="text-xs whitespace-nowrap"
                         >
                           {exchange.instrumentClass === 'perpetual-future' ? 'Perp' : 'Spot'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">
+                      <TableCell className="text-right font-mono px-4 whitespace-nowrap">
                         ${formatCurrency(exchange.price)}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right px-4">
                         {exchange.change24h !== null ? (
-                          <div className={`flex items-center justify-end gap-1 ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
-                            {isPositive ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                          <div className={`flex items-center justify-end gap-1 whitespace-nowrap ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
+                            {isPositive ? <TrendingUp className="h-3 w-3 shrink-0" /> : <TrendingDown className="h-3 w-3 shrink-0" />}
                             <span className="font-mono">
                               {isPositive ? '+' : ''}{exchange.change24h.toFixed(2)}%
                             </span>
@@ -209,18 +209,18 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
                           <span className="text-muted-foreground">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-right font-mono">
+                      <TableCell className="text-right font-mono px-4 whitespace-nowrap">
                         {formatVolume(exchange.volume)}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
+                      <TableCell className="px-4">
+                        <div className="flex items-center gap-3 min-w-[140px]">
                           <Progress value={volumePercent} className="h-2 flex-1" />
-                          <span className="text-xs text-muted-foreground w-10 text-right">
+                          <span className="text-xs text-muted-foreground w-10 text-right shrink-0">
                             {volumePercent.toFixed(0)}%
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-mono">
+                      <TableCell className="text-right font-mono px-4 whitespace-nowrap">
                         {exchange.tradeCount.toLocaleString()}
                       </TableCell>
                     </TableRow>
