@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { Layers, Activity, Clock, Zap, ChevronDown, ChevronRight } from "lucide-react";
 import { formatDuration, intervalToDuration } from "date-fns";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { apiFetch } from "@/lib/duckdb-api-client";
 
 interface Shard {
   shardIndex: number | null;
@@ -78,14 +79,7 @@ export function ShardProgressCard({ refreshInterval = 3000 }: ShardProgressCardP
 
   const fetchShardProgress = async () => {
     try {
-      const apiUrl = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
-      const response = await fetch(`${apiUrl}/api/backfill/shards`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      
-      const result = await response.json();
+      const result = await apiFetch<{ data: ShardGroupStats[] }>('/api/backfill/shards');
       setShardData(result.data || []);
       setError(null);
     } catch (err: any) {
