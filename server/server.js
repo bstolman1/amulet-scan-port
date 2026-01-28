@@ -37,6 +37,9 @@ import {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust nginx proxy - enables correct X-Forwarded-For handling for rate limiting
+app.set('trust proxy', 'loopback');
+
 // Security and protection middleware
 app.use(securityHeaders);
 app.use(cors());
