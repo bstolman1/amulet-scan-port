@@ -5,8 +5,9 @@ import express from 'express';
 const app = express();
 
 // 🔴 MUST come before any rate limiter is imported
-// Trust exactly one proxy hop (e.g., nginx in front of this app).
-// This keeps IP-based rate limiting secure while allowing X-Forwarded-For.
-app.set('trust proxy', 1);
+// Trust only proxies from localhost (nginx on 127.0.0.1).
+// Using 'loopback' satisfies express-rate-limit: it's specific (not permissive)
+// and it's set (so X-Forwarded-For is trusted).
+app.set('trust proxy', 'loopback');
 
 export default app;
