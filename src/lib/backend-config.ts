@@ -15,7 +15,8 @@ interface BackendConfig {
 const DEFAULT_DUCKDB_PORT = 3001;
 
 // Remote server URL for access from non-local environments (set to empty string to disable)
-const REMOTE_SERVER_URL = 'http://34.56.191.157:3001';
+// Use HTTPS proxy domain to avoid mixed-content blocking
+const REMOTE_SERVER_URL = 'https://scanton.app/api';
 
 function computeDuckDbApiUrl(): string {
   if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
