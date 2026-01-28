@@ -5,7 +5,11 @@ import './env.js';
 import { installCrashHandlers, LOG_PATHS } from './lib/crash-logger.js';
 installCrashHandlers();
 
+// Express app MUST be created before importing rate limiters
 import express from 'express';
+const app = express();
+app.set('trust proxy', true); // Trust nginx proxy for X-Forwarded-For
+
 import cors from 'cors';
 import eventsRouter from './api/events.js';
 import updatesRouter from './api/updates.js';
@@ -34,11 +38,7 @@ import {
   globalErrorHandler,
 } from './lib/server-protection.js';
 
-const app = express();
 const PORT = process.env.PORT || 3001;
-
-// Trust nginx proxy - enables correct X-Forwarded-For handling for rate limiting
-app.set('trust proxy', 'loopback');
 
 // Security and protection middleware
 app.use(securityHeaders);
