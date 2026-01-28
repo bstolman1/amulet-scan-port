@@ -1,11 +1,13 @@
 /**
  * DuckDB API Client
  * 
- * Client for the local DuckDB API server.
+ * Unified API client for all backend requests.
+ * All calls go through relative /api paths - nginx handles routing.
+ * 
+ * For local development (localhost), direct connection to port 3001 is used.
+ * For production, relative paths go through nginx proxy.
  */
 
-// NOTE: In Lovable preview, localhost is not reachable. When running locally, this resolves
-// to http://localhost:3001 (or http://<your-host>:3001 if hosting the UI on your LAN).
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 interface ApiResponse<T> {
@@ -14,16 +16,23 @@ interface ApiResponse<T> {
   error?: string;
 }
 
-function getApiBaseUrl() {
+/**
+ * Get the API base URL.
+ * - Local dev: http://localhost:3001
+ * - Production: empty string (relative paths)
+ */
+function getApiBaseUrl(): string {
   return getDuckDBApiUrl();
 }
 
 /**
- * Generic fetch wrapper with error handling
+ * Generic fetch wrapper with error handling.
+ * All API calls should go through this function.
  */
 export async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const API_BASE_URL = getApiBaseUrl();
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    credentials: 'same-origin',
     ...options,
     headers: {
       'Content-Type': 'application/json',

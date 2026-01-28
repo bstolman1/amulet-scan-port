@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle, RefreshCw, Clock } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { apiFetch } from "@/lib/duckdb-api-client";
 
 interface Gap {
   synchronizer: string;
@@ -33,15 +34,10 @@ export function GapDetectionCard({ refreshInterval = 30000 }: GapDetectionCardPr
   const [isLoading, setIsLoading] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
 
-  const localApiUrl = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
-
   const fetchGaps = async () => {
     try {
-      const response = await fetch(`${localApiUrl}/api/backfill/gaps`);
-      if (response.ok) {
-        const data = await response.json();
-        setGapInfo(data);
-      }
+      const data = await apiFetch<GapInfo>('/api/backfill/gaps');
+      setGapInfo(data);
     } catch (err) {
       console.warn("Failed to fetch gap info:", err);
     }
@@ -50,14 +46,11 @@ export function GapDetectionCard({ refreshInterval = 30000 }: GapDetectionCardPr
   const triggerDetection = async (autoRecover = false) => {
     setIsDetecting(true);
     try {
-      const response = await fetch(`${localApiUrl}/api/backfill/gaps/detect`, {
+      await apiFetch('/api/backfill/gaps/detect', {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ autoRecover }),
       });
-      if (response.ok) {
-        await fetchGaps();
-      }
+      await fetchGaps();
     } catch (err) {
       console.error("Failed to trigger gap detection:", err);
     } finally {

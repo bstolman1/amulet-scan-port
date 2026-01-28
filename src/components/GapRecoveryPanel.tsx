@@ -16,6 +16,8 @@ import {
   FileWarning
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { apiFetch } from "@/lib/duckdb-api-client";
+import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 interface Gap {
   synchronizer: string;
@@ -87,8 +89,6 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
   const logsEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  const localApiUrl = import.meta.env.VITE_DUCKDB_API_URL || "http://localhost:3001";
-
   const addLog = (message: string) => {
     const timestamp = new Date().toLocaleTimeString();
     setRecovery(prev => ({
@@ -99,11 +99,8 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
 
   const fetchGaps = async () => {
     try {
-      const response = await fetch(`${localApiUrl}/api/backfill/gaps`);
-      if (response.ok) {
-        const data = await response.json();
-        setGapInfo(data);
-      }
+      const data = await apiFetch<GapInfo>('/api/backfill/gaps');
+      setGapInfo(data);
     } catch (err) {
       console.warn("Failed to fetch gap info:", err);
     }
@@ -111,11 +108,8 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
 
   const fetchReconciliation = async () => {
     try {
-      const response = await fetch(`${localApiUrl}/api/backfill/reconciliation`);
-      if (response.ok) {
-        const data = await response.json();
-        setReconciliation(data);
-      }
+      const data = await apiFetch<ReconciliationData>('/api/backfill/reconciliation');
+      setReconciliation(data);
     } catch (err) {
       // Endpoint may not exist yet
     }
@@ -126,20 +120,14 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
     addLog('🔍 Starting gap detection scan...');
     
     try {
-      const response = await fetch(`${localApiUrl}/api/backfill/gaps/detect`, {
+      const result = await apiFetch<{ gaps?: number; totalGapTime?: string }>('/api/backfill/gaps/detect', {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ autoRecover: false }),
       });
       
-      if (response.ok) {
-        const result = await response.json();
-        addLog(`✅ Scan complete: Found ${result.gaps || 0} gaps (${result.totalGapTime || '0ms'} total)`);
-        await fetchGaps();
-        setRecovery(prev => ({ ...prev, status: 'idle', message: '' }));
-      } else {
-        throw new Error('Detection failed');
-      }
+      addLog(`✅ Scan complete: Found ${result.gaps || 0} gaps (${result.totalGapTime || '0ms'} total)`);
+      await fetchGaps();
+      setRecovery(prev => ({ ...prev, status: 'idle', message: '' }));
     } catch (err) {
       addLog(`❌ Detection failed: ${err}`);
       setRecovery(prev => ({ ...prev, status: 'error', message: 'Detection failed' }));
@@ -168,7 +156,9 @@ export function GapRecoveryPanel({ refreshInterval = 30000 }: GapRecoveryPanelPr
     addLog(`🚀 Starting recovery of ${gapInfo.data.length} gaps...`);
 
     try {
-      const response = await fetch(`${localApiUrl}/api/backfill/gaps/recover`, {
+      // For streaming, we need to use the base URL directly
+      const apiBase = getDuckDBApiUrl();
+      const response = await fetch(`${apiBase}/api/backfill/gaps/recover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 

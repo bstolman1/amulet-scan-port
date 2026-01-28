@@ -1,67 +1,55 @@
 /**
  * Backend Configuration
  * 
- * DuckDB API backend for all ledger data queries.
+ * All frontend API calls go through relative paths.
+ * nginx proxies /api/* → backend:3001
  */
 
-interface BackendConfig {
-  /** DuckDB API base URL */
-  duckdbApiUrl: string;
-}
+// Frontend API base - nginx handles routing
+// NEVER use localhost, IPs, or ports directly
+export const API_BASE = "/api";
 
-// Configuration
-// - Local dev: frontend on http://localhost:<vitePort> talks to API on http://localhost:3001
-// - Production: use relative "/api" path - nginx proxies to localhost:3001
-const DEFAULT_DUCKDB_PORT = 3001;
-
-function computeDuckDbApiUrl(): string {
-  if (typeof window === 'undefined') return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
-
-  const host = window.location.hostname;
-  const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-
-  // When running locally, use localhost backend directly
-  if (isLocalHost) {
-    return `http://localhost:${DEFAULT_DUCKDB_PORT}`;
+/**
+ * @deprecated Use API_BASE and apiFetch from duckdb-api-client.ts instead.
+ * This function is kept for backwards compatibility during migration.
+ */
+export function getDuckDBApiUrl(): string {
+  // For local development with Vite, we need direct connection to backend
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return 'http://localhost:3001';
+    }
   }
-
-  // For all deployed environments, use relative /api path
-  // nginx proxies /api/* to localhost:3001
+  // Production: return empty string so paths are relative
   return '';
 }
 
-const config: BackendConfig = {
-  duckdbApiUrl: computeDuckDbApiUrl(),
-};
-
-export function getBackendConfig(): BackendConfig {
-  // Recompute each time so it stays correct if host changes (rare, but safe).
-  return { ...config, duckdbApiUrl: computeDuckDbApiUrl() };
+/**
+ * @deprecated Legacy compatibility
+ */
+export function getBackendConfig() {
+  return { duckdbApiUrl: getDuckDBApiUrl() };
 }
 
+/**
+ * @deprecated Legacy compatibility
+ */
 export function useDuckDBForLedger(): boolean {
   return true;
 }
 
-export function getDuckDBApiUrl(): string {
-  return computeDuckDbApiUrl();
-}
-
 /**
- * Check if DuckDB API is available
+ * Check if backend API is available
  */
 export async function checkDuckDBConnection(): Promise<boolean> {
   try {
-    const baseUrl = computeDuckDbApiUrl();
-    console.log('[DuckDB] Checking connection to:', baseUrl);
-    const response = await fetch(`${baseUrl}/health`, {
+    const response = await fetch(`${API_BASE.replace('/api', '')}/health`, {
       method: 'GET',
-      signal: AbortSignal.timeout(5000), // Increased timeout
+      signal: AbortSignal.timeout(5000),
     });
-    console.log('[DuckDB] Health check response:', response.ok);
     return response.ok;
-  } catch (err) {
-    console.warn('[DuckDB] Health check failed:', err);
+  } catch {
     return false;
   }
 }
