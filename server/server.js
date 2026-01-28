@@ -46,7 +46,7 @@ const {
 const PORT = process.env.PORT || 3001;
 
 // 🔍 DIAGNOSTIC: Confirm trust proxy is set BEFORE rate limiter is attached
-console.log('🔍 trust proxy at limiter attach =', app.get('trust proxy'));
+console.log('🔍 ROOT app trust proxy =', app.get('trust proxy'));
 
 // Security and protection middleware
 app.use(securityHeaders);
@@ -54,6 +54,12 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Limit request body size
 app.use(requestTimeout(30000)); // 30 second timeout on all requests
 app.use(memoryGuard); // Reject requests when memory is critical
+
+// 🔍 DIAGNOSTIC: Log req.app trust proxy on EVERY request (before rate limiter)
+app.use((req, _res, next) => {
+  console.log('🔍 REQUEST app trust proxy =', req.app.get('trust proxy'));
+  next();
+});
 
 // Rate limiting (nginx strips /api, so routes are at root)
 app.use('/', apiLimiter); // General rate limiting for all routes
