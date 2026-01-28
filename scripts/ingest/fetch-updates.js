@@ -205,16 +205,18 @@ function loadLiveCursor() {
 
 /**
  * Save live cursor state
+ * The cursor represents the FORWARD position: we will fetch transactions AFTER this time
  */
-function saveLiveCursor(migrationId, recordTime) {
+function saveLiveCursor(migrationId, afterRecordTime) {
   if (!fs.existsSync(CURSOR_DIR)) {
     fs.mkdirSync(CURSOR_DIR, { recursive: true });
   }
   const cursor = {
     migration_id: migrationId,
-    record_time: recordTime,
+    record_time: afterRecordTime,
     updated_at: new Date().toISOString(),
-    mode: 'live'
+    mode: 'live',
+    semantics: 'forward', // Explicit: fetch transactions AFTER this time
   };
   fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
 }
@@ -596,7 +598,16 @@ async function detectLatestMigration() {
 
 /**
  * Fetch updates from the scan API using v2/updates
- * Uses proper pagination with after.after_migration_id and after.after_record_time
+ * 
+ * IMPORTANT: LIVE mode uses FORWARD pagination only (after semantics).
+ * This is different from backfill which uses BACKWARD pagination (before semantics).
+ * 
+ * The v2/updates API returns transactions AFTER the given (migration_id, record_time) tuple,
+ * sorted in ascending order by record_time. This means:
+ * - We start from the backfill's max_time and poll forward
+ * - New transactions appear at the END of results
+ * - We advance the cursor to the last transaction's record_time
+ * - Empty results mean we're caught up (poll again after interval)
  */
 async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
   try {
@@ -605,21 +616,31 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       daml_value_encoding: 'compact_json',
     };
     
-    // Use the "after" object for proper pagination (v2 API format)
+    // FORWARD pagination using "after" object (v2 API format)
+    // This fetches transactions AFTER the given timestamp, NOT before
+    // This is the correct semantics for LIVE mode polling
     if (afterMigrationId !== null && afterRecordTime) {
       payload.after = {
         after_migration_id: afterMigrationId,
         after_record_time: afterRecordTime
       };
+      
+      // Log the first few requests for debugging cursor handoff
+      if (!fetchUpdates._loggedFirst) {
+        console.log(`📡 LIVE query: after=(migration=${afterMigrationId}, time=${afterRecordTime})`);
+        fetchUpdates._loggedFirst = true;
+      }
     }
     
     const response = await client.post('/v2/updates', payload);
     
-    // v2/updates returns { transactions: [...] }
+    // v2/updates returns { transactions: [...] } sorted ascending by record_time
     const transactions = response.data?.transactions || [];
+    
+    // The LAST transaction in the batch is the NEWEST (furthest forward in time)
+    // Use its record_time as the cursor for the next request
     return { 
       items: transactions,
-      // Track the last item for next pagination
       lastMigrationId: transactions.length > 0 ? transactions[transactions.length - 1].migration_id : null,
       lastRecordTime: transactions.length > 0 ? transactions[transactions.length - 1].record_time : null
     };
@@ -686,6 +707,17 @@ async function processUpdates(items) {
 
 /**
  * Main ingestion loop
+ * 
+ * LIVE MODE SEMANTICS:
+ * - Uses FORWARD pagination (after.after_record_time)
+ * - Polls for new transactions appearing AFTER the cursor timestamp
+ * - Never uses "before" semantics (that's for backfill only)
+ * - Empty results = caught up, wait and poll again
+ * 
+ * CURSOR HANDOFF:
+ * - Starts from backfill's max_time (the newest backfilled transaction)
+ * - Advances forward as new transactions arrive
+ * - Saves cursor periodically to resume on restart
  */
 async function runIngestion() {
   const modeLabel = LIVE_MODE ? 'LIVE' : 'RESUME';
@@ -696,6 +728,7 @@ async function runIngestion() {
   console.log("   SCAN_URL:", SCAN_URL);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   POLL_INTERVAL:", POLL_INTERVAL, "ms");
+  console.log("   PAGINATION: FORWARD (after semantics, NOT before)");
   
   // ─────────────────────────────────────────────────────────────
   // GCS / DISK MODE CONFIGURATION
@@ -747,17 +780,22 @@ async function runIngestion() {
   await detectLatestMigration();
   
   // Track pagination state for v2/updates
+  // IMPORTANT: afterRecordTime is the FORWARD cursor (we fetch transactions AFTER this time)
   let afterMigrationId = lastMigrationId || migrationId;
   let afterRecordTime = lastTimestamp;
   
   if (afterRecordTime) {
+    console.log(`\n📍 FORWARD CURSOR: migration=${afterMigrationId}, after_record_time=${afterRecordTime}`);
+    console.log(`   (Will fetch transactions AFTER this timestamp, advancing forward in time)`);
     logCursor('resume', { 
       migrationId: afterMigrationId, 
-      lastBefore: afterRecordTime,
+      afterRecordTime: afterRecordTime, // renamed from lastBefore to be accurate
       mode: modeLabel,
+      semantics: 'forward',
     });
   } else {
     log('info', 'ingestion_fresh_start', { mode: modeLabel });
+    console.log('\n📍 FRESH START: No cursor found, starting from earliest available');
     afterMigrationId = null; // Start from beginning
   }
   
