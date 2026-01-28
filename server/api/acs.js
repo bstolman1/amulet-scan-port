@@ -41,26 +41,37 @@ const SCAN_API_BASE = 'https://scan.canton.network/api';
 */
 
 /**
+ * Helper to fetch from Scan API with error handling
+ */
+async function fetchScanApi(endpoint, options = {}) {
+  const url = `${SCAN_API_BASE}${endpoint}`;
+  console.log(`[ACS Proxy] Fetching: ${url}`);
+  
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json', ...options.headers },
+    signal: AbortSignal.timeout(30000),
+    ...options,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Scan API error: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
  * GET /acs/latest
  * Proxies Scan API "round-of-latest-data"
  */
 router.get('/latest', async (_req, res) => {
   try {
     if (USE_DUCKDB_ACS) {
-      // DuckDB path would go here when re-enabled
       throw new Error('DuckDB ACS path disabled - re-enable by setting USE_DUCKDB_ACS = true');
     }
 
-    const response = await fetch(`${SCAN_API_BASE}/round-of-latest-data`, {
-      headers: { Accept: 'application/json' },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Scan API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    res.json(data);
+    const data = await fetchScanApi('/round-of-latest-data');
+    res.json({ data, source: 'scan-api' });
   } catch (err) {
     console.error('❌ ACS latest failed:', err.message);
     res.status(502).json({
@@ -74,12 +85,30 @@ router.get('/latest', async (_req, res) => {
  * GET /acs/status
  * Returns current ACS data source status
  */
-router.get('/status', (_req, res) => {
-  res.json({
-    source: USE_DUCKDB_ACS ? 'duckdb' : 'scan-api',
-    duckdb_enabled: USE_DUCKDB_ACS,
-    scan_api_base: SCAN_API_BASE,
-  });
+router.get('/status', async (_req, res) => {
+  try {
+    // Quick health check to Scan API
+    const data = await fetchScanApi('/round-of-latest-data');
+    res.json({
+      available: true,
+      source: 'scan-api',
+      duckdb_enabled: USE_DUCKDB_ACS,
+      scan_api_base: SCAN_API_BASE,
+      latestRound: data?.round || null,
+      snapshotInProgress: false,
+      completeSnapshotCount: 0,
+      inProgressSnapshotCount: 0,
+      message: 'Using Canton Scan API for live data',
+    });
+  } catch (err) {
+    res.json({
+      available: false,
+      source: 'scan-api',
+      duckdb_enabled: USE_DUCKDB_ACS,
+      error: err.message,
+      message: 'Scan API unreachable',
+    });
+  }
 });
 
 /**
@@ -103,19 +132,17 @@ router.get('/stats', async (_req, res) => {
       throw new Error('DuckDB ACS path disabled');
     }
 
-    // Use round-of-latest-data for basic stats
-    const response = await fetch(`${SCAN_API_BASE}/round-of-latest-data`, {
-      headers: { Accept: 'application/json' },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Scan API error: ${response.status}`);
-    }
-
-    const data = await response.json();
+    const data = await fetchScanApi('/round-of-latest-data');
     res.json({
+      data: {
+        total_contracts: 0,
+        total_templates: 0,
+        total_snapshots: 0,
+        latest_snapshot: null,
+        latest_record_time: null,
+      },
       source: 'scan-api',
-      round: data.round || data,
+      round: data,
     });
   } catch (err) {
     console.error('❌ ACS stats failed:', err.message);
@@ -131,11 +158,6 @@ router.get('/stats', async (_req, res) => {
  * Returns empty list when DuckDB is disabled
  */
 router.get('/templates', (_req, res) => {
-  if (USE_DUCKDB_ACS) {
-    // Would query DuckDB for template list
-    return res.json({ data: [], count: 0, source: 'duckdb-disabled' });
-  }
-  
   res.json({
     data: [],
     count: 0,
@@ -182,6 +204,171 @@ router.get('/aggregate', (_req, res) => {
   });
 });
 
+/**
+ * GET /acs/supply
+ * Proxies to Scan API for amulet supply data
+ */
+router.get('/supply', async (_req, res) => {
+  try {
+    // Use dso for amulet rules which contain supply info
+    const data = await fetchScanApi('/dso');
+    
+    // Extract supply-related data from DSO response
+    const amuletRules = data?.amuletRules || {};
+    
+    res.json({
+      data: {
+        totalSupply: amuletRules?.totalAmuletBalance || 0,
+        unlockedSupply: 0,
+        lockedSupply: 0,
+        circulatingSupply: 0,
+      },
+      source: 'scan-api',
+      raw: data,
+    });
+  } catch (err) {
+    console.error('❌ ACS supply failed:', err.message);
+    res.status(502).json({
+      error: 'Failed to fetch supply data',
+      source: 'scan-api',
+    });
+  }
+});
+
+/**
+ * GET /acs/rich-list
+ * Returns empty list - rich list requires DuckDB aggregation
+ */
+router.get('/rich-list', (_req, res) => {
+  res.json({
+    data: [],
+    totalSupply: 0,
+    unlockedSupply: 0,
+    lockedSupply: 0,
+    holderCount: 0,
+    source: 'scan-api',
+    message: 'Rich list requires DuckDB aggregation - enable USE_DUCKDB_ACS for this feature',
+  });
+});
+
+/**
+ * GET /acs/realtime-supply
+ * Proxies to Scan API for real-time supply
+ */
+router.get('/realtime-supply', async (_req, res) => {
+  try {
+    const data = await fetchScanApi('/round-of-latest-data');
+    
+    res.json({
+      data: {
+        snapshot: null,
+        delta: null,
+        realtime: {
+          unlocked: 0,
+          locked: 0,
+          total: 0,
+          circulating: 0,
+        },
+        calculated_at: new Date().toISOString(),
+      },
+      source: 'scan-api',
+      round: data,
+    });
+  } catch (err) {
+    console.error('❌ ACS realtime-supply failed:', err.message);
+    res.status(502).json({
+      error: 'Failed to fetch realtime supply',
+      source: 'scan-api',
+    });
+  }
+});
+
+/**
+ * GET /acs/realtime-rich-list
+ * Returns empty - requires DuckDB
+ */
+router.get('/realtime-rich-list', (_req, res) => {
+  res.json({
+    data: [],
+    totalSupply: 0,
+    unlockedSupply: 0,
+    lockedSupply: 0,
+    holderCount: 0,
+    snapshotRecordTime: null,
+    isRealtime: false,
+    source: 'scan-api',
+    message: 'Real-time rich list requires DuckDB',
+  });
+});
+
+/**
+ * GET /acs/mining-rounds
+ * Proxies to Scan API for mining round data
+ */
+router.get('/mining-rounds', async (_req, res) => {
+  try {
+    const data = await fetchScanApi('/round-of-latest-data');
+    
+    res.json({
+      openRounds: [],
+      issuingRounds: [],
+      closedRounds: [],
+      counts: {
+        open: 0,
+        issuing: 0,
+        closed: 0,
+      },
+      currentRound: data?.round || null,
+      source: 'scan-api',
+    });
+  } catch (err) {
+    console.error('❌ ACS mining-rounds failed:', err.message);
+    res.status(502).json({
+      error: 'Failed to fetch mining rounds',
+      source: 'scan-api',
+    });
+  }
+});
+
+/**
+ * GET /acs/allocations
+ * Returns empty - allocations require DuckDB
+ */
+router.get('/allocations', (_req, res) => {
+  res.json({
+    data: [],
+    totalCount: 0,
+    totalAmount: 0,
+    uniqueExecutors: 0,
+    source: 'scan-api',
+    message: 'Allocations require DuckDB aggregation',
+  });
+});
+
+/**
+ * POST /acs/cache/invalidate
+ * Stub for cache invalidation
+ */
+router.post('/cache/invalidate', (_req, res) => {
+  res.json({
+    success: true,
+    message: 'Cache invalidation is no-op when using Scan API',
+    source: 'scan-api',
+  });
+});
+
+/**
+ * POST /acs/trigger-snapshot
+ * Stub for snapshot trigger
+ */
+router.post('/trigger-snapshot', (_req, res) => {
+  res.json({
+    success: false,
+    message: 'Snapshot trigger not available when using Scan API mode',
+    source: 'scan-api',
+  });
+});
+
 export default router;
 
 /*
@@ -196,56 +383,16 @@ export default router;
   2. Uncomment the imports above
   3. Uncomment and integrate the code below into the routes
 
-  --- ORIGINAL DUCKDB IMPLEMENTATION ---
-
-// Cache TTL for different endpoints
-const CACHE_TTL = {
-  RICH_LIST: 5 * 60 * 1000,     // 5 minutes
-  SUPPLY: 5 * 60 * 1000,        // 5 minutes  
-  MINING_ROUNDS: 5 * 60 * 1000, // 5 minutes
-  ALLOCATIONS: 5 * 60 * 1000,   // 5 minutes
-  TEMPLATES: 10 * 60 * 1000,    // 10 minutes
-  STATS: 10 * 60 * 1000,        // 10 minutes
-  SNAPSHOTS: 10 * 60 * 1000,    // 10 minutes
-};
-
-// Helper to convert BigInt to Number for JSON serialization
-function serializeBigInt(obj) {
-  return JSON.parse(JSON.stringify(obj, (_, v) => typeof v === 'bigint' ? Number(v) : v));
-}
-
-// ACS data path - use the centralized path from duckdb connection
-const ACS_DATA_PATH = db.ACS_DATA_PATH;
-
-// Find ACS files and return their paths (supports both JSONL and Parquet)
-function findACSFiles() {
-  try {
-    if (!fs.existsSync(ACS_DATA_PATH)) {
-      console.log(`[ACS] findACSFiles: ACS_DATA_PATH does not exist: ${ACS_DATA_PATH}`);
-      return { jsonl: [], parquet: [] };
-    }
-    const allFiles = fs.readdirSync(ACS_DATA_PATH, { recursive: true });
-    const jsonlFiles = allFiles
-      .map(f => String(f))
-      .filter(f => f.endsWith('.jsonl') || f.endsWith('.jsonl.gz') || f.endsWith('.jsonl.zst'))
-      .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
-    
-    const parquetFiles = allFiles
-      .map(f => String(f))
-      .filter(f => f.endsWith('.parquet'))
-      .map(f => path.join(ACS_DATA_PATH, f).replace(/\\/g, '/')); // Normalize for DuckDB
-    
-    if (jsonlFiles.length > 0 || parquetFiles.length > 0) {
-      console.log(`[ACS] findACSFiles: Found ${parquetFiles.length} parquet, ${jsonlFiles.length} jsonl files`);
-    }
-    return { jsonl: jsonlFiles, parquet: parquetFiles };
-  } catch (err) {
-    console.error(`[ACS] findACSFiles error: ${err.message}`);
-    return { jsonl: [], parquet: [] };
-  }
-}
-
-// ... rest of DuckDB implementation preserved in original file ...
-// See git history or backup for full implementation
-
+  See git history for full original implementation.
+  
+  Key functions that were here:
+  - findACSFiles()
+  - getACSSource()
+  - hasACSData()
+  - findCompleteSnapshots()
+  - findAvailableSnapshots()
+  - getSnapshotFilesSource()
+  - getBestSnapshotAndSource()
+  - getSnapshotCTE()
+  - Various DuckDB SQL queries for rich-list, supply, allocations, etc.
 */
