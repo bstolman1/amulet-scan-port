@@ -5,12 +5,12 @@ import './env.js';
 import { installCrashHandlers, LOG_PATHS } from './lib/crash-logger.js';
 installCrashHandlers();
 
-// Express app MUST be created before importing rate limiters
-import express from 'express';
-const app = express();
-app.set('trust proxy', true); // Trust nginx proxy for X-Forwarded-For
+// 🔴 CRITICAL: Import app FIRST - it has trust proxy set before rate limiters load
+import app from './app.js';
 
+// NOW import everything else (rate limiters will see trust proxy already set)
 import cors from 'cors';
+import express from 'express';
 import eventsRouter from './api/events.js';
 import updatesRouter from './api/updates.js';
 import partyRouter from './api/party.js';
