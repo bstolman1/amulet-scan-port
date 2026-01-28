@@ -26,8 +26,13 @@ import rewardsRouter from './api/rewards.js';
 import scanProxyRouter from './api/scan-proxy.js';
 import db, { initializeViews } from './duckdb/connection.js';
 import { getCacheStats } from './cache/stats-cache.js';
+
 // Server protection
-import {
+// NOTE: This MUST be a dynamic import.
+// In Node ESM, sibling static imports can be evaluated in an order that isn't guaranteed,
+// which can cause express-rate-limit to initialize before app.js runs.
+// Dynamic import guarantees trust proxy has already been set on the app.
+const {
   apiLimiter,
   expensiveLimiter,
   securityHeaders,
@@ -36,7 +41,7 @@ import {
   memoryGuard,
   requestTimeout,
   globalErrorHandler,
-} from './lib/server-protection.js';
+} = await import('./lib/server-protection.js');
 
 const PORT = process.env.PORT || 3001;
 
