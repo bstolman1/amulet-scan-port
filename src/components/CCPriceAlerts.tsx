@@ -159,13 +159,13 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
 
   return (
     <Card>
-      <CardHeader className="pb-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <CardHeader>
+        <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <Bell className="h-5 w-5" />
             Price Alerts
             {currentPrice && (
-              <Badge variant="secondary" className="ml-2 font-mono">
+              <Badge variant="secondary" className="ml-2">
                 Current: ${currentPrice.toFixed(4)}
               </Badge>
             )}
@@ -174,7 +174,6 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
             variant={notificationsEnabled ? "secondary" : "outline"}
             size="sm"
             onClick={requestNotificationPermission}
-            className="shrink-0"
           >
             {notificationsEnabled ? (
               <>
@@ -192,9 +191,9 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Add New Alert */}
-        <div className="flex flex-col gap-4 p-4 rounded-lg bg-muted/50">
-          <div>
-            <Label htmlFor="price" className="text-xs text-muted-foreground mb-2 block">
+        <div className="flex flex-col sm:flex-row gap-3 p-4 rounded-lg bg-muted/50">
+          <div className="flex-1">
+            <Label htmlFor="price" className="text-xs text-muted-foreground mb-1 block">
               Target Price (USD)
             </Label>
             <Input
@@ -207,29 +206,29 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
               className="bg-background"
             />
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-end gap-2">
             <div className="flex rounded-md overflow-hidden border">
               <Button
                 variant={newType === 'above' ? 'default' : 'ghost'}
                 size="sm"
-                className="rounded-none px-4"
+                className="rounded-none"
                 onClick={() => setNewType('above')}
               >
-                <TrendingUp className="h-4 w-4 mr-2" />
+                <TrendingUp className="h-4 w-4 mr-1" />
                 Above
               </Button>
               <Button
                 variant={newType === 'below' ? 'default' : 'ghost'}
                 size="sm"
-                className="rounded-none px-4"
+                className="rounded-none"
                 onClick={() => setNewType('below')}
               >
-                <TrendingDown className="h-4 w-4 mr-2" />
+                <TrendingDown className="h-4 w-4 mr-1" />
                 Below
               </Button>
             </div>
-            <Button onClick={addAlert} className="px-6">
-              <Plus className="h-4 w-4 mr-2" />
+            <Button onClick={addAlert}>
+              <Plus className="h-4 w-4 mr-1" />
               Add
             </Button>
           </div>
@@ -238,16 +237,16 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
         {/* Alerts List */}
         {alerts.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
-            <AlertCircle className="h-8 w-8 mx-auto mb-3 opacity-50" />
-            <p className="font-medium">No price alerts set</p>
-            <p className="text-sm mt-1">Add an alert to get notified when CC reaches your target price</p>
+            <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p>No price alerts set</p>
+            <p className="text-sm">Add an alert to get notified when CC reaches your target price</p>
           </div>
         ) : (
           <div className="space-y-2">
             {alerts.map((alert) => (
               <div
                 key={alert.id}
-                className={`flex items-center gap-4 p-4 rounded-lg border ${
+                className={`flex items-center gap-3 p-3 rounded-lg border ${
                   alert.triggered 
                     ? 'bg-green-500/10 border-green-500/30' 
                     : alert.enabled 
@@ -260,11 +259,11 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
                   onCheckedChange={() => toggleAlert(alert.id)}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-2">
                     {alert.type === 'above' ? (
-                      <TrendingUp className="h-4 w-4 text-green-500 shrink-0" />
+                      <TrendingUp className="h-4 w-4 text-green-500" />
                     ) : (
-                      <TrendingDown className="h-4 w-4 text-red-500 shrink-0" />
+                      <TrendingDown className="h-4 w-4 text-red-500" />
                     )}
                     <span className="font-medium">
                       {alert.type === 'above' ? 'Above' : 'Below'} ${alert.targetPrice.toFixed(4)}
@@ -275,11 +274,11 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
                       </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs text-muted-foreground">
                     Created {alert.createdAt.toLocaleString()}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1">
                   {alert.triggered && (
                     <Button
                       variant="ghost"
