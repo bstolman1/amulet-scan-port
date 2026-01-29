@@ -1,87 +1,137 @@
 import { Router } from 'express';
+import { 
+  fetchWithFailover, 
+  getCurrentEndpoint, 
+  getHealthStats,
+  setEndpointByName,
+  checkAllEndpoints,
+} from '../lib/endpoint-rotation.js';
 
 const router = Router();
 
-// Canton Scan API base URL
-const SCAN_API_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
-
 /**
- * Scan API Proxy
+ * Scan API Proxy with Automatic Endpoint Rotation
  * 
- * All frontend Scan API calls go through this proxy to avoid:
- * 1. CORS errors (browser → Scan API blocked)
- * 2. Rate limiting (distributed across multiple frontend clients)
+ * All frontend Scan API calls go through this proxy to:
+ * 1. Avoid CORS errors (browser → Scan API blocked)
+ * 2. Avoid rate limiting (distributed across multiple frontend clients)
+ * 3. Automatically failover to healthy endpoints
  * 
  * Rule: Browser → our API → Scan API (never browser → Scan directly)
  */
+
+// Health/status endpoint for monitoring
+router.get('/_health', (req, res) => {
+  const stats = getHealthStats();
+  res.json({
+    status: 'ok',
+    currentEndpoint: stats.current,
+    endpoints: stats.endpoints,
+  });
+});
+
+// Manually trigger health check of all endpoints
+router.post('/_health/check', async (req, res) => {
+  try {
+    const results = await checkAllEndpoints();
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manually set active endpoint
+router.post('/_endpoint', (req, res) => {
+  const { name } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  
+  const success = setEndpointByName(name);
+  if (success) {
+    res.json({ success: true, current: getCurrentEndpoint().name });
+  } else {
+    res.status(404).json({ error: 'Endpoint not found' });
+  }
+});
 
 // Generic proxy handler for GET requests
 router.get('/*', async (req, res) => {
   try {
     const path = req.params[0] || '';
     const queryString = new URLSearchParams(req.query).toString();
-    const url = queryString 
-      ? `${SCAN_API_URL}/${path}?${queryString}`
-      : `${SCAN_API_URL}/${path}`;
+    const fullPath = queryString ? `${path}?${queryString}` : path;
 
-    console.log(`[Scan Proxy] GET ${path}`);
+    const endpoint = getCurrentEndpoint();
+    console.log(`[Scan Proxy] GET ${path} via ${endpoint.name}`);
 
-    const response = await fetch(url, {
+    const response = await fetchWithFailover(fullPath, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {
       console.error(`[Scan Proxy] Error: ${response.status} for ${path}`);
+      const errorBody = await response.text().catch(() => '');
       return res.status(response.status).json({ 
         error: `Scan API error: ${response.status}`,
         path,
+        details: errorBody,
       });
     }
 
     const data = await response.json();
+    
+    // Add header indicating which endpoint served the request
+    res.set('X-Scan-Endpoint', getCurrentEndpoint().name);
     res.json(data);
   } catch (err) {
     console.error('[Scan Proxy] GET error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ 
+      error: err.message,
+      endpoint: getCurrentEndpoint().name,
+    });
   }
 });
 
 // Generic proxy handler for POST requests
 router.post('/*', async (req, res) => {
+  // Skip internal endpoints
+  if (req.params[0]?.startsWith('_')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  
   try {
     const path = req.params[0] || '';
-    const url = `${SCAN_API_URL}/${path}`;
 
-    console.log(`[Scan Proxy] POST ${path}`);
+    const endpoint = getCurrentEndpoint();
+    console.log(`[Scan Proxy] POST ${path} via ${endpoint.name}`);
 
-    const response = await fetch(url, {
+    const response = await fetchWithFailover(path, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
       body: JSON.stringify(req.body),
-      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {
       console.error(`[Scan Proxy] Error: ${response.status} for ${path}`);
+      const errorBody = await response.text().catch(() => '');
       return res.status(response.status).json({ 
         error: `Scan API error: ${response.status}`,
         path,
+        details: errorBody,
       });
     }
 
     const data = await response.json();
+    
+    // Add header indicating which endpoint served the request
+    res.set('X-Scan-Endpoint', getCurrentEndpoint().name);
     res.json(data);
   } catch (err) {
     console.error('[Scan Proxy] POST error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ 
+      error: err.message,
+      endpoint: getCurrentEndpoint().name,
+    });
   }
 });
 
