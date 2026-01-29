@@ -3,90 +3,90 @@
 @tailwind utilities;
 
 /* Canton Foundation-inspired design system
-   Dark navy-to-purple gradient with neon accents
+   Dark theme with refined, readable colors
    All colors in HSL
 */
 
 @layer base {
   :root {
-    /* Dark gradient base - deep navy to purple */
-    --background: 245 50% 8%;
-    --foreground: 0 0% 100%;
+    /* Dark base - deep slate */
+    --background: 225 30% 8%;
+    --foreground: 210 20% 95%;
 
-    /* Cards with dark backgrounds */
-    --card: 245 45% 12%;
-    --card-foreground: 0 0% 100%;
+    /* Cards with subtle elevation */
+    --card: 225 25% 12%;
+    --card-foreground: 210 20% 95%;
 
-    --popover: 245 45% 12%;
-    --popover-foreground: 0 0% 100%;
+    --popover: 225 25% 14%;
+    --popover-foreground: 210 20% 95%;
 
-    /* Primary: Cyan neon accent */
-    --primary: 180 100% 50%;
-    --primary-foreground: 245 50% 8%;
-    --primary-glow: 190 100% 60%;
+    /* Primary: Soft teal accent */
+    --primary: 175 60% 45%;
+    --primary-foreground: 225 30% 8%;
+    --primary-glow: 180 50% 55%;
 
-    /* Secondary: Vibrant magenta/purple */
-    --secondary: 300 100% 60%;
-    --secondary-foreground: 0 0% 100%;
+    /* Secondary: Muted purple */
+    --secondary: 260 40% 55%;
+    --secondary-foreground: 210 20% 95%;
 
-    --muted: 245 30% 18%;
-    --muted-foreground: 240 10% 70%;
+    --muted: 225 20% 18%;
+    --muted-foreground: 220 15% 60%;
 
-    /* Accent: Bright cyan/blue */
-    --accent: 190 100% 55%;
-    --accent-foreground: 245 50% 8%;
+    /* Accent: Soft blue */
+    --accent: 200 50% 50%;
+    --accent-foreground: 225 30% 8%;
 
-    /* Additional neon colors */
-    --neon-pink: 320 100% 60%;
-    --neon-purple: 270 100% 65%;
-    --neon-blue: 210 100% 60%;
-    --neon-cyan: 180 100% 55%;
+    /* Neon colors - toned down for readability */
+    --neon-pink: 330 60% 55%;
+    --neon-purple: 270 50% 55%;
+    --neon-blue: 210 60% 55%;
+    --neon-cyan: 180 50% 50%;
 
-    --success: 142 76% 45%;
-    --success-foreground: 0 0% 100%;
+    --success: 150 50% 40%;
+    --success-foreground: 210 20% 95%;
 
-    --warning: 45 100% 55%;
-    --warning-foreground: 245 50% 8%;
+    --warning: 40 70% 50%;
+    --warning-foreground: 225 30% 8%;
 
-    --destructive: 0 85% 55%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 60% 50%;
+    --destructive-foreground: 210 20% 95%;
 
-    /* Borders with neon glow capability */
-    --border: 270 50% 30%;
-    --input: 270 50% 25%;
-    --ring: 180 100% 50%;
+    /* Subtle borders */
+    --border: 225 20% 22%;
+    --input: 225 20% 20%;
+    --ring: 175 50% 45%;
 
-    --radius: 9999px; /* Pill-shaped by default */
+    --radius: 0.75rem;
 
-    /* Chart colors - neon palette */
-    --chart-1: 180 100% 50%;  /* cyan */
-    --chart-2: 190 100% 55%;  /* cyan */
-    --chart-3: 320 100% 60%;  /* pink */
-    --chart-4: 270 100% 65%;  /* purple */
-    --chart-5: 45 100% 55%;   /* yellow */
+    /* Chart colors - balanced palette */
+    --chart-1: 175 50% 50%;
+    --chart-2: 200 50% 55%;
+    --chart-3: 330 50% 55%;
+    --chart-4: 260 45% 55%;
+    --chart-5: 40 65% 55%;
 
-    /* Gradients */
-    --gradient-background: linear-gradient(135deg, hsl(245 50% 8%) 0%, hsl(270 50% 12%) 50%, hsl(245 50% 6%) 100%);
-    --gradient-primary: linear-gradient(135deg, hsl(180 100% 50%) 0%, hsl(200 100% 55%) 100%);
-    --gradient-accent: linear-gradient(135deg, hsl(190 100% 55%) 0%, hsl(270 100% 65%) 100%);
-    --gradient-card: linear-gradient(135deg, hsl(245 45% 12% / 0.8) 0%, hsl(270 45% 15% / 0.6) 100%);
-    --gradient-neon: linear-gradient(90deg, hsl(320 100% 60%), hsl(270 100% 65%), hsl(190 100% 55%));
+    /* Gradients - subtle */
+    --gradient-background: linear-gradient(145deg, hsl(225 30% 8%) 0%, hsl(235 25% 10%) 100%);
+    --gradient-primary: linear-gradient(135deg, hsl(175 60% 45%) 0%, hsl(190 55% 50%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(200 50% 50%) 0%, hsl(260 45% 55%) 100%);
+    --gradient-card: linear-gradient(145deg, hsl(225 25% 12% / 0.95) 0%, hsl(230 25% 14% / 0.9) 100%);
+    --gradient-neon: linear-gradient(90deg, hsl(330 50% 55%), hsl(260 45% 55%), hsl(200 50% 55%));
 
-    /* Shadows with neon glow */
-    --shadow-glow-primary: 0 0 30px hsl(180 100% 50% / 0.4);
-    --shadow-glow-cyan: 0 0 30px hsl(180 100% 55% / 0.4);
-    --shadow-glow-pink: 0 0 30px hsl(320 100% 60% / 0.4);
-    --shadow-glow-purple: 0 0 30px hsl(270 100% 65% / 0.4);
-    --shadow-card: 0 8px 32px hsl(245 50% 5% / 0.6);
+    /* Subtle shadows */
+    --shadow-glow-primary: 0 4px 20px hsl(175 60% 45% / 0.15);
+    --shadow-glow-cyan: 0 4px 20px hsl(180 50% 50% / 0.15);
+    --shadow-glow-pink: 0 4px 20px hsl(330 50% 55% / 0.15);
+    --shadow-glow-purple: 0 4px 20px hsl(260 45% 55% / 0.15);
+    --shadow-card: 0 4px 24px hsl(225 30% 5% / 0.4);
 
-    --sidebar-background: 245 50% 10%;
-    --sidebar-foreground: 0 0% 95%;
-    --sidebar-primary: 180 100% 50%;
-    --sidebar-primary-foreground: 245 50% 8%;
-    --sidebar-accent: 270 50% 20%;
-    --sidebar-accent-foreground: 0 0% 95%;
-    --sidebar-border: 270 50% 25%;
-    --sidebar-ring: 180 100% 50%;
+    --sidebar-background: 225 28% 10%;
+    --sidebar-foreground: 210 20% 90%;
+    --sidebar-primary: 175 55% 45%;
+    --sidebar-primary-foreground: 225 30% 8%;
+    --sidebar-accent: 225 20% 18%;
+    --sidebar-accent-foreground: 210 20% 90%;
+    --sidebar-border: 225 20% 20%;
+    --sidebar-ring: 175 50% 45%;
   }
 }
 
@@ -102,46 +102,43 @@
     min-height: 100vh;
   }
 
-  /* Futuristic typography - uppercase headings with wide letter spacing */
+  /* Clean typography - readable headings */
   h1, h2, h3 {
-    @apply uppercase tracking-widest font-bold;
+    @apply font-semibold tracking-tight;
   }
 
   h1 {
-    @apply text-4xl md:text-5xl lg:text-6xl;
+    @apply text-3xl md:text-4xl lg:text-5xl;
   }
 
   h2 {
-    @apply text-2xl md:text-3xl;
+    @apply text-xl md:text-2xl;
   }
 
   h3 {
-    @apply text-lg md:text-xl;
+    @apply text-base md:text-lg;
   }
 }
 
 @layer components {
-  /* Glass card with neon border */
+  /* Clean card with subtle border */
   .glass-card {
-    @apply bg-card/60 backdrop-blur-xl rounded-2xl shadow-lg;
+    @apply bg-card/90 backdrop-blur-sm rounded-xl shadow-lg;
     background: var(--gradient-card);
-    backdrop-filter: blur(16px);
-    border: 1px solid hsl(var(--border) / 0.5);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid hsl(var(--border));
+    transition: all 0.2s ease;
   }
 
   .glass-card:hover {
-    border-color: hsl(var(--primary) / 0.5);
+    border-color: hsl(var(--primary) / 0.4);
     box-shadow: var(--shadow-glow-primary);
   }
 
-  /* Neon border card */
+  /* Accent card */
   .neon-card {
-    @apply bg-card/40 backdrop-blur-xl rounded-2xl;
-    border: 1px solid hsl(var(--neon-purple) / 0.6);
-    box-shadow: 
-      inset 0 0 20px hsl(var(--neon-purple) / 0.1),
-      0 0 20px hsl(var(--neon-purple) / 0.2);
+    @apply bg-card/80 backdrop-blur-sm rounded-xl;
+    border: 1px solid hsl(var(--neon-purple) / 0.3);
+    box-shadow: 0 4px 16px hsl(var(--neon-purple) / 0.08);
   }
 
   /* Gradients */
@@ -157,7 +154,7 @@
     background: var(--gradient-neon);
   }
 
-  /* Glow effects */
+  /* Subtle glow effects */
   .glow-primary {
     box-shadow: var(--shadow-glow-primary);
   }
@@ -174,48 +171,44 @@
     box-shadow: var(--shadow-glow-purple);
   }
 
-  /* Neon text effects */
+  /* Text accent styles - no harsh glow */
   .text-neon-primary {
     color: hsl(var(--primary));
-    text-shadow: 0 0 10px hsl(var(--primary) / 0.5);
   }
 
   .text-neon-cyan {
     color: hsl(var(--accent));
-    text-shadow: 0 0 10px hsl(var(--accent) / 0.5);
   }
 
   .text-neon-pink {
     color: hsl(var(--neon-pink));
-    text-shadow: 0 0 10px hsl(var(--neon-pink) / 0.5);
   }
 
   .text-neon-purple {
     color: hsl(var(--neon-purple));
-    text-shadow: 0 0 10px hsl(var(--neon-purple) / 0.5);
   }
 
-  /* Neon divider */
+  /* Subtle divider */
   .neon-divider {
     height: 1px;
     background: linear-gradient(90deg, 
       transparent, 
-      hsl(var(--neon-purple) / 0.8) 20%, 
-      hsl(var(--neon-pink) / 0.8) 50%, 
-      hsl(var(--neon-purple) / 0.8) 80%, 
+      hsl(var(--border)) 20%, 
+      hsl(var(--muted-foreground) / 0.3) 50%, 
+      hsl(var(--border)) 80%, 
       transparent
     );
   }
 
   /* Smooth transitions */
   .transition-smooth {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 0.2s ease;
   }
 
-  /* Pill button styles */
+  /* Button styles */
   .btn-pill {
-    @apply rounded-full px-6 py-2 font-medium uppercase tracking-wider text-sm;
-    transition: all 0.3s ease;
+    @apply rounded-lg px-5 py-2 font-medium text-sm;
+    transition: all 0.2s ease;
   }
 
   .btn-pill-primary {
@@ -224,38 +217,35 @@
 
   .btn-pill-primary:hover {
     box-shadow: var(--shadow-glow-primary);
-    transform: translateY(-2px);
+    transform: translateY(-1px);
   }
 
   .btn-pill-outline {
-    @apply btn-pill bg-transparent border-2;
+    @apply btn-pill bg-transparent border;
     border-color: hsl(var(--primary));
     color: hsl(var(--primary));
   }
 
   .btn-pill-outline:hover {
     background: hsl(var(--primary) / 0.1);
-    box-shadow: var(--shadow-glow-primary);
   }
 
-  /* Stat number styling */
+  /* Stat number styling - clean gradient */
   .stat-number {
-    @apply text-4xl md:text-5xl font-bold;
-    background: linear-gradient(135deg, hsl(var(--neon-cyan)), hsl(var(--neon-purple)));
+    @apply text-3xl md:text-4xl font-bold;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
 
   .stat-number-cyan {
-    @apply text-4xl md:text-5xl font-bold;
+    @apply text-3xl md:text-4xl font-bold;
     color: hsl(var(--primary));
-    text-shadow: 0 0 20px hsl(var(--primary) / 0.4);
   }
 
   .stat-number-pink {
-    @apply text-4xl md:text-5xl font-bold;
+    @apply text-3xl md:text-4xl font-bold;
     color: hsl(var(--neon-pink));
-    text-shadow: 0 0 20px hsl(var(--neon-pink) / 0.4);
   }
 }
