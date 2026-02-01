@@ -2,20 +2,11 @@
 // ------------------------------------------------------------------
 // All Scan API calls are proxied through our backend to avoid CORS and rate-limit issues.
 // Rule: Browser → our API → Scan API (never browser → Scan directly)
-import { getDuckDBApiUrl } from "./backend-config";
+// CRITICAL: Frontend must NEVER know the real Scan URL — only /api/scan-proxy
 
 // Backend proxy base URL - all Scan API calls go through here
-// Use a getter function so it's evaluated at call time, not module load time
-const getApiBase = () => `${getDuckDBApiUrl()}/scan-proxy`;
-
-// For backwards compatibility with existing code using API_BASE
-// This is evaluated lazily when accessed
-const API_BASE = new Proxy({} as { toString: () => string }, {
-  get: () => getApiBase(),
-}) as unknown as string;
-
-// Helper to get the actual API base URL string
-const apiBase = () => getApiBase();
+// Hard-coded to prevent any env variable leakage (e.g., VITE_SCAN_API_URL)
+const API_BASE = "/api/scan-proxy";
 
 /* =========================
  *         TYPES

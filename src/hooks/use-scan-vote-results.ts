@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { getDuckDBApiUrl } from "@/lib/backend-config";
 
 // All Scan API calls are proxied through our backend to avoid CORS and rate-limit issues
 // Rule: Browser → our API → Scan API (never browser → Scan directly)
-const getScanApiBase = () => `${getDuckDBApiUrl()}/scan-proxy`;
+// CRITICAL: Never use VITE_SCAN_API_URL — frontend must ONLY talk to /api/scan-proxy
+const getScanApiBase = () => "/api/scan-proxy";
 
 export interface VoteResultRequest {
   actionName?: string;
