@@ -1,9 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Wifi, WifiOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getDuckDBApiUrl } from "@/lib/backend-config";
 
-// Connection status checks our backend health, not Scan API directly
+// Connection status checks our backend via scan-proxy (not DuckDB)
 // Rule: Browser → our API → Scan API (never browser → Scan directly)
 
 export const ConnectionStatusIndicator = () => {
@@ -11,8 +10,8 @@ export const ConnectionStatusIndicator = () => {
     queryKey: ["backend-api-health"],
     queryFn: async () => {
       try {
-        const baseUrl = getDuckDBApiUrl();
-        const response = await fetch(`${baseUrl}/health`, {
+        // Use scan-proxy which works without DuckDB
+        const response = await fetch("/api/scan-proxy/v0/dso", {
           method: "GET",
           signal: AbortSignal.timeout(5000),
         });

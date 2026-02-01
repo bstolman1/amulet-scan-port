@@ -30,14 +30,14 @@ export function useACSStatus() {
           completeSnapshotCount: 0,
           inProgressSnapshotCount: 0,
           latestComplete: null,
-          message: 'Unable to check ACS status',
+          message: 'DuckDB ACS not available - using live Scan API',
           error: err instanceof Error ? err.message : 'Unknown error',
         } as ACSStatusResponse;
       }
     },
-    staleTime: 10_000, // Check status more frequently
-    refetchInterval: 15_000, // Auto-refresh every 15 seconds when snapshot in progress
-    retry: 1,
+    staleTime: 60_000, // Check less frequently since DuckDB is optional
+    refetchInterval: false, // Disable auto-refresh - DuckDB is optional
+    retry: false, // Don't retry failed requests
   });
 }
 
