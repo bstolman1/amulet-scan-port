@@ -84,49 +84,18 @@ router.post('/init-engine-schema', async (req, res) => {
 });
 
 // GET /api/stats/overview - Dashboard overview stats
-router.get('/overview', async (req, res) => {
-  try {
-    // Use engine aggregations when engine is enabled
-    if (ENGINE_ENABLED) {
-      try {
-        const [counts, timeRange, ingestionStats] = await Promise.all([
-          getTotalCounts(),
-          getTimeRange(),
-          getIngestionStats(),
-        ]);
-        
-        return res.json({
-          total_events: counts.events,
-          unique_contracts: 0,
-          unique_templates: 0,
-          earliest_event: timeRange.min_ts,
-          latest_event: timeRange.max_ts,
-          data_source: 'engine',
-          ingestion: ingestionStats,
-        });
-      } catch (err) {
-        console.error('Engine stats error:', err.message);
-        // Fall through to DuckDB
-      }
-    }
-    
-    // DuckDB over Parquet/JSONL
-    const sql = `
-      SELECT 
-        COUNT(*) as total_events,
-        COUNT(DISTINCT contract_id) as unique_contracts,
-        COUNT(DISTINCT template_id) as unique_templates,
-        MIN(COALESCE(timestamp, effective_at)) as earliest_event,
-        MAX(COALESCE(timestamp, effective_at)) as latest_event
-      FROM ${getEventsSource()}
-    `;
-    
-    const rows = await safeQuery(sql);
-    res.json({ ...rows[0], data_source: getDataSourceInfo() });
-  } catch (err) {
-    console.error('Error fetching overview stats:', err);
-    res.status(500).json({ error: err.message });
-  }
+// DuckDB is disabled; return graceful stub response
+router.get('/overview', (_req, res) => {
+  res.json({
+    mode: 'scan-only',
+    message: 'Stats disabled (DuckDB offline)',
+    total_events: null,
+    unique_contracts: null,
+    unique_templates: null,
+    earliest_event: null,
+    latest_event: null,
+    data_source: 'none',
+  });
 });
 
 // GET /api/stats/daily - Daily event counts
