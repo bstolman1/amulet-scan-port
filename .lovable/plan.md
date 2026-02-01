@@ -1,46 +1,160 @@
 
-## Limit Kaiko Timeframes to 30 Days
 
-Remove the 90D and MAX timeframe options from the CC Performance component so users only see the available data range without any indication of limitations.
+# Fix Scan API Proxy - Method-Preserving Corrections
 
-### Changes
+## Problem Summary
 
-**File: `src/components/CCTimeframeComparison.tsx`**
+The scan-proxy system has **two critical bugs** that cause requests to fail or stall:
 
-| Line | Change |
-|------|--------|
-| 10 | Update type from `"1D" \| "7D" \| "30D" \| "90D" \| "MAX"` to `"1D" \| "7D" \| "30D"` |
-| 12-18 | Remove 90D and MAX from the `TIMEFRAMES` array |
-| 28-30 | Simplify the `startTimeFor` function to only handle 7D and 30D cases |
+1. **Health Check Uses Wrong HTTP Method** - The `checkAllEndpoints()` function in `endpoint-rotation.js` sends `POST` requests to `/v0/dso`, but this is a **GET-only endpoint**. This causes health checks to fail, marking all endpoints as unhealthy.
 
-### Before/After
+2. **fetchWithFailover Forces Content-Type on GET** - The `fetchWithFailover()` function always sets `Content-Type: application/json` headers, even for GET requests. This can cause issues with GET-only endpoints.
+
+---
+
+## Root Cause Analysis
+
+### Issue 1: Health Check (Lines 240-276 in endpoint-rotation.js)
 
 ```text
-┌─────────────────────────────────────────────┐
-│  BEFORE                                     │
-│  [1D] [7D] [30D] [90D] [Max]               │
-└─────────────────────────────────────────────┘
+Current (BROKEN):
+  fetch(`${endpoint.url}/v0/dso`, {
+    method: 'POST',           // ❌ Wrong - /v0/dso is GET-only
+    body: JSON.stringify({}), // ❌ Wrong - GET endpoints reject bodies
+  })
 
-┌─────────────────────────────────────────────┐
-│  AFTER                                      │
-│  [1D] [7D] [30D]                            │
-└─────────────────────────────────────────────┘
+Should be:
+  fetch(`${endpoint.url}/v0/dso`, {
+    method: 'GET',            // ✅ Correct
+    // No body                // ✅ Correct
+  })
 ```
 
-### Technical Details
+### Issue 2: fetchWithFailover (Lines 149-197 in endpoint-rotation.js)
 
-The `startTimeFor` function simplification:
+The function always injects headers for JSON regardless of method. While `scan-proxy.js` is now correct, if `fetchWithFailover` is used elsewhere, it could cause issues.
 
-```typescript
-// Before (line 28-30)
-const days = timeframe === "7D" ? 7 : timeframe === "30D" ? 30 : timeframe === "90D" ? 90 : 365 * 3;
-const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-return { startTime: start.toISOString(), interval: "1d", pageSize: timeframe === "MAX" ? 1100 : 200 };
+---
 
-// After
-const days = timeframe === "7D" ? 7 : 30;
-const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-return { startTime: start.toISOString(), interval: "1d", pageSize: 200 };
+## Implementation Plan
+
+### Step 1: Fix checkAllEndpoints() Health Check
+
+**File:** `server/lib/endpoint-rotation.js`
+
+**Change:** Update the health check to use GET method without a body.
+
+```javascript
+// BEFORE (lines 246-254):
+const response = await fetch(`${endpoint.url}/v0/dso`, {
+  method: 'POST',
+  headers: { 
+    'Content-Type': 'application/json',
+    'Accept': 'application/json' 
+  },
+  body: JSON.stringify({}),
+  signal: AbortSignal.timeout(10000),
+});
+
+// AFTER:
+const response = await fetch(`${endpoint.url}/v0/dso`, {
+  method: 'GET',
+  headers: { 
+    'Accept': 'application/json' 
+  },
+  signal: AbortSignal.timeout(10000),
+});
 ```
 
-This is a clean removal with no explanatory text or badges - users will simply see the available timeframes as if that's all there ever was.
+### Step 2: Fix fetchWithFailover() to be Method-Aware
+
+**File:** `server/lib/endpoint-rotation.js`
+
+**Change:** Only set `Content-Type` header for methods that send bodies.
+
+```javascript
+// BEFORE (lines 158-166):
+const response = await fetch(url, {
+  ...options,
+  headers: {
+    'Content-Type': 'application/json',  // ❌ Always set
+    'Accept': 'application/json',
+    ...options.headers,
+  },
+  signal: options.signal || AbortSignal.timeout(30000),
+});
+
+// AFTER:
+const method = options.method?.toUpperCase() || 'GET';
+const headers = {
+  'Accept': 'application/json',
+  ...options.headers,
+};
+
+// Only set Content-Type for methods that have bodies
+if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+  headers['Content-Type'] = 'application/json';
+}
+
+const response = await fetch(url, {
+  ...options,
+  method,
+  headers,
+  signal: options.signal || AbortSignal.timeout(30000),
+});
+```
+
+### Step 3: Update Inline Comment
+
+**File:** `server/lib/endpoint-rotation.js`
+
+**Change:** Fix the misleading comment at line 246.
+
+```javascript
+// BEFORE:
+// Scan API requires POST requests with application/json
+
+// AFTER:
+// /v0/dso is a GET-only endpoint for health checks
+```
+
+---
+
+## Technical Details
+
+| File | Lines Changed | Description |
+|------|---------------|-------------|
+| `server/lib/endpoint-rotation.js` | 246-254 | Change health check from POST to GET |
+| `server/lib/endpoint-rotation.js` | 158-166 | Make fetchWithFailover method-aware |
+
+---
+
+## Verification Steps
+
+After deployment, run these commands on your VM:
+
+```bash
+# 1. Restart the backend
+pm2 restart all
+
+# 2. Test GET endpoint (should return DSO state)
+curl http://34.56.191.157/api/scan-proxy/v0/dso
+
+# 3. Trigger health check and verify endpoints are healthy
+curl -X POST http://34.56.191.157/api/scan-proxy/_health/check
+
+# 4. Check health status
+curl http://34.56.191.157/api/scan-proxy/_health
+
+# 5. Test POST endpoint (should return updates)
+curl -X POST http://34.56.191.157/api/scan-proxy/v2/updates \
+  -H 'Content-Type: application/json' \
+  -d '{"page_size": 5}'
+```
+
+**Expected results:**
+- Step 2: Returns JSON with DSO/SV state data
+- Step 3: Returns all endpoints as `healthy: true`
+- Step 4: Shows current endpoint and health stats
+- Step 5: Returns ledger updates array
+
