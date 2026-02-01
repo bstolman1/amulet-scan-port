@@ -9,6 +9,54 @@
 const API_BASE = "/api/scan-proxy";
 
 /* =========================
+ *    CORE SCAN HELPERS
+ * ========================= */
+
+/**
+ * Centralized POST helper for all SCAN endpoints that require POST.
+ * Ensures consistent headers, error handling, and logging.
+ * 
+ * Rule: If the SCAN endpoint accepts a body or parameters → POST
+ *       If it's pure metadata (e.g., /v0/dso) → can use GET
+ */
+async function scanPost<T>(path: string, body: unknown = {}): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`SCAN POST ${path} failed (${res.status}): ${text}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * GET helper for SCAN endpoints that are explicitly GET-only.
+ * Only use for pure metadata endpoints with no parameters.
+ */
+async function scanGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`SCAN GET ${path} failed (${res.status}): ${text}`);
+  }
+
+  return res.json();
+}
+
+/* =========================
  *         TYPES
  * ========================= */
 
