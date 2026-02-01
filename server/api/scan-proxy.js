@@ -1,24 +1,38 @@
 import { Router } from 'express';
 import { 
-  fetchWithFailover, 
   getCurrentEndpoint, 
   getHealthStats,
   setEndpointByName,
   checkAllEndpoints,
+  recordSuccess,
+  recordFailure,
+  rotateToNextHealthy,
 } from '../lib/endpoint-rotation.js';
 
 const router = Router();
 
 /**
- * Scan API Proxy with Automatic Endpoint Rotation
+ * Scan API Proxy - Transparent Method-Preserving Relay
  * 
- * All frontend Scan API calls go through this proxy to:
- * 1. Avoid CORS errors (browser → Scan API blocked)
- * 2. Avoid rate limiting (distributed across multiple frontend clients)
- * 3. Automatically failover to healthy endpoints
+ * Routes: /api/scan-proxy/* → Scan API /api/scan/*
  * 
- * Rule: Browser → our API → Scan API (never browser → Scan directly)
+ * Rules:
+ * 1. Preserve HTTP method (GET vs POST)
+ * 2. GET requests: no body, query params only
+ * 3. POST requests: forward JSON body unchanged
+ * 4. Set Host header to the Scan API hostname
  */
+
+/**
+ * Extract hostname from a full URL for the Host header
+ */
+function extractHostname(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
+}
 
 // Health/status endpoint for monitoring
 router.get('/_health', (req, res) => {
@@ -55,74 +69,95 @@ router.post('/_endpoint', (req, res) => {
   }
 });
 
-// Generic proxy handler for GET requests (no body, query params only)
-router.get('/*', async (req, res) => {
-  try {
-    const path = req.params[0] || '';
-    const queryString = new URLSearchParams(req.query).toString();
-    const fullPath = queryString ? `${path}?${queryString}` : path;
-
-    const endpoint = getCurrentEndpoint();
-    const scanUrl = `${endpoint.url}/${fullPath}`;
-    
-    console.log(`[Scan Proxy] GET ${scanUrl}`);
-
-    const scanRes = await fetch(scanUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-    });
-    
-    console.log(`[Scan Proxy] GET response: ${scanRes.status}`);
-
-    const text = await scanRes.text();
-    
-    res.set('X-Scan-Endpoint', endpoint.name);
-    res.status(scanRes.status).send(text);
-  } catch (err) {
-    console.error('[Scan Proxy] GET error:', err.message);
-    res.status(500).json({ 
-      error: err.message,
-      endpoint: getCurrentEndpoint().name,
-    });
+/**
+ * Generic proxy handler - preserves HTTP method
+ */
+async function proxyRequest(req, res, method) {
+  const path = req.params[0] || '';
+  
+  // Skip internal endpoints
+  if (path.startsWith('_')) {
+    return res.status(404).json({ error: 'Not found' });
   }
-});
 
-// Generic proxy handler for POST requests (with JSON body)
-router.post('/*', async (req, res) => {
-  // Skip internal endpoints (handled above)
+  const maxRetries = 3;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const endpoint = getCurrentEndpoint();
+    
+    // Build full URL: endpoint.url already ends with /api/scan
+    const queryString = new URLSearchParams(req.query).toString();
+    const scanUrl = queryString 
+      ? `${endpoint.url}/${path}?${queryString}`
+      : `${endpoint.url}/${path}`;
+    
+    const hostname = extractHostname(endpoint.url);
+    
+    console.log(`[Scan Proxy] ${method} ${scanUrl} (Host: ${hostname})`);
+
+    try {
+      const fetchOptions = {
+        method,
+        headers: {
+          'Accept': 'application/json',
+          ...(hostname && { 'Host': hostname }),
+        },
+        signal: AbortSignal.timeout(30000),
+      };
+
+      // Only add body for POST/PUT/PATCH requests
+      if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+        fetchOptions.headers['Content-Type'] = 'application/json';
+        fetchOptions.body = JSON.stringify(req.body);
+      }
+
+      const scanRes = await fetch(scanUrl, fetchOptions);
+      
+      console.log(`[Scan Proxy] ${method} response: ${scanRes.status}`);
+
+      // Check for server errors that warrant rotation
+      if (scanRes.status >= 500 || scanRes.status === 429) {
+        recordFailure(endpoint.url, new Error(`HTTP ${scanRes.status}`));
+        rotateToNextHealthy();
+        lastError = new Error(`Scan API returned ${scanRes.status}`);
+        continue;
+      }
+
+      // Success or client error - return as-is
+      recordSuccess(endpoint.url);
+      
+      const text = await scanRes.text();
+      
+      res.set('X-Scan-Endpoint', endpoint.name);
+      res.status(scanRes.status).send(text);
+      return;
+
+    } catch (err) {
+      console.error(`[Scan Proxy] ${method} error (${endpoint.name}):`, err.message);
+      recordFailure(endpoint.url, err);
+      rotateToNextHealthy();
+      lastError = err;
+    }
+  }
+
+  // All retries exhausted
+  res.status(502).json({ 
+    error: lastError?.message || 'All Scan API endpoints failed',
+    endpoint: getCurrentEndpoint().name,
+  });
+}
+
+// GET requests - no body, query params preserved
+router.get('/*', (req, res) => proxyRequest(req, res, 'GET'));
+
+// POST requests - JSON body forwarded
+router.post('/*', (req, res) => {
+  // Skip internal routes (already handled above)
   if (req.params[0]?.startsWith('_')) {
     return res.status(404).json({ error: 'Not found' });
   }
-  
-  try {
-    const path = req.params[0] || '';
-    const endpoint = getCurrentEndpoint();
-    const scanUrl = `${endpoint.url}/${path}`;
-    
-    console.log(`[Scan Proxy] POST ${scanUrl}`);
-
-    const scanRes = await fetch(scanUrl, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify(req.body),
-    });
-    
-    console.log(`[Scan Proxy] POST response: ${scanRes.status}`);
-
-    const text = await scanRes.text();
-
-    res.set('X-Scan-Endpoint', endpoint.name);
-    res.status(scanRes.status).send(text);
-  } catch (err) {
-    console.error('[Scan Proxy] POST error:', err.message);
-    res.status(500).json({ 
-      error: err.message,
-      endpoint: getCurrentEndpoint().name,
-    });
-  }
+  return proxyRequest(req, res, 'POST');
 });
 
 export default router;
