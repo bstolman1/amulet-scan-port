@@ -2,10 +2,13 @@
  * Data Authority Contract Tests
  * 
  * These tests enforce the core architectural invariant:
- * ALL API routes must derive data exclusively from DuckDB-over-Parquet.
+ * API routes may derive data from DuckDB-over-Parquet OR live Scan APIs.
  * 
  * Binary readers (JSONL, PBZST) are export-only and must never be imported
  * by API routes or business logic.
+ * 
+ * The scan-proxy.js is an authorized live data source that proxies
+ * requests to Canton Scan APIs with automatic failover.
  * 
  * See: docs/architecture.md - DATA AUTHORITY CONTRACT
  */
@@ -17,10 +20,12 @@ import path from 'path';
 describe('Data Authority Contract', () => {
   
   // ============================================================
-  // TEST 1: Parquet-only invariant - MOST IMPORTANT
-  // Proves all API routes derive data exclusively from DuckDB-over-Parquet
+  // TEST 1: Data source invariant
+  // Proves all API routes derive data from authorized sources:
+  // - DuckDB-over-Parquet (local indexed data)
+  // - Scan API proxy (live network data)
   // ============================================================
-  describe('Parquet-only invariant', () => {
+  describe('Data source invariant', () => {
     
     it('binary-reader.js must not exist in server/duckdb/', () => {
       const binaryReaderPath = path.join(process.cwd(), 'server/duckdb/binary-reader.js');
@@ -81,12 +86,13 @@ describe('Data Authority Contract', () => {
       expect(content).not.toMatch(/export\s+.*streamRecords/);
     });
     
-    it('API routes use readParquetGlob or DuckDB queries', () => {
+    it('API routes use authorized data sources (Parquet/DuckDB or Scan proxy)', () => {
       const apiDir = path.join(process.cwd(), 'server/api');
       
       // Files that are exempt from this check (special purpose or external data sources)
       const exemptFiles = [
-        // External API proxies (not Parquet candidates - they fetch from external sources)
+        // External API proxies (authorized live data sources)
+        'scan-proxy.js',            // Live Scan API proxy with failover - AUTHORIZED
         'governance-lifecycle.js',  // Fetches from Groups.io API, not ledger data
         'announcements.js',         // Fetches from external SV announcements
         'kaiko.js',                 // Fetches from Kaiko price API
