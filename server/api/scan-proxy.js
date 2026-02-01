@@ -95,6 +95,8 @@ router.get('/*', async (req, res) => {
 
 // Generic proxy handler for POST requests
 router.post('/*', async (req, res) => {
+  console.log('🔥 scan-proxy POST hit', req.params[0], req.body);
+  
   // Skip internal endpoints
   if (req.params[0]?.startsWith('_')) {
     return res.status(404).json({ error: 'Not found' });
