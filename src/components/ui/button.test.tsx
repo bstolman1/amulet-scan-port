@@ -72,7 +72,7 @@ describe('Button', () => {
   it('applies size lg', () => {
     const { container } = render(<Button size="lg">Large</Button>);
     const button = getButton(container);
-    expect(button?.className).toContain('h-11');
+    expect(button?.className).toContain('h-12');
   });
 
   it('applies size icon', () => {
