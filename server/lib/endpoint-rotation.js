@@ -243,9 +243,14 @@ export async function checkAllEndpoints() {
   const results = await Promise.allSettled(
     SCAN_ENDPOINTS.map(async (endpoint) => {
       try {
+        // Scan API requires POST requests with application/json
         const response = await fetch(`${endpoint.url}/v0/dso`, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json' 
+          },
+          body: JSON.stringify({}),
           signal: AbortSignal.timeout(10000),
         });
         
