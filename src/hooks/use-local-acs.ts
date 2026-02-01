@@ -95,10 +95,8 @@ export function useLocalACSSnapshots() {
 export function useLocalLatestACSSnapshot() {
   return useQuery({
     queryKey: ["localLatestACSSnapshot"],
-    queryFn: async () => {
-      const response = await getLatestACSSnapshot();
-      return response.data;
-    },
+    // DuckDB ACS endpoints must not be called from the browser.
+    queryFn: async () => null,
     staleTime: 30_000,
   });
 }

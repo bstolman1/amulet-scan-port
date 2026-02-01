@@ -2,7 +2,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   getACSSnapshots as getLocalACSSnapshots,
-  getLatestACSSnapshot as getLocalLatestACSSnapshot,
   getACSTemplates as getLocalACSTemplates,
   apiFetch,
 } from "@/lib/duckdb-api-client";
@@ -53,10 +52,10 @@ export function useACSSnapshots() {
 export function useLatestACSSnapshot() {
   return useQuery({
     queryKey: ["latestAcsSnapshot"],
-    queryFn: async (): Promise<ACSSnapshot | null> => {
-      const response = await getLocalLatestACSSnapshot();
-      return (response.data as ACSSnapshot) || null;
-    },
+    // DuckDB ACS is deprecated in the live-SCAN architecture.
+    // IMPORTANT: Do not call /api/acs/latest from the browser.
+    // This hook now returns null (no snapshot) rather than hitting DuckDB endpoints.
+    queryFn: async (): Promise<ACSSnapshot | null> => null,
     staleTime: 30_000,
     retry: false,
   });
@@ -66,16 +65,8 @@ export function useLatestACSSnapshot() {
 export function useActiveSnapshot() {
   return useQuery({
     queryKey: ["activeAcsSnapshot"],
-    queryFn: async () => {
-      const response = await getLocalLatestACSSnapshot();
-      if (response.data) {
-        return { 
-          snapshot: response.data as ACSSnapshot, 
-          isProcessing: response.data.status === "processing" 
-        };
-      }
-      return { snapshot: null, isProcessing: false };
-    },
+    // IMPORTANT: Do not call /api/acs/latest from the browser.
+    queryFn: async () => ({ snapshot: null, isProcessing: false }),
     staleTime: 30_000,
     retry: false,
   });

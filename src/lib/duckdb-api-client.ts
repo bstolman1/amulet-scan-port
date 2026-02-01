@@ -371,7 +371,9 @@ export async function getACSSnapshots(): Promise<ApiResponse<ACSSnapshot[]>> {
 }
 
 export async function getLatestACSSnapshot(): Promise<{ data: ACSSnapshot | null }> {
-  return apiFetch('/api/acs/latest');
+  // DuckDB ACS endpoints must not be called from the browser in the live-SCAN architecture.
+  // Returning null keeps callers stable without issuing /api/acs/latest.
+  return { data: null };
 }
 
 export async function getACSTemplates(limit = 100): Promise<ApiResponse<ACSTemplateStats[]>> {

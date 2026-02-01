@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Database,
 } from "lucide-react";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useQueryClient, useQuery, keepPreviousData } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -66,8 +65,6 @@ const Supply = () => {
       setIsRefreshing(false);
     }
   };
-
-  const { data: latestSnapshot } = useLatestACSSnapshot();
 
   // Fetch real-time supply stats (snapshot + v2/updates delta)
   const { data: realtimeSupply, isLoading: supplyLoading } = useQuery({
@@ -374,11 +371,6 @@ const Supply = () => {
           <div>
             <h3 className="text-2xl font-bold mb-2">Mining Rounds</h3>
             <p className="text-muted-foreground">Track open, issuing, and closed mining rounds</p>
-            {latestSnapshot?.timestamp && (
-              <p className="text-xs text-muted-foreground mt-1">
-                ACS Snapshot: {new Date(latestSnapshot.timestamp).toLocaleString()}
-              </p>
-            )}
           </div>
 
           {/* Current Round Info - from LIVE scan API */}
@@ -615,7 +607,6 @@ const Supply = () => {
         </div>
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
           templateSuffixes={[
             "Splice:Amulet:Amulet",
             "Splice:Amulet:LockedAmulet",

@@ -497,6 +497,22 @@ export const scanApi = {
     return res.json();
   },
 
+  /* ---------- v0 /activities ---------- */
+
+  /**
+   * Activity feed.
+   * NOTE: This is the SCAN replacement for legacy `/api/acs/latest` usage.
+   */
+  async fetchActivities(request: Record<string, unknown> = { page_size: 50 }): Promise<unknown> {
+    const res = await fetch(`${API_BASE}/v0/activities`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) throw new Error("Failed to fetch activities");
+    return res.json();
+  },
+
   /**
    * Use /v2/updates to fetch open, issuing, and closed mining rounds.
    * Falls back to /v0/dso and /v0/closed-rounds if unavailable.
