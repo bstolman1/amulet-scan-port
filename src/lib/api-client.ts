@@ -835,15 +835,15 @@ export const scanApi = {
     };
   },
 
-  // fetchTopProviders: uses round totals
+  // GET /v0/top-providers-by-app-rewards?round=N&limit=N (deprecated)
   async fetchTopProviders(limit: number = 1000): Promise<GetTopProvidersByAppRewardsResponse> {
     const latest = await this.fetchLatestRound();
-    return scanPost("/v0/top-providers-by-app-rewards", { round: latest.round, limit });
+    return scanGet("/v0/top-providers-by-app-rewards", { round: latest.round, limit });
   },
 
-  // fetchLatestRound: POST endpoint
+  // GET /v0/round-of-latest-data (deprecated)
   async fetchLatestRound(): Promise<GetRoundOfLatestDataResponse> {
-    return scanPost("/v0/round-of-latest-data", {});
+    return scanGet("/v0/round-of-latest-data");
   },
 
   // fetchTransactions: POST /v0/transactions
@@ -874,24 +874,58 @@ export const scanApi = {
     return scanPost("/v0/activities", request);
   },
 
-  // fetchAggregatedRounds: POST (likely custom backend)
+  // GET /v0/aggregated-rounds (deprecated)
   async fetchAggregatedRounds(): Promise<AggregatedRoundsResponse> {
-    return scanPost("/v0/aggregated-rounds", {});
+    return scanGet("/v0/aggregated-rounds");
   },
 
-  // fetchRoundPartyTotals: POST (likely custom backend)
+  // POST /v0/round-party-totals (deprecated)
   async fetchRoundPartyTotals(request: RoundPartyTotalsRequest): Promise<RoundPartyTotalsResponse> {
     return scanPost("/v0/round-party-totals", request);
   },
 
-  // fetchWalletBalance: POST (likely custom backend)
-  async fetchWalletBalance(partyId: string, asOfEndOfRound: number): Promise<WalletBalanceResponse> {
-    return scanPost("/v0/wallet-balance", { party_id: partyId, asOfEndOfRound });
+  // GET /v0/amulet-config-for-round?round=N (deprecated)
+  async fetchAmuletConfigForRound(round: number): Promise<AmuletConfigForRoundResponse> {
+    return scanGet("/v0/amulet-config-for-round", { round });
   },
 
-  // fetchAmuletConfigForRound: POST (likely custom backend)
-  async fetchAmuletConfigForRound(round: number): Promise<AmuletConfigForRoundResponse> {
-    return scanPost("/v0/amulet-config-for-round", { round });
+  // GET /v0/rewards-collected?round=N (deprecated)
+  async fetchRewardsCollected(round?: number): Promise<{ amount: string }> {
+    const params: Record<string, number> = {};
+    if (round !== undefined) params.round = round;
+    return scanGet("/v0/rewards-collected", params);
+  },
+
+  // GET /v0/top-validators-by-validator-rewards?round=N&limit=N (deprecated)
+  async fetchTopValidatorsByRewards(round: number, limit: number): Promise<GetTopValidatorsByValidatorRewardsResponse> {
+    return scanGet("/v0/top-validators-by-validator-rewards", { round, limit });
+  },
+
+  // GET /v0/top-validators-by-purchased-traffic?round=N&limit=N (deprecated)
+  async fetchTopValidatorsByPurchasedTraffic(round: number, limit: number): Promise<any> {
+    return scanGet("/v0/top-validators-by-purchased-traffic", { round, limit });
+  },
+
+  // GET /v0/amulet-price/votes
+  async fetchAmuletPriceVotes(): Promise<{ amulet_price_votes: Contract[] }> {
+    return scanGet("/v0/amulet-price/votes");
+  },
+
+  // POST /v0/backfilling/import-updates
+  async fetchBackfillImportUpdates(request: { migration_id: number; after_update_id?: string; limit: number }): Promise<UpdateHistoryResponse> {
+    return scanPost("/v0/backfilling/import-updates", request);
+  },
+
+  // GET /v0/updates/{update_id} (deprecated, use v2)
+  async fetchUpdateByIdV0(updateId: string, lossless?: boolean): Promise<UpdateByIdResponse> {
+    const params: Record<string, string> = {};
+    if (lossless) params.lossless = "true";
+    return scanGet(`/v0/updates/${encodeURIComponent(updateId)}`, params);
+  },
+
+  // POST /v0/updates (deprecated, use v2)
+  async fetchUpdatesV0(request: UpdateHistoryRequest & { lossless?: boolean }): Promise<UpdateHistoryResponse> {
+    return scanPost("/v0/updates", request);
   },
 
   /* ==========================================================
