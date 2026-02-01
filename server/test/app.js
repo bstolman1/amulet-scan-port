@@ -21,6 +21,7 @@ import announcementsRouter from '../api/announcements.js';
 import governanceLifecycleRouter from '../api/governance-lifecycle.js';
 import rewardsRouter from '../api/rewards.js';
 import engineRouter from '../engine/api.js';
+import scanProxyRouter from '../api/scan-proxy.js';
 
 /**
  * Create a test-ready Express app
@@ -67,6 +68,7 @@ export function createTestApp(options = {}) {
   app.use('/api/governance-lifecycle', governanceLifecycleRouter);
   app.use('/api/rewards', rewardsRouter);
   app.use('/api/engine', engineRouter);
+  app.use('/api/scan-proxy', scanProxyRouter);
   
   // Error handler
   app.use((err, req, res, next) => {
