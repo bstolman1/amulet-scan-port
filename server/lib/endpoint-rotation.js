@@ -5,6 +5,29 @@
  * rotates to a healthy endpoint when the current one fails.
  */
 
+import https from 'https';
+
+/**
+ * Extract hostname from URL for Host header and TLS SNI
+ */
+function extractHostname(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Create an HTTPS agent with proper SNI servername for the target host.
+ */
+function createAgent(hostname) {
+  return new https.Agent({
+    servername: hostname,
+    keepAlive: true,
+  });
+}
+
 // All available Canton Scan API endpoints (extracted from SV info)
 const SCAN_ENDPOINTS = [
   { name: 'Global-Synchronizer-Foundation', url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
@@ -251,14 +274,26 @@ export async function checkAllEndpoints() {
   const results = await Promise.allSettled(
     SCAN_ENDPOINTS.map(async (endpoint) => {
       try {
+        // Extract hostname for Host header and TLS SNI
+        const hostname = extractHostname(endpoint.url);
+        const agent = hostname ? createAgent(hostname) : undefined;
+        
         // /v0/dso is a GET-only endpoint for health checks
-        const response = await fetch(`${endpoint.url}/v0/dso`, {
+        const fetchOptions = {
           method: 'GET',
           headers: { 
-            'Accept': 'application/json' 
+            'Accept': 'application/json',
+            // CRITICAL: Override Host header - SCAN uses host-based routing
+            'Host': hostname,
           },
           signal: AbortSignal.timeout(10000),
-        });
+        };
+        
+        if (agent) {
+          fetchOptions.agent = agent;
+        }
+        
+        const response = await fetch(`${endpoint.url}/v0/dso`, fetchOptions);
         
         if (response.ok) {
           recordSuccess(endpoint.url);
