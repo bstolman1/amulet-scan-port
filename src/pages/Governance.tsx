@@ -8,7 +8,6 @@ import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { useLatestACSSnapshot } from "@/hooks/use-acs-snapshots";
 import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data";
 import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
@@ -76,7 +75,6 @@ const Governance = () => {
     stop: stopFullScan,
   } = useFullProposalScan(runFullScan, { debug: debugMode, raw: rawMode, concurrency });
 
-  const { data: latestSnapshot } = useLatestACSSnapshot();
   const { data: governanceEventsResult, isLoading: eventsLoading, error: eventsError } = useGovernanceEvents();
   const governanceEvents = governanceEventsResult?.events;
   const dataSource = governanceEventsResult?.source;
@@ -1952,7 +1950,6 @@ const Governance = () => {
         </Card>
 
         <DataSourcesFooter
-          snapshotId={latestSnapshot?.id}
           templateSuffixes={[
             "Splice:DsoRules:VoteRequest",
             "Splice:DsoRules:DsoRules",
