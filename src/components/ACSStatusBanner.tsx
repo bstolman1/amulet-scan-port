@@ -50,14 +50,14 @@ export function ACSStatusBanner({ hideWhenAvailable = true }: ACSStatusBannerPro
     );
   }
 
-  // No data at all
+  // No DuckDB data - but that's fine, we use live SCAN data
   if (!status?.available) {
     return (
-      <Alert variant="destructive" className="mb-4">
-        <AlertTriangle className="h-4 w-4" />
-        <AlertTitle>No ACS Data Available</AlertTitle>
+      <Alert variant="default" className="mb-4 border-muted">
+        <Database className="h-4 w-4 text-muted-foreground" />
+        <AlertTitle className="text-muted-foreground">Using Live Network Data</AlertTitle>
         <AlertDescription>
-          {status?.message || "No active contract set data is available. Run an ACS snapshot to populate this data."}
+          Data is fetched directly from the Canton Scan API.
         </AlertDescription>
       </Alert>
     );
