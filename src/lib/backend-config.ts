@@ -40,11 +40,13 @@ export function useDuckDBForLedger(): boolean {
 }
 
 /**
- * Check if backend API is available
+ * Check if backend API is available via scan-proxy health (not DuckDB)
+ * This checks the scan-proxy which is always available when backend runs.
  */
 export async function checkDuckDBConnection(): Promise<boolean> {
   try {
-    const response = await fetch(`${API_BASE.replace('/api', '')}/health`, {
+    // Use scan-proxy/v0/dso which works without DuckDB
+    const response = await fetch(`${API_BASE}/scan-proxy/v0/dso`, {
       method: 'GET',
       signal: AbortSignal.timeout(5000),
     });

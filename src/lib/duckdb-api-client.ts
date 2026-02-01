@@ -577,12 +577,24 @@ export async function purgeLiveCursor(): Promise<{ success: boolean; message: st
 // Health Check
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Check backend health via scan-proxy (not DuckDB-dependent)
+ */
 export async function checkHealth(): Promise<{ status: string; timestamp: string }> {
-  return apiFetch('/health');
+  const API_BASE_URL = getApiBaseUrl();
+  // Use scan-proxy/v0/dso which works without DuckDB
+  const response = await fetch(`${API_BASE_URL}/api/scan-proxy/v0/dso`, {
+    method: 'GET',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) {
+    throw new Error('Backend not available');
+  }
+  return { status: 'ok', timestamp: new Date().toISOString() };
 }
 
 /**
- * Check if the DuckDB API is available
+ * Check if the backend API is available (via scan-proxy, not DuckDB)
  */
 export async function isApiAvailable(): Promise<boolean> {
   try {
@@ -610,6 +622,21 @@ export interface ACSStatusResponse {
   error?: string;
 }
 
+/**
+ * Get ACS status - returns unavailable if DuckDB endpoint fails
+ */
 export async function getACSStatus(): Promise<ACSStatusResponse> {
-  return apiFetch('/api/acs/status');
+  try {
+    return await apiFetch('/api/acs/status');
+  } catch {
+    // DuckDB not available - return graceful fallback
+    return {
+      available: false,
+      snapshotInProgress: false,
+      completeSnapshotCount: 0,
+      inProgressSnapshotCount: 0,
+      latestComplete: null,
+      message: 'DuckDB ACS not available - using live Scan API',
+    };
+  }
 }
