@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import https from 'https';
 import { 
   getCurrentEndpoint, 
   getHealthStats,
@@ -21,30 +20,10 @@ const router = Router();
  * 1. Preserve HTTP method (GET vs POST)
  * 2. GET requests: no body, query params only
  * 3. POST requests: forward JSON body unchanged
- * 4. CRITICAL: Override Host header for SCAN's host-based routing
+ * 
+ * NOTE: Node 18 fetch (Undici) handles TLS/Host correctly by default.
+ * No manual Host override or https.Agent needed.
  */
-
-/**
- * Extract hostname from a full URL for the Host header
- */
-function extractHostname(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Create an HTTPS agent with proper SNI servername for the target host.
- * This ensures TLS handshake uses the correct hostname.
- */
-function createAgent(hostname) {
-  return new https.Agent({
-    servername: hostname,
-    keepAlive: true,
-  });
-}
 
 // Health/status endpoint for monitoring
 router.get('/_health', (req, res) => {
@@ -106,26 +85,16 @@ async function proxyRequest(req, res, method) {
     
     const hostname = extractHostname(endpoint.url);
     
-    console.log(`[Scan Proxy] ${method} ${scanUrl} (Host: ${hostname})`);
+    console.log(`[Scan Proxy] ${method} ${scanUrl}`);
 
     try {
-      // Create agent with correct TLS SNI servername
-      const agent = hostname ? createAgent(hostname) : undefined;
-      
       const fetchOptions = {
         method,
         headers: {
           'Accept': 'application/json',
-          // CRITICAL: Override Host header - SCAN uses host-based routing
-          'Host': hostname,
         },
         signal: AbortSignal.timeout(30000),
       };
-
-      // Add the agent for proper TLS SNI
-      if (agent) {
-        fetchOptions.agent = agent;
-      }
 
       // Only add body for POST/PUT/PATCH requests
       if (method === 'POST' || method === 'PUT' || method === 'PATCH') {

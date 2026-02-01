@@ -3,30 +3,10 @@
  * 
  * Maintains a list of Canton Scan API endpoints and automatically
  * rotates to a healthy endpoint when the current one fails.
+ * 
+ * NOTE: Node 18 fetch (Undici) handles TLS/Host correctly by default.
+ * No manual Host override or https.Agent needed.
  */
-
-import https from 'https';
-
-/**
- * Extract hostname from URL for Host header and TLS SNI
- */
-function extractHostname(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Create an HTTPS agent with proper SNI servername for the target host.
- */
-function createAgent(hostname) {
-  return new https.Agent({
-    servername: hostname,
-    keepAlive: true,
-  });
-}
 
 // All available Canton Scan API endpoints (extracted from SV info)
 const SCAN_ENDPOINTS = [
@@ -274,26 +254,12 @@ export async function checkAllEndpoints() {
   const results = await Promise.allSettled(
     SCAN_ENDPOINTS.map(async (endpoint) => {
       try {
-        // Extract hostname for Host header and TLS SNI
-        const hostname = extractHostname(endpoint.url);
-        const agent = hostname ? createAgent(hostname) : undefined;
-        
         // /v0/dso is a GET-only endpoint for health checks
-        const fetchOptions = {
+        const response = await fetch(`${endpoint.url}/v0/dso`, {
           method: 'GET',
-          headers: { 
-            'Accept': 'application/json',
-            // CRITICAL: Override Host header - SCAN uses host-based routing
-            'Host': hostname,
-          },
+          headers: { 'Accept': 'application/json' },
           signal: AbortSignal.timeout(10000),
-        };
-        
-        if (agent) {
-          fetchOptions.agent = agent;
-        }
-        
-        const response = await fetch(`${endpoint.url}/v0/dso`, fetchOptions);
+        });
         
         if (response.ok) {
           recordSuccess(endpoint.url);
