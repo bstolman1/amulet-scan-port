@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import https from 'https';
 import { 
   getCurrentEndpoint, 
   getHealthStats,
@@ -20,7 +21,7 @@ const router = Router();
  * 1. Preserve HTTP method (GET vs POST)
  * 2. GET requests: no body, query params only
  * 3. POST requests: forward JSON body unchanged
- * 4. Set Host header to the Scan API hostname
+ * 4. CRITICAL: Override Host header for SCAN's host-based routing
  */
 
 /**
@@ -28,10 +29,21 @@ const router = Router();
  */
 function extractHostname(url) {
   try {
-    return new URL(url).host;
+    return new URL(url).hostname;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Create an HTTPS agent with proper SNI servername for the target host.
+ * This ensures TLS handshake uses the correct hostname.
+ */
+function createAgent(hostname) {
+  return new https.Agent({
+    servername: hostname,
+    keepAlive: true,
+  });
 }
 
 // Health/status endpoint for monitoring
@@ -97,14 +109,23 @@ async function proxyRequest(req, res, method) {
     console.log(`[Scan Proxy] ${method} ${scanUrl} (Host: ${hostname})`);
 
     try {
+      // Create agent with correct TLS SNI servername
+      const agent = hostname ? createAgent(hostname) : undefined;
+      
       const fetchOptions = {
         method,
         headers: {
           'Accept': 'application/json',
-          ...(hostname && { 'Host': hostname }),
+          // CRITICAL: Override Host header - SCAN uses host-based routing
+          'Host': hostname,
         },
         signal: AbortSignal.timeout(30000),
       };
+
+      // Add the agent for proper TLS SNI
+      if (agent) {
+        fetchOptions.agent = agent;
+      }
 
       // Only add body for POST/PUT/PATCH requests
       if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
