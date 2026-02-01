@@ -155,13 +155,21 @@ export async function fetchWithFailover(path, options = {}) {
     const url = `${endpoint.url}/${path}`;
     
     try {
+      const method = (options.method || 'GET').toUpperCase();
+      const headers = {
+        'Accept': 'application/json',
+        ...options.headers,
+      };
+      
+      // Only set Content-Type for methods that have bodies
+      if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+        headers['Content-Type'] = 'application/json';
+      }
+      
       const response = await fetch(url, {
         ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          ...options.headers,
-        },
+        method,
+        headers,
         signal: options.signal || AbortSignal.timeout(30000),
       });
       
@@ -243,14 +251,12 @@ export async function checkAllEndpoints() {
   const results = await Promise.allSettled(
     SCAN_ENDPOINTS.map(async (endpoint) => {
       try {
-        // Scan API requires POST requests with application/json
+        // /v0/dso is a GET-only endpoint for health checks
         const response = await fetch(`${endpoint.url}/v0/dso`, {
-          method: 'POST',
+          method: 'GET',
           headers: { 
-            'Content-Type': 'application/json',
             'Accept': 'application/json' 
           },
-          body: JSON.stringify({}),
           signal: AbortSignal.timeout(10000),
         });
         
