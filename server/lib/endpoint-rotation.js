@@ -8,6 +8,8 @@
  * No manual Host override or https.Agent needed.
  */
 
+import { extractHostname, createDispatcher } from './undici-dispatcher.js';
+
 // All available Canton Scan API endpoints (extracted from SV info)
 const SCAN_ENDPOINTS = [
   { name: 'Global-Synchronizer-Foundation', url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
@@ -156,11 +158,14 @@ export async function fetchWithFailover(path, options = {}) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const endpoint = getCurrentEndpoint();
     const url = `${endpoint.url}/${path}`;
+    const hostname = extractHostname(endpoint.url);
+    const dispatcher = hostname ? createDispatcher(hostname) : undefined;
     
     try {
       const method = (options.method || 'GET').toUpperCase();
       const headers = {
         'Accept': 'application/json',
+        ...(hostname ? { Host: hostname } : {}),
         ...options.headers,
       };
       
@@ -173,6 +178,7 @@ export async function fetchWithFailover(path, options = {}) {
         ...options,
         method,
         headers,
+        ...(dispatcher ? { dispatcher } : {}),
         signal: options.signal || AbortSignal.timeout(30000),
       });
       
@@ -254,10 +260,17 @@ export async function checkAllEndpoints() {
   const results = await Promise.allSettled(
     SCAN_ENDPOINTS.map(async (endpoint) => {
       try {
+        const hostname = extractHostname(endpoint.url);
+        const dispatcher = hostname ? createDispatcher(hostname) : undefined;
+
         // /v0/dso is a GET-only endpoint for health checks
         const response = await fetch(`${endpoint.url}/v0/dso`, {
           method: 'GET',
-          headers: { 'Accept': 'application/json' },
+          headers: {
+            'Accept': 'application/json',
+            ...(hostname ? { Host: hostname } : {}),
+          },
+          ...(dispatcher ? { dispatcher } : {}),
           signal: AbortSignal.timeout(10000),
         });
         

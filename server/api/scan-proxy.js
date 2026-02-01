@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { extractHostname, createDispatcher } from '../lib/undici-dispatcher.js';
 import { 
   getCurrentEndpoint, 
   getHealthStats,
@@ -83,16 +84,21 @@ async function proxyRequest(req, res, method) {
       ? `${endpoint.url}/${path}?${queryString}`
       : `${endpoint.url}/${path}`;
     
-    const hostname = extractHostname(endpoint.url);
-    
     console.log(`[Scan Proxy] ${method} ${scanUrl}`);
 
     try {
+      const hostname = extractHostname(endpoint.url);
+      const dispatcher = hostname ? createDispatcher(hostname) : undefined;
+
       const fetchOptions = {
         method,
         headers: {
           'Accept': 'application/json',
+          // Required for SCAN host-based routing
+          ...(hostname ? { Host: hostname } : {}),
         },
+        // CRITICAL: fetch() uses Undici's dispatcher, not https.Agent
+        ...(dispatcher ? { dispatcher } : {}),
         signal: AbortSignal.timeout(30000),
       };
 
