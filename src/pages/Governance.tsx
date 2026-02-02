@@ -187,9 +187,47 @@ const Governance = () => {
     return undefined;
   };
 
+  // Helper to extract simple displayable values from nested objects
+  const extractSimpleFields = (obj: any, prefix = "", depth = 0): Record<string, string> => {
+    if (!obj || depth > 2) return {}; // Limit depth to prevent huge JSON dumps
+    
+    const result: Record<string, string> = {};
+    
+    for (const [key, value] of Object.entries(obj)) {
+      // Skip internal/technical fields
+      if (["tag", "value", "packageId", "moduleName", "entityName", "dso"].includes(key)) continue;
+      
+      const fieldName = prefix ? `${prefix}.${key}` : key;
+      
+      if (value === null || value === undefined) continue;
+      
+      if (typeof value === "string") {
+        // Only include if it's not a huge hash/ID
+        if (value.length < 100 && !value.match(/^[a-f0-9]{64}$/i)) {
+          result[fieldName] = value;
+        }
+      } else if (typeof value === "number" || typeof value === "boolean") {
+        result[fieldName] = String(value);
+      } else if (Array.isArray(value)) {
+        // Show array length instead of contents
+        if (value.length > 0 && typeof value[0] !== "object") {
+          result[fieldName] = value.slice(0, 3).join(", ") + (value.length > 3 ? ` (+${value.length - 3} more)` : "");
+        } else {
+          result[fieldName] = `[${value.length} items]`;
+        }
+      } else if (typeof value === "object") {
+        // Recurse into nested objects but limit depth
+        const nested = extractSimpleFields(value, fieldName, depth + 1);
+        Object.assign(result, nested);
+      }
+    }
+    
+    return result;
+  };
+
   // Helper to parse action structure and extract meaningful title
-  const parseAction = (action: any): { title: string; actionType: string; actionDetails: any } => {
-    if (!action) return { title: "Unknown Action", actionType: "Unknown", actionDetails: null };
+  const parseAction = (action: any): { title: string; actionType: string; actionDetails: Record<string, string> } => {
+    if (!action) return { title: "Unknown Action", actionType: "Unknown", actionDetails: {} };
     
     // Handle nested tag/value structure: { tag: "ARC_DsoRules", value: { dsoAction: { tag: "SRARC_...", value: {...} } } }
     const outerTag = action.tag || Object.keys(action)[0] || "Unknown";
@@ -207,7 +245,10 @@ const Governance = () => {
       .replace(/([A-Z])/g, " $1")
       .trim();
     
-    return { title, actionType, actionDetails: innerValue };
+    // Extract only simple displayable fields
+    const actionDetails = extractSimpleFields(innerValue);
+    
+    return { title, actionType, actionDetails };
   };
 
   // Helper to parse votes array (format: [[svName, voteObj], ...])
@@ -588,31 +629,35 @@ const Governance = () => {
                         <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
                       </div>
 
-                      {/* Action Details - Collapsible */}
-                      {proposal.actionDetails && typeof proposal.actionDetails === "object" && (
+                      {/* Action Details - Collapsible (only show if has displayable fields) */}
+                      {proposal.actionDetails && Object.keys(proposal.actionDetails).length > 0 && (
                         <Collapsible className="mb-4">
                           <CollapsibleTrigger asChild>
                             <Button variant="ghost" size="sm" className="w-full justify-between p-3 h-auto rounded-lg bg-primary/5 border border-primary/20 hover:bg-primary/10">
-                              <span className="text-sm font-semibold">Action Details</span>
+                              <span className="text-sm font-semibold">Action Details ({Object.keys(proposal.actionDetails).length} fields)</span>
                               <ChevronDown className="h-4 w-4" />
                             </Button>
                           </CollapsibleTrigger>
                           <CollapsibleContent className="mt-2 p-3 rounded-lg bg-primary/5 border border-primary/20">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                               {Object.entries(proposal.actionDetails)
-                                .filter(([_, value]) => value !== null && value !== undefined)
-                                .slice(0, 10) // Limit to first 10 fields
-                                .map(([key, value]: [string, any]) => (
+                                .slice(0, 12) // Limit to first 12 fields
+                                .map(([key, value]: [string, string]) => (
                                 <div key={key} className="flex flex-col">
-                                  <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                                  <span className="text-xs text-muted-foreground capitalize">
+                                    {key.replace(/\./g, " › ").replace(/([A-Z])/g, " $1").trim()}
+                                  </span>
                                   <span className="font-mono text-xs break-all line-clamp-2">
-                                    {typeof value === "string" || typeof value === "number" 
-                                      ? String(value).slice(0, 100) + (String(value).length > 100 ? "..." : "")
-                                      : JSON.stringify(value).slice(0, 100) + (JSON.stringify(value).length > 100 ? "..." : "")}
+                                    {value}
                                   </span>
                                 </div>
                               ))}
                             </div>
+                            {Object.keys(proposal.actionDetails).length > 12 && (
+                              <p className="text-xs text-muted-foreground mt-2">
+                                +{Object.keys(proposal.actionDetails).length - 12} more fields (see full JSON)
+                              </p>
+                            )}
                           </CollapsibleContent>
                         </Collapsible>
                       )}
