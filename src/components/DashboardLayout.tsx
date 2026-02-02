@@ -100,15 +100,15 @@ const navigationGroups: NavGroup[] = [
       { name: "Subscriptions", href: "/subscriptions", icon: Package },
     ],
   },
-  {
-    label: "Rules",
-    items: [
-      { name: "Amulet Rules", href: "/amulet-rules", icon: Shield },
-      { name: "External Party", href: "/external-party-setup", icon: UserPlus },
-      { name: "External Rules", href: "/external-party-rules", icon: Shield },
-      { name: "Transfer Counters", href: "/transfer-counters", icon: Hash },
-    ],
-  },
+  // {
+  //   label: "Rules",
+  //   items: [
+  //     { name: "Amulet Rules", href: "/amulet-rules", icon: Shield },
+  //     { name: "External Party", href: "/external-party-setup", icon: UserPlus },
+  //     { name: "External Rules", href: "/external-party-rules", icon: Shield },
+  //     { name: "Transfer Counters", href: "/transfer-counters", icon: Hash },
+  //   ],
+  // },
   {
     label: "Statistics",
     items: [
