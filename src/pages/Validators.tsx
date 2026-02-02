@@ -26,6 +26,18 @@ const normalizeBps = (val: any) => {
 
 const bpsToPercent = (bps: number) => (bps / 10000).toFixed(2) + "%";
 
+const formatTimeAgo = (timestamp: number) => {
+  const now = Date.now();
+  const diffMs = now - timestamp;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins} minute${diffMins === 1 ? "" : "s"} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  return new Date(timestamp).toLocaleDateString();
+};
+
 // ─────────────────────────────
 // Component
 // ─────────────────────────────
@@ -46,7 +58,7 @@ const Validators = () => {
   } = useQuery({
     queryKey: ["sv-config", "v5"],
     queryFn: () => fetchConfigData(true),
-    staleTime: 24 * 60 * 60 * 1000,
+    staleTime: 60 * 60 * 1000, // 1 hour
   });
 
   if (isLoading) {
@@ -166,10 +178,15 @@ const Validators = () => {
     <DashboardLayout>
       <div className="space-y-8">
         {/* Header */}
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
           <div>
             <h2 className="text-3xl font-bold">SuperValidators / Validators</h2>
             <p className="text-muted-foreground">Network statistics for Supervalidators and active validators</p>
+            {configData?.lastUpdated && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Last synced: {formatTimeAgo(configData.lastUpdated)}
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => refetch()} className="flex items-center gap-2">

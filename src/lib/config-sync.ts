@@ -133,9 +133,9 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
 }
 
 // ─────────────────────────────
-// Schedule periodic background refresh
+// Schedule periodic background refresh (every hour)
 // ─────────────────────────────
 export function scheduleDailySync() {
-  const interval = setInterval(fetchConfigData, 24 * 60 * 60 * 1000);
+  const interval = setInterval(fetchConfigData, 60 * 60 * 1000); // 1 hour
   return () => clearInterval(interval);
 }
