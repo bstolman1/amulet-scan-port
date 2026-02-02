@@ -404,6 +404,40 @@ export interface AmuletSummary {
   total_available_coin: string;
 }
 
+// Holdings state response (for /v0/holdings/state)
+export interface HoldingsStateRequest {
+  migration_id: number;
+  record_time: string;
+  record_time_match?: "exact" | "before";
+  after?: number;
+  page_size: number;
+  owner_party_ids?: string[];
+}
+
+export interface HoldingsStateResponse {
+  record_time: string;
+  migration_id: number;
+  created_events: HoldingsCreatedEvent[];
+  next_page_token?: number;
+}
+
+export interface HoldingsCreatedEvent {
+  event_type: string;
+  event_id: string;
+  contract_id: string;
+  template_id: string;
+  package_name: string;
+  create_arguments: {
+    dso?: string;
+    owner?: string;
+    amount?: { initialAmount: string; createdAt: { microseconds: string }; ratePerRound: { rate: string } };
+    lock?: { holders: string[]; expiresAt?: string };
+  };
+  created_at: string;
+  signatories: string[];
+  observers: string[];
+}
+
 export interface AnsEntriesResponse {
   entries: AnsEntry[];
 }
@@ -667,14 +701,7 @@ export const scanApi = {
   },
 
   // POST /v0/holdings/state
-  async fetchHoldingsState(request: {
-    migration_id: number;
-    record_time: string;
-    record_time_match?: "exact" | "before";
-    after?: number;
-    page_size: number;
-    owner_party_ids?: string[];
-  }): Promise<StateAcsResponse> {
+  async fetchHoldingsState(request: HoldingsStateRequest): Promise<HoldingsStateResponse> {
     return scanPost("/v0/holdings/state", request);
   },
 
