@@ -9,6 +9,60 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Button } from "@/components/ui/button";
 import { ChevronRight } from "lucide-react";
 import { useAmuletRules } from "@/hooks/use-canton-scan-api";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
+
+const REWARD_COLORS = {
+  validator: "hsl(var(--chart-1))",
+  app: "hsl(var(--chart-2))",
+  sv: "hsl(var(--chart-3))",
+};
+
+interface RewardDistributionChartProps {
+  validatorPct: number;
+  appPct: number;
+  svPct: number;
+}
+
+const RewardDistributionChart = ({ validatorPct, appPct, svPct }: RewardDistributionChartProps) => {
+  const data = [
+    { name: "Validator", value: validatorPct * 100, color: REWARD_COLORS.validator },
+    { name: "App", value: appPct * 100, color: REWARD_COLORS.app },
+    { name: "Super Validator", value: svPct * 100, color: REWARD_COLORS.sv },
+  ];
+
+  return (
+    <div className="h-[200px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={50}
+            outerRadius={80}
+            paddingAngle={2}
+            dataKey="value"
+            label={({ name, value }) => `${name}: ${value.toFixed(0)}%`}
+            labelLine={false}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.color} />
+            ))}
+          </Pie>
+          <Tooltip 
+            formatter={(value: number) => `${value.toFixed(1)}%`}
+            contentStyle={{ 
+              backgroundColor: "hsl(var(--popover))", 
+              border: "1px solid hsl(var(--border))",
+              borderRadius: "var(--radius)"
+            }}
+          />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
 
 interface NormalizedTransferStep {
   amount?: string;
@@ -363,27 +417,34 @@ export function AmuletRulesContent() {
                     const appPct = parseFloat(values?.appRewardPercentage || "0");
                     const svPct = 1 - validatorPct - appPct;
                     return (
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Amulet/Year</p>
-                          <p className="font-semibold">{values?.amuletToIssuePerYear || "—"}</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="grid grid-cols-2 gap-4 text-sm content-start">
+                          <div>
+                            <p className="text-xs text-muted-foreground">Amulet/Year</p>
+                            <p className="font-semibold">{values?.amuletToIssuePerYear || "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Validator Cap</p>
+                            <p className="font-semibold">{values?.validatorRewardCap || "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Validator %</p>
+                            <p className="font-semibold">{(validatorPct * 100).toFixed(0)}%</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">App %</p>
+                            <p className="font-semibold">{(appPct * 100).toFixed(0)}%</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">SV % (inferred)</p>
+                            <p className="font-semibold">{(svPct * 100).toFixed(0)}%</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Validator %</p>
-                          <p className="font-semibold">{values?.validatorRewardPercentage || "—"}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">App %</p>
-                          <p className="font-semibold">{values?.appRewardPercentage || "—"}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">SV % (inferred)</p>
-                          <p className="font-semibold">{svPct.toFixed(2)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Validator Cap</p>
-                          <p className="font-semibold">{values?.validatorRewardCap || "—"}</p>
-                        </div>
+                        <RewardDistributionChart 
+                          validatorPct={validatorPct} 
+                          appPct={appPct} 
+                          svPct={svPct} 
+                        />
                       </div>
                     );
                   })()}
