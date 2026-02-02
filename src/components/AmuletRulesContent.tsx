@@ -50,18 +50,40 @@ const RewardDistributionChart = ({ validatorPct, appPct, svPct }: RewardDistribu
             ))}
           </Pie>
           <Tooltip 
-            formatter={(value: number) => `${value.toFixed(1)}%`}
+            formatter={(value: number) => [`${value.toFixed(1)}%`, "Share"]}
             contentStyle={{ 
-              backgroundColor: "hsl(var(--popover))", 
-              border: "1px solid hsl(var(--border))",
-              borderRadius: "var(--radius)"
+              backgroundColor: "hsl(222 47% 11%)", 
+              border: "1px solid hsl(217 33% 17%)",
+              borderRadius: "8px",
+              color: "hsl(210 40% 98%)"
             }}
+            itemStyle={{ color: "hsl(210 40% 98%)" }}
+            labelStyle={{ color: "hsl(215 20% 65%)" }}
           />
           <Legend />
         </PieChart>
       </ResponsiveContainer>
     </div>
   );
+};
+
+const formatLargeNumber = (value?: string | number): string => {
+  if (value === undefined || value === null) return "—";
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  if (isNaN(num)) return "—";
+  return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
+};
+
+const getStageExplanation = (stage: number): string => {
+  const explanations: Record<number, string> = {
+    0: "Initial bootstrapping phase with highest issuance to incentivize early network participation.",
+    1: "First reduction phase. Issuance decreases as network matures and early incentives taper.",
+    2: "Current phase focuses on sustainable growth with balanced rewards across validators, apps, and super validators.",
+    3: "Approaching steady-state. Issuance continues to decrease toward long-term equilibrium.",
+    4: "Near-final reduction phase with minimal issuance to maintain network security.",
+    5: "Final steady-state phase with stable, minimal issuance for long-term sustainability.",
+  };
+  return explanations[stage] || "Issuance parameters for the current network phase.";
 };
 
 interface NormalizedTransferStep {
@@ -408,10 +430,13 @@ export function AmuletRulesContent() {
               );
               return (
                 <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center gap-2 mb-2">
                     <h3 className="font-semibold">Current Active Stage</h3>
                     <Badge variant="default">{label}</Badge>
                   </div>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {getStageExplanation(stage)}
+                  </p>
                   {(() => {
                     const validatorPct = parseFloat(values?.validatorRewardPercentage || "0");
                     const appPct = parseFloat(values?.appRewardPercentage || "0");
@@ -421,11 +446,11 @@ export function AmuletRulesContent() {
                         <div className="grid grid-cols-2 gap-4 text-sm content-start">
                           <div>
                             <p className="text-xs text-muted-foreground">Amulet/Year</p>
-                            <p className="font-semibold">{values?.amuletToIssuePerYear || "—"}</p>
+                            <p className="font-semibold">{formatLargeNumber(values?.amuletToIssuePerYear)}</p>
                           </div>
                           <div>
                             <p className="text-xs text-muted-foreground">Validator Cap</p>
-                            <p className="font-semibold">{values?.validatorRewardCap || "—"}</p>
+                            <p className="font-semibold">{formatLargeNumber(values?.validatorRewardCap)}</p>
                           </div>
                           <div>
                             <p className="text-xs text-muted-foreground">Validator %</p>
@@ -462,23 +487,23 @@ export function AmuletRulesContent() {
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
                     <div>
                       <p className="text-xs text-muted-foreground">Amulet/Year</p>
-                      <p className="font-semibold">{issuanceCurve.initialValue?.amuletToIssuePerYear || "—"}</p>
+                      <p className="font-semibold">{formatLargeNumber(issuanceCurve.initialValue?.amuletToIssuePerYear)}</p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Validator %</p>
-                      <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardPercentage || "—"}</p>
+                      <p className="font-semibold">{(validatorPct * 100).toFixed(0)}%</p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">App %</p>
-                      <p className="font-semibold">{issuanceCurve.initialValue?.appRewardPercentage || "—"}</p>
+                      <p className="font-semibold">{(appPct * 100).toFixed(0)}%</p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">SV % (inferred)</p>
-                      <p className="font-semibold">{svPct.toFixed(2)}</p>
+                      <p className="font-semibold">{(svPct * 100).toFixed(0)}%</p>
                     </div>
                     <div>
                       <p className="text-xs text-muted-foreground">Validator Cap</p>
-                      <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardCap || "—"}</p>
+                      <p className="font-semibold">{formatLargeNumber(issuanceCurve.initialValue?.validatorRewardCap)}</p>
                     </div>
                   </div>
                 );
