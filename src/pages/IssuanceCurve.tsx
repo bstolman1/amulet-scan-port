@@ -30,15 +30,15 @@ const RewardDistributionChart = ({ validatorPct, appPct, svPct }: RewardDistribu
   ];
 
   return (
-    <div className="h-[200px] w-full flex items-center justify-center">
+    <div className="h-[280px] w-full flex items-center justify-center">
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie
             data={data}
-            cx="50%"
+            cx="40%"
             cy="50%"
-            innerRadius={50}
-            outerRadius={80}
+            innerRadius={70}
+            outerRadius={110}
             paddingAngle={3}
             dataKey="value"
           >
@@ -61,7 +61,7 @@ const RewardDistributionChart = ({ validatorPct, appPct, svPct }: RewardDistribu
             verticalAlign="middle" 
             align="right" 
             layout="vertical"
-            wrapperStyle={{ paddingLeft: "20px" }}
+            wrapperStyle={{ paddingLeft: "30px" }}
             formatter={(value, entry: any) => (
               <span className="text-sm text-foreground">{value}: {entry.payload.value.toFixed(0)}%</span>
             )}
@@ -190,20 +190,31 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
                       {s.effectiveMicros === 0 ? "Launch" : formatDate(s.effectiveMicros)}
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <span className="text-muted-foreground text-xs">Issuance</span>
-                      <p className="font-semibold">{formatLargeNumber(s.values?.amuletToIssuePerYear)}/yr</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground text-xs">Validator</span>
-                      <p className="font-semibold">{(parseFloat(s.values?.validatorRewardPercentage || "0") * 100).toFixed(0)}%</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground text-xs">App</span>
-                      <p className="font-semibold">{(parseFloat(s.values?.appRewardPercentage || "0") * 100).toFixed(0)}%</p>
-                    </div>
-                  </div>
+                  {(() => {
+                    const valPct = parseFloat(s.values?.validatorRewardPercentage || "0");
+                    const appPctVal = parseFloat(s.values?.appRewardPercentage || "0");
+                    const svPctVal = 1 - valPct - appPctVal;
+                    return (
+                      <div className="grid grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <span className="text-muted-foreground text-xs">Issuance</span>
+                          <p className="font-semibold">{formatLargeNumber(s.values?.amuletToIssuePerYear)}/yr</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">Validator</span>
+                          <p className="font-semibold">{(valPct * 100).toFixed(0)}%</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">App</span>
+                          <p className="font-semibold">{(appPctVal * 100).toFixed(0)}%</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">SV</span>
+                          <p className="font-semibold">{(svPctVal * 100).toFixed(0)}%</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );
