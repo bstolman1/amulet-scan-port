@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { scanApi, CreatedEvent } from "@/lib/api-client";
+import { pickAmountAsCC, pickLockedAmount, toCC } from "@/lib/amount-utils";
 
 export interface RichListHolder {
   owner: string;
@@ -16,28 +17,21 @@ export interface RichListData {
   round: number;
 }
 
-/**
- * Calculates the effective balance after holding fees
- */
-function calculateEffectiveBalance(
-  initialAmount: string,
-  createdAtMicros: string,
-  ratePerRound: string,
-  currentRound: number,
-  roundDuration: number = 600_000_000 // ~10 minutes in microseconds
-): number {
-  const initial = parseFloat(initialAmount);
-  const createdAt = BigInt(createdAtMicros);
-  const rate = parseFloat(ratePerRound);
-  
-  // Approximate rounds held based on creation time
-  const microsecondsPerRound = BigInt(roundDuration);
-  const elapsedMicros = BigInt(Date.now() * 1000) - createdAt;
-  const roundsHeld = Math.max(0, Number(elapsedMicros / microsecondsPerRound));
-  
-  // Holding fee reduces the balance over time
-  const holdingFee = initial * rate * roundsHeld;
-  return Math.max(0, initial - holdingFee);
+function pickOwner(payload: any, fallback?: string): string | undefined {
+  return (
+    payload?.owner ||
+    payload?.amulet?.owner ||
+    payload?.state?.owner ||
+    payload?.create_arguments?.owner ||
+    fallback
+  );
+}
+
+function pickBalanceCC(payload: any, isLocked: boolean): number {
+  // Ledger contracts often store amount in raw 10-decimal units.
+  // Use shared parsing utilities (strict parsing + correct decimals).
+  if (isLocked) return toCC(pickLockedAmount(payload));
+  return pickAmountAsCC(payload);
 }
 
 /**
@@ -58,10 +52,8 @@ export function useRichList(limit: number = 100) {
       const pageSize = 1000; // Max page size for efficiency
       
       // Templates for Amulet holdings (format: package:module:entity)
-      const templates = [
-        "Splice:Amulet:Amulet",
-        "Splice:Amulet:LockedAmulet"
-      ];
+      // NOTE: package name here includes a dot (as documented), so we still end up with 3 parts.
+      const templates = ["Splice.Amulet:Amulet:Amulet", "Splice.Amulet:Amulet:LockedAmulet"];
       
       // Fetch up to 10 pages (10k contracts) to avoid infinite loops
       for (let i = 0; i < 10; i++) {
@@ -85,23 +77,14 @@ export function useRichList(limit: number = 100) {
       
       for (const event of holdings) {
         const payload = event.create_arguments as any;
-        const owner = payload?.owner || event.signatories?.[0];
+        const owner = pickOwner(payload, event.signatories?.[0]);
         if (!owner) continue;
-        
-        // Parse amount from payload
-        let balance = 0;
-        const amount = payload?.amount;
-        if (amount?.initialAmount) {
-          balance = calculateEffectiveBalance(
-            amount.initialAmount,
-            amount.createdAt?.microseconds || "0",
-            amount.ratePerRound?.rate || "0",
-            latestRound.round
-          );
-        }
-        
+
         // Check if this is a locked amulet
         const isLocked = event.template_id?.includes("LockedAmulet") || !!payload?.lock;
+
+        const balance = pickBalanceCC(payload, isLocked);
+        if (balance <= 0) continue;
         
         const existing = holderMap.get(owner) || { unlocked: 0, locked: 0 };
         if (isLocked) {
