@@ -11,9 +11,6 @@
  *   node fetch-updates.js --keep-raw # Also write to .pb.zst files
  */
 
-import dotenv from 'dotenv';
-dotenv.config();
-
 import axios from 'axios';
 import https from 'https';
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
@@ -27,6 +24,11 @@ import {
   logSummary 
 } from './structured-logger.js';
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 const LIVE_MODE = args.includes('--live') || args.includes('-l');
@@ -38,6 +40,12 @@ const USE_BINARY = KEEP_RAW || RAW_ONLY;
 // Use Parquet writer by default, binary writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter from './write-binary.js';
+
+// Load environment variables from scripts/ingest/.env by default.
+// This avoids surprises when running the script from the repo root.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 // Unified writer functions
 async function bufferUpdates(updates) {
@@ -112,12 +120,6 @@ const client = axios.create({
   httpsAgent: new https.Agent({ rejectUnauthorized: false }),
 });
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 // Cross-platform path handling
 import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
 // GCS preflight checks
@@ -1064,8 +1066,8 @@ async function runIngestion() {
           const flushed = await withTimeout(flushAll(), 60_000, 'flushAll');
           log('info', 'flush_complete', { filesWritten: flushed.length });
           
-          // Save live cursor after flush
-          if (LIVE_MODE && afterRecordTime) {
+          // Save cursor after flush (so we can resume even if the process dies while caught up)
+          if (afterRecordTime) {
             saveLiveCursor(afterMigrationId, afterRecordTime);
             log('info', 'cursor_advanced', {
               newCursor: afterRecordTime,
@@ -1162,8 +1164,8 @@ async function runIngestion() {
         batchCount,
       });
       
-      // Periodically save live cursor (every 10 batches)
-      if (LIVE_MODE && batchCount % 10 === 0) {
+      // Periodically save cursor (every 10 batches)
+      if (afterRecordTime && batchCount % 10 === 0) {
         saveLiveCursor(afterMigrationId, afterRecordTime);
       }
       
@@ -1336,8 +1338,8 @@ async function shutdown() {
     log('error', 'flush_timeout_on_shutdown', { error: err.message });
   }
   
-  // Save final live cursor state
-  if (LIVE_MODE && lastTimestamp) {
+  // Save final cursor state
+  if (lastTimestamp) {
     saveLiveCursor(lastMigrationId || migrationId, lastTimestamp);
     log('info', 'cursor_advanced', {
       newCursor: lastTimestamp,
