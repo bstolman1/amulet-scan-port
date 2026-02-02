@@ -137,7 +137,7 @@ const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
   };
 };
 
-const NETWORK_LAUNCH_DATE = new Date("2025-07-01T00:00:00Z");
+const NETWORK_LAUNCH_DATE = new Date("2024-07-01T00:00:00Z");
 
 const getMicrosecondsSinceLaunch = (): number => {
   const now = new Date();
