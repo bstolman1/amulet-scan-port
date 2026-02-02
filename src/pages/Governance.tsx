@@ -13,6 +13,7 @@ import { useGovernanceEvents } from "@/hooks/use-governance-events";
 import { useUniqueProposals } from "@/hooks/use-unique-proposals";
 import { useFullProposalScan } from "@/hooks/use-full-proposal-scan";
 import { useGovernanceProposals } from "@/hooks/use-governance-proposals";
+import { useActiveVoteRequests } from "@/hooks/use-active-vote-requests";
 
 import { useCanonicalProposals, useDedupeStats, parseCanonicalAction, parseCanonicalVotes } from "@/hooks/use-canonical-proposals";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
@@ -88,12 +89,23 @@ const Governance = () => {
     staleTime: 60 * 1000,
   });
 
-  // Fetch vote requests from LOCAL ACS only
+  // Fetch active vote requests from Scan API (PRIMARY SOURCE for active governance)
+  const {
+    data: activeVoteRequestsData,
+    isLoading: activeVoteRequestsLoading,
+    isError: activeVoteRequestsError,
+  } = useActiveVoteRequests();
+
+  // Fallback: Fetch vote requests from LOCAL ACS (if Scan API fails)
   const {
     data: voteRequestsData,
-    isLoading,
-    isError,
+    isLoading: localLoading,
+    isError: localError,
   } = useAggregatedTemplateData(undefined, "Splice:DsoRules:VoteRequest");
+
+  // Combined loading/error states - prefer Scan API data
+  const isLoading = activeVoteRequestsLoading && localLoading;
+  const isError = activeVoteRequestsError && localError;
 
   // Fetch DsoRules from LOCAL ACS
   const { data: dsoRulesData } = useAggregatedTemplateData(
@@ -230,11 +242,17 @@ const Governance = () => {
     return { votesFor, votesAgainst, votedSvs };
   };
 
-  // Process proposals from ACS data with full JSON parsing
+  // Use Scan API data as primary source, fallback to local ACS
+  const rawVoteRequests = activeVoteRequestsData?.data || voteRequestsData?.data || [];
+  const dataSourceLabel = activeVoteRequestsData?.data?.length ? "Scan API" : (voteRequestsData?.data?.length ? "Local ACS" : "No data");
+
+  // Process proposals from Scan API or ACS data with full JSON parsing
   const proposals =
-    voteRequestsData?.data?.map((voteRequest: any) => {
-      // Handle both flat structure and nested payload structure from DuckDB
-      const payload = voteRequest.payload || voteRequest;
+    rawVoteRequests.map((voteRequest: any) => {
+      // Handle Scan API format: { contract: {...}, state: {...} }
+      // vs ACS format: { payload: {...} } or flat structure
+      const contract = voteRequest.contract || voteRequest;
+      const payload = contract.payload || contract.create_arguments || contract;
       
       // Parse action
       const action = payload.action || voteRequest.action || {};
@@ -255,13 +273,12 @@ const Governance = () => {
       // Extract timing fields
       const voteBefore = payload.voteBefore || voteRequest.voteBefore;
       const targetEffectiveAt = payload.targetEffectiveAt || voteRequest.targetEffectiveAt;
-      const trackingCid = payload.trackingCid || voteRequest.trackingCid || voteRequest.contract_id;
+      const trackingCid = payload.trackingCid || voteRequest.trackingCid || contract.contract_id || voteRequest.contract_id;
 
-      // STATUS DERIVATION FOR ACS ACTIVE PROPOSALS
+      // STATUS DERIVATION FOR ACTIVE PROPOSALS
       // ⚠️ Client-side derivation is ACCEPTABLE here because:
-      // - ACS data represents CURRENT active contract state (live data)
-      // - There are no exercised events in ACS - only created contracts exist
-      // - For indexed/historical data, status MUST come from backend (ledger model)
+      // - Active proposals are CURRENT state (not historical)
+      // - There are no exercised events - only created contracts exist
       // - This threshold-based logic approximates what an active proposal looks like
       const threshold = votingThreshold || svCount || 1;
       let status: "approved" | "rejected" | "pending" = "pending";
@@ -283,7 +300,7 @@ const Governance = () => {
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",
-        contractId: voteRequest.contract_id || trackingCid,
+        contractId: contract.contract_id || trackingCid,
         trackingCid,
         title,
         actionType,
@@ -495,16 +512,29 @@ const Governance = () => {
           <TabsContent value="active">
             <Card className="glass-card">
               <div className="p-6">
-                <h3 className="text-xl font-bold mb-6">Recent Proposals</h3>
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      <Clock className="h-5 w-5 text-warning" />
+                      Active Proposals
+                    </h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      In-progress vote requests from {dataSourceLabel}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="text-xs">
+                    {dataSourceLabel}
+                  </Badge>
+                </div>
 
             {isError ? (
               <div className="text-center py-12">
                 <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground mb-2">
-                  Unable to load proposals from local ACS data.
+                  Unable to load proposals from Scan API.
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Ensure the local server is running (cd server && npm start) or check network connectivity.
+                  Check network connectivity to the Canton Scan API.
                 </p>
               </div>
             ) : isLoading ? (
@@ -515,10 +545,10 @@ const Governance = () => {
               </div>
             ) : !proposals?.length ? (
               <div className="text-center py-12">
-                <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <p className="text-muted-foreground mb-2">No proposals available at the moment</p>
+                <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
+                <p className="text-muted-foreground mb-2">No active proposals at the moment</p>
                 <p className="text-sm text-muted-foreground">
-                  Governance proposals will appear here when submitted by DSO members
+                  All governance proposals have been resolved. New proposals will appear here when submitted by DSO members.
                 </p>
               </div>
             ) : (
