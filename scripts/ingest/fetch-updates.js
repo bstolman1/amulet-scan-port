@@ -139,6 +139,7 @@ let sessionErrorCount = 0; // Track errors for this session
 let sessionStartTime = Date.now();
 let lastProgressTimestamp = Date.now(); // Watchdog: last time we made progress
 let stallWatchdogInterval = null; // Watchdog interval handle
+let heartbeatInterval = null; // Heartbeat interval handle
 let currentCycleId = 0; // Unique ID for each fetch cycle
 
 // Cursor directory (same as backfill script)
@@ -846,6 +847,22 @@ async function runIngestion() {
   let lastMetricsTime = Date.now();
   
   // ─────────────────────────────────────────────────────────────
+  // STEP 3: HEARTBEAT (non-negotiable)
+  // ─────────────────────────────────────────────────────────────
+  heartbeatInterval = setInterval(() => {
+    log('info', 'heartbeat', {
+      cursor: afterRecordTime,
+      migration: afterMigrationId,
+      inflight: 0,
+      workers: 1,
+      totalUpdates,
+      totalEvents,
+      cycleId: currentCycleId,
+      isRunning,
+    });
+  }, 30_000);
+  
+  // ─────────────────────────────────────────────────────────────
   // STALL DETECTION WATCHDOG
   // ─────────────────────────────────────────────────────────────
   lastProgressTimestamp = Date.now();
@@ -894,10 +911,10 @@ async function runIngestion() {
           consecutiveEmptyPolls: emptyPolls,
         });
         
-        // Flush any remaining buffered data
+        // Flush any remaining buffered data (with timeout)
         if (emptyPolls === 1) {
           log('info', 'flush_start', { batchId: currentCycleId });
-          const flushed = await flushAll();
+          const flushed = await withTimeout(flushAll(), 60_000, 'flushAll');
           log('info', 'flush_complete', { filesWritten: flushed.length });
           
           // Save live cursor after flush
@@ -939,7 +956,7 @@ async function runIngestion() {
           reason: 'empty_batch',
         });
         
-        await sleep(POLL_INTERVAL);
+        await sleep(POLL_INTERVAL, 'empty_batch_poll');
         continue;
       }
       
@@ -955,7 +972,13 @@ async function runIngestion() {
         sessionErrorCount = 0;
       }
       
-      const { updates, events } = await processUpdates(data.items);
+      // Process updates with timeout (Step 1: wrap blocking awaits)
+      const processResult = await withTimeout(
+        processUpdates(data.items),
+        60_000,
+        'processUpdates'
+      );
+      const { updates, events } = processResult;
       totalUpdates += updates;
       totalEvents += events;
       
@@ -1064,7 +1087,7 @@ async function runIngestion() {
         });
         
         console.log(`⏳ Cooldown: sleeping ${Math.round(cooldownMs / 1000)}s before retry (error #${sessionErrorCount})...`);
-        await sleep(cooldownMs);
+        await sleep(cooldownMs, 'cooldown_backoff');
         
         // ─── LIFECYCLE: Cycle Re-enter (after error recovery) ───
         log('info', 'cycle_reenter', {
@@ -1093,12 +1116,16 @@ async function runIngestion() {
           reason: 'non_transient_error_retry',
         });
         
-        await sleep(10000); // Wait 10s on non-transient error
+        await sleep(10000, 'non_transient_error_retry'); // Wait 10s on non-transient error
       }
     }
   }
   
-  // Clean up watchdog
+  // Clean up heartbeat and watchdog
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
   if (stallWatchdogInterval) {
     clearInterval(stallWatchdogInterval);
     stallWatchdogInterval = null;
@@ -1118,10 +1145,24 @@ async function runIngestion() {
 }
 
 /**
- * Sleep helper
+ * Sleep helper with logging (Step 2: Never await sleep without logging)
  */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+async function sleep(ms, reason = 'unknown') {
+  log('debug', 'sleep_start', { ms, reason });
+  await new Promise(resolve => setTimeout(resolve, ms));
+  log('debug', 'sleep_end', { ms, reason });
+}
+
+/**
+ * Timeout wrapper (Step 1: Put a timeout around every await that can block)
+ */
+async function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout: ${label} after ${ms}ms`)), ms)
+    )
+  ]);
 }
 
 /**
@@ -1151,16 +1192,26 @@ async function shutdown() {
   log('info', 'shutdown_started', { mode: LIVE_MODE ? 'LIVE' : 'RESUME' });
   isRunning = false;
   
+  // Clean up heartbeat
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+  
   // Clean up watchdog
   if (stallWatchdogInterval) {
     clearInterval(stallWatchdogInterval);
     stallWatchdogInterval = null;
   }
   
-  // Flush remaining data
+  // Flush remaining data (with timeout to avoid hanging on shutdown)
   log('info', 'flush_start', { reason: 'shutdown' });
-  const flushed = await flushAll();
-  log('info', 'flush_complete', { filesWritten: flushed.length });
+  try {
+    const flushed = await withTimeout(flushAll(), 30_000, 'shutdown_flushAll');
+    log('info', 'flush_complete', { filesWritten: flushed.length });
+  } catch (err) {
+    log('error', 'flush_timeout_on_shutdown', { error: err.message });
+  }
   
   // Save final live cursor state
   if (LIVE_MODE && lastTimestamp) {
