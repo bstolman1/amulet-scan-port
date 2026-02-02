@@ -324,15 +324,17 @@ function backupCursorToGCS(cursor) {
   const GCS_BUCKET = process.env.GCS_BUCKET;
   
   if (!GCS_BUCKET) {
+    console.log('  ⚠️ Cursor backup skipped: GCS_BUCKET not set');
     return;
   }
+  
+  const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
   
   try {
     // Write cursor to a temp file and upload
     const tmpCursorPath = path.join('/tmp', 'live-cursor-backup.json');
     fs.writeFileSync(tmpCursorPath, JSON.stringify(cursor, null, 2));
     
-    const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
     execSync(`gsutil -q cp "${tmpCursorPath}" "${gcsPath}"`, {
       stdio: 'pipe',
       timeout: 10000, // 10s timeout for cursor backup
@@ -341,6 +343,7 @@ function backupCursorToGCS(cursor) {
     // Clean up temp file
     fs.unlinkSync(tmpCursorPath);
     
+    console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
     log('debug', 'cursor_backed_up_to_gcs', { 
       gcsPath, 
       migration: cursor.migration_id, 
@@ -348,7 +351,13 @@ function backupCursorToGCS(cursor) {
     });
   } catch (err) {
     // Non-blocking - log warning but don't fail ingestion
-    console.warn(`⚠️ Failed to backup cursor to GCS: ${err.message}`);
+    // Show stderr if available for debugging
+    const stderr = err.stderr?.toString?.() || '';
+    console.warn(`  ⚠️ Failed to backup cursor to GCS: ${err.message}`);
+    if (stderr) {
+      console.warn(`     gsutil stderr: ${stderr.trim()}`);
+    }
+    console.warn(`     Target path: ${gcsPath}`);
   }
 }
 
