@@ -222,7 +222,7 @@ const Validators = () => {
             return (
               <div key={op.operator} className="border-b border-border py-3">
                 <div
-                  className="grid grid-cols-[1fr_auto_auto] items-center gap-4 cursor-pointer"
+                  className="grid grid-cols-[1fr_180px_24px] items-center gap-4 cursor-pointer"
                   onClick={() => setExpandedOperator(expanded ? null : op.operator)}
                 >
                   <div className="flex flex-col min-w-0">
@@ -232,18 +232,20 @@ const Validators = () => {
                       {op.beneficiaries.length}
                     </span>
                   </div>
-                  <Badge
-                    variant="outline"
-                    className={`whitespace-nowrap text-xs ${
-                      op.mismatch 
-                        ? "border-yellow-500/50 bg-yellow-500/10 text-yellow-400" 
-                        : op.hasBeneficiaries 
-                          ? "border-green-500/50 bg-green-500/10 text-green-400" 
-                          : "border-blue-500/50 bg-blue-500/10 text-blue-400"
-                    }`}
-                  >
-                    {op.statusLabel}
-                  </Badge>
+                  <div className="flex justify-end">
+                    <Badge
+                      variant="outline"
+                      className={`whitespace-nowrap text-xs ${
+                        op.mismatch 
+                          ? "border-yellow-500/50 bg-yellow-500/10 text-yellow-400" 
+                          : op.hasBeneficiaries 
+                            ? "border-green-500/50 bg-green-500/10 text-green-400" 
+                            : "border-blue-500/50 bg-blue-500/10 text-blue-400"
+                      }`}
+                    >
+                      {op.mismatch ? "⚠️ Mismatch" : op.hasBeneficiaries ? "✅ Balanced" : "✅ Direct"}
+                    </Badge>
+                  </div>
                   {expanded ? <ChevronUp className="w-5 h-5 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 flex-shrink-0" />}
                 </div>
 
