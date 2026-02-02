@@ -358,48 +358,70 @@ export function AmuletRulesContent() {
                     <h3 className="font-semibold">Current Active Stage</h3>
                     <Badge variant="default">{label}</Badge>
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Amulet/Year</p>
-                      <p className="font-semibold">{values?.amuletToIssuePerYear || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Validator %</p>
-                      <p className="font-semibold">{values?.validatorRewardPercentage || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">App %</p>
-                      <p className="font-semibold">{values?.appRewardPercentage || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Validator Cap</p>
-                      <p className="font-semibold">{values?.validatorRewardCap || "—"}</p>
-                    </div>
-                  </div>
+                  {(() => {
+                    const validatorPct = parseFloat(values?.validatorRewardPercentage || "0");
+                    const appPct = parseFloat(values?.appRewardPercentage || "0");
+                    const svPct = 1 - validatorPct - appPct;
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Amulet/Year</p>
+                          <p className="font-semibold">{values?.amuletToIssuePerYear || "—"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Validator %</p>
+                          <p className="font-semibold">{values?.validatorRewardPercentage || "—"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">App %</p>
+                          <p className="font-semibold">{values?.appRewardPercentage || "—"}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">SV % (inferred)</p>
+                          <p className="font-semibold">{svPct.toFixed(2)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Validator Cap</p>
+                          <p className="font-semibold">{values?.validatorRewardCap || "—"}</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
 
             <div className="p-4 rounded-lg bg-muted/50">
               <h3 className="font-semibold mb-3">Initial Values (Stage 0)</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <p className="text-xs text-muted-foreground">Amulet/Year</p>
-                  <p className="font-semibold">{issuanceCurve.initialValue?.amuletToIssuePerYear || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Validator %</p>
-                  <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardPercentage || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">App %</p>
-                  <p className="font-semibold">{issuanceCurve.initialValue?.appRewardPercentage || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Validator Cap</p>
-                  <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardCap || "—"}</p>
-                </div>
-              </div>
+              {(() => {
+                const validatorPct = parseFloat(issuanceCurve.initialValue?.validatorRewardPercentage || "0");
+                const appPct = parseFloat(issuanceCurve.initialValue?.appRewardPercentage || "0");
+                const svPct = 1 - validatorPct - appPct;
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Amulet/Year</p>
+                      <p className="font-semibold">{issuanceCurve.initialValue?.amuletToIssuePerYear || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Validator %</p>
+                      <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardPercentage || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">App %</p>
+                      <p className="font-semibold">{issuanceCurve.initialValue?.appRewardPercentage || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">SV % (inferred)</p>
+                      <p className="font-semibold">{svPct.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Validator Cap</p>
+                      <p className="font-semibold">{issuanceCurve.initialValue?.validatorRewardCap || "—"}</p>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {issuanceCurve.futureValues && issuanceCurve.futureValues.length > 0 && (
