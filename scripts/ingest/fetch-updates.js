@@ -170,39 +170,123 @@ async function getCurrentAPITime() {
 
 /**
  * Load live cursor if it exists
+ * Falls back to GCS backup if local cursor is missing
  */
 function loadLiveCursor() {
-  if (!fs.existsSync(LIVE_CURSOR_FILE)) {
+  // Try local cursor first
+  if (fs.existsSync(LIVE_CURSOR_FILE)) {
+    try {
+      const content = fs.readFileSync(LIVE_CURSOR_FILE, 'utf8').trim();
+      // Handle empty or corrupted cursor file
+      if (!content || content.length === 0) {
+        log('warn', 'cursor_empty', { file: LIVE_CURSOR_FILE });
+      } else {
+        const data = JSON.parse(content);
+        if (!data.migration_id || !data.record_time) {
+          log('warn', 'cursor_invalid', { file: LIVE_CURSOR_FILE, reason: 'missing_fields' });
+        } else {
+          // Reject timestamps in the future (likely corrupted from old T23:59:59 bug)
+          const cursorTime = new Date(data.record_time).getTime();
+          const now = Date.now();
+          if (cursorTime > now) {
+            log('warn', 'cursor_future', { file: LIVE_CURSOR_FILE, record_time: data.record_time });
+          } else {
+            logCursor('loaded', { 
+              migrationId: data.migration_id, 
+              lastBefore: data.record_time,
+              source: 'local'
+            });
+            return data;
+          }
+        }
+      }
+    } catch (err) {
+      logError('cursor_read', err, { file: LIVE_CURSOR_FILE });
+    }
+  }
+  
+  // Fall back to GCS backup if enabled
+  if (GCS_MODE) {
+    const gcsCursor = loadCursorFromGCS();
+    if (gcsCursor) {
+      log('info', 'cursor_restored_from_gcs', {
+        migration: gcsCursor.migration_id,
+        recordTime: gcsCursor.record_time
+      });
+      // Also restore local cursor for future reads
+      saveLiveCursorLocal(gcsCursor.migration_id, gcsCursor.record_time);
+      return gcsCursor;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Save cursor to local file only (no GCS backup)
+ * Used when restoring from GCS to avoid circular backup
+ */
+function saveLiveCursorLocal(migrationId, afterRecordTime) {
+  if (!fs.existsSync(CURSOR_DIR)) {
+    fs.mkdirSync(CURSOR_DIR, { recursive: true });
+  }
+  const cursor = {
+    migration_id: migrationId,
+    record_time: afterRecordTime,
+    updated_at: new Date().toISOString(),
+    mode: 'live',
+    semantics: 'forward',
+    restored_from: 'gcs',
+  };
+  fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
+}
+
+/**
+ * Load cursor from GCS backup
+ */
+function loadCursorFromGCS() {
+  const { execSync } = require('child_process');
+  const GCS_BUCKET = process.env.GCS_BUCKET;
+  
+  if (!GCS_BUCKET) {
     return null;
   }
+  
   try {
-    const content = fs.readFileSync(LIVE_CURSOR_FILE, 'utf8').trim();
-    // Handle empty or corrupted cursor file
-    if (!content || content.length === 0) {
-      log('warn', 'cursor_empty', { file: LIVE_CURSOR_FILE });
-      return null;
-    }
+    const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
+    const tmpPath = path.join('/tmp', 'gcs-cursor-restore.json');
+    
+    // Download cursor from GCS
+    execSync(`gsutil -q cp "${gcsPath}" "${tmpPath}"`, {
+      stdio: 'pipe',
+      timeout: 15000,
+    });
+    
+    const content = fs.readFileSync(tmpPath, 'utf8').trim();
+    fs.unlinkSync(tmpPath); // Cleanup
+    
+    if (!content) return null;
+    
     const data = JSON.parse(content);
     if (!data.migration_id || !data.record_time) {
-      log('warn', 'cursor_invalid', { file: LIVE_CURSOR_FILE, reason: 'missing_fields' });
+      log('warn', 'gcs_cursor_invalid', { reason: 'missing_fields' });
       return null;
     }
     
-    // Reject timestamps in the future (likely corrupted from old T23:59:59 bug)
+    // Validate not in future
     const cursorTime = new Date(data.record_time).getTime();
-    const now = Date.now();
-    if (cursorTime > now) {
-      log('warn', 'cursor_future', { file: LIVE_CURSOR_FILE, record_time: data.record_time });
+    if (cursorTime > Date.now()) {
+      log('warn', 'gcs_cursor_future', { record_time: data.record_time });
       return null;
     }
     
-    logCursor('loaded', { 
-      migrationId: data.migration_id, 
-      lastBefore: data.record_time 
-    });
+    console.log(`☁️ Restored cursor from GCS: migration=${data.migration_id}, time=${data.record_time}`);
     return data;
   } catch (err) {
-    logError('cursor_read', err, { file: LIVE_CURSOR_FILE });
+    // GCS cursor doesn't exist or failed to fetch - this is expected on first run
+    if (!err.message?.includes('No such object') && !err.message?.includes('CommandException')) {
+      console.warn(`⚠️ Could not load cursor from GCS: ${err.message}`);
+    }
     return null;
   }
 }
@@ -210,6 +294,7 @@ function loadLiveCursor() {
 /**
  * Save live cursor state
  * The cursor represents the FORWARD position: we will fetch transactions AFTER this time
+ * Also backs up to GCS if enabled to prevent cursor loss on restart
  */
 function saveLiveCursor(migrationId, afterRecordTime) {
   if (!fs.existsSync(CURSOR_DIR)) {
@@ -223,6 +308,48 @@ function saveLiveCursor(migrationId, afterRecordTime) {
     semantics: 'forward', // Explicit: fetch transactions AFTER this time
   };
   fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
+  
+  // Backup cursor to GCS if enabled
+  if (GCS_MODE) {
+    backupCursorToGCS(cursor);
+  }
+}
+
+/**
+ * Backup cursor to GCS (non-blocking)
+ * Writes cursor.json to gs://bucket/cursors/live-cursor.json
+ */
+function backupCursorToGCS(cursor) {
+  const { execSync } = require('child_process');
+  const GCS_BUCKET = process.env.GCS_BUCKET;
+  
+  if (!GCS_BUCKET) {
+    return;
+  }
+  
+  try {
+    // Write cursor to a temp file and upload
+    const tmpCursorPath = path.join('/tmp', 'live-cursor-backup.json');
+    fs.writeFileSync(tmpCursorPath, JSON.stringify(cursor, null, 2));
+    
+    const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
+    execSync(`gsutil -q cp "${tmpCursorPath}" "${gcsPath}"`, {
+      stdio: 'pipe',
+      timeout: 10000, // 10s timeout for cursor backup
+    });
+    
+    // Clean up temp file
+    fs.unlinkSync(tmpCursorPath);
+    
+    log('debug', 'cursor_backed_up_to_gcs', { 
+      gcsPath, 
+      migration: cursor.migration_id, 
+      recordTime: cursor.record_time 
+    });
+  } catch (err) {
+    // Non-blocking - log warning but don't fail ingestion
+    console.warn(`⚠️ Failed to backup cursor to GCS: ${err.message}`);
+  }
 }
 
 /**
