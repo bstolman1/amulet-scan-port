@@ -220,28 +220,31 @@ const Validators = () => {
           {operatorsView.map((op) => {
             const expanded = expandedOperator === op.operator;
             return (
-              <div key={op.operator} className="border-b border-gray-800 py-3">
+              <div key={op.operator} className="border-b border-border py-3">
                 <div
-                  className="flex justify-between items-center cursor-pointer"
+                  className="grid grid-cols-[1fr_auto_auto] items-center gap-4 cursor-pointer"
                   onClick={() => setExpandedOperator(expanded ? null : op.operator)}
                 >
-                  <div className="flex flex-col">
-                    <span className="font-semibold">{op.operator}</span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-semibold truncate">{op.operator}</span>
                     <span className="text-sm text-muted-foreground">
                       Reward Weight: {op.operatorWeightPct} • Network Share: {op.networkShare} • Beneficiaries:{" "}
                       {op.beneficiaries.length}
                     </span>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <span
-                      className={`text-sm ${
-                        op.mismatch ? "text-yellow-400" : op.hasBeneficiaries ? "text-green-400" : "text-blue-400"
-                      }`}
-                    >
-                      {op.statusLabel}
-                    </span>
-                    {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                  </div>
+                  <Badge
+                    variant="outline"
+                    className={`whitespace-nowrap text-xs ${
+                      op.mismatch 
+                        ? "border-yellow-500/50 bg-yellow-500/10 text-yellow-400" 
+                        : op.hasBeneficiaries 
+                          ? "border-green-500/50 bg-green-500/10 text-green-400" 
+                          : "border-blue-500/50 bg-blue-500/10 text-blue-400"
+                    }`}
+                  >
+                    {op.statusLabel}
+                  </Badge>
+                  {expanded ? <ChevronUp className="w-5 h-5 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 flex-shrink-0" />}
                 </div>
 
                 {expanded && op.hasBeneficiaries && (
