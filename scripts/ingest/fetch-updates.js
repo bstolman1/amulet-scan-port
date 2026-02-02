@@ -100,15 +100,18 @@ function setDataSource(source) {
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 100;
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 5000;
+const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000; // 30s default
+const STALL_DETECTION_INTERVAL_MS = parseInt(process.env.STALL_DETECTION_INTERVAL_MS) || 30000; // Check every 30s
+const STALL_THRESHOLD_MS = parseInt(process.env.STALL_THRESHOLD_MS) || 120000; // Alert after 120s
 
 // Auto-rebuild VoteRequest index every N updates (0 = disabled)
 const INDEX_REBUILD_INTERVAL = parseInt(process.env.INDEX_REBUILD_INTERVAL) || 10000;
 const LOCAL_SERVER_URL = process.env.LOCAL_SERVER_URL || 'http://localhost:3001';
 
-// Axios client with retry logic
+// Axios client with explicit timeout
 const client = axios.create({
   baseURL: SCAN_URL,
-  timeout: 60000,
+  timeout: FETCH_TIMEOUT_MS,
   httpsAgent: new https.Agent({ rejectUnauthorized: false }),
 });
 
@@ -134,6 +137,9 @@ let isRunning = true;
 let lastIndexRebuildAt = 0; // Track updates count at last index rebuild
 let sessionErrorCount = 0; // Track errors for this session
 let sessionStartTime = Date.now();
+let lastProgressTimestamp = Date.now(); // Watchdog: last time we made progress
+let stallWatchdogInterval = null; // Watchdog interval handle
+let currentCycleId = 0; // Unique ID for each fetch cycle
 
 // Cursor directory (same as backfill script)
 const CURSOR_DIR = getCursorDir();
@@ -610,6 +616,17 @@ async function detectLatestMigration() {
  * - Empty results mean we're caught up (poll again after interval)
  */
 async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
+  // AbortController for explicit timeout enforcement
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+    log('warn', 'fetch_timeout', {
+      migration: afterMigrationId,
+      cursor: afterRecordTime,
+      timeout_ms: FETCH_TIMEOUT_MS,
+    });
+  }, FETCH_TIMEOUT_MS);
+
   try {
     const payload = {
       page_size: BATCH_SIZE,
@@ -632,10 +649,24 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       }
     }
     
-    const response = await client.post('/v2/updates', payload);
+    const fetchStart = Date.now();
+    const response = await client.post('/v2/updates', payload, {
+      signal: controller.signal
+    });
+    const fetchLatencyMs = Date.now() - fetchStart;
     
     // v2/updates returns { transactions: [...] } sorted ascending by record_time
     const transactions = response.data?.transactions || [];
+    
+    // Log fetch completion (required instrumentation)
+    log('info', 'fetch_complete', {
+      updatesFetched: transactions.length,
+      eventsFetched: transactions.reduce((sum, t) => {
+        const u = t.transaction || t.reassignment || t;
+        return sum + Object.keys(u?.events_by_id || u?.eventsById || {}).length;
+      }, 0),
+      apiLatencyMs: fetchLatencyMs,
+    });
     
     // The LAST transaction in the batch is the NEWEST (furthest forward in time)
     // Use its record_time as the cursor for the next request
@@ -645,6 +676,13 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       lastRecordTime: transactions.length > 0 ? transactions[transactions.length - 1].record_time : null
     };
   } catch (err) {
+    // Handle AbortController timeout
+    if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
+      const timeoutErr = new Error(`Fetch timed out after ${FETCH_TIMEOUT_MS}ms`);
+      timeoutErr.code = 'FETCH_TIMEOUT';
+      throw timeoutErr;
+    }
+    
     if (err.response?.status === 404) {
       return { items: [], lastMigrationId: null, lastRecordTime: null };
     }
@@ -667,6 +705,8 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
     }
     
     throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -805,25 +845,68 @@ async function runIngestion() {
   let batchCount = 0;
   let lastMetricsTime = Date.now();
   
+  // ─────────────────────────────────────────────────────────────
+  // STALL DETECTION WATCHDOG
+  // ─────────────────────────────────────────────────────────────
+  lastProgressTimestamp = Date.now();
+  stallWatchdogInterval = setInterval(() => {
+    const staleMs = Date.now() - lastProgressTimestamp;
+    if (staleMs > STALL_THRESHOLD_MS) {
+      log('warn', 'ingestion_stall_detected', {
+        cursor: afterRecordTime,
+        migration: afterMigrationId,
+        workers: 1, // Single-threaded fetch
+        inflight: 0,
+        lastProgressTs: new Date(lastProgressTimestamp).toISOString(),
+        staleDurationMs: staleMs,
+      });
+    }
+  }, STALL_DETECTION_INTERVAL_MS);
+  
   while (isRunning) {
     try {
+      currentCycleId++;
       const batchStart = Date.now();
+      
+      // ─── LIFECYCLE: Cycle Start ───
+      log('info', 'ingestion_cycle_start', {
+        cycleId: currentCycleId,
+        migration: afterMigrationId,
+        cursor: afterRecordTime,
+        workers: 1,
+        inflight: 0,
+      });
       
       // Fetch using v2/updates with proper (migration_id, record_time) pagination
       const data = await fetchUpdates(afterMigrationId, afterRecordTime);
       
+      // Update watchdog timestamp on successful fetch
+      lastProgressTimestamp = Date.now();
+      
       if (!data.items || data.items.length === 0) {
         emptyPolls++;
         
+        // ─── LIFECYCLE: Empty Batch ───
+        log('info', 'empty_batch', {
+          cycleId: currentCycleId,
+          migration: afterMigrationId,
+          cursor: afterRecordTime,
+          consecutiveEmptyPolls: emptyPolls,
+        });
+        
         // Flush any remaining buffered data
         if (emptyPolls === 1) {
+          log('info', 'flush_start', { batchId: currentCycleId });
           const flushed = await flushAll();
-          if (flushed.length > 0) {
-            log('info', 'flush_complete', { files_written: flushed.length });
-          }
+          log('info', 'flush_complete', { filesWritten: flushed.length });
+          
           // Save live cursor after flush
           if (LIVE_MODE && afterRecordTime) {
             saveLiveCursor(afterMigrationId, afterRecordTime);
+            log('info', 'cursor_advanced', {
+              newCursor: afterRecordTime,
+              migration: afterMigrationId,
+            });
             logCursor('saved', { 
               migrationId: afterMigrationId, 
               lastBefore: afterRecordTime,
@@ -848,6 +931,13 @@ async function runIngestion() {
             errorCount: sessionErrorCount,
           });
         }
+        
+        // ─── LIFECYCLE: Cycle Re-enter (after sleep) ───
+        log('info', 'cycle_reenter', {
+          cycleId: currentCycleId,
+          sleepMs: POLL_INTERVAL,
+          reason: 'empty_batch',
+        });
         
         await sleep(POLL_INTERVAL);
         continue;
@@ -895,6 +985,13 @@ async function runIngestion() {
         throughput: updates / (batchLatency / 1000),
       });
       
+      // ─── LIFECYCLE: Cursor Advanced ───
+      log('info', 'cursor_advanced', {
+        newCursor: afterRecordTime,
+        migration: afterMigrationId,
+        batchCount,
+      });
+      
       // Periodically save live cursor (every 10 batches)
       if (LIVE_MODE && batchCount % 10 === 0) {
         saveLiveCursor(afterMigrationId, afterRecordTime);
@@ -905,6 +1002,12 @@ async function runIngestion() {
         lastIndexRebuildAt = totalUpdates;
         triggerIndexRebuild();
       }
+      
+      // ─── LIFECYCLE: Cycle Re-enter ───
+      log('info', 'cycle_reenter', {
+        cycleId: currentCycleId,
+        reason: 'batch_complete',
+      });
       
       // Log metrics every 60 seconds
       const now = Date.now();
@@ -925,10 +1028,11 @@ async function runIngestion() {
     } catch (err) {
       sessionErrorCount++;
       
-      // Check if this is a transient/timeout error
+      // Check if this is a transient/timeout error (including our custom FETCH_TIMEOUT)
       const isTimeout = err.code === 'ECONNABORTED' || 
                         err.code === 'ETIMEDOUT' ||
                         err.code === 'ECONNRESET' ||
+                        err.code === 'FETCH_TIMEOUT' ||
                         err.message?.includes('timeout');
       const isTransient = isTimeout || 
                           err.response?.status === 503 || 
@@ -936,6 +1040,7 @@ async function runIngestion() {
                           err.response?.status >= 500;
       
       logError('fetch', err, { 
+        cycleId: currentCycleId,
         migration: afterMigrationId, 
         cursor: afterRecordTime,
         error_count: sessionErrorCount,
@@ -950,6 +1055,7 @@ async function runIngestion() {
         const cooldownMs = backoffMs + jitter;
         
         log('warn', 'cooldown_mode', {
+          cycleId: currentCycleId,
           migration: afterMigrationId,
           cursor: afterRecordTime,
           error_count: sessionErrorCount,
@@ -960,7 +1066,16 @@ async function runIngestion() {
         console.log(`⏳ Cooldown: sleeping ${Math.round(cooldownMs / 1000)}s before retry (error #${sessionErrorCount})...`);
         await sleep(cooldownMs);
         
-        // Reset error count after successful cooldown (will reset to 0 on next successful batch)
+        // ─── LIFECYCLE: Cycle Re-enter (after error recovery) ───
+        log('info', 'cycle_reenter', {
+          cycleId: currentCycleId,
+          reason: 'error_recovery',
+          cooldownMs: Math.round(cooldownMs),
+        });
+        
+        // Update watchdog timestamp even on error recovery to avoid false stall alerts
+        lastProgressTimestamp = Date.now();
+        
         // Keep counting for logging purposes but don't fatal
       } else {
         // Non-transient error: fail after too many
@@ -971,9 +1086,22 @@ async function runIngestion() {
           });
           throw err;
         }
+        
+        // ─── LIFECYCLE: Cycle Re-enter (after non-transient error) ───
+        log('info', 'cycle_reenter', {
+          cycleId: currentCycleId,
+          reason: 'non_transient_error_retry',
+        });
+        
         await sleep(10000); // Wait 10s on non-transient error
       }
     }
+  }
+  
+  // Clean up watchdog
+  if (stallWatchdogInterval) {
+    clearInterval(stallWatchdogInterval);
+    stallWatchdogInterval = null;
   }
   
   // Log final summary
@@ -1023,15 +1151,25 @@ async function shutdown() {
   log('info', 'shutdown_started', { mode: LIVE_MODE ? 'LIVE' : 'RESUME' });
   isRunning = false;
   
-  // Flush remaining data
-  const flushed = await flushAll();
-  if (flushed.length > 0) {
-    log('info', 'shutdown_flush', { files_written: flushed.length });
+  // Clean up watchdog
+  if (stallWatchdogInterval) {
+    clearInterval(stallWatchdogInterval);
+    stallWatchdogInterval = null;
   }
+  
+  // Flush remaining data
+  log('info', 'flush_start', { reason: 'shutdown' });
+  const flushed = await flushAll();
+  log('info', 'flush_complete', { filesWritten: flushed.length });
   
   // Save final live cursor state
   if (LIVE_MODE && lastTimestamp) {
     saveLiveCursor(lastMigrationId || migrationId, lastTimestamp);
+    log('info', 'cursor_advanced', {
+      newCursor: lastTimestamp,
+      migration: lastMigrationId || migrationId,
+      reason: 'shutdown',
+    });
     logCursor('shutdown_saved', { 
       migrationId: lastMigrationId || migrationId, 
       lastBefore: lastTimestamp 
