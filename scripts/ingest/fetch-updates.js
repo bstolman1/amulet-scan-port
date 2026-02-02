@@ -104,9 +104,6 @@ const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000; // 30s
 const STALL_DETECTION_INTERVAL_MS = parseInt(process.env.STALL_DETECTION_INTERVAL_MS) || 30000; // Check every 30s
 const STALL_THRESHOLD_MS = parseInt(process.env.STALL_THRESHOLD_MS) || 120000; // Alert after 120s
 
-// Auto-rebuild VoteRequest index every N updates (0 = disabled)
-const INDEX_REBUILD_INTERVAL = parseInt(process.env.INDEX_REBUILD_INTERVAL) || 10000;
-const LOCAL_SERVER_URL = process.env.LOCAL_SERVER_URL || 'http://localhost:3001';
 
 // Axios client with explicit timeout
 const client = axios.create({
@@ -134,7 +131,7 @@ let lastTimestamp = null;
 let lastMigrationId = null;
 let migrationId = null;
 let isRunning = true;
-let lastIndexRebuildAt = 0; // Track updates count at last index rebuild
+
 let sessionErrorCount = 0; // Track errors for this session
 let sessionStartTime = Date.now();
 let lastProgressTimestamp = Date.now(); // Watchdog: last time we made progress
@@ -1020,11 +1017,6 @@ async function runIngestion() {
         saveLiveCursor(afterMigrationId, afterRecordTime);
       }
       
-      // Auto-rebuild VoteRequest index every N updates
-      if (INDEX_REBUILD_INTERVAL > 0 && (totalUpdates - lastIndexRebuildAt) >= INDEX_REBUILD_INTERVAL) {
-        lastIndexRebuildAt = totalUpdates;
-        triggerIndexRebuild();
-      }
       
       // ─── LIFECYCLE: Cycle Re-enter ───
       log('info', 'cycle_reenter', {
@@ -1165,25 +1157,6 @@ async function withTimeout(promise, ms, label) {
   ]);
 }
 
-/**
- * Trigger VoteRequest index rebuild (non-blocking)
- */
-function triggerIndexRebuild() {
-  console.log('🔄 Triggering VoteRequest index rebuild...');
-  fetch(`${LOCAL_SERVER_URL}/api/events/vote-request-index/build?force=true`, {
-    method: 'POST',
-  })
-    .then(res => {
-      if (res.ok) {
-        console.log('✅ VoteRequest index rebuild triggered successfully');
-      } else {
-        console.warn(`⚠️ VoteRequest index rebuild failed: ${res.status}`);
-      }
-    })
-    .catch(err => {
-      console.warn(`⚠️ Could not trigger index rebuild: ${err.message}`);
-    });
-}
 
 /**
  * Graceful shutdown
