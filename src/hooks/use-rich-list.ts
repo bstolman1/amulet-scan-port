@@ -9,12 +9,26 @@ export interface RichListHolder {
   total: number;       // total available balance
 }
 
+export interface RichListDebug {
+  contractsFetched: number;
+  pagesLoaded: number;
+  templatesQueried: string[];
+  sampleContracts: Array<{
+    template_id: string;
+    owner: string | undefined;
+    rawPayload: any;
+    parsedBalance: number;
+  }>;
+  uniqueTemplates: string[];
+}
+
 export interface RichListData {
   data: RichListHolder[];
   totalSupply: number;
   holderCount: number;
   recordTime: string;
   round: number;
+  debug: RichListDebug;
 }
 
 function pickOwner(payload: any, fallback?: string): string | undefined {
@@ -50,10 +64,11 @@ export function useRichList(limit: number = 100) {
       const holdings: CreatedEvent[] = [];
       let nextPage: number | undefined = undefined;
       const pageSize = 1000; // Max page size for efficiency
+      let pagesLoaded = 0;
       
       // Templates for Amulet holdings (format: package:module:entity)
-      // NOTE: package name here includes a dot (as documented), so we still end up with 3 parts.
-      const templates = ["Splice.Amulet:Amulet:Amulet", "Splice.Amulet:Amulet:LockedAmulet"];
+      // Try without template filter first to see what's available
+      const templates: string[] = [];
       
       // Fetch up to 10 pages (10k contracts) to avoid infinite loops
       for (let i = 0; i < 10; i++) {
@@ -63,19 +78,38 @@ export function useRichList(limit: number = 100) {
           record_time_match: "exact",
           page_size: pageSize,
           after: nextPage,
-          templates,
+          templates: templates.length > 0 ? templates : undefined,
         });
         
+        pagesLoaded++;
         holdings.push(...response.created_events);
         
         if (!response.next_page_token) break;
         nextPage = response.next_page_token;
       }
       
+      // Debug: collect unique templates and sample contracts
+      const uniqueTemplates = [...new Set(holdings.map(e => e.template_id || "unknown"))];
+      const sampleContracts = holdings.slice(0, 5).map(event => {
+        const payload = event.create_arguments as any;
+        const isLocked = event.template_id?.includes("LockedAmulet") || !!payload?.lock;
+        return {
+          template_id: event.template_id || "unknown",
+          owner: pickOwner(payload, event.signatories?.[0]),
+          rawPayload: payload,
+          parsedBalance: pickBalanceCC(payload, isLocked),
+        };
+      });
+      
+      // Filter to only Amulet contracts for aggregation
+      const amuletHoldings = holdings.filter(e => 
+        e.template_id?.includes("Amulet") && !e.template_id?.includes("AmuletRules")
+      );
+      
       // Aggregate holdings by owner
       const holderMap = new Map<string, { unlocked: number; locked: number }>();
       
-      for (const event of holdings) {
+      for (const event of amuletHoldings) {
         const payload = event.create_arguments as any;
         const owner = pickOwner(payload, event.signatories?.[0]);
         if (!owner) continue;
@@ -115,6 +149,13 @@ export function useRichList(limit: number = 100) {
         holderCount: holderMap.size,
         recordTime: snapshot.record_time,
         round: latestRound.round,
+        debug: {
+          contractsFetched: holdings.length,
+          pagesLoaded,
+          templatesQueried: templates.length > 0 ? templates : ["(no filter - fetching all)"],
+          sampleContracts,
+          uniqueTemplates,
+        },
       };
     },
     staleTime: 60_000, // 1 minute - holdings don't change rapidly
