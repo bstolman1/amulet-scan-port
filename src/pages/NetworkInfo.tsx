@@ -4,7 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
-import { Network, Clock, Server, Shield, CheckCircle, XCircle } from "lucide-react";
+import { Network, Clock, Server, FileText } from "lucide-react";
+import { useAmuletRules } from "@/hooks/use-canton-scan-api";
+import { Link } from "react-router-dom";
 
 export default function NetworkInfo() {
   const { data: instanceNames, isLoading: loadingNames } = useQuery({
@@ -17,15 +19,7 @@ export default function NetworkInfo() {
     queryFn: () => scanApi.fetchMigrationSchedule(),
   });
 
-  const { data: featureSupport, isLoading: loadingFeatures } = useQuery({
-    queryKey: ["featureSupport"],
-    queryFn: () => scanApi.fetchFeatureSupport(),
-  });
-
-  const { data: backfillStatus, isLoading: loadingBackfill } = useQuery({
-    queryKey: ["backfillStatus"],
-    queryFn: () => scanApi.fetchBackfillStatus(),
-  });
+  const { data: amuletRulesData, isLoading: loadingAmuletRules } = useAmuletRules();
 
   const { data: dsoSequencers, isLoading: loadingSequencers } = useQuery({
     queryKey: ["dsoSequencers"],
@@ -120,67 +114,76 @@ export default function NetworkInfo() {
             </CardContent>
           </Card>
 
-          {/* Feature Support */}
-          <Card>
+          {/* Amulet Rules Summary */}
+          <Card className="md:col-span-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5" />
-                Feature Support
+                <FileText className="h-5 w-5" />
+                Amulet Rules
               </CardTitle>
-              <CardDescription>Enabled features on this network</CardDescription>
+              <CardDescription>Core network configuration parameters</CardDescription>
             </CardHeader>
             <CardContent>
-              {loadingFeatures ? (
+              {loadingAmuletRules ? (
                 <div className="space-y-2">
                   <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-1/2" />
                 </div>
-              ) : featureSupport ? (
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">No Holding Fees on Transfers</span>
-                    {featureSupport.no_holding_fees_on_transfers ? (
-                      <Badge variant="default" className="bg-green-600">
-                        <CheckCircle className="h-3 w-3 mr-1" /> Enabled
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary">
-                        <XCircle className="h-3 w-3 mr-1" /> Disabled
-                      </Badge>
-                    )}
-                  </div>
+              ) : amuletRulesData ? (
+                <div className="space-y-4">
+                  {(() => {
+                    const raw = amuletRulesData as any;
+                    const payload = raw?.contract?.payload ?? raw?.payload ?? raw;
+                    const configSchedule = payload?.configSchedule ?? payload?.config_schedule;
+                    const config = configSchedule?.initialValue ?? configSchedule?.initial_value ?? payload;
+                    const transferConfig = config?.transferConfig ?? config?.transfer_config;
+                    const issuanceCurve = config?.issuanceCurve ?? config?.issuance_curve;
+                    const initialIssuance = issuanceCurve?.initialValue ?? issuanceCurve?.initial_value;
+                    
+                    return (
+                      <>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">Holding Fee Rate</p>
+                            <p className="font-semibold">{transferConfig?.holdingFee?.rate ?? transferConfig?.holding_fee?.rate ?? "—"}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">Create Fee</p>
+                            <p className="font-semibold">{transferConfig?.createFee?.fee ?? transferConfig?.create_fee?.fee ?? "—"}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">Max Inputs</p>
+                            <p className="font-semibold">{transferConfig?.maxNumInputs ?? transferConfig?.max_num_inputs ?? "—"}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">Max Outputs</p>
+                            <p className="font-semibold">{transferConfig?.maxNumOutputs ?? transferConfig?.max_num_outputs ?? "—"}</p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">Amulet/Year</p>
+                            <p className="font-semibold text-sm">{initialIssuance?.amuletToIssuePerYear ?? initialIssuance?.amulet_to_issue_per_year ?? "—"}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">Validator Reward %</p>
+                            <p className="font-semibold">{initialIssuance?.validatorRewardPercentage ?? initialIssuance?.validator_reward_percentage ?? "—"}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-muted/50">
+                            <p className="text-xs text-muted-foreground">App Reward %</p>
+                            <p className="font-semibold">{initialIssuance?.appRewardPercentage ?? initialIssuance?.app_reward_percentage ?? "—"}</p>
+                          </div>
+                        </div>
+                        <Link to="/amulet-rules" className="text-primary hover:underline text-sm">
+                          View full Amulet Rules →
+                        </Link>
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
-                <p className="text-muted-foreground">No feature info available</p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Backfill Status */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Server className="h-5 w-5" />
-                Backfill Status
-              </CardTitle>
-              <CardDescription>Historical data synchronization status</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingBackfill ? (
-                <Skeleton className="h-6 w-24" />
-              ) : backfillStatus ? (
-                <div className="flex items-center gap-2">
-                  {backfillStatus.complete ? (
-                    <Badge variant="default" className="bg-green-600">
-                      <CheckCircle className="h-3 w-3 mr-1" /> Complete
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary">
-                      <Clock className="h-3 w-3 mr-1" /> In Progress
-                    </Badge>
-                  )}
-                </div>
-              ) : (
-                <p className="text-muted-foreground">Status unavailable</p>
+                <p className="text-muted-foreground">No Amulet Rules data available</p>
               )}
             </CardContent>
           </Card>
