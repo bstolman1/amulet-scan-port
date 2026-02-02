@@ -63,7 +63,7 @@ export function useRichList(limit: number = 100) {
         const response = await scanApi.fetchHoldingsState({
           migration_id: 0,
           record_time: snapshot.record_time,
-          record_time_match: "before",
+          record_time_match: "exact",
           page_size: pageSize,
           after: nextPage,
         });
