@@ -8,7 +8,8 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 // Core pages
 import Dashboard from "./pages/Dashboard";
 import Supply from "./pages/Supply";
-import NetworkInfo from "./pages/NetworkInfo";
+import IssuanceCurve from "./pages/IssuanceCurve";
+import ProtocolFees from "./pages/ProtocolFees";
 
 // Transactions
 import Transactions from "./pages/Transactions";
@@ -20,6 +21,7 @@ import Validators from "./pages/Validators";
 import ValidatorLicenses from "./pages/ValidatorLicenses";
 import RoundStats from "./pages/RoundStats";
 import TrafficStatus from "./pages/TrafficStatus";
+import Sequencers from "./pages/Sequencers";
 
 // Rewards & Pricing
 import Rewards from "./pages/Rewards";
@@ -90,7 +92,8 @@ const App = () => (
             {/* Core pages */}
             <Route path="/" element={<Dashboard />} />
             <Route path="/supply" element={<Supply />} />
-            <Route path="/network-info" element={<NetworkInfo />} />
+            <Route path="/issuance-curve" element={<IssuanceCurve />} />
+            <Route path="/protocol-fees" element={<ProtocolFees />} />
             
             {/* Transactions */}
             <Route path="/transactions" element={<Transactions />} />
@@ -102,6 +105,7 @@ const App = () => (
             <Route path="/validator-licenses" element={<ValidatorLicenses />} />
             <Route path="/round-stats" element={<RoundStats />} />
             <Route path="/traffic-status" element={<TrafficStatus />} />
+            <Route path="/sequencers" element={<Sequencers />} />
             
             {/* Rewards & Pricing */}
             <Route path="/rewards" element={<Rewards />} />
