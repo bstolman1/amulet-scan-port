@@ -137,12 +137,47 @@ const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
   };
 };
 
+const NETWORK_LAUNCH_DATE = new Date("2025-07-01T00:00:00Z");
+
+const getMicrosecondsSinceLaunch = (): number => {
+  const now = new Date();
+  return (now.getTime() - NETWORK_LAUNCH_DATE.getTime()) * 1000;
+};
+
 const formatMicroseconds = (value?: string) => {
   if (!value) return "—";
   const micros = Number(value);
   const days = micros / 1_000_000 / 86_400;
   if (Number.isNaN(days)) return `${value} µs`;
   return `${value} µs (${days.toFixed(2)} days)`;
+};
+
+const getCurrentIssuanceStage = (
+  initialValue: NormalizedIssuanceValue | undefined,
+  futureValues: NormalizedIssuanceFutureValue[] | undefined
+): { stage: number; label: string; values: NormalizedIssuanceValue | undefined } => {
+  const elapsedMicros = getMicrosecondsSinceLaunch();
+  
+  if (!futureValues || futureValues.length === 0) {
+    return { stage: 0, label: "Initial", values: initialValue };
+  }
+
+  // Find the current active stage
+  let currentStage = 0;
+  let currentValues = initialValue;
+  
+  for (let i = 0; i < futureValues.length; i++) {
+    const threshold = Number(futureValues[i].effectiveAfterMicroseconds || 0);
+    if (elapsedMicros >= threshold) {
+      currentStage = i + 1;
+      currentValues = futureValues[i].values;
+    } else {
+      break;
+    }
+  }
+
+  const label = currentStage === 0 ? "Initial" : `Stage ${currentStage}`;
+  return { stage: currentStage, label, values: currentValues };
 };
 
 const truncateIdentifier = (value?: string) =>
@@ -312,8 +347,41 @@ export function AmuletRulesContent() {
             <CardTitle>Issuance Curve</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {(() => {
+              const { stage, label, values } = getCurrentIssuanceStage(
+                issuanceCurve.initialValue,
+                issuanceCurve.futureValues
+              );
+              return (
+                <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <h3 className="font-semibold">Current Active Stage</h3>
+                    <Badge variant="default">{label}</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Amulet/Year</p>
+                      <p className="font-semibold">{values?.amuletToIssuePerYear || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Validator %</p>
+                      <p className="font-semibold">{values?.validatorRewardPercentage || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">App %</p>
+                      <p className="font-semibold">{values?.appRewardPercentage || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Validator Cap</p>
+                      <p className="font-semibold">{values?.validatorRewardCap || "—"}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="p-4 rounded-lg bg-muted/50">
-              <h3 className="font-semibold mb-3">Initial Values</h3>
+              <h3 className="font-semibold mb-3">Initial Values (Stage 0)</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
                   <p className="text-xs text-muted-foreground">Amulet/Year</p>
@@ -336,23 +404,38 @@ export function AmuletRulesContent() {
 
             {issuanceCurve.futureValues && issuanceCurve.futureValues.length > 0 && (
               <div>
-                <h3 className="font-semibold mb-3">Future Value Schedule ({issuanceCurve.futureValues.length} entries)</h3>
+                <h3 className="font-semibold mb-3">Future Value Schedule ({issuanceCurve.futureValues.length} stages)</h3>
                 <div className="space-y-2">
-                  {issuanceCurve.futureValues.slice(0, 5).map((fv, idx) => (
-                    <div key={idx} className="p-3 rounded bg-muted/30 text-sm">
-                      <p className="text-xs text-muted-foreground">
-                        Effective after: {formatMicroseconds(fv.effectiveAfterMicroseconds)}
-                      </p>
-                      <p className="font-medium">
-                        Amulet/Year: {fv.values?.amuletToIssuePerYear || "—"}
-                      </p>
-                    </div>
-                  ))}
-                  {issuanceCurve.futureValues.length > 5 && (
-                    <p className="text-xs text-muted-foreground">
-                      ... and {issuanceCurve.futureValues.length - 5} more entries
-                    </p>
-                  )}
+                  {issuanceCurve.futureValues.map((fv, idx) => {
+                    const elapsedMicros = getMicrosecondsSinceLaunch();
+                    const threshold = Number(fv.effectiveAfterMicroseconds || 0);
+                    const isActive = elapsedMicros >= threshold;
+                    const isNext = !isActive && (idx === 0 || elapsedMicros >= Number(issuanceCurve.futureValues![idx - 1].effectiveAfterMicroseconds || 0));
+                    
+                    return (
+                      <div 
+                        key={idx} 
+                        className={`p-3 rounded text-sm ${
+                          isActive 
+                            ? "bg-primary/10 border border-primary/20" 
+                            : isNext 
+                              ? "bg-accent/50 border border-accent" 
+                              : "bg-muted/30"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            Effective after: {formatMicroseconds(fv.effectiveAfterMicroseconds)}
+                          </p>
+                          {isActive && <Badge variant="default" className="text-xs">Active</Badge>}
+                          {isNext && <Badge variant="outline" className="text-xs">Next</Badge>}
+                        </div>
+                        <p className="font-medium">
+                          Amulet/Year: {fv.values?.amuletToIssuePerYear || "—"}
+                        </p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
