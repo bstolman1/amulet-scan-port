@@ -109,15 +109,26 @@ const normalizeFutureValues = (futureValues: any): NormalizedIssuanceFutureValue
 
 const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
   if (!raw) return null;
-  const source = raw.contract?.payload ?? raw.payload ?? raw;
+  
+  // Navigate to the payload - handle multiple nesting levels
+  const payload = raw.contract?.payload ?? raw.payload ?? raw;
+  
+  // The actual config can be at the root of payload OR inside configSchedule.initialValue
+  const configSchedule = pickFirstDefined(payload.configSchedule, payload.config_schedule);
+  const configInitialValue = pickFirstDefined(configSchedule?.initialValue, configSchedule?.initial_value);
+  
+  // Use configSchedule.initialValue if available, otherwise fall back to payload root
+  const source = configInitialValue ?? payload;
+  
   const transferConfig = pickFirstDefined(source.transferConfig, source.transfer_config);
   const issuanceCurve = pickFirstDefined(source.issuanceCurve, source.issuance_curve);
   const decentralizedSynchronizer = pickFirstDefined(source.decentralizedSynchronizer, source.decentralized_synchronizer);
+  const packageConfig = pickFirstDefined(source.packageConfig, source.package_config);
 
   return {
-    dso: pickFirstDefined(source.dso, source.DSO, source.owner),
+    dso: pickFirstDefined(payload.dso, payload.DSO, payload.owner),
     templateIdSuffix: "AmuletRules",
-    isDevNet: pickFirstDefined(source.isDevNet, source.is_devnet, false),
+    isDevNet: pickFirstDefined(payload.isDevNet, payload.is_devnet, false),
     featuredAppActivityMarkerAmount: pickFirstDefined(source.featuredAppActivityMarkerAmount, source.featured_app_activity_marker_amount),
     transferConfig: transferConfig
       ? {
@@ -147,7 +158,7 @@ const normalizeAmuletRule = (raw: any): NormalizedAmuletRule | null => {
           fees: decentralizedSynchronizer.fees,
         }
       : undefined,
-    packageConfig: pickFirstDefined(source.packageConfig, source.package_config),
+    packageConfig: packageConfig,
     raw,
   };
 };
