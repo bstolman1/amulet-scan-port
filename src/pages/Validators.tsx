@@ -242,8 +242,15 @@ const Validators = () => {
                             ? "border-green-500/50 bg-green-500/10 text-green-400" 
                             : "border-blue-500/50 bg-blue-500/10 text-blue-400"
                       }`}
+                      title={op.mismatch 
+                        ? `Beneficiaries total: ${op.totalBeneficiaryWeightPct} vs Operator declared: ${op.operatorWeightPct}` 
+                        : undefined}
                     >
-                      {op.mismatch ? "⚠️ Mismatch" : op.hasBeneficiaries ? "✅ Balanced" : "✅ Direct"}
+                      {op.mismatch 
+                        ? `⚠️ Mismatch: ${op.totalBeneficiaryWeightPct} ≠ ${op.operatorWeightPct}` 
+                        : op.hasBeneficiaries 
+                          ? "✅ Balanced" 
+                          : "✅ Direct"}
                     </Badge>
                   </div>
                   {expanded ? <ChevronUp className="w-5 h-5 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 flex-shrink-0" />}

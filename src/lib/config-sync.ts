@@ -76,11 +76,19 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
     const operatorComment = sv.comment || undefined;
 
     const extras = sv.extraBeneficiaries || [];
-    const normalizedExtras = extras.map((ex: any) => ({
-      beneficiary: ex.beneficiary,
-      weight: Number(String(ex.weight).replace(/_/g, "")),
-      comment: inlineComments.get(ex.beneficiary) || undefined,
-    }));
+    const normalizedExtras = extras.map((ex: any) => {
+      // Handle both number and string weights (some YAML entries use quotes)
+      const rawWeight = ex.weight;
+      const parsedWeight = typeof rawWeight === 'string' 
+        ? Number(rawWeight.replace(/_/g, ""))
+        : Number(String(rawWeight).replace(/_/g, ""));
+      
+      return {
+        beneficiary: ex.beneficiary,
+        weight: parsedWeight,
+        comment: inlineComments.get(ex.beneficiary) || undefined,
+      };
+    });
 
     // Save operator entry
     operators.push({
