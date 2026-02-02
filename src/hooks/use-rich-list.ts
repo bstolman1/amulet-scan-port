@@ -88,9 +88,12 @@ export function useRichList(limit: number = 100) {
         nextPage = response.next_page_token;
       }
       
-      // Debug: collect unique templates and sample contracts
+      // Debug: collect unique templates and sample AMULET contracts specifically
       const uniqueTemplates = [...new Set(holdings.map(e => e.template_id || "unknown"))];
-      const sampleContracts = holdings.slice(0, 5).map(event => {
+      const amuletSamples = holdings
+        .filter(e => e.template_id?.includes("Amulet") && !e.template_id?.includes("AmuletRules"))
+        .slice(0, 5);
+      const sampleContracts = amuletSamples.map(event => {
         const payload = event.create_arguments as any;
         const isLocked = event.template_id?.includes("LockedAmulet") || !!payload?.lock;
         return {
@@ -98,6 +101,7 @@ export function useRichList(limit: number = 100) {
           owner: pickOwner(payload, event.signatories?.[0]),
           rawPayload: payload,
           parsedBalance: pickBalanceCC(payload, isLocked),
+          rawAmount: payload?.amount?.initialAmount || payload?.amulet?.amount?.initialAmount || "not found",
         };
       });
       
