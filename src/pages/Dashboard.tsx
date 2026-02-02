@@ -90,7 +90,7 @@ const Dashboard = () => {
           <div className="relative glass-card p-6 text-center">
             <h2 className="text-3xl font-bold mb-1">Welcome to SCANTON</h2>
             <p className="text-muted-foreground">
-              Explore transactions, validators, and network statistics
+              Explore governance, validators, and network statistics
             </p>
           </div>
         </div>
