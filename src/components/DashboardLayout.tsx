@@ -55,7 +55,8 @@ const navigationGroups: NavGroup[] = [
     items: [
       { name: "Dashboard", href: "/", icon: BarChart3 },
       { name: "Supply", href: "/supply", icon: Coins },
-      { name: "Network Info", href: "/network-info", icon: Network },
+      { name: "Issuance Curve", href: "/issuance-curve", icon: TrendingUp },
+      { name: "Protocol Fees", href: "/protocol-fees", icon: DollarSign },
     ],
   },
   {
@@ -71,6 +72,7 @@ const navigationGroups: NavGroup[] = [
     items: [
       { name: "Validators", href: "/validators", icon: Zap },
       { name: "Licenses", href: "/validator-licenses", icon: Ticket },
+      { name: "Sequencers", href: "/sequencers", icon: Network },
       { name: "Round Stats", href: "/round-stats", icon: Layers },
       { name: "Traffic Status", href: "/traffic-status", icon: Radio },
     ],
