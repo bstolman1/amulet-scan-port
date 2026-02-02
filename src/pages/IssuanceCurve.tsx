@@ -6,10 +6,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ChevronRight, TrendingUp, Info } from "lucide-react";
-import { useAmuletRules, useLatestRound } from "@/hooks/use-canton-scan-api";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip as RechartsTooltip } from "recharts";
+import { ChevronRight, TrendingUp } from "lucide-react";
+import { useAmuletRules } from "@/hooks/use-canton-scan-api";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
 
 const REWARD_COLORS = {
   validator: "hsl(var(--chart-1))",
@@ -47,7 +46,7 @@ const RewardDistributionChart = ({ validatorPct, appPct, svPct }: RewardDistribu
               <Cell key={`cell-${index}`} fill={entry.color} />
             ))}
           </Pie>
-          <RechartsTooltip 
+          <Tooltip 
             formatter={(value: number) => [`${value.toFixed(1)}%`, "Share"]}
             contentStyle={{ 
               backgroundColor: "hsl(222 47% 11%)", 
@@ -95,140 +94,62 @@ interface NormalizedIssuanceFutureValue {
   values?: NormalizedIssuanceValue;
 }
 
-interface StageActivationInfo {
-  stage: number;
-  label: string;
-  activationTimestampMicros: number;
-  estimatedDate: string;
-  actualActivationRound: number | null;
-  effectiveAt: string | null;
-  status: "Active" | "Upcoming";
-  values: NormalizedIssuanceValue | undefined;
-}
-
 interface IssuanceTimelineProps {
   initialValue: NormalizedIssuanceValue | undefined;
   futureValues: NormalizedIssuanceFutureValue[] | undefined;
-  latestRound: { round: number; effectiveAt: string } | undefined;
 }
 
 const NETWORK_LAUNCH_DATE = new Date("2024-07-01T00:00:00Z");
 
-/**
- * Convert microseconds since launch to an absolute timestamp
- */
-const microsToTimestamp = (micros: number): number => {
-  return NETWORK_LAUNCH_DATE.getTime() + micros / 1000;
+const getMicrosecondsSinceLaunch = (): number => {
+  const now = new Date();
+  return (now.getTime() - NETWORK_LAUNCH_DATE.getTime()) * 1000;
 };
 
-/**
- * Format a timestamp as estimated date (e.g., "~Jan 2026")
- */
-const formatEstimatedDate = (timestampMs: number): string => {
-  const date = new Date(timestampMs);
-  return `~${date.toLocaleDateString("en-US", { month: "short", year: "numeric" })}`;
-};
+const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps) => {
+  const elapsedMicros = getMicrosecondsSinceLaunch();
+  const launchDate = new Date("2024-07-01T00:00:00Z");
+  
+  const formatDuration = (micros: number): string => {
+    const days = micros / 1_000_000 / 86_400;
+    if (days < 365) return `${Math.floor(days)} days`;
+    const years = days / 365;
+    return `${years.toFixed(1)} years`;
+  };
 
-/**
- * Format a timestamp as full UTC date/time
- */
-const formatEffectiveAt = (isoString: string): string => {
-  const date = new Date(isoString);
-  return date.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
-};
+  const formatDate = (micros: number): string => {
+    const date = new Date(launchDate.getTime() + micros / 1000);
+    return date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  };
 
-/**
- * Determine if a stage is active based on the latest round's effectiveAt
- * A stage is active when: round.effectiveAt >= stage.activationTimestamp
- */
-const computeStageActivation = (
-  initialValue: NormalizedIssuanceValue | undefined,
-  futureValues: NormalizedIssuanceFutureValue[] | undefined,
-  latestRound: { round: number; effectiveAt: string } | undefined
-): StageActivationInfo[] => {
-  const latestEffectiveAtMs = latestRound ? new Date(latestRound.effectiveAt).getTime() : Date.now();
-  
-  const stages: StageActivationInfo[] = [];
-  
-  // Stage 0 - always active from launch
-  stages.push({
-    stage: 0,
-    label: "Stage 0",
-    activationTimestampMicros: 0,
-    estimatedDate: "Jul 2024",
-    actualActivationRound: 0, // Round 0 at launch
-    effectiveAt: NETWORK_LAUNCH_DATE.toISOString(),
-    status: "Active",
-    values: initialValue,
-  });
-  
-  if (!futureValues) return stages;
-  
-  for (let i = 0; i < futureValues.length; i++) {
-    const fv = futureValues[i];
-    const activationMicros = Number(fv.effectiveAfterMicroseconds || 0);
-    const activationTimestampMs = microsToTimestamp(activationMicros);
-    
-    // Determine if this stage is active
-    // A stage is active when the latest round's effectiveAt >= stage's activation timestamp
-    const isActive = latestEffectiveAtMs >= activationTimestampMs;
-    
-    stages.push({
-      stage: i + 1,
-      label: `Stage ${i + 1}`,
-      activationTimestampMicros: activationMicros,
-      estimatedDate: formatEstimatedDate(activationTimestampMs),
-      actualActivationRound: isActive && latestRound ? latestRound.round : null,
-      effectiveAt: isActive && latestRound ? latestRound.effectiveAt : null,
-      status: isActive ? "Active" : "Upcoming",
-      values: fv.values,
-    });
-  }
-  
-  // Mark only the current active stage (last one that's active)
-  let foundActive = false;
-  for (let i = stages.length - 1; i >= 0; i--) {
-    if (stages[i].status === "Active" && !foundActive) {
-      foundActive = true;
-    } else if (stages[i].status === "Active") {
-      // Previous stages are past, not "Active"
-      stages[i].status = "Active"; // Keep as Active for display, but we'll style differently
-    }
-  }
-  
-  return stages;
-};
-
-const IssuanceTimeline = ({ initialValue, futureValues, latestRound }: IssuanceTimelineProps) => {
-  const stages = useMemo(
-    () => computeStageActivation(initialValue, futureValues, latestRound),
-    [initialValue, futureValues, latestRound]
-  );
-  
-  // Find the current active stage (the highest numbered active stage)
-  const currentStageIndex = stages.reduce((acc, s, idx) => 
-    s.status === "Active" ? idx : acc, 0
-  );
+  const stages = [
+    { 
+      stage: 0, 
+      label: "Stage 0", 
+      effectiveMicros: 0, 
+      values: initialValue,
+      isActive: !futureValues?.length || elapsedMicros < Number(futureValues[0].effectiveAfterMicroseconds || 0)
+    },
+    ...(futureValues || []).map((fv, idx) => {
+      const threshold = Number(fv.effectiveAfterMicroseconds || 0);
+      const nextThreshold = futureValues?.[idx + 1] 
+        ? Number(futureValues[idx + 1].effectiveAfterMicroseconds || 0) 
+        : Infinity;
+      return {
+        stage: idx + 1,
+        label: `Stage ${idx + 1}`,
+        effectiveMicros: threshold,
+        values: fv.values,
+        isActive: elapsedMicros >= threshold && elapsedMicros < nextThreshold
+      };
+    })
+  ];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">Network Launch: Jul 2024</span>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1 text-muted-foreground cursor-help">
-                <Info className="h-4 w-4" />
-                <span className="text-xs">How activation works</span>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              <p className="text-sm">
-                Minting stages activate on ledger round boundaries. Dates are approximate; round numbers are authoritative.
-              </p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <span className="font-medium text-primary">Elapsed: {formatDuration(elapsedMicros)}</span>
       </div>
       <div className="relative">
         {/* Timeline bar */}
@@ -236,19 +157,14 @@ const IssuanceTimeline = ({ initialValue, futureValues, latestRound }: IssuanceT
         
         <div className="space-y-2">
           {stages.map((s, idx) => {
-            const isCurrent = idx === currentStageIndex;
-            const isPast = idx < currentStageIndex;
-            const isFuture = s.status === "Upcoming";
-            
-            const valPct = parseFloat(s.values?.validatorRewardPercentage || "0");
-            const appPctVal = parseFloat(s.values?.appRewardPercentage || "0");
-            const svPctVal = 1 - valPct - appPctVal;
+            const isPast = elapsedMicros > s.effectiveMicros && !s.isActive;
+            const isFuture = elapsedMicros < s.effectiveMicros;
             
             return (
               <div key={idx} className="relative pl-10">
                 {/* Timeline dot */}
                 <div className={`absolute left-1.5 top-4 w-3.5 h-3.5 rounded-full border-2 ${
-                  isCurrent 
+                  s.isActive 
                     ? "bg-primary border-primary ring-4 ring-primary/20" 
                     : isPast 
                       ? "bg-muted-foreground/50 border-muted-foreground/50" 
@@ -256,66 +172,49 @@ const IssuanceTimeline = ({ initialValue, futureValues, latestRound }: IssuanceT
                 }`} />
                 
                 <div className={`p-4 rounded-lg text-sm transition-all ${
-                  isCurrent 
+                  s.isActive 
                     ? "bg-primary/10 border border-primary/30" 
                     : isPast
                       ? "bg-muted/30 opacity-60"
                       : "bg-muted/20"
                 }`}>
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-base">{s.label}</span>
-                      {isCurrent && <Badge variant="default" className="text-xs">Current</Badge>}
-                      {isFuture && idx === currentStageIndex + 1 && (
+                      {s.isActive && <Badge variant="default" className="text-xs">Current</Badge>}
+                      {isFuture && idx === stages.findIndex(st => elapsedMicros < st.effectiveMicros) && (
                         <Badge variant="outline" className="text-xs">Next</Badge>
                       )}
                     </div>
-                    <Badge variant={s.status === "Active" ? "default" : "secondary"} className="text-xs">
-                      {s.status}
-                    </Badge>
+                    <span className="text-sm text-muted-foreground">
+                      {s.effectiveMicros === 0 ? "Launch" : formatDate(s.effectiveMicros)}
+                    </span>
                   </div>
-                  
-                  {/* Activation details */}
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3 p-2 rounded bg-background/50">
-                    <div>
-                      <span className="text-muted-foreground">Estimated Activation:</span>
-                      <p className="font-medium">{s.estimatedDate}</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Actual Activation:</span>
-                      <p className="font-medium">
-                        {s.actualActivationRound !== null 
-                          ? `Round ${s.actualActivationRound.toLocaleString()}` 
-                          : "Not yet reached"}
-                      </p>
-                    </div>
-                    <div className="col-span-2">
-                      <span className="text-muted-foreground">Effective At:</span>
-                      <p className="font-medium font-mono text-xs">
-                        {s.effectiveAt ? formatEffectiveAt(s.effectiveAt) : "—"}
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {/* Issuance metrics */}
-                  <div className="grid grid-cols-4 gap-3 text-sm">
-                    <div>
-                      <span className="text-muted-foreground text-xs">Issuance</span>
-                      <p className="font-semibold">{formatLargeNumber(s.values?.amuletToIssuePerYear)}/yr</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground text-xs">Validator</span>
-                      <p className="font-semibold">{(valPct * 100).toFixed(0)}%</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground text-xs">App</span>
-                      <p className="font-semibold">{(appPctVal * 100).toFixed(0)}%</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground text-xs">SV</span>
-                      <p className="font-semibold">{(svPctVal * 100).toFixed(0)}%</p>
-                    </div>
-                  </div>
+                  {(() => {
+                    const valPct = parseFloat(s.values?.validatorRewardPercentage || "0");
+                    const appPctVal = parseFloat(s.values?.appRewardPercentage || "0");
+                    const svPctVal = 1 - valPct - appPctVal;
+                    return (
+                      <div className="grid grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <span className="text-muted-foreground text-xs">Issuance</span>
+                          <p className="font-semibold">{formatLargeNumber(s.values?.amuletToIssuePerYear)}/yr</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">Validator</span>
+                          <p className="font-semibold">{(valPct * 100).toFixed(0)}%</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">App</span>
+                          <p className="font-semibold">{(appPctVal * 100).toFixed(0)}%</p>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">SV</span>
+                          <p className="font-semibold">{(svPctVal * 100).toFixed(0)}%</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -358,10 +257,9 @@ const normalizeFutureValues = (futureValues: any): NormalizedIssuanceFutureValue
 
 const getCurrentIssuanceStage = (
   initialValue: NormalizedIssuanceValue | undefined,
-  futureValues: NormalizedIssuanceFutureValue[] | undefined,
-  latestRound: { round: number; effectiveAt: string } | undefined
+  futureValues: NormalizedIssuanceFutureValue[] | undefined
 ): { stage: number; label: string; values: NormalizedIssuanceValue | undefined } => {
-  const latestEffectiveAtMs = latestRound ? new Date(latestRound.effectiveAt).getTime() : Date.now();
+  const elapsedMicros = getMicrosecondsSinceLaunch();
   
   if (!futureValues || futureValues.length === 0) {
     return { stage: 0, label: "Initial", values: initialValue };
@@ -371,10 +269,8 @@ const getCurrentIssuanceStage = (
   let currentValues = initialValue;
   
   for (let i = 0; i < futureValues.length; i++) {
-    const activationMicros = Number(futureValues[i].effectiveAfterMicroseconds || 0);
-    const activationTimestampMs = microsToTimestamp(activationMicros);
-    
-    if (latestEffectiveAtMs >= activationTimestampMs) {
+    const threshold = Number(futureValues[i].effectiveAfterMicroseconds || 0);
+    if (elapsedMicros >= threshold) {
       currentStage = i + 1;
       currentValues = futureValues[i].values;
     } else {
@@ -387,11 +283,8 @@ const getCurrentIssuanceStage = (
 };
 
 export default function IssuanceCurve() {
-  const { data: amuletRulesData, isLoading: isLoadingRules } = useAmuletRules();
-  const { data: latestRoundData, isLoading: isLoadingRound } = useLatestRound();
+  const { data: amuletRulesData, isLoading } = useAmuletRules();
   const [jsonOpen, setJsonOpen] = useState(false);
-
-  const isLoading = isLoadingRules || isLoadingRound;
 
   const issuanceCurve = useMemo(() => {
     if (!amuletRulesData) return null;
@@ -434,8 +327,7 @@ export default function IssuanceCurve() {
 
   const { label, values } = getCurrentIssuanceStage(
     issuanceCurve.initialValue,
-    issuanceCurve.futureValues,
-    latestRoundData
+    issuanceCurve.futureValues
   );
   const validatorPct = parseFloat(values?.validatorRewardPercentage || "0");
   const appPct = parseFloat(values?.appRewardPercentage || "0");
@@ -465,11 +357,6 @@ export default function IssuanceCurve() {
                 <p className="text-2xl font-bold">{label}</p>
                 <Badge variant="default">Active</Badge>
               </div>
-              {latestRoundData && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Round {latestRoundData.round.toLocaleString()}
-                </p>
-              )}
             </CardContent>
           </Card>
           <Card>
@@ -545,7 +432,6 @@ export default function IssuanceCurve() {
               <IssuanceTimeline 
                 initialValue={issuanceCurve.initialValue}
                 futureValues={issuanceCurve.futureValues}
-                latestRound={latestRoundData}
               />
             </CardContent>
           </Card>
@@ -553,16 +439,16 @@ export default function IssuanceCurve() {
 
         <Collapsible open={jsonOpen} onOpenChange={setJsonOpen}>
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" className="flex items-center gap-2">
-              <ChevronRight className={`h-4 w-4 transition-transform ${jsonOpen ? "rotate-90" : ""}`} />
-              Raw JSON Data
+            <Button variant="outline" className="w-full justify-start">
+              <ChevronRight className={`h-4 w-4 mr-2 transition-transform ${jsonOpen ? "rotate-90" : ""}`} />
+              View Raw JSON
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <Card className="mt-2">
-              <CardContent className="p-4">
-                <pre className="text-xs overflow-auto max-h-96 bg-muted p-4 rounded-lg">
-                  {JSON.stringify(amuletRulesData, null, 2)}
+              <CardContent className="pt-4">
+                <pre className="text-xs overflow-auto max-h-96 bg-muted p-4 rounded">
+                  {JSON.stringify(issuanceCurve, null, 2)}
                 </pre>
               </CardContent>
             </Card>
