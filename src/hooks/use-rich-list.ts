@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { scanApi, HoldingsCreatedEvent } from "@/lib/api-client";
+import { scanApi, CreatedEvent } from "@/lib/api-client";
 
 export interface RichListHolder {
   owner: string;
@@ -31,7 +31,6 @@ function calculateEffectiveBalance(
   const rate = parseFloat(ratePerRound);
   
   // Approximate rounds held based on creation time
-  // This is a simplified calculation - actual holding fees depend on round transitions
   const microsecondsPerRound = BigInt(roundDuration);
   const elapsedMicros = BigInt(Date.now() * 1000) - createdAt;
   const roundsHeld = Math.max(0, Number(elapsedMicros / microsecondsPerRound));
@@ -43,7 +42,7 @@ function calculateEffectiveBalance(
 
 /**
  * Fetches all amulet holdings and aggregates them into a rich list
- * Uses /v0/holdings/state to get all amulet contracts and aggregates by owner
+ * Uses /v0/state/acs to get all Amulet contracts and aggregates by owner
  */
 export function useRichList(limit: number = 100) {
   return useQuery({
@@ -53,19 +52,26 @@ export function useRichList(limit: number = 100) {
       const latestRound = await scanApi.fetchLatestRound();
       const snapshot = await scanApi.fetchAcsSnapshotTimestamp(latestRound.effectiveAt, 0);
       
-      // Fetch all holdings (paginated)
-      const holdings: HoldingsCreatedEvent[] = [];
+      // Fetch all Amulet and LockedAmulet contracts using /v0/state/acs
+      const holdings: CreatedEvent[] = [];
       let nextPage: number | undefined = undefined;
       const pageSize = 1000; // Max page size for efficiency
       
+      // Templates for Amulet holdings
+      const templates = [
+        "Splice.Amulet:Amulet",
+        "Splice.Amulet:LockedAmulet"
+      ];
+      
       // Fetch up to 10 pages (10k contracts) to avoid infinite loops
       for (let i = 0; i < 10; i++) {
-        const response = await scanApi.fetchHoldingsState({
+        const response = await scanApi.fetchStateAcs({
           migration_id: 0,
           record_time: snapshot.record_time,
           record_time_match: "exact",
           page_size: pageSize,
           after: nextPage,
+          templates,
         });
         
         holdings.push(...response.created_events);
@@ -78,22 +84,24 @@ export function useRichList(limit: number = 100) {
       const holderMap = new Map<string, { unlocked: number; locked: number }>();
       
       for (const event of holdings) {
-        const args = event.create_arguments;
-        const owner = args.owner || event.signatories[0];
+        const payload = event.create_arguments as any;
+        const owner = payload?.owner || event.signatories?.[0];
         if (!owner) continue;
         
-        // Parse amount
+        // Parse amount from payload
         let balance = 0;
-        if (args.amount?.initialAmount) {
+        const amount = payload?.amount;
+        if (amount?.initialAmount) {
           balance = calculateEffectiveBalance(
-            args.amount.initialAmount,
-            args.amount.createdAt?.microseconds || "0",
-            args.amount.ratePerRound?.rate || "0",
+            amount.initialAmount,
+            amount.createdAt?.microseconds || "0",
+            amount.ratePerRound?.rate || "0",
             latestRound.round
           );
         }
         
-        const isLocked = !!args.lock;
+        // Check if this is a locked amulet
+        const isLocked = event.template_id?.includes("LockedAmulet") || !!payload?.lock;
         
         const existing = holderMap.get(owner) || { unlocked: 0, locked: 0 };
         if (isLocked) {
