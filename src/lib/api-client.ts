@@ -518,6 +518,57 @@ export interface AmuletConfigForRoundResponse {
   amulet_config: any;
 }
 
+export interface SvBftSequencersResponse {
+  bftSequencers: BftSequencerInfo[];
+}
+
+export interface BftSequencerInfo {
+  migrationId: number;
+  id: string;
+  p2pUrl: string;
+}
+
+export interface UpdateVerdictResponse {
+  update: UpdateByIdResponse;
+  verdict: {
+    update_id: string;
+    migration_id: number;
+    domain_id: string;
+    record_time: string;
+    finalization_time: string;
+    submitting_parties: string[];
+    submitting_participant_uid: string;
+    verdict_result: string;
+    mediator_group: number;
+    transaction_views?: {
+      views: TransactionView[];
+      root_views: number[];
+    };
+  };
+}
+
+export interface TransactionView {
+  view_id: number;
+  informees: string[];
+  confirming_parties: ConfirmingParty[];
+  sub_views: number[];
+}
+
+export interface ConfirmingParty {
+  parties: string[];
+  threshold: number;
+}
+
+export interface SynchronizerIdentitiesResponse {
+  identities: SynchronizerIdentity[];
+}
+
+export interface SynchronizerIdentity {
+  domain_id: string;
+  sequencer_id: string;
+  mediator_id: string;
+}
+
 /* =========================
  *       API CLIENT
  * ========================= */
@@ -781,6 +832,21 @@ export const scanApi = {
     return scanGet("/v0/feature-support");
   },
 
+  // GET /v0/sv-bft-sequencers - BFT sequencer config for this SV
+  async fetchSvBftSequencers(): Promise<SvBftSequencersResponse> {
+    return scanGet("/v0/sv-bft-sequencers");
+  },
+
+  // GET /v0/wallet-balance/{party} - Party wallet balance
+  async fetchWalletBalance(party: string): Promise<WalletBalanceResponse> {
+    return scanGet(`/v0/wallet-balance/${encodeURIComponent(party)}`);
+  },
+
+  // GET /v0/updates/verdict/{update_id} - Update with verdict details
+  async fetchUpdateVerdict(updateId: string): Promise<UpdateVerdictResponse> {
+    return scanGet(`/v0/updates/verdict/${encodeURIComponent(updateId)}`);
+  },
+
   // GET /v2/updates/{update_id}
   async fetchUpdateByIdV2(updateId: string, damlValueEncoding?: string): Promise<UpdateByIdResponse> {
     const params: Record<string, string> = {};
@@ -810,7 +876,7 @@ export const scanApi = {
   },
 
   // GET /v0/synchronizer-identities/{domain_id_prefix}
-  async fetchSynchronizerIdentities(domainIdPrefix: string): Promise<any> {
+  async fetchSynchronizerIdentities(domainIdPrefix: string): Promise<SynchronizerIdentitiesResponse> {
     return scanGet(`/v0/synchronizer-identities/${encodeURIComponent(domainIdPrefix)}`);
   },
 
