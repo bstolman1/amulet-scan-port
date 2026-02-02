@@ -57,10 +57,10 @@ export function useRichList(limit: number = 100) {
       let nextPage: number | undefined = undefined;
       const pageSize = 1000; // Max page size for efficiency
       
-      // Templates for Amulet holdings
+      // Templates for Amulet holdings (format: package:module:entity)
       const templates = [
-        "Splice.Amulet:Amulet",
-        "Splice.Amulet:LockedAmulet"
+        "Splice:Amulet:Amulet",
+        "Splice:Amulet:LockedAmulet"
       ];
       
       // Fetch up to 10 pages (10k contracts) to avoid infinite loops
