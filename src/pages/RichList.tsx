@@ -127,8 +127,77 @@ const RichList = () => {
               {error instanceof Error ? error.message : "Failed to load rich list data"}
             </p>
             <p className="text-xs text-muted-foreground mt-2">
-              The /v0/holdings/state endpoint may not be available on this SV
+              The /v0/state/acs endpoint may not be available on this SV
             </p>
+          </Card>
+        )}
+
+        {/* Debug Panel */}
+        {richListData?.debug && (
+          <Card className="glass-card p-4 border-warning/30 bg-warning/5">
+            <h4 className="font-bold text-warning mb-2">🔍 Debug Info</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div>
+                <p className="text-muted-foreground">Contracts Fetched:</p>
+                <p className="font-mono font-bold">{richListData.debug.contractsFetched}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Pages Loaded:</p>
+                <p className="font-mono font-bold">{richListData.debug.pagesLoaded}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Templates Queried:</p>
+                <p className="font-mono text-xs">{richListData.debug.templatesQueried.join(", ")}</p>
+              </div>
+            </div>
+            
+            {richListData.debug.uniqueTemplates.length > 0 && (
+              <div className="mt-4">
+                <p className="text-muted-foreground mb-1">Unique Templates Found ({richListData.debug.uniqueTemplates.length}):</p>
+                <div className="flex flex-wrap gap-1">
+                  {richListData.debug.uniqueTemplates.slice(0, 20).map((t) => (
+                    <Badge key={t} variant="outline" className="text-xs font-mono">
+                      {t}
+                    </Badge>
+                  ))}
+                  {richListData.debug.uniqueTemplates.length > 20 && (
+                    <Badge variant="outline" className="text-xs">
+                      +{richListData.debug.uniqueTemplates.length - 20} more
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            {richListData.debug.sampleContracts.length > 0 && (
+              <div className="mt-4">
+                <p className="text-muted-foreground mb-2">Sample Contracts:</p>
+                <div className="space-y-2 max-h-64 overflow-auto">
+                  {richListData.debug.sampleContracts.map((sample, i) => (
+                    <div key={i} className="p-2 rounded bg-muted/30 text-xs">
+                      <div className="flex gap-2 flex-wrap mb-1">
+                        <span className="text-muted-foreground">Template:</span>
+                        <span className="font-mono">{sample.template_id}</span>
+                      </div>
+                      <div className="flex gap-2 flex-wrap mb-1">
+                        <span className="text-muted-foreground">Owner:</span>
+                        <span className="font-mono">{sample.owner || "(none)"}</span>
+                      </div>
+                      <div className="flex gap-2 flex-wrap mb-1">
+                        <span className="text-muted-foreground">Parsed Balance:</span>
+                        <span className="font-mono">{sample.parsedBalance.toFixed(6)} CC</span>
+                      </div>
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-muted-foreground">Raw Payload</summary>
+                        <pre className="text-xs overflow-auto max-h-32 mt-1 p-1 bg-background rounded">
+                          {JSON.stringify(sample.rawPayload, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </Card>
         )}
 
