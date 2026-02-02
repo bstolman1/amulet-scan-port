@@ -396,3 +396,51 @@ export function useTrafficStatus(domainId: string | undefined, memberId: string 
     staleTime: 30 * 1000,
   });
 }
+
+// ============ BFT Sequencers ============
+export function useSvBftSequencers() {
+  return useQuery({
+    queryKey: ["scan-api", "sv-bft-sequencers"],
+    queryFn: () => scanApi.fetchSvBftSequencers(),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+// ============ Wallet Balance ============
+export function useWalletBalance(party: string | undefined) {
+  return useQuery({
+    queryKey: ["scan-api", "wallet-balance", party],
+    queryFn: async () => {
+      if (!party) throw new Error("Party required");
+      return scanApi.fetchWalletBalance(party);
+    },
+    enabled: !!party,
+    staleTime: 60 * 1000,
+  });
+}
+
+// ============ Update Verdict ============
+export function useUpdateVerdict(updateId: string | undefined) {
+  return useQuery({
+    queryKey: ["scan-api", "update-verdict", updateId],
+    queryFn: async () => {
+      if (!updateId) throw new Error("Update ID required");
+      return scanApi.fetchUpdateVerdict(updateId);
+    },
+    enabled: !!updateId,
+    staleTime: 5 * 60 * 1000, // Verdicts don't change
+  });
+}
+
+// ============ Synchronizer Identities ============
+export function useSynchronizerIdentities(domainIdPrefix: string | undefined) {
+  return useQuery({
+    queryKey: ["scan-api", "synchronizer-identities", domainIdPrefix],
+    queryFn: async () => {
+      if (!domainIdPrefix) throw new Error("Domain ID prefix required");
+      return scanApi.fetchSynchronizerIdentities(domainIdPrefix);
+    },
+    enabled: !!domainIdPrefix,
+    staleTime: 5 * 60 * 1000,
+  });
+}
