@@ -297,21 +297,35 @@ function loadCursorFromGCS() {
  * Also backs up to GCS if enabled to prevent cursor loss on restart
  */
 function saveLiveCursor(migrationId, afterRecordTime) {
-  if (!fs.existsSync(CURSOR_DIR)) {
-    fs.mkdirSync(CURSOR_DIR, { recursive: true });
-  }
-  const cursor = {
-    migration_id: migrationId,
-    record_time: afterRecordTime,
-    updated_at: new Date().toISOString(),
-    mode: 'live',
-    semantics: 'forward', // Explicit: fetch transactions AFTER this time
-  };
-  fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
-  
-  // Backup cursor to GCS if enabled
-  if (GCS_MODE) {
-    backupCursorToGCS(cursor);
+  try {
+    console.log(`  📍 Saving cursor to: ${LIVE_CURSOR_FILE}`);
+    console.log(`     CURSOR_DIR: ${CURSOR_DIR}`);
+    
+    if (!fs.existsSync(CURSOR_DIR)) {
+      console.log(`     Creating directory: ${CURSOR_DIR}`);
+      fs.mkdirSync(CURSOR_DIR, { recursive: true });
+    }
+    
+    const cursor = {
+      migration_id: migrationId,
+      record_time: afterRecordTime,
+      updated_at: new Date().toISOString(),
+      mode: 'live',
+      semantics: 'forward', // Explicit: fetch transactions AFTER this time
+    };
+    
+    fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
+    console.log(`  ✅ Local cursor saved: ${afterRecordTime}`);
+    
+    // Backup cursor to GCS if enabled
+    if (GCS_MODE) {
+      backupCursorToGCS(cursor);
+    } else {
+      console.log(`  ⚠️ GCS_MODE disabled, skipping GCS backup`);
+    }
+  } catch (err) {
+    console.error(`  ❌ Failed to save cursor: ${err.message}`);
+    console.error(`     Stack: ${err.stack}`);
   }
 }
 
