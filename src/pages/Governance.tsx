@@ -588,25 +588,33 @@ const Governance = () => {
                         <Badge className={getStatusColor(proposal.status)}>{proposal.status}</Badge>
                       </div>
 
-                      {/* Action Details */}
+                      {/* Action Details - Collapsible */}
                       {proposal.actionDetails && typeof proposal.actionDetails === "object" && (
-                        <div className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
-                          <p className="text-sm text-muted-foreground mb-2 font-semibold">Action Details:</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                            {Object.entries(proposal.actionDetails)
-                              .filter(([_, value]) => value !== null && value !== undefined)
-                              .map(([key, value]: [string, any]) => (
-                              <div key={key} className="flex flex-col">
-                                <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
-                                <span className="font-mono text-xs break-all">
-                                  {typeof value === "string" || typeof value === "number" 
-                                    ? String(value) 
-                                    : JSON.stringify(value)}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                        <Collapsible className="mb-4">
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="w-full justify-between p-3 h-auto rounded-lg bg-primary/5 border border-primary/20 hover:bg-primary/10">
+                              <span className="text-sm font-semibold">Action Details</span>
+                              <ChevronDown className="h-4 w-4" />
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-2 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                              {Object.entries(proposal.actionDetails)
+                                .filter(([_, value]) => value !== null && value !== undefined)
+                                .slice(0, 10) // Limit to first 10 fields
+                                .map(([key, value]: [string, any]) => (
+                                <div key={key} className="flex flex-col">
+                                  <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                                  <span className="font-mono text-xs break-all line-clamp-2">
+                                    {typeof value === "string" || typeof value === "number" 
+                                      ? String(value).slice(0, 100) + (String(value).length > 100 ? "..." : "")
+                                      : JSON.stringify(value).slice(0, 100) + (JSON.stringify(value).length > 100 ? "..." : "")}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       )}
 
                       {/* Reason Section */}
@@ -655,41 +663,54 @@ const Governance = () => {
                         </div>
                       </div>
 
-                      {/* Votes Cast */}
+                      {/* Votes Cast - Compact Collapsible */}
                       {proposal.votedSvs?.length > 0 && (
-                        <div className="mb-4">
-                          <p className="text-xs text-muted-foreground mb-2 font-semibold">Votes Cast ({proposal.votedSvs.length}):</p>
-                          <div className="space-y-2">
+                        <Collapsible className="mb-4">
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="w-full justify-between p-3 h-auto rounded-lg bg-muted/30 border border-border/30 hover:bg-muted/50">
+                              <div className="flex items-center gap-2">
+                                <Users className="h-4 w-4" />
+                                <span className="text-sm font-semibold">Votes Cast ({proposal.votedSvs.length})</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="border-success/50 text-success text-xs">
+                                  {proposal.votesFor} ✓
+                                </Badge>
+                                <Badge variant="outline" className="border-destructive/50 text-destructive text-xs">
+                                  {proposal.votesAgainst} ✗
+                                </Badge>
+                                <ChevronDown className="h-4 w-4" />
+                              </div>
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-2 space-y-1 max-h-48 overflow-y-auto">
                             {proposal.votedSvs.map((sv: any, idx: number) => (
                               <div 
                                 key={idx}
-                                className={`p-2 rounded border text-sm ${
+                                className={`px-3 py-2 rounded border text-sm flex items-center justify-between ${
                                   sv.vote === "accept" 
                                     ? "bg-success/5 border-success/30" 
                                     : "bg-destructive/5 border-destructive/30"
                                 }`}
                               >
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="font-medium">{sv.party}</span>
+                                <span className="font-medium text-xs truncate max-w-[200px]" title={sv.party}>{sv.party}</span>
+                                <div className="flex items-center gap-2">
+                                  {sv.castAt && (
+                                    <span className="text-xs text-muted-foreground hidden sm:inline">
+                                      {safeFormatDate(sv.castAt, "MMM d, HH:mm")}
+                                    </span>
+                                  )}
                                   <Badge 
                                     variant="outline" 
-                                    className={sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}
+                                    className={`text-xs ${sv.vote === "accept" ? "border-success text-success" : "border-destructive text-destructive"}`}
                                   >
-                                    {sv.vote === "accept" ? "✓ Accept" : "✗ Reject"}
+                                    {sv.vote === "accept" ? "✓" : "✗"}
                                   </Badge>
                                 </div>
-                                {sv.reason && typeof sv.reason === "string" && (
-                                  <p className="text-xs text-muted-foreground italic">"{sv.reason}"</p>
-                                )}
-                                {sv.castAt && (
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    Cast: {safeFormatDate(sv.castAt)}
-                                  </p>
-                                )}
                               </div>
                             ))}
-                          </div>
-                        </div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       )}
 
                       <CollapsibleTrigger asChild>
