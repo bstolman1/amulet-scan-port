@@ -54,14 +54,22 @@ const navigationGroups: NavGroup[] = [
     label: "Overview",
     items: [
       { name: "Dashboard", href: "/", icon: BarChart3 },
-      { name: "Supply", href: "/supply", icon: Coins },
       { name: "Issuance Curve", href: "/issuance-curve", icon: TrendingUp },
       { name: "Protocol Fees", href: "/protocol-fees", icon: DollarSign },
+      { name: "Price Votes", href: "/price-votes", icon: DollarSign },
     ],
   },
   {
-    label: "Transactions",
+    label: "Governance",
     items: [
+      { name: "Governance", href: "/governance", icon: Vote },
+      { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
+    ],
+  },
+  {
+    label: "Burn/Mint",
+    items: [
+      { name: "Mint", href: "/supply", icon: Coins },
       { name: "Transactions", href: "/transactions", icon: Activity },
       { name: "Transfers", href: "/transfers", icon: ArrowRightLeft },
       { name: "Rich List", href: "/rich-list", icon: Wallet },
@@ -81,17 +89,12 @@ const navigationGroups: NavGroup[] = [
     label: "Rewards",
     items: [
       { name: "Rewards", href: "/rewards", icon: Award },
-      { name: "Price Votes", href: "/price-votes", icon: DollarSign },
-      { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
     ],
   },
   {
-    label: "Governance",
+    label: "Exchange Data",
     items: [
-      { name: "Governance", href: "/governance", icon: Vote },
-      { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
-      { name: "Elections", href: "/elections", icon: Vote },
-      { name: "DSO State", href: "/dso-state", icon: Users },
+      { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
     ],
   },
   {
@@ -102,15 +105,6 @@ const navigationGroups: NavGroup[] = [
       { name: "Subscriptions", href: "/subscriptions", icon: Package },
     ],
   },
-  // {
-  //   label: "Rules",
-  //   items: [
-  //     { name: "Amulet Rules", href: "/amulet-rules", icon: Shield },
-  //     { name: "External Party", href: "/external-party-setup", icon: UserPlus },
-  //     { name: "External Rules", href: "/external-party-rules", icon: Shield },
-  //     { name: "Transfer Counters", href: "/transfer-counters", icon: Hash },
-  //   ],
-  // },
   {
     label: "Statistics",
     items: [
