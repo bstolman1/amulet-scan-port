@@ -1,35 +1,31 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, Coins, Database } from "lucide-react";
+import { Wallet, Coins, Clock, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Input } from "@/components/ui/input";
-import { useACSStatus } from "@/hooks/use-local-acs";
 import { ACSStatusBanner } from "@/components/ACSStatusBanner";
-import { useQuery } from "@tanstack/react-query";
-import { getRealtimeRichList, isApiAvailable } from "@/lib/duckdb-api-client";
+import { useRichList } from "@/hooks/use-rich-list";
+import { Button } from "@/components/ui/button";
+import { useQueryClient } from "@tanstack/react-query";
 
 const RichList = () => {
   const [searchTerm, setSearchTerm] = useState("");
-  const { data: acsStatus } = useACSStatus();
+  const queryClient = useQueryClient();
 
-  // Use real-time rich list endpoint (snapshot + v2/updates delta)
-  const { data: richListData, isLoading, error } = useQuery({
-    queryKey: ["acs-realtime-rich-list", searchTerm],
-    queryFn: async () => {
-      const available = await isApiAvailable();
-      if (!available) {
-        throw new Error("DuckDB API not available");
-      }
-      return getRealtimeRichList({ limit: 100, search: searchTerm || undefined });
-    },
-    staleTime: 30_000, // Shorter stale time for real-time data
-    enabled: acsStatus?.available !== false,
-  });
+  // Use Scan API rich list
+  const { data: richListData, isLoading, error, isFetching } = useRichList(100);
 
-  const topHolders = richListData?.data || [];
+  // Filter by search term client-side
+  const filteredHolders = useMemo(() => {
+    if (!richListData?.data) return [];
+    if (!searchTerm) return richListData.data;
+    const lower = searchTerm.toLowerCase();
+    return richListData.data.filter((h) => h.owner.toLowerCase().includes(lower));
+  }, [richListData?.data, searchTerm]);
+
   const totalSupply = richListData?.totalSupply || 0;
   const holderCount = richListData?.holderCount || 0;
 
@@ -46,28 +42,39 @@ const RichList = () => {
     return parts[0]?.substring(0, 30) || party.substring(0, 30);
   };
 
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["scan-api", "rich-list"] });
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <ACSStatusBanner />
         <div>
-        <div className="flex items-center gap-2 mb-2">
-          <h2 className="text-3xl font-bold">Rich List</h2>
-          {acsStatus?.available && (
-            <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30">
-              <Database className="h-3 w-3 mr-1" />
-              {richListData?.isRealtime ? "Real-time" : "Snapshot"}
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-3xl font-bold">Rich List</h2>
+            <Badge variant="outline" className="bg-success/10 text-success border-success/30">
+              <Clock className="h-3 w-3 mr-1" />
+              Live API
             </Badge>
-          )}
-        </div>
-        <p className="text-muted-foreground">
-          Top CC holders and balance distribution
-          {richListData?.snapshotRecordTime && (
-            <span className="text-xs ml-2">
-              (Snapshot + updates since {new Date(richListData.snapshotRecordTime).toLocaleString()})
-            </span>
-          )}
-        </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isFetching}
+              className="ml-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
+          <p className="text-muted-foreground">
+            Top CC holders and balance distribution
+            {richListData?.recordTime && (
+              <span className="text-xs ml-2">
+                (As of round {richListData.round.toLocaleString()} - {new Date(richListData.recordTime).toLocaleString()})
+              </span>
+            )}
+          </p>
         </div>
 
         {/* Summary Cards */}
@@ -82,14 +89,14 @@ const RichList = () => {
             ) : (
               <>
                 <p className="text-3xl font-bold text-primary mb-1">{holderCount.toLocaleString()}</p>
-                <p className="text-xs text-muted-foreground">Unique holders</p>
+                <p className="text-xs text-muted-foreground">Unique holders (from holdings state)</p>
               </>
             )}
           </Card>
 
           <Card className="glass-card p-6">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium text-muted-foreground">Total Balance</h3>
+              <h3 className="text-sm font-medium text-muted-foreground">Total Balance (Top 100)</h3>
               <Coins className="h-5 w-5 text-success" />
             </div>
             {isLoading ? (
@@ -97,7 +104,7 @@ const RichList = () => {
             ) : (
               <>
                 <p className="text-3xl font-bold text-success mb-1">{formatAmount(totalSupply)}</p>
-                <p className="text-xs text-muted-foreground">CC</p>
+                <p className="text-xs text-muted-foreground">CC (after holding fees)</p>
               </>
             )}
           </Card>
@@ -120,7 +127,7 @@ const RichList = () => {
               {error instanceof Error ? error.message : "Failed to load rich list data"}
             </p>
             <p className="text-xs text-muted-foreground mt-2">
-              Make sure the local DuckDB server is running at localhost:3001
+              The /v0/holdings/state endpoint may not be available on this SV
             </p>
           </Card>
         )}
@@ -130,12 +137,18 @@ const RichList = () => {
           <div className="p-6">
             <h3 className="text-xl font-bold mb-4">Top 100 Holders</h3>
             {isLoading ? (
-              <Skeleton className="h-96 w-full" />
-            ) : topHolders.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">No holders found</p>
+              <div className="space-y-3">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <Skeleton key={i} className="h-32 w-full" />
+                ))}
+              </div>
+            ) : filteredHolders.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">
+                {searchTerm ? "No holders match your search" : "No holders found"}
+              </p>
             ) : (
               <div className="space-y-3">
-                {topHolders.map((holder, index) => (
+                {filteredHolders.map((holder, index) => (
                   <Card key={holder.owner} className="p-4 hover:shadow-md transition-smooth">
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-center space-x-3">
@@ -159,19 +172,19 @@ const RichList = () => {
                         <p className="text-xs text-muted-foreground mb-1">Unlocked Balance</p>
                         <p className="text-lg font-bold text-success">{formatAmount(holder.amount)} CC</p>
                       </div>
-                      
+
                       <div className="p-3 rounded-lg bg-warning/10 border border-warning/20">
                         <p className="text-xs text-muted-foreground mb-1">Locked Balance</p>
                         <p className="text-lg font-bold text-warning">{formatAmount(holder.locked)} CC</p>
                       </div>
-                      
+
                       <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
                         <p className="text-xs text-muted-foreground mb-1">Total Balance</p>
                         <p className="text-xl font-bold text-primary">{formatAmount(holder.total)} CC</p>
                       </div>
-                      
+
                       <div className="p-3 rounded-lg bg-muted/30">
-                        <p className="text-xs text-muted-foreground mb-1">% of Total Supply</p>
+                        <p className="text-xs text-muted-foreground mb-1">% of Top 100</p>
                         <p className="text-lg font-bold">
                           {totalSupply > 0 ? ((holder.total / totalSupply) * 100).toFixed(4) : 0}%
                         </p>
