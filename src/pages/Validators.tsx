@@ -120,17 +120,26 @@ const Validators = () => {
   const displayModel = useMemo(() => {
     if (!configData) return null;
 
-    const allSVs = configData.superValidators || [];
     const operators = configData.operators || [];
 
-    // Calculate total operator weight (the invariant)
-    const totalOperatorWeightBps = operators.reduce(
-      (sum: number, op: any) => sum + normalizeBps(op.rewardWeightBps),
-      0
+    // Find GSF operator - the primary operator with extraBeneficiaries
+    const gsfOperator = operators.find(
+      (op: any) => op.name === "Global-Synchronizer-Foundation"
     );
 
-    // Group beneficiaries by their economic identity (name without ghost suffix)
-    // Key insight: A beneficiary's "earned weight" is the sum of all their custody paths
+    if (!gsfOperator) {
+      return null;
+    }
+
+    // The invariant: GSF's declared reward weight
+    const totalOperatorWeightBps = normalizeBps(gsfOperator.rewardWeightBps);
+
+    // Ghost ledger for advanced view
+    const ghostLedger: GhostLedgerEntry[] = [];
+
+    // Group beneficiaries by their economic identity
+    // Key insight: Multiple entries with same party_id get merged
+    // Ghost entries get attributed to their source beneficiary
     const beneficiaryMap = new Map<string, {
       name: string;
       totalWeightBps: number;
@@ -140,29 +149,36 @@ const Validators = () => {
       operatorName: string;
     }>();
 
-    // Ghost ledger for advanced view
-    const ghostLedger: GhostLedgerEntry[] = [];
+    const extraBeneficiaries = gsfOperator.extraBeneficiaries || [];
 
-    for (const sv of allSVs) {
-      const isGhost = sv.isGhost ?? false;
-      const weightBps = normalizeBps(sv.weight);
+    for (const entry of extraBeneficiaries) {
+      const fullPartyId = entry.beneficiary;
+      const [rawName] = fullPartyId.split("::");
+      const weightBps = normalizeBps(entry.weight);
+      const comment = entry.comment || "";
+
+      // Determine if this is a ghost/escrow entry
+      const isGhostEntry = rawName.toLowerCase().includes("ghost");
       
-      if (isGhost) {
-        // This is a ghost entry - find the source beneficiary from the name
-        // Ghost names typically contain the beneficiary name (e.g., "Fireblocks-ghost")
-        const sourceName = sv.name.replace(/-ghost.*$/i, "").replace(/ghost$/i, "").trim();
-        
-        // Add to ghost ledger
+      if (isGhostEntry) {
+        // Extract source beneficiary name from ghost name (e.g., "Fireblocks-ghost-1" → "Fireblocks")
+        const sourceName = rawName
+          .replace(/-ghost.*$/i, "")
+          .replace(/ghost.*$/i, "")
+          .replace(/-\d+$/, "")
+          .trim();
+
+        // Add to ghost ledger for advanced view
         ghostLedger.push({
           ghostHolder: "GhostSV",
-          sourceBeneficiary: sourceName || sv.operatorName,
+          sourceBeneficiary: sourceName || rawName,
           weightBps,
           weightPct: bpsToPercent(weightBps),
-          cip: sv.comment,
+          cip: comment,
         });
 
         // Find or create the source beneficiary entry
-        const key = sourceName || sv.operatorName;
+        const key = sourceName || rawName;
         const existing = beneficiaryMap.get(key);
         if (existing) {
           existing.totalWeightBps += weightBps;
@@ -172,7 +188,7 @@ const Validators = () => {
             weightBps,
             weightPct: bpsToPercent(weightBps),
             isGhost: true,
-            partyId: sv.fullPartyId,
+            partyId: fullPartyId,
           });
         } else {
           beneficiaryMap.set(key, {
@@ -185,39 +201,39 @@ const Validators = () => {
               weightBps,
               weightPct: bpsToPercent(weightBps),
               isGhost: true,
-              partyId: sv.fullPartyId,
+              partyId: fullPartyId,
             }],
-            operatorName: sv.operatorName,
+            operatorName: gsfOperator.name,
           });
         }
       } else {
-        // This is a direct holding
-        const key = sv.name;
+        // Direct holding - use the name as-is
+        const key = rawName;
         const existing = beneficiaryMap.get(key);
         if (existing) {
           existing.totalWeightBps += weightBps;
           existing.directWeightBps += weightBps;
           existing.custodyBreakdown.unshift({
-            label: `Held directly by ${sv.name}`,
+            label: `Held directly by ${rawName}`,
             weightBps,
             weightPct: bpsToPercent(weightBps),
             isGhost: false,
-            partyId: sv.fullPartyId,
+            partyId: fullPartyId,
           });
         } else {
           beneficiaryMap.set(key, {
-            name: sv.name,
+            name: rawName,
             totalWeightBps: weightBps,
             directWeightBps: weightBps,
             ghostWeightBps: 0,
             custodyBreakdown: [{
-              label: `Held directly by ${sv.name}`,
+              label: `Held directly by ${rawName}`,
               weightBps,
               weightPct: bpsToPercent(weightBps),
               isGhost: false,
-              partyId: sv.fullPartyId,
+              partyId: fullPartyId,
             }],
-            operatorName: sv.operatorName,
+            operatorName: gsfOperator.name,
           });
         }
       }
@@ -256,10 +272,11 @@ const Validators = () => {
     const driftPct = ((drift / totalOperatorWeightBps) * 100).toFixed(2);
     const invariantSatisfied = Math.abs(drift) <= 1;
 
-    // Network share calculation
-    const networkSharePct = ((totalOperatorWeightBps / (165.50 * 100)) * 100).toFixed(2);
+    // Network share: GSF's weight as % of total network (100% = 1,000,000 bps)
+    const networkSharePct = ((totalOperatorWeightBps / 1000000) * 100).toFixed(2);
 
     return {
+      operatorName: gsfOperator.name,
       totalOperatorWeightBps,
       totalOperatorWeightPct: bpsToPercent(totalOperatorWeightBps),
       totalBeneficiaryWeightBps,
