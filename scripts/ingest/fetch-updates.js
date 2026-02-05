@@ -111,7 +111,7 @@ function setDataSource(source) {
 }
 
 // Configuration
-const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
+let activeScanUrl = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 100;
 const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 5000;
 const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000; // 30s default
@@ -135,9 +135,9 @@ const ALL_SCAN_ENDPOINTS = [
   { name: 'C7-Technology-Services-Limited', url: 'https://scan.sv-1.global.canton.network.c7.digital/api/scan' },
 ];
 
-// Axios client with explicit timeout
+// Axios client with explicit timeout (baseURL updated dynamically by probe)
 const client = axios.create({
-  baseURL: SCAN_URL,
+  baseURL: activeScanUrl,
   timeout: FETCH_TIMEOUT_MS,
   httpsAgent: new https.Agent({ rejectUnauthorized: false }),
 });
@@ -924,7 +924,7 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       console.error('\n' + '='.repeat(60));
       console.error(`🔐 ${err.response.status} ERROR - Full diagnostic info:`);
       console.error('='.repeat(60));
-      console.error('Request URL:', SCAN_URL + '/v2/updates');
+      console.error('Request URL:', activeScanUrl + '/v2/updates');
       console.error('After migration:', afterMigrationId);
       console.error('After record_time:', afterRecordTime);
       console.error('\nResponse status:', err.response.status);
@@ -981,6 +981,9 @@ async function processUpdates(items) {
  * Pre-flight: Probe all known Scan API endpoints for reachability.
  * Uses GET /v0/dso (lightweight, method-safe) with a 10s timeout.
  * Logs individual results so operators can see which endpoints work.
+ * 
+ * AUTO-FAILOVER: If the active endpoint is unreachable, automatically
+ * switches to the fastest healthy endpoint and updates the axios client.
  */
 async function probeAllScanEndpoints() {
   console.log(`\n${"─".repeat(60)}`);
@@ -998,17 +1001,22 @@ async function probeAllScanEndpoints() {
           headers: { 'Accept': 'application/json' },
         });
         const latencyMs = Date.now() - probeStart;
-        return { name: ep.name, healthy: true, status: response.status, latencyMs };
+        return { name: ep.name, url: ep.url, healthy: true, status: response.status, latencyMs };
       } catch (err) {
         const latencyMs = Date.now() - probeStart;
         const status = err.response?.status || null;
-        return { name: ep.name, healthy: false, status, error: err.code || err.message, latencyMs };
+        return { name: ep.name, url: ep.url, healthy: false, status, error: err.code || err.message, latencyMs };
       }
     })
   );
 
-  let healthyCount = 0;
-  const activeEndpointName = ALL_SCAN_ENDPOINTS.find(e => e.url === SCAN_URL)?.name || 'Custom';
+  // Collect healthy endpoints sorted by latency (fastest first)
+  const healthyEndpoints = results
+    .filter(r => r.status === 'fulfilled' && r.value.healthy)
+    .map(r => r.value)
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+
+  const activeEndpointName = ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom';
 
   for (const r of results) {
     const ep = r.status === 'fulfilled' ? r.value : { name: '?', healthy: false, error: 'Promise rejected' };
@@ -1018,23 +1026,29 @@ async function probeAllScanEndpoints() {
       ? `HTTP ${ep.status} in ${ep.latencyMs}ms`
       : `${ep.error || 'HTTP ' + ep.status} (${ep.latencyMs}ms)`;
     console.log(`  ${icon}  ${ep.name} — ${detail}${active}`);
-    if (ep.healthy) healthyCount++;
   }
 
   console.log(`${"─".repeat(60)}`);
-  console.log(`  ${healthyCount}/${ALL_SCAN_ENDPOINTS.length} endpoints reachable`);
+  console.log(`  ${healthyEndpoints.length}/${ALL_SCAN_ENDPOINTS.length} endpoints reachable`);
   
-  if (healthyCount === 0) {
+  if (healthyEndpoints.length === 0) {
     console.error(`\n🔴 FATAL: No Scan API endpoints are reachable! Check network/DNS.`);
     log('error', 'all_endpoints_unreachable', { probed: ALL_SCAN_ENDPOINTS.length });
   } else {
-    const activeReachable = results.some(r => 
-      r.status === 'fulfilled' && r.value.name === activeEndpointName && r.value.healthy
-    );
+    const activeReachable = healthyEndpoints.some(ep => ep.name === activeEndpointName);
     if (!activeReachable) {
-      console.warn(`\n⚠️  WARNING: Active endpoint "${activeEndpointName}" is NOT reachable!`);
-      console.warn(`   Consider switching SCAN_URL to a healthy endpoint.`);
-      log('warn', 'active_endpoint_unreachable', { name: activeEndpointName, scan_url: SCAN_URL });
+      // AUTO-FAILOVER: Switch to the fastest healthy endpoint
+      const best = healthyEndpoints[0];
+      console.warn(`\n⚠️  Active endpoint "${activeEndpointName}" is NOT reachable!`);
+      console.log(`🔄 AUTO-FAILOVER: Switching to fastest healthy endpoint: ${best.name} (${best.latencyMs}ms)`);
+      activeScanUrl = best.url;
+      client.defaults.baseURL = best.url;
+      log('warn', 'auto_failover', { 
+        from: activeEndpointName, 
+        to: best.name, 
+        latencyMs: best.latencyMs,
+        newUrl: best.url,
+      });
     }
   }
   
@@ -1042,8 +1056,9 @@ async function probeAllScanEndpoints() {
   
   log('info', 'endpoint_probe_complete', { 
     total: ALL_SCAN_ENDPOINTS.length, 
-    healthy: healthyCount,
-    active: activeEndpointName,
+    healthy: healthyEndpoints.length,
+    active: ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom',
+    activeUrl: activeScanUrl,
   });
 }
 
@@ -1067,7 +1082,7 @@ async function runIngestion() {
   
   console.log("\n" + "=".repeat(60));
   console.log(`🚀 Starting Canton ledger updates (${modeLabel} mode)`);
-  console.log("   SCAN_URL:", SCAN_URL);
+  console.log("   SCAN_URL:", activeScanUrl);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   POLL_INTERVAL:", POLL_INTERVAL, "ms");
   console.log("   PAGINATION: FORWARD (after semantics, NOT before)");
@@ -1112,7 +1127,7 @@ async function runIngestion() {
   
   log('info', 'ingestion_start', { 
     mode: modeLabel,
-    scan_url: SCAN_URL,
+    scan_url: activeScanUrl,
     batch_size: BATCH_SIZE,
     poll_interval: POLL_INTERVAL,
     gcs_mode: GCS_MODE,
