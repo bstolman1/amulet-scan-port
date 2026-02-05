@@ -592,9 +592,12 @@ function findLatestFromGCS() {
   const GCS_BUCKET = process.env.GCS_BUCKET;
   if (!GCS_BUCKET) return null;
 
-  // Scan both updates/ and backfill/updates/ prefixes
+  // Scan actual GCS paths matching getPartitionPath() output:
+  //   source='updates', type='updates' → raw/updates/updates/
+  //   source='updates', type='events'  → raw/updates/events/
+  //   source='backfill', type='updates' → raw/backfill/updates/
   const prefixes = [
-    `gs://${GCS_BUCKET}/raw/updates/`,
+    `gs://${GCS_BUCKET}/raw/updates/updates/`,
     `gs://${GCS_BUCKET}/raw/backfill/updates/`,
   ];
 
