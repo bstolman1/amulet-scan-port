@@ -25,6 +25,14 @@ import { format } from "date-fns";
 import { apiFetch } from "@/lib/duckdb-api-client";
 import { cn } from "@/lib/utils";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
+import { useVotingThreshold } from "@/hooks/use-voting-threshold";
+import {
+  parseVotes as parseVotesShared,
+  determineVoteStatus,
+  parseAction as parseActionShared,
+  extractSimpleFields as extractSimpleFieldsShared,
+} from "@/lib/governance-utils";
+
 // Safe date formatter that won't crash on invalid dates
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
   if (!dateStr || typeof dateStr !== "string") return "N/A";
@@ -187,101 +195,11 @@ const Governance = () => {
     return undefined;
   };
 
-  // Helper to extract simple displayable values from nested objects
-  const extractSimpleFields = (obj: any, prefix = "", depth = 0): Record<string, string> => {
-    if (!obj || depth > 2) return {}; // Limit depth to prevent huge JSON dumps
-    
-    const result: Record<string, string> = {};
-    
-    for (const [key, value] of Object.entries(obj)) {
-      // Skip internal/technical fields
-      if (["tag", "value", "packageId", "moduleName", "entityName", "dso"].includes(key)) continue;
-      
-      const fieldName = prefix ? `${prefix}.${key}` : key;
-      
-      if (value === null || value === undefined) continue;
-      
-      if (typeof value === "string") {
-        // Only include if it's not a huge hash/ID
-        if (value.length < 100 && !value.match(/^[a-f0-9]{64}$/i)) {
-          result[fieldName] = value;
-        }
-      } else if (typeof value === "number" || typeof value === "boolean") {
-        result[fieldName] = String(value);
-      } else if (Array.isArray(value)) {
-        // Show array length instead of contents
-        if (value.length > 0 && typeof value[0] !== "object") {
-          result[fieldName] = value.slice(0, 3).join(", ") + (value.length > 3 ? ` (+${value.length - 3} more)` : "");
-        } else {
-          result[fieldName] = `[${value.length} items]`;
-        }
-      } else if (typeof value === "object") {
-        // Recurse into nested objects but limit depth
-        const nested = extractSimpleFields(value, fieldName, depth + 1);
-        Object.assign(result, nested);
-      }
-    }
-    
-    return result;
-  };
-
-  // Helper to parse action structure and extract meaningful title
-  const parseAction = (action: any): { title: string; actionType: string; actionDetails: Record<string, string> } => {
-    if (!action) return { title: "Unknown Action", actionType: "Unknown", actionDetails: {} };
-    
-    // Handle nested tag/value structure: { tag: "ARC_DsoRules", value: { dsoAction: { tag: "SRARC_...", value: {...} } } }
-    const outerTag = action.tag || Object.keys(action)[0] || "Unknown";
-    const outerValue = action.value || action[outerTag] || action;
-    
-    // Extract inner action (e.g., dsoAction)
-    const innerAction = outerValue?.dsoAction || outerValue?.amuletRulesAction || outerValue;
-    const innerTag = innerAction?.tag || "";
-    const innerValue = innerAction?.value || innerAction;
-    
-    // Build human-readable title
-    const actionType = innerTag || outerTag;
-    const title = actionType
-      .replace(/^(SRARC_|ARC_|CRARC_|ARAC_)/, "")
-      .replace(/([A-Z])/g, " $1")
-      .trim();
-    
-    // Extract only simple displayable fields
-    const actionDetails = extractSimpleFields(innerValue);
-    
-    return { title, actionType, actionDetails };
-  };
-
-  // Helper to parse votes array (format: [[svName, voteObj], ...])
-  const parseVotes = (votes: any): { votesFor: number; votesAgainst: number; votedSvs: any[] } => {
-    if (!votes) return { votesFor: 0, votesAgainst: 0, votedSvs: [] };
-    
-    // Handle array of tuples format: [["SV Name", { sv, accept, reason, optCastAt }], ...]
-    const votesArray = Array.isArray(votes) ? votes : Object.entries(votes);
-    
-    let votesFor = 0;
-    let votesAgainst = 0;
-    const votedSvs: any[] = [];
-    
-    for (const vote of votesArray) {
-      const [svName, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-      const isAccept = voteData?.accept === true || voteData?.Accept === true;
-      const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
-      
-      if (isAccept) votesFor++;
-      else if (isReject) votesAgainst++;
-      
-      votedSvs.push({
-        party: svName,
-        sv: voteData?.sv || svName,
-        vote: isAccept ? "accept" : isReject ? "reject" : "abstain",
-        reason: voteData?.reason?.body || voteData?.reason || "",
-        reasonUrl: voteData?.reason?.url || "",
-        castAt: voteData?.optCastAt || null,
-      });
-    }
-    
-    return { votesFor, votesAgainst, votedSvs };
-  };
+  // Use shared utilities from governance-utils for consistency
+  // These delegate to the centralized implementations
+  const extractSimpleFields = extractSimpleFieldsShared;
+  const parseAction = parseActionShared;
+  const parseVotes = parseVotesShared;
 
   // Use Scan API data as primary source, fallback to local ACS
   const rawVoteRequests = activeVoteRequestsData?.data || voteRequestsData?.data || [];
@@ -322,22 +240,17 @@ const Governance = () => {
       // - There are no exercised events - only created contracts exist
       // - This threshold-based logic approximates what an active proposal looks like
       const threshold = votingThreshold || svCount || 1;
-      let status: "approved" | "rejected" | "pending" = "pending";
-      
-      // Check if voting deadline has passed
-      const now = new Date();
-      const voteDeadline = voteBefore ? new Date(voteBefore) : null;
-      const isExpired = voteDeadline && voteDeadline < now;
-      
-      // Only mark as approved if enough votes FOR
-      if (votesFor >= threshold) {
-        status = "approved";
-      } 
-      // Only mark as rejected if deadline passed AND not enough votes
-      else if (isExpired && votesFor < threshold) {
-        status = "rejected";
-      }
-      // Otherwise it's still pending (deadline not reached or voting ongoing)
+
+      // Use shared status determination utility for consistency
+      const { status: derivedStatus } = determineVoteStatus(
+        votesFor,
+        threshold,
+        voteBefore
+      );
+
+      // Map 'expired' to 'rejected' for display in active proposals context
+      // (expired proposals that didn't pass are functionally rejected)
+      const status = derivedStatus === "expired" ? "rejected" : derivedStatus;
 
       return {
         id: trackingCid?.slice(0, 12) || "unknown",

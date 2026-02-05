@@ -56,6 +56,16 @@ import { cn } from "@/lib/utils";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 import { LearnFromCorrectionsPanel } from "@/components/LearnFromCorrectionsPanel";
 import { GoldenSetManagementPanel } from "@/components/GoldenSetManagementPanel";
+import { useVotingThreshold } from "@/hooks/use-voting-threshold";
+import {
+  countVotes,
+  determineVoteStatus,
+  mapOutcomeToStatus,
+  extractVoteTypeMapping,
+  isMilestoneVote as isMilestoneVoteUtil,
+  type VoteStatus,
+  type VoteTypeMapping,
+} from "@/lib/governance-utils";
 
 
 interface TopicIdentifiers {
@@ -177,154 +187,32 @@ interface VoteRequest {
 }
 
 // Helper to extract reference key from VoteRequest for mapping
-interface VoteRequestMapping {
-  type: 'cip' | 'featured-app' | 'validator' | 'protocol-upgrade' | 'other';
-  key: string;
-  stage: 'sv-onchain-vote' | 'sv-milestone';
-}
-
-// Helper to detect if a vote represents a milestone/reward vote
-// NOTE: some milestone votes don't encode “milestone” in the action tag, but do in the proposal text.
-const isMilestoneVote = (actionTag: string, text: string): boolean => {
-  // We keep this intentionally broad because Scan/ACS action tags and reason text have evolved over time.
-  // Text variants we see include: "milestone", "milestones", and "milestone(s)".
-  const milestoneText = /\bmilestone(?:s|\(s\))?\b/i;
-
-  return (
-    /MintUnclaimedRewards/i.test(actionTag) ||
-    /SRARC_MintUnclaimed/i.test(actionTag) ||
-    /MintRewards/i.test(actionTag) ||
-    /DistributeRewards/i.test(actionTag) ||
-    /Reward/i.test(actionTag) ||
-    /Coupon/i.test(actionTag) ||
-    milestoneText.test(text)
-  );
-};
-
-// Updated interface to support multiple stages for a single vote
-interface VoteRequestMappingMulti {
-  type: 'cip' | 'featured-app' | 'validator' | 'protocol-upgrade' | 'other';
-  key: string;
-  stages: Array<'sv-onchain-vote' | 'sv-milestone'>; // A vote can appear in multiple stages
-}
-
-const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteRequestMappingMulti | null => {
+// Uses shared utility from governance-utils with corrected type classification order
+const extractVoteRequestMapping = (voteRequest: VoteRequest): VoteTypeMapping | null => {
   const reason = voteRequest.payload?.reason;
   const actionTag = voteRequest.payload?.action?.tag || '';
   const actionValue = voteRequest.payload?.action?.value || {};
-  const text = `${reason?.body || ''} ${reason?.url || ''}`;
-  
-  // Determine stages: milestone votes appear in BOTH on-chain vote AND milestone categories
-  const stages: Array<'sv-onchain-vote' | 'sv-milestone'> = ['sv-onchain-vote'];
-  if (isMilestoneVote(actionTag, text)) {
-    stages.push('sv-milestone');
-  }
-  
-  // Check for CIP references
-  const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
-  if (cipMatch) {
-    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stages };
-  }
-  
-  // Check for Featured App actions
-  if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
-      actionTag.includes('SetFeaturedAppRight') || text.toLowerCase().includes('featured app') ||
-      isMilestoneVote(actionTag, text)) {
-    // Extract app name from action value or reason
-    const appName =
-      (actionValue as any)?.provider ||
-      (actionValue as any)?.featuredAppProvider ||
-      (actionValue as any)?.featuredApp ||
-      (actionValue as any)?.beneficiary ||
-      (actionValue as any)?.name ||
-      text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
-      text.match(/app[:\s]+([^\s,]+)/i)?.[1];
-    if (appName) {
-      const normalized = String(appName).replace(/::/g, '::').toLowerCase();
-      return { type: 'featured-app', key: normalized, stages };
-    }
-  }
-  
-  // Check for Validator actions
-  if (actionTag.includes('OnboardValidator') || actionTag.includes('OffboardValidator') ||
-      actionTag.includes('ValidatorOnboarding') || text.toLowerCase().includes('validator')) {
-    const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
-                         text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
-    if (validatorName) {
-      return { type: 'validator', key: validatorName.toLowerCase(), stages };
-    }
-  }
-  
-  // Check for Protocol Upgrade actions
-  if (actionTag.includes('ScheduleDomainMigration') || actionTag.includes('ProtocolUpgrade') ||
-      actionTag.includes('Synchronizer') || text.toLowerCase().includes('migration') ||
-      text.toLowerCase().includes('splice')) {
-    const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
-                   text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
-    return { type: 'protocol-upgrade', key: version || 'upgrade', stages };
-  }
-  
-  return null;
+  return extractVoteTypeMapping(
+    actionTag,
+    actionValue,
+    reason?.body || '',
+    reason?.url || ''
+  );
 };
 
 // Extract reference key from ParsedVoteResult (historical votes from Scan API)
-const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteRequestMappingMulti | null => {
+// Uses shared utility from governance-utils with corrected type classification order
+const extractHistoricalVoteMapping = (vote: ParsedVoteResult): VoteTypeMapping | null => {
   const actionTag = vote.actionType || '';
-  const text = `${vote.reasonBody || ''} ${vote.reasonUrl || ''} ${vote.actionTitle || ''}`;
-  
-  // Determine stages: milestone votes appear in BOTH on-chain vote AND milestone categories
-  const stages: Array<'sv-onchain-vote' | 'sv-milestone'> = ['sv-onchain-vote'];
-  if (isMilestoneVote(actionTag, text)) {
-    stages.push('sv-milestone');
-  }
-  
-  // Check for CIP references
-  const cipMatch = text.match(/CIP[#\-\s]?0*(\d+)/i);
-  if (cipMatch) {
-    return { type: 'cip', key: `CIP-${cipMatch[1].padStart(4, '0')}`, stages };
-  }
-  
-  // Check for Featured App actions (including milestone reward distributions)
-  if (actionTag.includes('GrantFeaturedAppRight') || actionTag.includes('RevokeFeaturedAppRight') ||
-      actionTag.includes('SetFeaturedAppRight') || actionTag.includes('FeaturedApp') ||
-      text.toLowerCase().includes('featured app') || isMilestoneVote(actionTag, text)) {
-    // Extract app name from action details or reason
-    const actionValue = vote.actionDetails || {};
-    const appName =
-      (actionValue as any)?.provider ||
-      (actionValue as any)?.featuredAppProvider ||
-      (actionValue as any)?.featuredApp ||
-      (actionValue as any)?.beneficiary ||
-      (actionValue as any)?.name ||
-      text.match(/(?:mainnet|testnet):\s*([^\s,]+)/i)?.[1] ||
-      text.match(/app[:\s]+([^\s,]+)/i)?.[1];
-    if (appName) {
-      const normalized = String(appName).replace(/::/g, '::').toLowerCase();
-      return { type: 'featured-app', key: normalized, stages };
-    }
-  }
-  
-  // Check for Validator actions
-  if (actionTag.includes('OnboardValidator') || actionTag.includes('OffboardValidator') ||
-      actionTag.includes('ValidatorOnboarding') || text.toLowerCase().includes('validator')) {
-    const actionValue = vote.actionDetails || {};
-    const validatorName = (actionValue as any)?.validator || (actionValue as any)?.name ||
-                         text.match(/validator[:\s]+([^\s,]+)/i)?.[1];
-    if (validatorName) {
-      return { type: 'validator', key: validatorName.toLowerCase(), stages };
-    }
-  }
-  
-  // Check for Protocol Upgrade actions
-  if (actionTag.includes('ScheduleDomainMigration') || actionTag.includes('ProtocolUpgrade') ||
-      actionTag.includes('Synchronizer') || text.toLowerCase().includes('migration') ||
-      text.toLowerCase().includes('splice')) {
-    const version = text.match(/splice[:\s]*(\d+\.\d+)/i)?.[1] ||
-                   text.match(/version[:\s]*(\d+\.\d+)/i)?.[1];
-    return { type: 'protocol-upgrade', key: version || 'upgrade', stages };
-  }
-  
-  return null;
+  const actionValue = vote.actionDetails || {};
+  // Include actionTitle in reason text for better matching
+  const reasonBody = `${vote.reasonBody || ''} ${vote.actionTitle || ''}`;
+  return extractVoteTypeMapping(
+    actionTag,
+    actionValue,
+    reasonBody,
+    vote.reasonUrl || ''
+  );
 };
 
 // Legacy helper for backwards compatibility
@@ -357,7 +245,10 @@ const GovernanceFlow = () => {
   
   // Fetch historical vote results from Scan API
   const { data: historicalVotes = [] } = useGovernanceVoteHistory(500);
-  
+
+  // Get voting threshold from DSO (single source of truth)
+  const { threshold: votingThreshold } = useVotingThreshold();
+
   // Bulk selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [bulkSelectMode, setBulkSelectMode] = useState(false);
@@ -422,7 +313,7 @@ const GovernanceFlow = () => {
   // Combined map: unifies ACS (in-progress) and historical votes into OnChainVoteItem[]
   const combinedVoteMap = useMemo(() => {
     const map = new Map<string, OnChainVoteItem[]>();
-    
+
     // Add in-progress votes from ACS
     acsVoteRequestMap.forEach((entries, key) => {
       if (!map.has(key)) {
@@ -431,32 +322,33 @@ const GovernanceFlow = () => {
       entries.forEach(({ vr, stage }) => {
         const payload = vr.payload;
         const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
-        const isExpired = voteBefore && voteBefore < new Date();
         const votesRaw = payload?.votes || [];
-        
-        let votesFor = 0;
-        let votesAgainst = 0;
-        for (const vote of votesRaw) {
-          const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-          const isAccept = voteData?.accept === true || voteData?.Accept === true;
-          const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
-          if (isAccept) votesFor++;
-          else if (isReject) votesAgainst++;
-        }
-        
-        const threshold = 10;
-        let status: 'pending' | 'approved' | 'rejected' | 'expired' = 'pending';
-        if (votesFor >= threshold) status = 'approved';
-        else if (isExpired && votesFor < threshold) status = isExpired ? 'expired' : 'rejected';
-        
+
+        // Use shared vote counting utility
+        const { votesFor, votesAgainst, totalVotes } = countVotes(votesRaw);
+
+        // Use shared status determination with proper threshold
+        // For ACS (active) votes, we show current status but cap at 'pending' if expired
+        // since active contracts shouldn't show as expired (they'd be archived)
+        const { status: derivedStatus } = determineVoteStatus(
+          votesFor,
+          votingThreshold,
+          voteBefore
+        );
+
+        // ACS votes are active contracts - if they're still in ACS, they're either
+        // pending (not enough votes yet) or approved (enough votes, awaiting execution)
+        // We don't show 'expired' for active contracts since they'd be cleaned up
+        const status: VoteStatus = derivedStatus === 'expired' ? 'pending' : derivedStatus;
+
         map.get(key)!.push({
           id: payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown',
           source: 'acs',
           stage,
-          status: status === 'expired' ? 'pending' : status, // ACS votes are in-progress
+          status,
           votesFor,
           votesAgainst,
-          totalVotes: votesRaw.length,
+          totalVotes,
           voteBefore,
           reasonBody: payload?.reason?.body || '',
           reasonUrl: payload?.reason?.url || '',
@@ -464,18 +356,25 @@ const GovernanceFlow = () => {
         });
       });
     });
-    
+
     // Add historical votes from Scan API
     historicalVoteMap.forEach((entries, key) => {
       if (!map.has(key)) {
         map.set(key, []);
       }
       entries.forEach(({ vote, stage }) => {
+        // Use shared outcome mapping for historical votes
+        // Historical votes have explicit outcomes from the Scan API
+        const status = mapOutcomeToStatus(
+          vote.outcome === 'accepted' ? 'VRO_Accepted' :
+          vote.outcome === 'rejected' ? 'VRO_Rejected' : undefined
+        );
+
         map.get(key)!.push({
           id: vote.id,
           source: 'history',
           stage,
-          status: vote.outcome === 'accepted' ? 'approved' : vote.outcome === 'rejected' ? 'rejected' : 'expired',
+          status,
           votesFor: vote.votesFor,
           votesAgainst: vote.votesAgainst,
           totalVotes: vote.totalVotes,
@@ -486,7 +385,7 @@ const GovernanceFlow = () => {
         });
       });
     });
-    
+
     // Sort each entry: ACS (in-progress) first, then historical by date DESC
     map.forEach((items, key) => {
       items.sort((a, b) => {
@@ -500,9 +399,9 @@ const GovernanceFlow = () => {
       });
       map.set(key, items);
     });
-    
+
     return map;
-  }, [acsVoteRequestMap, historicalVoteMap]);
+  }, [acsVoteRequestMap, historicalVoteMap, votingThreshold]);
   
   // Legacy: keep voteRequestMap for backwards compatibility with existing code
   const voteRequestMap = acsVoteRequestMap;
@@ -1246,48 +1145,43 @@ const GovernanceFlow = () => {
 
   // Timeline data - group events by month
   // Create timeline entries from vote requests
-  type TimelineEntry = 
+  // Timeline entry status uses consistent terminology with the rest of the app
+  // 'approved' = passed threshold, 'expired' = deadline passed without approval
+  type TimelineEntry =
     | { type: 'topic'; data: Topic; date: Date }
     | { type: 'vote-started'; data: VoteRequest; date: Date; cipRef: string | null }
-    | { type: 'vote-ended'; data: VoteRequest; date: Date; cipRef: string | null; status: 'passed' | 'failed' | 'expired' };
+    | { type: 'vote-ended'; data: VoteRequest; date: Date; cipRef: string | null; status: VoteStatus };
 
   const timelineData = useMemo(() => {
     const entries: TimelineEntry[] = [];
-    
+
     // Add topics as entries
     filteredTopics.forEach(topic => {
       entries.push({ type: 'topic', data: topic, date: new Date(topic.date) });
     });
-    
+
     // Add vote requests as timeline entries
     voteRequests.forEach(vr => {
       const cipRef = extractCipReference(vr);
       const recordTime = vr.record_time ? new Date(vr.record_time) : null;
       const voteBefore = vr.payload?.voteBefore ? new Date(vr.payload.voteBefore) : null;
-      
+
       // "Vote Started" entry - use record_time if available
       if (recordTime) {
         entries.push({ type: 'vote-started', data: vr, date: recordTime, cipRef });
       }
-      
+
       // "Vote Ended" entry - only if vote deadline has passed
       if (voteBefore && voteBefore < new Date()) {
-        // Calculate vote result
-        const votesRaw = vr.payload?.votes || [];
-        let votesFor = 0;
-        for (const vote of votesRaw) {
-          const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-          const isAccept = voteData?.accept === true || voteData?.Accept === true;
-          if (isAccept) votesFor++;
-        }
-        const threshold = 10; // Assuming threshold
-        const status: 'passed' | 'failed' | 'expired' = votesFor >= threshold ? 'passed' : votesRaw.length > 0 ? 'failed' : 'expired';
+        // Use shared vote counting and status determination
+        const { votesFor } = countVotes(vr.payload?.votes);
+        const { status } = determineVoteStatus(votesFor, votingThreshold, voteBefore);
         entries.push({ type: 'vote-ended', data: vr, date: voteBefore, cipRef, status });
       }
     });
-    
+
     if (entries.length === 0) return [];
-    
+
     // Group by month
     const monthGroups: Record<string, TimelineEntry[]> = {};
     entries.forEach(entry => {
@@ -1297,7 +1191,7 @@ const GovernanceFlow = () => {
       }
       monthGroups[monthKey].push(entry);
     });
-    
+
     return Object.entries(monthGroups)
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([month, monthEntries]) => {
@@ -1311,7 +1205,7 @@ const GovernanceFlow = () => {
           voteCount: monthEntries.filter(e => e.type === 'vote-started' || e.type === 'vote-ended').length,
         };
       });
-  }, [filteredTopics, voteRequests]);
+  }, [filteredTopics, voteRequests, votingThreshold]);
 
   // Helper to render unified OnChainVoteItem card with correct links
   const renderOnChainVoteCard = (item: OnChainVoteItem) => {
@@ -1408,27 +1302,15 @@ const GovernanceFlow = () => {
   const renderVoteRequestCard = (vr: VoteRequest) => {
     const payload = vr.payload;
     const voteBefore = payload?.voteBefore ? new Date(payload.voteBefore) : null;
-    const isExpired = voteBefore && voteBefore < new Date();
-    const votesRaw = payload?.votes || [];
     const reason = payload?.reason;
-    
-    let votesFor = 0;
-    let votesAgainst = 0;
-    for (const vote of votesRaw) {
-      const [, voteData] = Array.isArray(vote) ? vote : [vote.sv || "Unknown", vote];
-      const isAccept = voteData?.accept === true || voteData?.Accept === true;
-      const isReject = voteData?.accept === false || voteData?.reject === true || voteData?.Reject === true;
-      if (isAccept) votesFor++;
-      else if (isReject) votesAgainst++;
-    }
-    const totalVotes = votesRaw.length;
-    
+
+    // Use shared vote counting utility
+    const { votesFor, votesAgainst, totalVotes } = countVotes(payload?.votes);
+
     const proposalId = payload?.trackingCid?.slice(0, 12) || vr.contract_id?.slice(0, 12) || 'unknown';
-    
-    const threshold = 10;
-    let status: 'pending' | 'approved' | 'rejected' = 'pending';
-    if (votesFor >= threshold) status = 'approved';
-    else if (isExpired && votesFor < threshold) status = 'rejected';
+
+    // Use shared status determination with proper threshold
+    const { status, isExpired } = determineVoteStatus(votesFor, votingThreshold, voteBefore);
     
     // ACS votes link to Active (ACS) tab in Governance page
     const linkUrl = `/governance?tab=active&proposal=${proposalId}`;
@@ -1442,16 +1324,19 @@ const GovernanceFlow = () => {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <Badge 
-                variant="outline" 
+              <Badge
+                variant="outline"
                 className={cn(
                   "text-[10px] h-5",
                   status === 'approved' ? 'border-green-500/50 text-green-400 bg-green-500/10' :
-                  status === 'rejected' ? 'border-red-500/50 text-red-400 bg-red-500/10' :
+                  status === 'rejected' || status === 'expired' ? 'border-red-500/50 text-red-400 bg-red-500/10' :
                   'border-yellow-500/50 text-yellow-400 bg-yellow-500/10'
                 )}
               >
-                {status === 'approved' ? '✓ Approved' : status === 'rejected' ? '✗ Rejected' : '⏳ In Progress'}
+                {status === 'approved' ? '✓ Approved' :
+                 status === 'rejected' ? '✗ Rejected' :
+                 status === 'expired' ? '✗ Expired' :
+                 '⏳ In Progress'}
               </Badge>
               <Badge variant="outline" className="text-[10px] h-5 border-blue-500/50 text-blue-400 bg-blue-500/10">
                 Active (ACS)
@@ -1465,7 +1350,7 @@ const GovernanceFlow = () => {
               {voteBefore && (
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
-                  {isExpired ? 'Expired' : `Due ${format(voteBefore, 'MMM d, yyyy')}`}
+                  {isExpired ? 'Ended' : `Due ${format(voteBefore, 'MMM d, yyyy')}`}
                 </span>
               )}
             </div>
