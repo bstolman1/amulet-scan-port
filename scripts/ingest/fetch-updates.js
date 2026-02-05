@@ -249,7 +249,6 @@ function saveLiveCursorLocal(migrationId, afterRecordTime) {
  */
 function loadCursorFromGCS() {
   const GCS_BUCKET = process.env.GCS_BUCKET;
-  const GCS_BUCKET = process.env.GCS_BUCKET;
   
   if (!GCS_BUCKET) {
     return null;
