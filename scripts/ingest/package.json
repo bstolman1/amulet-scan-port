@@ -15,7 +15,7 @@
     "test": "npm run test:api && npm run test:backfill && npm run test:acs",
     "test:api": "node test/api.test.js",
     "test:backfill": "node test/backfill.test.js",
-    "test:acs": "node test/acs.test.js",
+    "test:acs": "npx vitest run test/acs.test.js",
     "test:gcs": "node gcs-integrity-test.js",
     "test:gcs:keep": "node gcs-integrity-test.js --keep",
     "test:health": "node test/pipeline-health.test.js",
