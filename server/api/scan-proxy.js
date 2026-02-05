@@ -84,7 +84,8 @@ async function proxyRequest(req, res, method) {
       ? `${endpoint.url}/${path}?${queryString}`
       : `${endpoint.url}/${path}`;
     
-    console.log(`[Scan Proxy] ${method} ${scanUrl}`);
+    console.log(`[Scan Proxy] ${method} → ${endpoint.name} | ${path}${queryString ? '?' + queryString : ''}`);
+    console.log(`[Scan Proxy] Full URL: ${scanUrl}`);
 
     try {
       const hostname = extractHostname(endpoint.url);
@@ -110,12 +111,14 @@ async function proxyRequest(req, res, method) {
 
       const scanRes = await fetch(scanUrl, fetchOptions);
       
-      console.log(`[Scan Proxy] ${method} response: ${scanRes.status}`);
+      console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - Date.now()}ms`);
 
       // Check for server errors that warrant rotation
       if (scanRes.status >= 500 || scanRes.status === 429) {
+        console.warn(`[Scan Proxy] ⚠ ${endpoint.name} returned ${scanRes.status}, rotating to next endpoint...`);
         recordFailure(endpoint.url, new Error(`HTTP ${scanRes.status}`));
-        rotateToNextHealthy();
+        const nextEndpoint = rotateToNextHealthy();
+        console.log(`[Scan Proxy] → Now using: ${nextEndpoint.name}`);
         lastError = new Error(`Scan API returned ${scanRes.status}`);
         continue;
       }
@@ -130,9 +133,10 @@ async function proxyRequest(req, res, method) {
       return;
 
     } catch (err) {
-      console.error(`[Scan Proxy] ${method} error (${endpoint.name}):`, err.message);
+      console.error(`[Scan Proxy] ✗ ${endpoint.name} failed: ${err.message}`);
       recordFailure(endpoint.url, err);
-      rotateToNextHealthy();
+      const nextEndpoint = rotateToNextHealthy();
+      console.log(`[Scan Proxy] → Rotating to: ${nextEndpoint.name}`);
       lastError = err;
     }
   }
