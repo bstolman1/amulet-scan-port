@@ -382,11 +382,19 @@ function backupCursorToGCS(cursor) {
  * This is the authoritative source for where backfill stopped
  */
 async function findLatestTimestamp() {
-  // Always check raw data first to find the actual latest timestamp
+  // Check local raw data for latest timestamp
   const rawDir = path.join(DATA_DIR, 'raw');
   let rawDataResult = null;
   if (fs.existsSync(rawDir)) {
     rawDataResult = await findLatestFromRawData(rawDir);
+  }
+
+  // In GCS mode, also scan the bucket for latest partition data
+  // This is the key protection against cursor drift after crashes
+  let gcsDataResult = null;
+  if (GCS_MODE) {
+    console.log('\n🔍 Scanning GCS for latest data position...');
+    gcsDataResult = findLatestFromGCS();
   }
 
   // In live mode, try to resume from live cursor, but never go backwards behind backfill.
@@ -399,7 +407,7 @@ async function findLatestTimestamp() {
     const backfillTime = findLatestFromCursors();
     const backfillMigration = lastMigrationId;
 
-    // Collect all candidates: live cursor, backfill cursor, raw data
+    // Collect all candidates: live cursor, backfill cursor, raw data, GCS data
     const candidates = [];
     
     if (liveCursor) {
@@ -409,7 +417,10 @@ async function findLatestTimestamp() {
       candidates.push({ source: 'backfill-cursor', migration: backfillMigration, time: backfillTime });
     }
     if (rawDataResult) {
-      candidates.push({ source: 'raw-data', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
+      candidates.push({ source: 'raw-data-local', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
+    }
+    if (gcsDataResult) {
+      candidates.push({ source: 'gcs-data', migration: gcsDataResult.migrationId, time: gcsDataResult.timestamp });
     }
 
     if (candidates.length === 0) {
@@ -432,6 +443,12 @@ async function findLatestTimestamp() {
       console.log(`   ${marker} ${c.source}: m${c.migration} @ ${c.time}`);
     }
 
+    // Auto-sync: if GCS data or raw data is ahead of the cursor, persist the advanced position
+    if (best.source !== 'live-cursor' && best.source !== 'backfill-cursor') {
+      console.log(`  🔄 Auto-syncing cursor: ${best.source} is ahead of cursors`);
+      saveLiveCursor(best.migration, best.time);
+    }
+
     lastMigrationId = best.migration;
     return best.time;
   } else {
@@ -450,7 +467,10 @@ async function findLatestTimestamp() {
       candidates.push({ source: 'backfill-cursor', migration: backfillMigration, time: backfillTime });
     }
     if (rawDataResult) {
-      candidates.push({ source: 'raw-data', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
+      candidates.push({ source: 'raw-data-local', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
+    }
+    if (gcsDataResult) {
+      candidates.push({ source: 'gcs-data', migration: gcsDataResult.migrationId, time: gcsDataResult.timestamp });
     }
 
     if (candidates.length === 0) {
@@ -470,6 +490,12 @@ async function findLatestTimestamp() {
     for (const c of candidates) {
       const marker = c === best ? '✓' : ' ';
       console.log(`   ${marker} ${c.source}: m${c.migration} @ ${c.time}`);
+    }
+
+    // Auto-sync: if GCS data or raw data is ahead of the cursor, persist the advanced position
+    if (best.source !== 'live-cursor' && best.source !== 'backfill-cursor') {
+      console.log(`  🔄 Auto-syncing cursor: ${best.source} is ahead of cursors`);
+      saveLiveCursor(best.migration, best.time);
     }
 
     lastMigrationId = best.migration;
@@ -549,6 +575,173 @@ function findLatestFromCursors() {
   }
   
   return null;
+}
+
+/**
+ * Find the latest data timestamp in GCS by scanning Hive partition structure.
+ * Uses gsutil ls to walk migration/year/month/day directories and find the 
+ * most recent partition. Then optionally extracts a precise timestamp from 
+ * Parquet filenames within that partition.
+ * 
+ * This runs automatically on startup in GCS mode to detect cursor drift.
+ * If GCS data is ahead of the cursor, the cursor auto-advances to prevent
+ * re-processing already-written data.
+ * 
+ * @returns {{ migrationId: number, timestamp: string, source: string } | null}
+ */
+function findLatestFromGCS() {
+  const GCS_BUCKET = process.env.GCS_BUCKET;
+  if (!GCS_BUCKET) return null;
+
+  // Scan both updates/ and backfill/updates/ prefixes
+  const prefixes = [
+    `gs://${GCS_BUCKET}/raw/updates/`,
+    `gs://${GCS_BUCKET}/raw/backfill/updates/`,
+  ];
+
+  let best = null;
+
+  for (const prefix of prefixes) {
+    try {
+      const result = scanGCSHivePartition(prefix);
+      if (!result) continue;
+      
+      if (!best || result.migrationId > best.migrationId ||
+          (result.migrationId === best.migrationId && 
+           new Date(result.timestamp).getTime() > new Date(best.timestamp).getTime())) {
+        best = result;
+      }
+    } catch (err) {
+      log('warn', 'gcs_scan_error', { prefix, error: err.message });
+    }
+  }
+
+  if (best) {
+    console.log(`  ☁️ GCS data scan: latest partition at migration=${best.migrationId}, time=${best.timestamp}`);
+    console.log(`     Source: ${best.source}`);
+  }
+
+  return best;
+}
+
+/**
+ * Scan a GCS prefix for the latest Hive partition (migration/year/month/day).
+ * Extracts precise timestamp from Parquet filenames if possible.
+ */
+function scanGCSHivePartition(prefix) {
+  try {
+    // Find migration directories
+    const migOutput = execSync(`gsutil ls "${prefix}"`, { stdio: 'pipe', timeout: 15000 }).toString().trim();
+    if (!migOutput) return null;
+
+    const migDirs = migOutput.split('\n')
+      .filter(l => l.includes('migration='))
+      .map(l => {
+        const match = l.match(/migration=(\d+)/);
+        return match ? { path: l.trim(), id: parseInt(match[1]) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.id - a.id);
+
+    if (migDirs.length === 0) return null;
+
+    // Walk the latest migration's year/month/day structure
+    for (const mig of migDirs) {
+      const latest = scanGCSDatePartitions(mig.path, mig.id);
+      if (latest) return latest;
+    }
+    return null;
+  } catch (err) {
+    // gsutil ls fails if prefix doesn't exist - that's fine
+    if (!err.message?.includes('CommandException') && !err.message?.includes('No URLs matched')) {
+      log('debug', 'gcs_partition_scan_skip', { prefix, error: err.message });
+    }
+    return null;
+  }
+}
+
+/**
+ * Given a migration path in GCS, find the latest year/month/day partition
+ * and extract a timestamp from the Parquet files in it.
+ */
+function scanGCSDatePartitions(migPath, migrationId) {
+  try {
+    // List years
+    const yearOutput = execSync(`gsutil ls "${migPath}"`, { stdio: 'pipe', timeout: 10000 }).toString().trim();
+    const years = yearOutput.split('\n')
+      .filter(l => l.includes('year='))
+      .map(l => ({ path: l.trim(), val: parseInt(l.match(/year=(\d+)/)?.[1]) }))
+      .filter(d => !isNaN(d.val))
+      .sort((a, b) => b.val - a.val);
+
+    for (const year of years) {
+      // List months
+      const monthOutput = execSync(`gsutil ls "${year.path}"`, { stdio: 'pipe', timeout: 10000 }).toString().trim();
+      const months = monthOutput.split('\n')
+        .filter(l => l.includes('month='))
+        .map(l => ({ path: l.trim(), val: parseInt(l.match(/month=(\d+)/)?.[1]) }))
+        .filter(d => !isNaN(d.val))
+        .sort((a, b) => b.val - a.val);
+
+      for (const month of months) {
+        // List days
+        const dayOutput = execSync(`gsutil ls "${month.path}"`, { stdio: 'pipe', timeout: 10000 }).toString().trim();
+        const days = dayOutput.split('\n')
+          .filter(l => l.includes('day='))
+          .map(l => ({ path: l.trim(), val: parseInt(l.match(/day=(\d+)/)?.[1]) }))
+          .filter(d => !isNaN(d.val))
+          .sort((a, b) => b.val - a.val);
+
+        if (days.length === 0) continue;
+
+        const latestDay = days[0];
+        const dateStr = `${year.val}-${String(month.val).padStart(2, '0')}-${String(latestDay.val).padStart(2, '0')}`;
+
+        // Try to extract precise timestamp from filenames in this partition
+        const timestamp = extractTimestampFromGCSFiles(latestDay.path, dateStr);
+
+        return {
+          migrationId,
+          timestamp,
+          source: `gcs:${migPath.replace(/.*raw\//, 'raw/')}year=${year.val}/month=${month.val}/day=${latestDay.val}/`,
+        };
+      }
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * List files in a GCS day partition and extract the latest record_time
+ * from Parquet filenames. Falls back to end-of-day timestamp.
+ */
+function extractTimestampFromGCSFiles(dayPath, dateStr) {
+  try {
+    const filesOutput = execSync(`gsutil ls "${dayPath}"`, { stdio: 'pipe', timeout: 10000 }).toString().trim();
+    const files = filesOutput.split('\n')
+      .filter(f => f.endsWith('.parquet'))
+      .sort()
+      .reverse();
+
+    if (files.length > 0) {
+      // Try to extract timestamp from filename: updates_2026-02-02T15-30-00.000000Z.parquet
+      const latestFile = files[0];
+      const match = latestFile.match(/(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
+      if (match) {
+        // Convert filename format back to ISO (replace dashes in time portion with colons)
+        const ts = match[1].replace(/(\d{2})-(\d{2})-(\d{2})\./, '$1:$2:$3.');
+        return ts;
+      }
+    }
+  } catch {
+    // Fall through to default
+  }
+  
+  // Conservative fallback: end of that day
+  // This may cause a small overlap but dedup/idempotent writes handle it
+  return `${dateStr}T23:59:59.999999Z`;
 }
 
 /**
