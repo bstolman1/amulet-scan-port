@@ -118,6 +118,22 @@ const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000; // 30s
 const STALL_DETECTION_INTERVAL_MS = parseInt(process.env.STALL_DETECTION_INTERVAL_MS) || 30000; // Check every 30s
 const STALL_THRESHOLD_MS = parseInt(process.env.STALL_THRESHOLD_MS) || 120000; // Alert after 120s
 
+// All known Scan API endpoints for pre-flight reachability check
+const ALL_SCAN_ENDPOINTS = [
+  { name: 'Global-Synchronizer-Foundation', url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
+  { name: 'Digital-Asset-1', url: 'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan' },
+  { name: 'Digital-Asset-2', url: 'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan' },
+  { name: 'Cumberland-1', url: 'https://scan.sv-1.global.canton.network.cumberland.io/api/scan' },
+  { name: 'Cumberland-2', url: 'https://scan.sv-2.global.canton.network.cumberland.io/api/scan' },
+  { name: 'Five-North-1', url: 'https://scan.sv-1.global.canton.network.fivenorth.io/api/scan' },
+  { name: 'Tradeweb-Markets-1', url: 'https://scan.sv-1.global.canton.network.tradeweb.com/api/scan' },
+  { name: 'Proof-Group-1', url: 'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan' },
+  { name: 'Liberty-City-Ventures-1', url: 'https://scan.sv-1.global.canton.network.lcv.mpch.io/api/scan' },
+  { name: 'MPC-Holding-Inc', url: 'https://scan.sv-1.global.canton.network.mpch.io/api/scan' },
+  { name: 'Orb-1-LP-1', url: 'https://scan.sv-1.global.canton.network.orb1lp.mpch.io/api/scan' },
+  { name: 'SV-Nodeops-Limited', url: 'https://scan.sv.global.canton.network.sv-nodeops.com/api/scan' },
+  { name: 'C7-Technology-Services-Limited', url: 'https://scan.sv-1.global.canton.network.c7.digital/api/scan' },
+];
 
 // Axios client with explicit timeout
 const client = axios.create({
@@ -962,6 +978,76 @@ async function processUpdates(items) {
 }
 
 /**
+ * Pre-flight: Probe all known Scan API endpoints for reachability.
+ * Uses GET /v0/dso (lightweight, method-safe) with a 10s timeout.
+ * Logs individual results so operators can see which endpoints work.
+ */
+async function probeAllScanEndpoints() {
+  console.log(`\n${"─".repeat(60)}`);
+  console.log(`  SCAN API ENDPOINT REACHABILITY CHECK`);
+  console.log(`  Probing ${ALL_SCAN_ENDPOINTS.length} endpoints with GET /v0/dso ...`);
+  console.log(`${"─".repeat(60)}`);
+
+  const results = await Promise.allSettled(
+    ALL_SCAN_ENDPOINTS.map(async (ep) => {
+      const probeStart = Date.now();
+      try {
+        const response = await axios.get(`${ep.url}/v0/dso`, {
+          timeout: 10000,
+          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          headers: { 'Accept': 'application/json' },
+        });
+        const latencyMs = Date.now() - probeStart;
+        return { name: ep.name, healthy: true, status: response.status, latencyMs };
+      } catch (err) {
+        const latencyMs = Date.now() - probeStart;
+        const status = err.response?.status || null;
+        return { name: ep.name, healthy: false, status, error: err.code || err.message, latencyMs };
+      }
+    })
+  );
+
+  let healthyCount = 0;
+  const activeEndpointName = ALL_SCAN_ENDPOINTS.find(e => e.url === SCAN_URL)?.name || 'Custom';
+
+  for (const r of results) {
+    const ep = r.status === 'fulfilled' ? r.value : { name: '?', healthy: false, error: 'Promise rejected' };
+    const icon = ep.healthy ? '✅' : '❌';
+    const active = ep.name === activeEndpointName ? ' ← ACTIVE' : '';
+    const detail = ep.healthy
+      ? `HTTP ${ep.status} in ${ep.latencyMs}ms`
+      : `${ep.error || 'HTTP ' + ep.status} (${ep.latencyMs}ms)`;
+    console.log(`  ${icon}  ${ep.name} — ${detail}${active}`);
+    if (ep.healthy) healthyCount++;
+  }
+
+  console.log(`${"─".repeat(60)}`);
+  console.log(`  ${healthyCount}/${ALL_SCAN_ENDPOINTS.length} endpoints reachable`);
+  
+  if (healthyCount === 0) {
+    console.error(`\n🔴 FATAL: No Scan API endpoints are reachable! Check network/DNS.`);
+    log('error', 'all_endpoints_unreachable', { probed: ALL_SCAN_ENDPOINTS.length });
+  } else {
+    const activeReachable = results.some(r => 
+      r.status === 'fulfilled' && r.value.name === activeEndpointName && r.value.healthy
+    );
+    if (!activeReachable) {
+      console.warn(`\n⚠️  WARNING: Active endpoint "${activeEndpointName}" is NOT reachable!`);
+      console.warn(`   Consider switching SCAN_URL to a healthy endpoint.`);
+      log('warn', 'active_endpoint_unreachable', { name: activeEndpointName, scan_url: SCAN_URL });
+    }
+  }
+  
+  console.log(`${"─".repeat(60)}\n`);
+  
+  log('info', 'endpoint_probe_complete', { 
+    total: ALL_SCAN_ENDPOINTS.length, 
+    healthy: healthyCount,
+    active: activeEndpointName,
+  });
+}
+
+/**
  * Main ingestion loop
  * 
  * LIVE MODE SEMANTICS:
@@ -985,6 +1071,11 @@ async function runIngestion() {
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   POLL_INTERVAL:", POLL_INTERVAL, "ms");
   console.log("   PAGINATION: FORWARD (after semantics, NOT before)");
+  
+  // ─────────────────────────────────────────────────────────────
+  // PRE-FLIGHT: Probe ALL Scan API endpoints for reachability
+  // ─────────────────────────────────────────────────────────────
+  await probeAllScanEndpoints();
   
   // ─────────────────────────────────────────────────────────────
   // GCS / DISK MODE CONFIGURATION
