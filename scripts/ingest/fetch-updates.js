@@ -27,6 +27,7 @@ import {
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 import dotenv from 'dotenv';
 
 // Parse command line arguments
@@ -336,7 +337,6 @@ function saveLiveCursor(migrationId, afterRecordTime) {
  * Writes cursor.json to gs://bucket/cursors/live-cursor.json
  */
 function backupCursorToGCS(cursor) {
-  const { execSync } = require('child_process');
   const GCS_BUCKET = process.env.GCS_BUCKET;
   
   if (!GCS_BUCKET) {
