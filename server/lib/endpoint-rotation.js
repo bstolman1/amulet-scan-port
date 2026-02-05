@@ -256,9 +256,11 @@ export function setEndpointByName(name) {
  */
 export async function checkAllEndpoints() {
   console.log('[Endpoint Rotation] Starting health check of all endpoints...');
+  console.log(`[Endpoint Rotation] Probing ${SCAN_ENDPOINTS.length} endpoints against /v0/dso ...`);
   
   const results = await Promise.allSettled(
     SCAN_ENDPOINTS.map(async (endpoint) => {
+      const probeStart = Date.now();
       try {
         const hostname = extractHostname(endpoint.url);
         const dispatcher = hostname ? createDispatcher(hostname) : undefined;
@@ -274,16 +276,22 @@ export async function checkAllEndpoints() {
           signal: AbortSignal.timeout(10000),
         });
         
+        const probeMs = Date.now() - probeStart;
+        
         if (response.ok) {
           recordSuccess(endpoint.url);
-          return { name: endpoint.name, healthy: true };
+          console.log(`[Endpoint Rotation] ✅ ${endpoint.name} — HTTP ${response.status} in ${probeMs}ms`);
+          return { name: endpoint.name, healthy: true, status: response.status, latencyMs: probeMs };
         } else {
           recordFailure(endpoint.url, new Error(`HTTP ${response.status}`));
-          return { name: endpoint.name, healthy: false, status: response.status };
+          console.log(`[Endpoint Rotation] ❌ ${endpoint.name} — HTTP ${response.status} in ${probeMs}ms`);
+          return { name: endpoint.name, healthy: false, status: response.status, latencyMs: probeMs };
         }
       } catch (err) {
+        const probeMs = Date.now() - probeStart;
         recordFailure(endpoint.url, err);
-        return { name: endpoint.name, healthy: false, error: err.message };
+        console.log(`[Endpoint Rotation] ❌ ${endpoint.name} — ${err.message} (${probeMs}ms)`);
+        return { name: endpoint.name, healthy: false, error: err.message, latencyMs: probeMs };
       }
     })
   );
