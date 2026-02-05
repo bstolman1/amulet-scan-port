@@ -384,6 +384,7 @@ describe('Chaos: GCS Upload Failures', () => {
         } else {
           stats.uploadsFailed++;
           reject(new Error(isTransient ? 'Max retries exceeded' : 'Permanent failure'));
+          pump(); // Must pump after freeing slot to avoid deadlock
         }
       } else {
         stats.uploadsSucceeded++;
