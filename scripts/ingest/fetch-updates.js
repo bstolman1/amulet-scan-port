@@ -248,7 +248,7 @@ function saveLiveCursorLocal(migrationId, afterRecordTime) {
  * Load cursor from GCS backup
  */
 function loadCursorFromGCS() {
-  const { execSync } = require('child_process');
+  const GCS_BUCKET = process.env.GCS_BUCKET;
   const GCS_BUCKET = process.env.GCS_BUCKET;
   
   if (!GCS_BUCKET) {
@@ -435,30 +435,45 @@ async function findLatestTimestamp() {
     lastMigrationId = best.migration;
     return best.time;
   } else {
-    // Non-live mode: prefer raw data if it's newer than cursors
+    // RESUME mode: check live cursor, backfill cursors, and raw data
+    // Pick the most advanced candidate to avoid re-processing
+    const liveCursor = loadLiveCursor();
     const backfillTime = findLatestFromCursors();
     const backfillMigration = lastMigrationId;
 
-    if (rawDataResult && backfillTime) {
-      const rawTs = new Date(rawDataResult.timestamp).getTime();
-      const backfillTs = new Date(backfillTime).getTime();
-      
-      const useRaw = rawDataResult.migrationId > backfillMigration ||
-        (rawDataResult.migrationId === backfillMigration && rawTs > backfillTs);
-      
-      if (useRaw) {
-        console.log(`📍 Raw data is ahead of cursor (raw: ${rawDataResult.timestamp} vs cursor: ${backfillTime})`);
-        lastMigrationId = rawDataResult.migrationId;
-        return rawDataResult.timestamp;
-      }
+    const candidates = [];
+    
+    if (liveCursor) {
+      candidates.push({ source: 'live-cursor', migration: liveCursor.migration_id, time: liveCursor.record_time });
+    }
+    if (backfillTime) {
+      candidates.push({ source: 'backfill-cursor', migration: backfillMigration, time: backfillTime });
+    }
+    if (rawDataResult) {
+      candidates.push({ source: 'raw-data', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
     }
 
-    if (backfillTime) return backfillTime;
-    
-    if (rawDataResult) {
-      lastMigrationId = rawDataResult.migrationId;
-      return rawDataResult.timestamp;
+    if (candidates.length === 0) {
+      console.log('📁 No existing backfill data found, starting fresh');
+      return null;
     }
+
+    // Find the newest candidate (highest migration, then latest timestamp)
+    candidates.sort((a, b) => {
+      if (a.migration !== b.migration) return b.migration - a.migration;
+      return new Date(b.time).getTime() - new Date(a.time).getTime();
+    });
+
+    const best = candidates[0];
+    console.log(`📍 Best resume point: ${best.source} -> migration=${best.migration}, time=${best.time}`);
+    
+    for (const c of candidates) {
+      const marker = c === best ? '✓' : ' ';
+      console.log(`   ${marker} ${c.source}: m${c.migration} @ ${c.time}`);
+    }
+
+    lastMigrationId = best.migration;
+    return best.time;
   }
 
   console.log('📁 No existing backfill data found, starting fresh');
@@ -1164,8 +1179,8 @@ async function runIngestion() {
         batchCount,
       });
       
-      // Periodically save cursor (every 10 batches)
-      if (afterRecordTime && batchCount % 10 === 0) {
+      // Periodically save cursor (every 5 batches to minimize re-processing on crash)
+      if (afterRecordTime && batchCount % 5 === 0) {
         saveLiveCursor(afterMigrationId, afterRecordTime);
       }
       
