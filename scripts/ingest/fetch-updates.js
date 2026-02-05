@@ -598,6 +598,7 @@ function findLatestFromGCS() {
   //   source='backfill', type='updates' → raw/backfill/updates/
   const prefixes = [
     `gs://${GCS_BUCKET}/raw/updates/updates/`,
+    `gs://${GCS_BUCKET}/raw/updates/events/`,
     `gs://${GCS_BUCKET}/raw/backfill/updates/`,
   ];
 
