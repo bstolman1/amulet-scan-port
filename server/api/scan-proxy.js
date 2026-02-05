@@ -84,6 +84,7 @@ async function proxyRequest(req, res, method) {
       ? `${endpoint.url}/${path}?${queryString}`
       : `${endpoint.url}/${path}`;
     
+    const reqStart = Date.now();
     console.log(`[Scan Proxy] ${method} → ${endpoint.name} | ${path}${queryString ? '?' + queryString : ''}`);
     console.log(`[Scan Proxy] Full URL: ${scanUrl}`);
 
@@ -111,7 +112,7 @@ async function proxyRequest(req, res, method) {
 
       const scanRes = await fetch(scanUrl, fetchOptions);
       
-      console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - Date.now()}ms`);
+      console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - reqStart}ms`);
 
       // Check for server errors that warrant rotation
       if (scanRes.status >= 500 || scanRes.status === 429) {
