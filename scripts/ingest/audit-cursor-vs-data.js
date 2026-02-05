@@ -2,250 +2,231 @@
 /**
  * Cursor vs Data Audit Tool
  * 
- * Scans GCS partitions to find the actual latest record_time in stored data,
- * then compares against local and GCS cursor positions to detect drift.
+ * Lightweight diagnostic that compares cursor positions against actual
+ * data in GCS across ALL 4 Hive partition paths:
+ *   - raw/updates/updates/   (live transactions)
+ *   - raw/updates/events/    (live events)
+ *   - raw/backfill/updates/  (historical transactions)
+ *   - raw/backfill/events/   (historical events)
+ * 
+ * Uses gcs-scanner.js (gsutil-based) instead of DuckDB for speed.
  * 
  * Usage:
  *   node audit-cursor-vs-data.js
  *   node audit-cursor-vs-data.js --verbose
  */
 
-import { Storage } from '@google-cloud/storage';
-import { Database } from 'duckdb-async';
+import { execSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import dotenv from 'dotenv';
+import { getCursorDir } from './path-utils.js';
+import {
+  getGCSScanPrefixes,
+  scanGCSHivePartition,
+} from './gcs-scanner.js';
 
 dotenv.config();
 
 const BUCKET = process.env.GCS_BUCKET || 'canton-bucket';
-const CURSOR_DIR = process.env.CURSOR_DIR || '/tmp/ledger_raw/cursors';
+const CURSOR_DIR = getCursorDir();
 const VERBOSE = process.argv.includes('--verbose');
 
-const storage = new Storage();
+// ─────────────────────────────────────────────────────────────
+// Cursor helpers
+// ─────────────────────────────────────────────────────────────
 
-/**
- * List recent Parquet files from a GCS prefix
- */
-async function listRecentFiles(prefix, limit = 50) {
-  const [files] = await storage.bucket(BUCKET).getFiles({
-    prefix,
-    maxResults: 1000,
-  });
-  
-  // Filter to .parquet files and sort by name (descending for most recent)
-  const parquetFiles = files
-    .filter(f => f.name.endsWith('.parquet'))
-    .sort((a, b) => b.name.localeCompare(a.name))
-    .slice(0, limit);
-  
-  return parquetFiles.map(f => `gs://${BUCKET}/${f.name}`);
-}
-
-/**
- * Query max record_time from a set of Parquet files using DuckDB
- */
-async function getMaxRecordTime(files) {
-  if (files.length === 0) return null;
-  
-  const db = await Database.create(':memory:');
-  
-  // Install and load httpfs for GCS access
-  await db.run("INSTALL httpfs; LOAD httpfs;");
-  await db.run("SET s3_region='auto';");
-  
-  // Build a UNION query across all files
-  const fileList = files.map(f => `'${f}'`).join(', ');
-  
-  try {
-    const result = await db.all(`
-      SELECT MAX(record_time) as max_record_time
-      FROM read_parquet([${fileList}])
-      WHERE record_time IS NOT NULL
-    `);
-    
-    await db.close();
-    return result[0]?.max_record_time || null;
-  } catch (err) {
-    if (VERBOSE) console.error(`  DuckDB error: ${err.message}`);
-    await db.close();
-    return null;
-  }
-}
-
-/**
- * Read local cursor file
- */
 function readLocalCursor(name) {
   const path = join(CURSOR_DIR, `${name}.json`);
   if (!existsSync(path)) return null;
-  
   try {
-    const data = JSON.parse(readFileSync(path, 'utf8'));
-    return data;
+    return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return null;
   }
 }
 
-/**
- * Read GCS cursor backup
- */
 async function readGCSCursor(name) {
   try {
-    const file = storage.bucket(BUCKET).file(`cursors/${name}.json`);
-    const [exists] = await file.exists();
-    if (!exists) return null;
-    
-    const [contents] = await file.download();
-    return JSON.parse(contents.toString());
+    const raw = execSync(
+      `gsutil cat gs://${BUCKET}/cursors/${name}.json 2>/dev/null`,
+      { stdio: 'pipe', timeout: 10000 }
+    ).toString().trim();
+    return JSON.parse(raw);
   } catch {
     return null;
   }
 }
 
-/**
- * Format timestamp for display
- */
-function formatTime(ts) {
+// ─────────────────────────────────────────────────────────────
+// Display helpers
+// ─────────────────────────────────────────────────────────────
+
+function fmt(ts) {
   if (!ts) return 'N/A';
-  const date = new Date(typeof ts === 'string' ? ts : ts);
-  return date.toISOString();
+  return new Date(ts).toISOString();
 }
 
-/**
- * Calculate time difference in human-readable format
- */
 function timeDiff(ts1, ts2) {
   if (!ts1 || !ts2) return 'N/A';
-  const d1 = new Date(ts1);
-  const d2 = new Date(ts2);
-  const diffMs = Math.abs(d1 - d2);
-  
-  const hours = Math.floor(diffMs / (1000 * 60 * 60));
-  const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-  const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
-  
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
+  const diffMs = Math.abs(new Date(ts1) - new Date(ts2));
+  const h = Math.floor(diffMs / 3600000);
+  const m = Math.floor((diffMs % 3600000) / 60000);
+  const s = Math.floor((diffMs % 60000) / 1000);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
+
+function label(prefix) {
+  if (prefix.includes('/updates/updates/')) return 'live/updates';
+  if (prefix.includes('/updates/events/'))  return 'live/events';
+  if (prefix.includes('/backfill/updates/')) return 'backfill/updates';
+  if (prefix.includes('/backfill/events/'))  return 'backfill/events';
+  return prefix;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main audit
+// ─────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('  CURSOR vs DATA AUDIT');
   console.log(`  Bucket: gs://${BUCKET}`);
-  console.log(`  Local Cursor Dir: ${CURSOR_DIR}`);
+  console.log(`  Cursor Dir: ${CURSOR_DIR}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
 
-  // --- Check for GCS cursor backup ---
-  console.log('📂 GCS Cursor Backup Status:');
-  const gcsCursor = await readGCSCursor('live-cursor');
-  if (gcsCursor) {
-    console.log(`  ✓ Found: gs://${BUCKET}/cursors/live-cursor.json`);
-    console.log(`    after_offset: ${gcsCursor.after || 'N/A'}`);
-    console.log(`    record_time: ${formatTime(gcsCursor.record_time)}`);
-  } else {
-    console.log(`  ✗ Not found: gs://${BUCKET}/cursors/live-cursor.json`);
-    console.log('    (Backup created after first successful ingestion batch)');
-  }
-  console.log();
+  // ── 1. Read all cursors ──────────────────────────────────────
+  console.log('📂 CURSOR STATUS:\n');
 
-  // --- Check local cursor ---
-  console.log('📂 Local Cursor Status:');
-  const localCursor = readLocalCursor('live-cursor');
-  if (localCursor) {
-    console.log(`  ✓ Found: ${CURSOR_DIR}/live-cursor.json`);
-    console.log(`    after_offset: ${localCursor.after || 'N/A'}`);
-    console.log(`    record_time: ${formatTime(localCursor.record_time)}`);
-  } else {
-    console.log(`  ✗ Not found: ${CURSOR_DIR}/live-cursor.json`);
-  }
-  console.log();
+  const localLive = readLocalCursor('live-cursor');
+  const gcsLive = await readGCSCursor('live-cursor');
+  const backfill = readLocalCursor('backfill-cursor');
 
-  // --- Check backfill cursor (fallback boundary) ---
-  console.log('📂 Backfill Cursor (Migration 4 boundary):');
-  const backfillCursor = readLocalCursor('backfill-cursor');
-  if (backfillCursor) {
-    console.log(`  ✓ Found: ${CURSOR_DIR}/backfill-cursor.json`);
-    console.log(`    after_offset: ${backfillCursor.after || 'N/A'}`);
-    console.log(`    record_time: ${formatTime(backfillCursor.record_time)}`);
-  } else {
-    console.log(`  ✗ Not found`);
-  }
-  console.log();
+  const cursors = [
+    { name: 'Local live-cursor', data: localLive, path: `${CURSOR_DIR}/live-cursor.json` },
+    { name: 'GCS live-cursor',   data: gcsLive,   path: `gs://${BUCKET}/cursors/live-cursor.json` },
+    { name: 'Local backfill-cursor', data: backfill, path: `${CURSOR_DIR}/backfill-cursor.json` },
+  ];
 
-  // --- Scan GCS for latest data ---
-  console.log('🔍 Scanning GCS for latest record_time in data...');
-  
-  // Check updates partition
-  console.log('\n  [updates/] partition:');
-  const updateFiles = await listRecentFiles('raw/updates/', 30);
-  if (VERBOSE) {
-    console.log(`    Found ${updateFiles.length} recent Parquet files`);
-    updateFiles.slice(0, 5).forEach(f => console.log(`      ${f}`));
-  }
-  
-  const updatesMaxTime = await getMaxRecordTime(updateFiles);
-  if (updatesMaxTime) {
-    console.log(`    Latest record_time: ${formatTime(updatesMaxTime)}`);
-  } else if (updateFiles.length === 0) {
-    console.log('    No Parquet files found (partition may be empty)');
-  } else {
-    console.log('    Could not determine max record_time');
+  for (const c of cursors) {
+    if (c.data) {
+      console.log(`  ✅ ${c.name}`);
+      console.log(`     Path: ${c.path}`);
+      console.log(`     record_time: ${fmt(c.data.record_time)}`);
+      console.log(`     after_offset: ${c.data.after || 'N/A'}`);
+      if (c.data.migration !== undefined) console.log(`     migration: ${c.data.migration}`);
+    } else {
+      console.log(`  ❌ ${c.name} — not found`);
+    }
+    console.log();
   }
 
-  // Check backfill/updates partition
-  console.log('\n  [backfill/updates/] partition:');
-  const backfillFiles = await listRecentFiles('raw/backfill/updates/', 30);
-  if (VERBOSE) {
-    console.log(`    Found ${backfillFiles.length} recent Parquet files`);
-  }
-  
-  const backfillMaxTime = await getMaxRecordTime(backfillFiles);
-  if (backfillMaxTime) {
-    console.log(`    Latest record_time: ${formatTime(backfillMaxTime)}`);
-  } else if (backfillFiles.length === 0) {
-    console.log('    No Parquet files found');
-  } else {
-    console.log('    Could not determine max record_time');
+  // Check local vs GCS cursor consistency
+  if (localLive && gcsLive) {
+    const localTs = new Date(localLive.record_time).getTime();
+    const gcsTs = new Date(gcsLive.record_time).getTime();
+    if (localTs !== gcsTs) {
+      console.log(`  ⚠️  LOCAL vs GCS CURSOR MISMATCH!`);
+      console.log(`     Local: ${fmt(localLive.record_time)}`);
+      console.log(`     GCS:   ${fmt(gcsLive.record_time)}`);
+      console.log(`     Drift: ${timeDiff(localLive.record_time, gcsLive.record_time)}`);
+      console.log(`     (The more recent one is authoritative)\n`);
+    } else {
+      console.log(`  ✅ Local and GCS cursors are in sync\n`);
+    }
   }
 
-  // --- Summary ---
+  // ── 2. Scan ALL 4 GCS prefixes ──────────────────────────────
+  console.log('═══════════════════════════════════════════════════════════════');
+  console.log('  GCS DATA SCAN (all 4 Hive partition paths)');
+  console.log('═══════════════════════════════════════════════════════════════\n');
+
+  const exec = (cmd) => execSync(cmd, { stdio: 'pipe', timeout: 15000 }).toString().trim();
+  const prefixes = getGCSScanPrefixes(BUCKET);
+  const results = [];
+
+  for (const prefix of prefixes) {
+    const tag = label(prefix);
+    try {
+      const result = scanGCSHivePartition(prefix, exec);
+      if (result) {
+        results.push({ prefix, tag, ...result });
+        console.log(`  ✅ ${tag.padEnd(20)} migration=${result.migrationId}  latest=${fmt(result.timestamp)}`);
+        if (VERBOSE) console.log(`     source: ${result.source}`);
+      } else {
+        console.log(`  📭 ${tag.padEnd(20)} (no data found)`);
+      }
+    } catch (err) {
+      console.log(`  ❌ ${tag.padEnd(20)} scan error: ${err.message}`);
+    }
+  }
+
+  // ── 3. Find overall latest data timestamp ────────────────────
+  let latestData = null;
+  for (const r of results) {
+    if (!latestData || new Date(r.timestamp) > new Date(latestData.timestamp)) {
+      latestData = r;
+    }
+  }
+
+  // ── 4. Summary ───────────────────────────────────────────────
+  const effectiveCursor = localLive || gcsLive || backfill;
+  const cursorTime = effectiveCursor?.record_time;
+  const dataTime = latestData?.timestamp;
+
   console.log('\n═══════════════════════════════════════════════════════════════');
   console.log('  SUMMARY');
-  console.log('═══════════════════════════════════════════════════════════════');
-  
-  const effectiveCursor = localCursor || gcsCursor || backfillCursor;
-  const cursorTime = effectiveCursor?.record_time;
-  const latestDataTime = updatesMaxTime || backfillMaxTime;
-  
-  console.log(`  Cursor position:     ${formatTime(cursorTime)}`);
-  console.log(`  Latest data in GCS:  ${formatTime(latestDataTime)}`);
-  
-  if (cursorTime && latestDataTime) {
-    const cursorDate = new Date(cursorTime);
-    const dataDate = new Date(latestDataTime);
-    
-    if (cursorDate > dataDate) {
-      console.log(`  Status: ⚠️  Cursor AHEAD of data by ${timeDiff(cursorTime, latestDataTime)}`);
-      console.log('           (This is normal - cursor tracks API position, data may lag)');
-    } else if (cursorDate < dataDate) {
-      console.log(`  Status: ⚠️  Cursor BEHIND data by ${timeDiff(cursorTime, latestDataTime)}`);
-      console.log('           (Unusual - cursor should be at or ahead of written data)');
-    } else {
-      console.log('  Status: ✓ Cursor matches latest data');
-    }
-  } else if (!cursorTime && !latestDataTime) {
-    console.log('  Status: 🆕 Fresh start - no cursor or data found');
-  } else if (!cursorTime) {
-    console.log('  Status: ⚠️  No cursor found but data exists');
-    console.log('           Run fetch-updates.js to create cursor from backfill boundary');
-  } else {
-    console.log('  Status: 📭 Cursor exists but no live update data in GCS yet');
-  }
-  
   console.log('═══════════════════════════════════════════════════════════════\n');
+
+  console.log(`  Active cursor:       ${fmt(cursorTime)}`);
+  console.log(`  Latest data in GCS:  ${fmt(dataTime)}  (${latestData?.tag || 'none'})`);
+
+  if (cursorTime && dataTime) {
+    const cursorMs = new Date(cursorTime).getTime();
+    const dataMs = new Date(dataTime).getTime();
+    const drift = timeDiff(cursorTime, dataTime);
+
+    if (cursorMs > dataMs) {
+      console.log(`\n  Status: ⚠️  Cursor AHEAD of data by ${drift}`);
+      console.log('           (Normal — cursor tracks API offset, data may lag slightly)');
+    } else if (cursorMs < dataMs) {
+      console.log(`\n  Status: 🚨 Cursor BEHIND data by ${drift}`);
+      console.log('           (Unusual — cursor should be at or ahead of data)');
+      console.log('           This can happen if cursor was not saved on crash.');
+      console.log('           May cause DUPLICATE ingestion of recent records.');
+    } else {
+      console.log('\n  Status: ✅ Cursor matches latest data');
+    }
+  } else if (!cursorTime && !dataTime) {
+    console.log('\n  Status: 🆕 Fresh start — no cursor or data found');
+  } else if (!cursorTime) {
+    console.log('\n  Status: ⚠️  No cursor but data exists in GCS');
+    console.log('           Run fetch-updates.js — it will auto-recover from GCS data');
+  } else {
+    console.log('\n  Status: 📭 Cursor exists but no data in GCS yet');
+  }
+
+  // ── 5. Check events vs updates consistency ───────────────────
+  const liveUpdates = results.find(r => r.tag === 'live/updates');
+  const liveEvents = results.find(r => r.tag === 'live/events');
+
+  if (liveUpdates && liveEvents) {
+    const uMs = new Date(liveUpdates.timestamp).getTime();
+    const eMs = new Date(liveEvents.timestamp).getTime();
+    if (uMs !== eMs) {
+      const drift = timeDiff(liveUpdates.timestamp, liveEvents.timestamp);
+      console.log(`\n  ⚠️  Live updates vs events timestamp drift: ${drift}`);
+      console.log(`     updates: ${fmt(liveUpdates.timestamp)}`);
+      console.log(`     events:  ${fmt(liveEvents.timestamp)}`);
+      console.log('     (Small drift is normal; large drift indicates partial write failure)');
+    } else {
+      console.log('\n  ✅ Live updates and events partitions are in sync');
+    }
+  }
+
+  console.log('\n═══════════════════════════════════════════════════════════════\n');
 }
 
 main().catch(err => {
