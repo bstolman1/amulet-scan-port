@@ -26,6 +26,7 @@ import rewardsRouter from './api/rewards.js';
 import scanProxyRouter from './api/scan-proxy.js';
 import db, { initializeViews } from './duckdb/connection.js';
 import { getCacheStats } from './cache/stats-cache.js';
+import { checkAllEndpoints, getAllEndpoints, getCurrentEndpoint } from './lib/endpoint-rotation.js';
 
 // Server protection
 // NOTE: This MUST be a dynamic import.
@@ -172,7 +173,7 @@ app.use(globalErrorHandler);
 
 // Startup logic - bind to 0.0.0.0 for external access
 const HOST = process.env.HOST || '0.0.0.0';
-app.listen(PORT, HOST, () => {
+app.listen(PORT, HOST, async () => {
   console.log(`🦆 DuckDB API server running on http://${HOST}:${PORT}`);
   console.log(`📁 Reading data files from ${db.DATA_PATH}`);
   console.log(`📝 Crash logs written to ${LOG_PATHS.crash}`);
@@ -182,13 +183,25 @@ app.listen(PORT, HOST, () => {
   // Start memory monitoring (just logs warnings, no actions)
   startMemoryMonitor();
   
-  // TEMPORARY: Memory allocation debugging - remove after diagnosis
-  setInterval(() => {
-    const m = process.memoryUsage();
-    console.log('📊 MEMORY:', {
-      rss: Math.round(m.rss / 1024 / 1024) + 'MB',
-      heapUsed: Math.round(m.heapUsed / 1024 / 1024) + 'MB',
-      heapTotal: Math.round(m.heapTotal / 1024 / 1024) + 'MB',
-    });
-  }, 5000);
+  // Run endpoint reachability check on startup
+  console.log(`\n📡 Checking Scan API endpoint reachability...`);
+  try {
+    const results = await checkAllEndpoints();
+    const allEndpoints = getAllEndpoints();
+    console.log(`\n${"─".repeat(60)}`);
+    console.log(`  SCAN API ENDPOINTS`);
+    console.log(`${"─".repeat(60)}`);
+    for (const ep of allEndpoints) {
+      const health = ep.health;
+      const icon = health.healthy ? '✅' : '❌';
+      const active = ep.name === getCurrentEndpoint().name ? ' ← active' : '';
+      console.log(`  ${icon}  ${ep.name}${active}`);
+    }
+    const healthyCount = allEndpoints.filter(e => e.health.healthy).length;
+    console.log(`${"─".repeat(60)}`);
+    console.log(`  ${healthyCount}/${allEndpoints.length} endpoints reachable`);
+    console.log(`${"─".repeat(60)}\n`);
+  } catch (err) {
+    console.warn(`⚠️ Endpoint health check failed: ${err.message}`);
+  }
 });
