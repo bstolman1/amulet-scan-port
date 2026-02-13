@@ -178,14 +178,25 @@ function getStreams() {
 // ── GCS scanning ───────────────────────────────────────────────────────────────
 
 /**
- * List all .parquet files under a GCS prefix, recursively.
+ * List all Parquet-compatible files under a GCS prefix, recursively.
+ * Matches both .parquet extension files AND extensionless files (application/octet-stream)
+ * that live inside Hive partition folders (day=X/).
  * Returns array of gs:// URIs.
  */
 function listGCSParquetFiles(prefix) {
   try {
-    const output = exec(`gsutil ls -r "${prefix}**/*.parquet" 2>/dev/null || true`);
+    const output = exec(`gsutil ls -r "${prefix}" 2>/dev/null || true`);
     if (!output) return [];
-    return output.split('\n').filter(l => l.endsWith('.parquet'));
+    return output.split('\n').filter(l => {
+      if (!l.startsWith('gs://')) return false;
+      // Skip directory listings (end with /:)
+      if (l.endsWith('/:') || l.endsWith('/')) return false;
+      // Accept .parquet files
+      if (l.endsWith('.parquet')) return true;
+      // Accept extensionless files inside day= partition folders
+      if (/\/day=\d+\/[^/]+$/.test(l) && !l.includes('.jsonl') && !l.includes('.json') && !l.includes('.zst')) return true;
+      return false;
+    });
   } catch {
     return [];
   }
