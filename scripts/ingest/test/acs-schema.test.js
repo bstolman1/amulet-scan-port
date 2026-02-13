@@ -468,6 +468,23 @@ describe('getACSPartitionPath', () => {
 
     expect(result).toContain('snapshot_id=010203');
   });
+
+  it('should use UTC date components, not local time', () => {
+    // 2024-12-31T23:30:00Z is still Dec 31 in UTC but Jan 1 in UTC+1 and beyond
+    const result = getACSPartitionPath('2024-12-31T23:30:00Z', 0);
+    expect(result).toBe('acs/migration=0/year=2024/month=12/day=31/snapshot_id=233000');
+  });
+
+  it('should use UTC for early morning timestamps', () => {
+    // 2024-01-01T00:30:00Z is Jan 1 in UTC but Dec 31 in UTC-1 and beyond
+    const result = getACSPartitionPath('2024-01-01T00:30:00Z', 0);
+    expect(result).toBe('acs/migration=0/year=2024/month=1/day=1/snapshot_id=003000');
+  });
+
+  it('should throw on invalid timestamp', () => {
+    expect(() => getACSPartitionPath('not-a-date', 0)).toThrow('invalid timestamp');
+    expect(() => getACSPartitionPath(null, 0)).toThrow('invalid timestamp');
+  });
 });
 
 describe('EXPECTED_TEMPLATES registry', () => {
