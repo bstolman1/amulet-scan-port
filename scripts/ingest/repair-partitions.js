@@ -8,11 +8,17 @@
  * The problem: historical files may have been partitioned using local time
  * instead of UTC, placing files in wrong day/snapshot_id folders.
  * 
+ * SAFE 3-PHASE WORKFLOW:
+ *   1. Dry-run (default): shows what would change, touches nothing
+ *   2. Execute: copies files to correct paths, originals are UNTOUCHED
+ *   3. Cleanup: deletes originals ONLY after --verify confirms correctness
+ * 
  * Usage:
  *   node repair-partitions.js                        # dry-run, all streams
- *   node repair-partitions.js --execute              # actually move files
+ *   node repair-partitions.js --execute              # COPY to correct paths (no deletes)
+ *   node repair-partitions.js --execute --verify      # copy + verify destinations
  *   node repair-partitions.js --verify               # verify-only (check existing files)
- *   node repair-partitions.js --execute --verify      # move files, then verify destinations
+ *   node repair-partitions.js --cleanup              # delete originals (REQUIRES prior --execute + --verify)
  *   node repair-partitions.js --stream=acs            # only ACS
  *   node repair-partitions.js --stream=backfill       # only backfill (updates + events)
  *   node repair-partitions.js --stream=updates        # only live updates (updates + events)
@@ -36,6 +42,7 @@ const __dirname = dirname(__filename);
 const args = process.argv.slice(2);
 const EXECUTE = args.includes('--execute');
 const VERIFY_FLAG = args.includes('--verify');
+const CLEANUP = args.includes('--cleanup');
 const STREAM_ARG = args.find(a => a.startsWith('--stream='))?.split('=')[1] || 'all';
 const MIGRATION_ARG = args.find(a => a.startsWith('--migration='))?.split('=')[1];
 const MIGRATION_FILTER = MIGRATION_ARG != null ? parseInt(MIGRATION_ARG) : null;
@@ -50,6 +57,7 @@ if (IS_MAIN && !GCS_BUCKET) {
 
 const TMP_DIR = '/tmp/repair-partitions';
 const LOG_FILE = join(TMP_DIR, 'repair-log.jsonl');
+const CLEANUP_FILE = join(TMP_DIR, 'cleanup-list.jsonl');  // originals to delete after verify
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -381,8 +389,9 @@ async function processFile(db, gcsFile, stream, stats) {
 
       if (EXECUTE) {
         exec(`gsutil cp "${gcsFile}" "${destGCS}"`);
-        exec(`gsutil rm "${gcsFile}"`);
-        log({ action: 'move', from: gcsFile, to: destGCS, rows: timestamps.length });
+        log({ action: 'copied', from: gcsFile, to: destGCS, rows: timestamps.length });
+        // Record original for later cleanup (no delete now)
+        appendFileSync(CLEANUP_FILE, JSON.stringify({ original: gcsFile, copied_to: destGCS }) + '\n');
       } else {
         log({ action: 'would_move', from: gcsFile, to: destGCS, rows: timestamps.length });
       }
@@ -393,6 +402,7 @@ async function processFile(db, gcsFile, stream, stats) {
     // Multiple partitions → split
     const fileName = gcsFile.substring(gcsFile.lastIndexOf('/') + 1);
     const baseName = fileName.replace('.parquet', '');
+    const splitDestinations = [];
 
     for (const [correctPath, tsGroup] of Object.entries(partitionGroups)) {
       const splitFile = join(TMP_DIR, `split-${baseName}-${correctPath.replace(/\//g, '_')}.parquet`);
@@ -412,15 +422,16 @@ async function processFile(db, gcsFile, stream, stats) {
         const splitRows = await countRows(db, splitFile);
         exec(`gsutil cp "${splitFile}" "${destGCS}"`);
         if (existsSync(splitFile)) unlinkSync(splitFile);
-        log({ action: 'split', from: gcsFile, to: destGCS, rows: splitRows, partition: correctPath });
+        log({ action: 'split_copied', from: gcsFile, to: destGCS, rows: splitRows, partition: correctPath });
+        splitDestinations.push(destGCS);
       } else {
         log({ action: 'would_split', from: gcsFile, to: destGCS, partition: correctPath });
       }
     }
 
-    // Delete original after all splits uploaded
-    if (EXECUTE) {
-      exec(`gsutil rm "${gcsFile}"`);
+    // Record original for later cleanup (no delete now)
+    if (EXECUTE && splitDestinations.length > 0) {
+      appendFileSync(CLEANUP_FILE, JSON.stringify({ original: gcsFile, split_to: splitDestinations }) + '\n');
     }
     stats.split++;
 
@@ -486,19 +497,90 @@ async function verifyFile(db, gcsFile, stream, stats) {
   }
 }
 
+// ── Cleanup phase ──────────────────────────────────────────────────────────────
+
+/**
+ * Delete originals listed in cleanup-list.jsonl.
+ * Only runs with --cleanup flag and requires that the cleanup list exists.
+ */
+async function runCleanup() {
+  if (!existsSync(CLEANUP_FILE)) {
+    console.error('❌ No cleanup list found at', CLEANUP_FILE);
+    console.error('   Run --execute first to create the list of originals to delete.');
+    process.exit(1);
+  }
+
+  const content = readFileSync(CLEANUP_FILE, 'utf8').trim();
+  if (!content) {
+    console.log('✅ Cleanup list is empty — nothing to delete.');
+    return;
+  }
+
+  const entries = content.split('\n').map(l => JSON.parse(l));
+  console.log(`🗑️  Cleanup: ${entries.length} originals to delete`);
+  console.log('   ⚠️  This will PERMANENTLY delete the original files listed below.');
+  console.log('   ⚠️  Make sure you have run --execute --verify and confirmed all copies are correct.\n');
+
+  let deleted = 0;
+  let errors = 0;
+
+  for (let i = 0; i < entries.length; i++) {
+    const { original } = entries[i];
+    if ((i + 1) % 25 === 0 || i === entries.length - 1) {
+      console.log(`   Progress: ${i + 1}/${entries.length}`);
+    }
+    try {
+      exec(`gsutil rm "${original}"`);
+      log({ action: 'deleted_original', file: original });
+      deleted++;
+    } catch (err) {
+      log({ action: 'delete_error', file: original, error: err.message });
+      errors++;
+    }
+  }
+
+  console.log('\n' + '═'.repeat(60));
+  console.log('🗑️  Cleanup Summary');
+  console.log('═'.repeat(60));
+  console.log(`   ✅ Deleted: ${deleted}`);
+  console.log(`   ❌ Errors: ${errors}`);
+  console.log(`\n   📝 Full log: ${LOG_FILE}`);
+
+  if (errors === 0) {
+    // Clear the cleanup list since all originals are gone
+    writeFileSync(CLEANUP_FILE, '');
+    console.log('   🧹 Cleanup list cleared.');
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 async function main() {
+  ensureDir(TMP_DIR);
+
+  // Cleanup mode — separate workflow
+  if (CLEANUP) {
+    console.log('🗑️  Phase 3: Cleanup originals');
+    console.log(`   Bucket: ${GCS_BUCKET}`);
+    console.log(`   Cleanup list: ${CLEANUP_FILE}\n`);
+    await runCleanup();
+    return;
+  }
+
+  const modeLabel = EXECUTE ? '🚀 EXECUTE (copy-only, no deletes)' : '👀 DRY-RUN';
   console.log('🔧 Phase 2: GCS Partition Repair');
-  console.log(`   Mode: ${EXECUTE ? '🚀 EXECUTE' : '👀 DRY-RUN'}`);
+  console.log(`   Mode: ${modeLabel}`);
   console.log(`   Verify: ${VERIFY_FLAG ? 'YES' : 'NO'}`);
   console.log(`   Stream: ${STREAM_ARG}`);
   console.log(`   Migration filter: ${MIGRATION_FILTER ?? 'all'}`);
   console.log(`   Bucket: ${GCS_BUCKET}`);
-  console.log(`   Log: ${LOG_FILE}\n`);
+  console.log(`   Log: ${LOG_FILE}`);
+  console.log(`   Cleanup list: ${CLEANUP_FILE}\n`);
 
-  ensureDir(TMP_DIR);
   writeFileSync(LOG_FILE, ''); // Clear log
+  if (EXECUTE && !existsSync(CLEANUP_FILE)) {
+    writeFileSync(CLEANUP_FILE, ''); // Init cleanup list
+  }
 
   // Init DuckDB
   const database = new duckdb.Database(':memory:');
@@ -532,7 +614,7 @@ async function main() {
 
     // Phase B: Verify
     if (VERIFY_FLAG) {
-      // If we executed moves, re-scan to pick up new locations
+      // If we executed copies, re-scan to pick up new locations
       const verifyFiles = EXECUTE ? listGCSParquetFiles(stream.prefix) : files;
       console.log(`\n   🔎 Verifying ${verifyFiles.length} files...`);
 
@@ -550,8 +632,8 @@ async function main() {
   console.log('📊 Repair Summary');
   console.log('═'.repeat(60));
   console.log(`   ✅ Already correct: ${totalStats.correct}`);
-  console.log(`   🔧 ${EXECUTE ? 'Moved' : 'Would move'}: ${totalStats.moved}`);
-  console.log(`   ✂️  ${EXECUTE ? 'Split' : 'Would split'}: ${totalStats.split}`);
+  console.log(`   🔧 ${EXECUTE ? 'Copied' : 'Would move'}: ${totalStats.moved}`);
+  console.log(`   ✂️  ${EXECUTE ? 'Split & copied' : 'Would split'}: ${totalStats.split}`);
   console.log(`   ⏭️  Skipped (no timestamps): ${totalStats.skipped}`);
   console.log(`   ❌ Errors: ${totalStats.errors}`);
 
@@ -566,6 +648,11 @@ async function main() {
 
   if (!EXECUTE && (totalStats.moved > 0 || totalStats.split > 0)) {
     console.log(`\n   ⚠️  This was a dry run. Re-run with --execute to apply changes.`);
+  }
+
+  if (EXECUTE && (totalStats.moved > 0 || totalStats.split > 0)) {
+    console.log(`\n   📋 Originals recorded in: ${CLEANUP_FILE}`);
+    console.log(`   ⚠️  Originals are UNTOUCHED. Run --verify to confirm, then --cleanup to delete them.`);
   }
 
   if (totalStats.verifyFailed > 0) {
