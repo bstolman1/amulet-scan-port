@@ -241,6 +241,106 @@ describe('determineRepairAction', () => {
       expect(partitions).toContain('backfill/updates/migration=4/year=2024/month=12/day=31');
       expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=1/day=1');
     });
+
+    it('should split file spanning 3 consecutive UTC days', () => {
+      const gcsFile = 'gs://test-bucket/raw/backfill/updates/migration=4/year=2025/month=3/day=10/file.parquet';
+      const result = determineRepairAction(
+        gcsFile,
+        ['2025-03-10T22:00:00Z', '2025-03-11T12:00:00Z', '2025-03-12T02:00:00Z'],
+        backfillUpdatesStream,
+        BUCKET,
+      );
+      expect(result.action).toBe('split');
+      expect(result.splits).toHaveLength(3);
+
+      const partitions = result.splits.map(s => s.partition);
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=3/day=10');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=3/day=11');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=3/day=12');
+    });
+
+    it('should split file spanning 5 days across month boundary', () => {
+      const gcsFile = 'gs://test-bucket/raw/backfill/updates/migration=4/year=2025/month=1/day=29/file.parquet';
+      const result = determineRepairAction(
+        gcsFile,
+        [
+          '2025-01-29T10:00:00Z',
+          '2025-01-30T10:00:00Z',
+          '2025-01-31T10:00:00Z',
+          '2025-02-01T10:00:00Z',
+          '2025-02-02T10:00:00Z',
+        ],
+        backfillUpdatesStream,
+        BUCKET,
+      );
+      expect(result.action).toBe('split');
+      expect(result.splits).toHaveLength(5);
+
+      const partitions = result.splits.map(s => s.partition);
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=1/day=29');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=1/day=30');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=1/day=31');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=2/day=1');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=2/day=2');
+    });
+
+    it('should split file spanning 3+ days across year boundary', () => {
+      const gcsFile = 'gs://test-bucket/raw/backfill/updates/migration=4/year=2024/month=12/day=30/file.parquet';
+      const result = determineRepairAction(
+        gcsFile,
+        ['2024-12-30T08:00:00Z', '2024-12-31T16:00:00Z', '2025-01-01T04:00:00Z', '2025-01-02T12:00:00Z'],
+        backfillUpdatesStream,
+        BUCKET,
+      );
+      expect(result.action).toBe('split');
+      expect(result.splits).toHaveLength(4);
+
+      const partitions = result.splits.map(s => s.partition);
+      expect(partitions).toContain('backfill/updates/migration=4/year=2024/month=12/day=30');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2024/month=12/day=31');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=1/day=1');
+      expect(partitions).toContain('backfill/updates/migration=4/year=2025/month=1/day=2');
+    });
+
+    it('should group multiple timestamps into same day correctly in multi-day split', () => {
+      const gcsFile = 'gs://test-bucket/raw/backfill/updates/migration=4/year=2025/month=6/day=1/file.parquet';
+      const result = determineRepairAction(
+        gcsFile,
+        [
+          '2025-06-01T10:00:00Z',
+          '2025-06-01T22:00:00Z',  // same day as above
+          '2025-06-02T03:00:00Z',
+          '2025-06-02T15:00:00Z',  // same day as above
+          '2025-06-03T01:00:00Z',
+        ],
+        backfillUpdatesStream,
+        BUCKET,
+      );
+      expect(result.action).toBe('split');
+      expect(result.splits).toHaveLength(3);
+
+      // Each split should have its timestamps grouped correctly
+      const day1 = result.splits.find(s => s.partition.includes('day=1'));
+      const day2 = result.splits.find(s => s.partition.includes('day=2'));
+      const day3 = result.splits.find(s => s.partition.includes('day=3'));
+      expect(day1.timestamps).toHaveLength(2);
+      expect(day2.timestamps).toHaveLength(2);
+      expect(day3.timestamps).toHaveLength(1);
+    });
+
+    it('should handle events stream multi-day split', () => {
+      const gcsFile = 'gs://test-bucket/raw/backfill/events/migration=4/year=2025/month=3/day=1/file.parquet';
+      const result = determineRepairAction(
+        gcsFile,
+        ['2025-03-01T20:00:00Z', '2025-03-02T10:00:00Z', '2025-03-03T05:00:00Z'],
+        backfillEventsStream,
+        BUCKET,
+      );
+      expect(result.action).toBe('split');
+      expect(result.splits).toHaveLength(3);
+      // Verify it uses events path, not updates
+      expect(result.splits[0].partition).toContain('events/migration=4');
+    });
   });
 
   describe('ACS stream', () => {
