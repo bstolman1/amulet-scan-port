@@ -53,8 +53,8 @@ const LOG_FILE = join(TMP_DIR, 'repair-log.jsonl');
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function exec(cmd) {
-  return execSync(cmd, { stdio: 'pipe', timeout: 60_000 }).toString().trim();
+function exec(cmd, timeoutMs = 300_000) {
+  return execSync(cmd, { stdio: 'pipe', timeout: timeoutMs }).toString().trim();
 }
 
 function log(entry) {
@@ -178,26 +178,17 @@ function getStreams() {
 // ── GCS scanning ───────────────────────────────────────────────────────────────
 
 /**
- * List all Parquet-compatible files under a GCS prefix, recursively.
- * Matches both .parquet extension files AND extensionless files (application/octet-stream)
- * that live inside Hive partition folders (day=X/).
+ * List all .parquet files under a GCS prefix, recursively.
+ * Uses a 10-minute timeout since large buckets can take a while to list.
  * Returns array of gs:// URIs.
  */
 function listGCSParquetFiles(prefix) {
   try {
-    const output = exec(`gsutil ls -r "${prefix}" 2>/dev/null || true`);
+    const output = exec(`gsutil ls -r "${prefix}**/*.parquet" 2>/dev/null || true`, 600_000);
     if (!output) return [];
-    return output.split('\n').filter(l => {
-      if (!l.startsWith('gs://')) return false;
-      // Skip directory listings (end with /:)
-      if (l.endsWith('/:') || l.endsWith('/')) return false;
-      // Accept .parquet files
-      if (l.endsWith('.parquet')) return true;
-      // Accept extensionless files inside day= partition folders
-      if (/\/day=\d+\/[^/]+$/.test(l) && !l.includes('.jsonl') && !l.includes('.json') && !l.includes('.zst')) return true;
-      return false;
-    });
-  } catch {
+    return output.split('\n').filter(l => l.endsWith('.parquet'));
+  } catch (err) {
+    console.error(`  ⚠️  Failed to list ${prefix}: ${err.message}`);
     return [];
   }
 }
