@@ -20,7 +20,7 @@
  */
 
 import { execSync } from 'child_process';
-import { mkdirSync, existsSync, appendFileSync, writeFileSync, unlinkSync } from 'fs';
+import { mkdirSync, existsSync, appendFileSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import duckdb from 'duckdb';
@@ -179,14 +179,21 @@ function getStreams() {
 
 /**
  * List all .parquet files under a GCS prefix, recursively.
- * Uses a 10-minute timeout since large buckets can take a while to list.
+ * Streams output to a temp file to avoid ENOBUFS on large buckets.
  * Returns array of gs:// URIs.
  */
 function listGCSParquetFiles(prefix) {
+  const listFile = join(TMP_DIR, 'gcs-listing.txt');
   try {
-    const output = exec(`gsutil ls -r "${prefix}**/*.parquet" 2>/dev/null || true`, 600_000);
-    if (!output) return [];
-    return output.split('\n').filter(l => l.endsWith('.parquet'));
+    ensureDir(TMP_DIR);
+    execSync(
+      `gsutil ls -r "${prefix}**/*.parquet" > "${listFile}" 2>/dev/null || true`,
+      { stdio: 'pipe', timeout: 600_000, maxBuffer: 1024 * 1024 * 512 }
+    );
+    if (!existsSync(listFile)) return [];
+    const content = readFileSync(listFile, 'utf8').trim();
+    if (!content) return [];
+    return content.split('\n').filter(l => l.endsWith('.parquet'));
   } catch (err) {
     console.error(`  ⚠️  Failed to list ${prefix}: ${err.message}`);
     return [];
