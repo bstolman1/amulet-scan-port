@@ -26,7 +26,7 @@ import { join, dirname, sep, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
 import { execSync } from 'child_process';
-import { getPartitionPath } from './data-schema.js';
+import { getPartitionPath, groupByPartition } from './data-schema.js';
 import { getParquetWriterPool, shutdownParquetPool } from './parquet-writer-pool.js';
 import { 
   isGCSMode, 
@@ -478,28 +478,28 @@ export async function bufferEvents(events) {
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
   
-  const firstRecord = updatesBuffer[0];
-  const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
-  const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  // Use 'updates' type with current data source (backfill or updates)
-  const partition = getPartitionPath(effectiveAt, migrationId, 'updates', currentDataSource);
-  const partitionDir = join(getDataDir(), partition);
-  
-  ensureDir(partitionDir);
-  
-  const fileName = generateFileName('updates');
-  const filePath = join(partitionDir, fileName);
-  
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
-  const result = USE_CLI 
-    ? writeToParquetCLI(rowsToWrite, filePath, 'updates', partition, fileName)
-    : await writeToParquetPool(rowsToWrite, filePath, 'updates', partition, fileName);
+  // Group by each record's own effective_at — no more first-record-wins
+  const groups = groupByPartition(rowsToWrite, 'updates', currentDataSource, currentMigrationId);
+  const results = [];
   
-  totalUpdatesWritten += rowsToWrite.length;
+  for (const [partition, records] of Object.entries(groups)) {
+    const partitionDir = join(getDataDir(), partition);
+    ensureDir(partitionDir);
+    const fileName = generateFileName('updates');
+    const filePath = join(partitionDir, fileName);
+    
+    const result = USE_CLI 
+      ? writeToParquetCLI(records, filePath, 'updates', partition, fileName)
+      : await writeToParquetPool(records, filePath, 'updates', partition, fileName);
+    
+    totalUpdatesWritten += records.length;
+    if (result) results.push(result);
+  }
   
-  return result;
+  return results.length === 1 ? results[0] : results;
 }
 
 /**
@@ -508,28 +508,28 @@ export async function flushUpdates() {
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
   
-  const firstRecord = eventsBuffer[0];
-  const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
-  const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  // Use 'events' type with current data source (backfill or updates)
-  const partition = getPartitionPath(effectiveAt, migrationId, 'events', currentDataSource);
-  const partitionDir = join(getDataDir(), partition);
-  
-  ensureDir(partitionDir);
-  
-  const fileName = generateFileName('events');
-  const filePath = join(partitionDir, fileName);
-  
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
-  const result = USE_CLI
-    ? writeToParquetCLI(rowsToWrite, filePath, 'events', partition, fileName)
-    : await writeToParquetPool(rowsToWrite, filePath, 'events', partition, fileName);
+  // Group by each record's own effective_at — no more first-record-wins
+  const groups = groupByPartition(rowsToWrite, 'events', currentDataSource, currentMigrationId);
+  const results = [];
   
-  totalEventsWritten += rowsToWrite.length;
+  for (const [partition, records] of Object.entries(groups)) {
+    const partitionDir = join(getDataDir(), partition);
+    ensureDir(partitionDir);
+    const fileName = generateFileName('events');
+    const filePath = join(partitionDir, fileName);
+    
+    const result = USE_CLI
+      ? writeToParquetCLI(records, filePath, 'events', partition, fileName)
+      : await writeToParquetPool(records, filePath, 'events', partition, fileName);
+    
+    totalEventsWritten += records.length;
+    if (result) results.push(result);
+  }
   
-  return result;
+  return results.length === 1 ? results[0] : results;
 }
 
 /**

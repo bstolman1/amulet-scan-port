@@ -19,7 +19,7 @@ import { writeFile } from 'fs/promises';
 import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import { getPartitionPath } from './data-schema.js';
+import { getPartitionPath, groupByPartition } from './data-schema.js';
 import { getWorkerPool, shutdownPool } from './worker-pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -246,22 +246,23 @@ export async function bufferEvents(events) {
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
   
-  // CRITICAL: Use effective_at (data time) for partitioning, not timestamp (write time)
-  const firstRecord = updatesBuffer[0];
-  const effectiveAt = firstRecord?.effective_at || firstRecord?.record_time || firstRecord?.timestamp || new Date();
-  const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  const partition = getPartitionPath(effectiveAt, migrationId);
-  const partitionDir = join(DATA_DIR, partition);
-  
-  ensureDir(partitionDir);
-  
-  const fileName = generateFileName('updates');
-  const filePath = join(partitionDir, fileName);
-  
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
   
-  return queueWrite(rowsToWrite, filePath, 'updates');
+  // Group by each record's own effective_at — no more first-record-wins
+  const groups = groupByPartition(rowsToWrite, 'updates', 'backfill', currentMigrationId);
+  const results = [];
+  
+  for (const [partition, records] of Object.entries(groups)) {
+    const partitionDir = join(DATA_DIR, partition);
+    ensureDir(partitionDir);
+    const fileName = generateFileName('updates');
+    const filePath = join(partitionDir, fileName);
+    const result = await queueWrite(records, filePath, 'updates');
+    if (result) results.push(result);
+  }
+  
+  return results.length === 1 ? results[0] : results;
 }
 
 /**
@@ -270,22 +271,23 @@ export async function flushUpdates() {
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
   
-  // CRITICAL: Use effective_at (data time) for partitioning, not timestamp (write time)
-  const firstRecord = eventsBuffer[0];
-  const effectiveAt = firstRecord?.effective_at || firstRecord?.recorded_at || firstRecord?.timestamp || new Date();
-  const migrationId = currentMigrationId || firstRecord?.migration_id || null;
-  const partition = getPartitionPath(effectiveAt, migrationId);
-  const partitionDir = join(DATA_DIR, partition);
-  
-  ensureDir(partitionDir);
-  
-  const fileName = generateFileName('events');
-  const filePath = join(partitionDir, fileName);
-  
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
   
-  return queueWrite(rowsToWrite, filePath, 'events');
+  // Group by each record's own effective_at — no more first-record-wins
+  const groups = groupByPartition(rowsToWrite, 'events', 'backfill', currentMigrationId);
+  const results = [];
+  
+  for (const [partition, records] of Object.entries(groups)) {
+    const partitionDir = join(DATA_DIR, partition);
+    ensureDir(partitionDir);
+    const fileName = generateFileName('events');
+    const filePath = join(partitionDir, fileName);
+    const result = await queueWrite(records, filePath, 'events');
+    if (result) results.push(result);
+  }
+  
+  return results.length === 1 ? results[0] : results;
 }
 
 /**

@@ -441,11 +441,32 @@ function extractPackageName(templateId) {
  * @param {string} type - Data type: 'updates' or 'events' (defaults to 'updates' for backward compat)
  * @param {string} source - Data source: 'backfill' or 'updates' (defaults to 'backfill')
  */
+/**
+ * Extract UTC year/month/day from an effective_at timestamp.
+ * 
+ * effective_at is the ONLY acceptable partitioning timestamp — no fallbacks.
+ * Throws if the value is missing or not a valid date.
+ * 
+ * @param {string} effectiveAt - ISO 8601 timestamp (must be valid)
+ * @returns {{ year: number, month: number, day: number }}
+ */
+export function getUtcPartition(effectiveAt) {
+  if (!effectiveAt) {
+    throw new Error('getUtcPartition: effective_at is required for partitioning — no fallbacks allowed');
+  }
+  const d = new Date(effectiveAt);
+  if (isNaN(d.getTime())) {
+    throw new Error(`getUtcPartition: invalid timestamp "${effectiveAt}"`);
+  }
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth() + 1,  // 1-12, no padding for INT64 inference
+    day: d.getUTCDate(),          // 1-31, no padding for INT64 inference
+  };
+}
+
 export function getPartitionPath(timestamp, migrationId = null, type = 'updates', source = 'backfill') {
-  const d = new Date(timestamp);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;  // 1-12, no padding for INT64 inference
-  const day = d.getDate();          // 1-31, no padding for INT64 inference
+  const { year, month, day } = getUtcPartition(timestamp);
   
   // Always include migration_id in path (default to 0 if not provided)
   const mig = migrationId ?? 0;
@@ -456,6 +477,41 @@ export function getPartitionPath(timestamp, migrationId = null, type = 'updates'
   
   // Structure: {source}/{type}/migration=X/year=YYYY/month=M/day=D
   return `${normalizedSource}/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
+}
+
+/**
+ * Group records by their individual effective_at partition path.
+ * 
+ * Each record is routed to its own correct UTC-based partition,
+ * preventing cross-midnight buffers from landing in the wrong folder.
+ * 
+ * @param {object[]} records - Array of normalized records (must have effective_at)
+ * @param {string} type - 'updates' or 'events'
+ * @param {string} source - 'backfill' or 'updates'
+ * @param {number|null} migrationId - Migration ID override (falls back to record.migration_id)
+ * @returns {Object.<string, object[]>} Map of partition path → records
+ */
+export function groupByPartition(records, type = 'updates', source = 'backfill', migrationId = null) {
+  const groups = {};
+  
+  for (const record of records) {
+    const effectiveAt = record.effective_at;
+    if (!effectiveAt) {
+      throw new Error(
+        `groupByPartition: record ${record.update_id || record.event_id || 'unknown'} ` +
+        `has no effective_at — cannot partition`
+      );
+    }
+    const mig = migrationId ?? record.migration_id ?? 0;
+    const partition = getPartitionPath(effectiveAt, mig, type, source);
+    
+    if (!groups[partition]) {
+      groups[partition] = [];
+    }
+    groups[partition].push(record);
+  }
+  
+  return groups;
 }
 
 /**
