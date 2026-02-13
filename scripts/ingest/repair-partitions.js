@@ -41,7 +41,9 @@ const MIGRATION_ARG = args.find(a => a.startsWith('--migration='))?.split('=')[1
 const MIGRATION_FILTER = MIGRATION_ARG != null ? parseInt(MIGRATION_ARG) : null;
 
 const GCS_BUCKET = process.env.GCS_BUCKET;
-if (!GCS_BUCKET) {
+const IS_MAIN = process.argv[1]?.endsWith('repair-partitions.js');
+
+if (IS_MAIN && !GCS_BUCKET) {
   console.error('❌ GCS_BUCKET environment variable is required');
   process.exit(1);
 }
@@ -192,7 +194,7 @@ function listGCSParquetFiles(prefix) {
 /**
  * Parse migration ID from a GCS path like .../migration=4/...
  */
-function parseMigrationFromPath(gcsPath) {
+export function parseMigrationFromPath(gcsPath) {
   const match = gcsPath.match(/migration=(\d+)/);
   return match ? parseInt(match[1]) : null;
 }
@@ -201,7 +203,7 @@ function parseMigrationFromPath(gcsPath) {
  * Parse the current partition from a GCS path.
  * Returns { year, month, day } for ledger streams, or { year, month, day, snapshotId } for ACS.
  */
-function parseCurrentPartition(gcsPath, isACS) {
+export function parseCurrentPartition(gcsPath, isACS) {
   const yearMatch = gcsPath.match(/year=(\d+)/);
   const monthMatch = gcsPath.match(/month=(\d+)/);
   const dayMatch = gcsPath.match(/day=(\d+)/);
@@ -218,6 +220,98 @@ function parseCurrentPartition(gcsPath, isACS) {
   }
 
   return result;
+}
+
+/**
+ * Determine the repair action for a file given its GCS path and the timestamps it contains.
+ * Pure function — no side effects.
+ * 
+ * @param {string} gcsFile - Full gs:// URI of the file
+ * @param {string[]} timestamps - Distinct timestamp values from the file
+ * @param {object} stream - Stream config with computeCorrectPath
+ * @param {string} bucket - GCS bucket name
+ * @returns {{ action: string, from?: string, to?: string, splits?: object[], reason?: string }}
+ */
+export function determineRepairAction(gcsFile, timestamps, stream, bucket) {
+  if (!timestamps || timestamps.length === 0) {
+    return { action: 'skip', reason: `no ${stream.timestampCol} values` };
+  }
+
+  const migrationId = parseMigrationFromPath(gcsFile);
+
+  // Group timestamps by their correct UTC partition
+  const partitionGroups = {};
+  for (const ts of timestamps) {
+    const correctPath = stream.computeCorrectPath(ts, migrationId);
+    if (!partitionGroups[correctPath]) partitionGroups[correctPath] = [];
+    partitionGroups[correctPath].push(ts);
+  }
+
+  const correctPaths = Object.keys(partitionGroups);
+  const currentGCSDir = gcsFile.substring(0, gcsFile.lastIndexOf('/') + 1);
+  const fileName = gcsFile.substring(gcsFile.lastIndexOf('/') + 1);
+
+  if (correctPaths.length === 1) {
+    const correctGCSDir = `gs://${bucket}/raw/${correctPaths[0]}/`;
+
+    if (currentGCSDir === correctGCSDir) {
+      return { action: 'skip', reason: 'already correct' };
+    }
+
+    return {
+      action: 'move',
+      from: gcsFile,
+      to: `${correctGCSDir}${fileName}`,
+      rows: timestamps.length,
+    };
+  }
+
+  // Multiple partitions → split
+  const splits = Object.entries(partitionGroups).map(([correctPath, tsGroup]) => {
+    const correctGCSDir = `gs://${bucket}/raw/${correctPath}/`;
+    return {
+      partition: correctPath,
+      to: `${correctGCSDir}${fileName}`,
+      timestamps: tsGroup,
+    };
+  });
+
+  return { action: 'split', from: gcsFile, splits };
+}
+
+/**
+ * Check whether a file's timestamps all match its current GCS partition.
+ * Pure function — no side effects.
+ * 
+ * @param {string} gcsFile - Full gs:// URI
+ * @param {string[]} timestamps - Distinct timestamp values
+ * @param {object} stream - Stream config
+ * @param {string} bucket - GCS bucket name
+ * @returns {{ passed: boolean, failedTimestamp?: string, expected?: string, actual?: string }}
+ */
+export function checkVerification(gcsFile, timestamps, stream, bucket) {
+  if (!timestamps || timestamps.length === 0) {
+    return { passed: true, skipped: true };
+  }
+
+  const migrationId = parseMigrationFromPath(gcsFile);
+  const currentGCSDir = gcsFile.substring(0, gcsFile.lastIndexOf('/') + 1);
+
+  for (const ts of timestamps) {
+    const correctPath = stream.computeCorrectPath(ts, migrationId);
+    const correctGCSDir = `gs://${bucket}/raw/${correctPath}/`;
+
+    if (currentGCSDir !== correctGCSDir) {
+      return {
+        passed: false,
+        failedTimestamp: ts,
+        expected: correctGCSDir,
+        actual: currentGCSDir,
+      };
+    }
+  }
+
+  return { passed: true };
 }
 
 // ── Core repair logic ──────────────────────────────────────────────────────────
@@ -470,8 +564,10 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('💥 Fatal error:', err.message);
-  console.error(err.stack);
-  process.exit(1);
-});
+if (IS_MAIN) {
+  main().catch(err => {
+    console.error('💥 Fatal error:', err.message);
+    console.error(err.stack);
+    process.exit(1);
+  });
+}
