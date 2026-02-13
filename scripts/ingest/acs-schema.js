@@ -405,6 +405,9 @@ export function validateTemplates(templateCounts) {
  * double-nesting when combined with base paths that already include "acs/".
  */
 export function getACSPartitionPath(timestamp, migrationId = null) {
+  if (timestamp == null) {
+    throw new Error(`getACSPartitionPath: invalid timestamp "${timestamp}"`);
+  }
   const d = new Date(timestamp);
   if (isNaN(d.getTime())) {
     throw new Error(`getACSPartitionPath: invalid timestamp "${timestamp}"`);
