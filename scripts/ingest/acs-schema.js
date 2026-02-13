@@ -406,12 +406,15 @@ export function validateTemplates(templateCounts) {
  */
 export function getACSPartitionPath(timestamp, migrationId = null) {
   const d = new Date(timestamp);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;  // 1-12, no padding for INT64 inference
-  const day = d.getDate();          // 1-31, no padding for INT64 inference
-  const hour = String(d.getHours()).padStart(2, '0');
-  const minute = String(d.getMinutes()).padStart(2, '0');
-  const second = String(d.getSeconds()).padStart(2, '0');
+  if (isNaN(d.getTime())) {
+    throw new Error(`getACSPartitionPath: invalid timestamp "${timestamp}"`);
+  }
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth() + 1;  // 1-12, no padding for INT64 inference
+  const day = d.getUTCDate();          // 1-31, no padding for INT64 inference
+  const hour = String(d.getUTCHours()).padStart(2, '0');
+  const minute = String(d.getUTCMinutes()).padStart(2, '0');
+  const second = String(d.getUTCSeconds()).padStart(2, '0');
   
   // Include full timestamp with seconds to keep each snapshot separate
   // snapshot_id is padded because it's a string identifier, not a numeric partition
