@@ -640,7 +640,7 @@ async function getSubscribedGroups() {
   
   const response = await fetch(subsUrl, {
     headers: { 'Authorization': `Bearer ${getApiKey()}` },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(45_000),
   });
   
   if (!response.ok) {
@@ -695,7 +695,7 @@ async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
     try {
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${getApiKey()}` },
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(45_000),
       });
       
       if (!response.ok) {
@@ -1917,9 +1917,25 @@ function applyOverrides(data) {
   
   return data;
 }
+// Global timeout for the entire fetchFreshData operation (3 minutes)
+const FETCH_FRESH_TIMEOUT_MS = 180_000;
 
-// Fetch fresh data from groups.io
+// Fetch fresh data from groups.io (with global timeout)
 async function fetchFreshData() {
+  const controller = new AbortController();
+  const globalTimeout = setTimeout(() => {
+    console.error('⏰ fetchFreshData global timeout reached (180s), aborting...');
+    controller.abort();
+  }, FETCH_FRESH_TIMEOUT_MS);
+  
+  try {
+    return await _fetchFreshDataInner(controller.signal);
+  } finally {
+    clearTimeout(globalTimeout);
+  }
+}
+
+async function _fetchFreshDataInner(signal) {
   console.log('Fetching fresh governance lifecycle data from groups.io...');
   
   // Get all subscribed governance groups
