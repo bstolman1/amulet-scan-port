@@ -54,6 +54,7 @@ import { useToast } from "@/hooks/use-toast";
 import { getDuckDBApiUrl } from "@/lib/backend-config";
 import { cn } from "@/lib/utils";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
+import { useActiveVoteRequests } from "@/hooks/use-canton-scan-api";
 import { LearnFromCorrectionsPanel } from "@/components/LearnFromCorrectionsPanel";
 import { GoldenSetManagementPanel } from "@/components/GoldenSetManagementPanel";
 
@@ -354,6 +355,9 @@ const GovernanceFlow = () => {
   const [datePreset, setDatePreset] = useState<string>('all');
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [voteRequests, setVoteRequests] = useState<VoteRequest[]>([]);
+  
+  // Fetch active vote requests from Scan API
+  const { data: scanVoteRequests } = useActiveVoteRequests();
   
   // Fetch historical vote results from Scan API
   const { data: historicalVotes = [] } = useGovernanceVoteHistory(500);
@@ -943,24 +947,17 @@ const GovernanceFlow = () => {
     fetchCipList();
   }, []);
 
-  // Fetch VoteRequests from local ACS
+  // Sync VoteRequests from Scan API hook
   useEffect(() => {
-    const fetchVoteRequests = async () => {
-      try {
-        const baseUrl = getDuckDBApiUrl();
-        const response = await fetch(`${baseUrl}/api/acs/contracts?template=VoteRequest&limit=100`);
-        if (response.ok) {
-          const result = await response.json();
-          if (result.data) {
-            setVoteRequests(result.data);
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to fetch VoteRequests:', err);
-      }
-    };
-    fetchVoteRequests();
-  }, []);
+    if (scanVoteRequests) {
+      const mapped = scanVoteRequests.map((vr: any) => ({
+        contract_id: vr.contract_id || vr.contractId || '',
+        payload: vr.payload || vr,
+        record_time: vr.record_time || vr.created_at || '',
+      }));
+      setVoteRequests(mapped);
+    }
+  }, [scanVoteRequests]);
 
   const toggleExpand = (id: string) => {
     setExpandedIds(prev => {
@@ -1727,6 +1724,50 @@ const GovernanceFlow = () => {
           </div>
         </div>
 
+        {/* Active Votes Banner */}
+        {voteRequests.length > 0 && (
+          <Card className="border-pink-500/30 bg-pink-500/5">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Vote className="h-4 w-4 text-pink-400" />
+                <span>Active On-Chain Votes</span>
+                <Badge className="bg-pink-500/20 text-pink-400 border-pink-500/30 ml-1">
+                  {voteRequests.length}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2">
+                {voteRequests.slice(0, 8).map((vr, idx) => {
+                  const actionTag = vr.payload?.action?.tag || 'Unknown Action';
+                  const reasonBody = vr.payload?.reason?.body || '';
+                  const label = reasonBody.slice(0, 60) || actionTag;
+                  const proposalId = (vr.payload?.trackingCid || vr.contract_id)?.slice(0, 12) || 'unknown';
+                  return (
+                    <a
+                      key={vr.contract_id || idx}
+                      href={`/governance?tab=active&proposal=${proposalId}`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-pink-500/10 border border-pink-500/20 text-sm text-pink-300 hover:bg-pink-500/20 transition-colors"
+                    >
+                      <Vote className="h-3 w-3" />
+                      <span className="truncate max-w-[200px]">{label}</span>
+                      <ExternalLink className="h-3 w-3 opacity-50" />
+                    </a>
+                  );
+                })}
+                {voteRequests.length > 8 && (
+                  <a
+                    href="/governance?tab=active"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-muted/50 text-sm text-muted-foreground hover:bg-muted transition-colors"
+                  >
+                    +{voteRequests.length - 8} more
+                    <ArrowRight className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Group Stats */}
         {data && Object.keys(data.stats.groupCounts).length > 0 && (
