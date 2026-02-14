@@ -640,6 +640,7 @@ async function getSubscribedGroups() {
   
   const response = await fetch(subsUrl, {
     headers: { 'Authorization': `Bearer ${getApiKey()}` },
+    signal: AbortSignal.timeout(30_000),
   });
   
   if (!response.ok) {
@@ -694,6 +695,7 @@ async function fetchGroupTopics(groupId, groupName, maxTopics = 300) {
     try {
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${getApiKey()}` },
+        signal: AbortSignal.timeout(30_000),
       });
       
       if (!response.ok) {
