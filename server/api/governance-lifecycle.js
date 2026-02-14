@@ -2026,10 +2026,12 @@ async function _fetchFreshDataInner(signal) {
   let lifecycleItems = correlateTopics(allTopics);
   
   // ========== LLM CLASSIFICATION STEP ==========
-  // Classify ambiguous items (type='other') using LLM
+  // Classify ambiguous items (type='other') using LLM (only if inference/LLM is enabled)
   const ambiguousBefore = lifecycleItems.filter(i => i.type === 'other').length;
-  if (ambiguousBefore > 0) {
+  if (ambiguousBefore > 0 && INFERENCE_ENABLED && isLLMAvailable()) {
     lifecycleItems = await classifyAmbiguousItems(lifecycleItems, allTopics);
+  } else if (ambiguousBefore > 0) {
+    console.log(`ℹ️ Skipping LLM classification for ${ambiguousBefore} ambiguous items (inference disabled or LLM unavailable)`);
   }
   // ========== END LLM CLASSIFICATION ==========
   
