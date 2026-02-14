@@ -195,10 +195,10 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
                     const appPctVal = parseFloat(s.values?.appRewardPercentage || "0");
                     const svPctVal = 1 - valPct - appPctVal;
                     return (
-                      <div className="grid grid-cols-4 gap-3 text-sm">
+                      <div className="grid grid-cols-4 gap-x-6 gap-y-1 text-sm">
                         <div>
                           <span className="text-muted-foreground text-xs">Issuance</span>
-                          <p className="font-semibold">{formatLargeNumber(s.values?.amuletToIssuePerYear)}/yr</p>
+                          <p className="font-semibold whitespace-nowrap">{formatLargeNumber(s.values?.amuletToIssuePerYear)}/yr</p>
                         </div>
                         <div>
                           <span className="text-muted-foreground text-xs">Validator</span>
