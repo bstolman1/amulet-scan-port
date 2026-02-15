@@ -1,15 +1,16 @@
 /**
  * Parquet Worker - DuckDB In-Memory Writer
  *
- * Each worker has its own DuckDB in-memory instance for isolation.
- * Receives records from the pool, writes them to Parquet with ZSTD compression.
+ * Supports two modes:
+ * 1. Persistent mode (workerData === null): Stays alive, processes jobs via parentPort messages
+ * 2. Legacy mode (workerData !== null): Process single job and exit (backward compatibility)
  *
  * Job format:
  * {
  *   type: 'events' | 'updates',
  *   filePath: string,
- *   records: object[],    // Pre-mapped records
- *   rowGroupSize: number  // DuckDB row group size
+ *   records: object[],
+ *   rowGroupSize: number
  * }
  *
  * Response format:
@@ -45,64 +46,45 @@ if (isMainThread) {
   process.exit(1);
 }
 
-if (!workerData) {
-  console.error('[PARQUET-WORKER] Error: No workerData received');
-  parentPort.postMessage({ ok: false, error: 'No workerData received' });
-  process.exit(1);
-}
+/**
+ * Process a single job (shared between persistent and legacy modes)
+ */
+async function processJob(job) {
+  const {
+    type,
+    filePath,
+    records,
+    rowGroupSize = 100000,
+  } = job;
 
-const {
-  type,
-  filePath,
-  records,
-  rowGroupSize = 100000,
-} = workerData;
+  // Validate inputs
+  if (!type || !['events', 'updates'].includes(type)) {
+    return { ok: false, error: `Invalid type: ${type}`, filePath };
+  }
 
-// Validate inputs
-if (!type || !['events', 'updates'].includes(type)) {
-  const msg = `Invalid type: ${type}`;
-  console.error('[PARQUET-WORKER]', msg);
-  parentPort.postMessage({ ok: false, error: msg, filePath });
-  process.exit(1);
-}
+  if (!filePath) {
+    return { ok: false, error: 'No filePath provided' };
+  }
 
-if (!filePath) {
-  const msg = 'No filePath provided';
-  console.error('[PARQUET-WORKER]', msg);
-  parentPort.postMessage({ ok: false, error: msg });
-  process.exit(1);
-}
+  if (!records || !Array.isArray(records)) {
+    return { ok: false, error: `Invalid records: expected array, got ${typeof records}`, filePath };
+  }
 
-if (!records || !Array.isArray(records)) {
-  const msg = `Invalid records: expected array, got ${typeof records}`;
-  console.error('[PARQUET-WORKER]', msg);
-  parentPort.postMessage({ ok: false, error: msg, filePath });
-  process.exit(1);
-}
+  if (records.length === 0) {
+    return { ok: true, filePath, count: 0, bytes: 0 };
+  }
 
-if (records.length === 0) {
-  parentPort.postMessage({ ok: true, filePath, count: 0, bytes: 0 });
-  process.exit(0);
-}
-
-async function run() {
   let duckdb;
   
   try {
-    // Dynamic import of duckdb
     duckdb = (await import('duckdb')).default;
   } catch (err) {
-    const msg = `Failed to load duckdb: ${err.message}`;
-    console.error('[PARQUET-WORKER]', msg);
-    parentPort.postMessage({ ok: false, error: msg, filePath });
-    return;
+    return { ok: false, error: `Failed to load duckdb: ${err.message}`, filePath };
   }
 
-  // Create in-memory database
   const db = new duckdb.Database(':memory:');
   const conn = db.connect();
 
-  // Promisify query execution
   const runQuery = (sql) => {
     return new Promise((resolve, reject) => {
       conn.run(sql, (err, result) => {
@@ -112,7 +94,6 @@ async function run() {
     });
   };
 
-  // Promisify all() for queries that return data
   const allQuery = (sql) => {
     return new Promise((resolve, reject) => {
       conn.all(sql, (err, result) => {
@@ -129,75 +110,32 @@ async function run() {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Use forward slashes for DuckDB SQL (works on all platforms)
     const normalizedFilePath = filePath.replace(/\\/g, '/');
-
-    // Write records as temp JSONL file
     const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
     const tempNativePath = tempJsonlPath.replace(/\//g, path.sep);
     
     const lines = records.map(r => JSON.stringify(r));
     fs.writeFileSync(tempNativePath, lines.join('\n') + '\n');
 
-    // Convert to Parquet via DuckDB
-    // IMPORTANT: Force stable types for JSON-ish columns to avoid DuckDB inferring JSON and later
-    // failing to parse arbitrary strings (seen in validation as "Failed to parse JSON string").
     const readFn = type === 'events'
       ? `read_json_auto('${tempJsonlPath}', columns={
-          event_id: 'VARCHAR',
-          update_id: 'VARCHAR',
-          event_type: 'VARCHAR',
-          event_type_original: 'VARCHAR',
-          synchronizer_id: 'VARCHAR',
-          effective_at: 'VARCHAR',
-          recorded_at: 'VARCHAR',
-          timestamp: 'VARCHAR',
-          created_at_ts: 'VARCHAR',
-          contract_id: 'VARCHAR',
-          template_id: 'VARCHAR',
-          package_name: 'VARCHAR',
-          migration_id: 'BIGINT',
-          signatories: 'VARCHAR[]',
-          observers: 'VARCHAR[]',
-          acting_parties: 'VARCHAR[]',
-          witness_parties: 'VARCHAR[]',
-          child_event_ids: 'VARCHAR[]',
-          choice: 'VARCHAR',
-          interface_id: 'VARCHAR',
-          consuming: 'BOOLEAN',
-          reassignment_counter: 'BIGINT',
-          source_synchronizer: 'VARCHAR',
-          target_synchronizer: 'VARCHAR',
-          unassign_id: 'VARCHAR',
-          submitter: 'VARCHAR',
-          payload: 'VARCHAR',
-          contract_key: 'VARCHAR',
-          exercise_result: 'VARCHAR',
-          raw_event: 'VARCHAR',
+          event_id: 'VARCHAR', update_id: 'VARCHAR', event_type: 'VARCHAR', event_type_original: 'VARCHAR',
+          synchronizer_id: 'VARCHAR', effective_at: 'VARCHAR', recorded_at: 'VARCHAR', timestamp: 'VARCHAR',
+          created_at_ts: 'VARCHAR', contract_id: 'VARCHAR', template_id: 'VARCHAR', package_name: 'VARCHAR',
+          migration_id: 'BIGINT', signatories: 'VARCHAR[]', observers: 'VARCHAR[]', acting_parties: 'VARCHAR[]',
+          witness_parties: 'VARCHAR[]', child_event_ids: 'VARCHAR[]', choice: 'VARCHAR', interface_id: 'VARCHAR',
+          consuming: 'BOOLEAN', reassignment_counter: 'BIGINT', source_synchronizer: 'VARCHAR',
+          target_synchronizer: 'VARCHAR', unassign_id: 'VARCHAR', submitter: 'VARCHAR',
+          payload: 'VARCHAR', contract_key: 'VARCHAR', exercise_result: 'VARCHAR', raw_event: 'VARCHAR',
           trace_context: 'VARCHAR'
         }, union_by_name=true)`
       : `read_json_auto('${tempJsonlPath}', columns={
-          update_id: 'VARCHAR',
-          update_type: 'VARCHAR',
-          synchronizer_id: 'VARCHAR',
-          effective_at: 'VARCHAR',
-          recorded_at: 'VARCHAR',
-          record_time: 'VARCHAR',
-          timestamp: 'VARCHAR',
-          command_id: 'VARCHAR',
-          workflow_id: 'VARCHAR',
-          kind: 'VARCHAR',
-          migration_id: 'BIGINT',
-          "offset": 'BIGINT',
-          event_count: 'INTEGER',
-          root_event_ids: 'VARCHAR[]',
-          source_synchronizer: 'VARCHAR',
-          target_synchronizer: 'VARCHAR',
-          unassign_id: 'VARCHAR',
-          submitter: 'VARCHAR',
-          reassignment_counter: 'BIGINT',
-          trace_context: 'VARCHAR',
-          update_data: 'VARCHAR'
+          update_id: 'VARCHAR', update_type: 'VARCHAR', synchronizer_id: 'VARCHAR', effective_at: 'VARCHAR',
+          recorded_at: 'VARCHAR', record_time: 'VARCHAR', timestamp: 'VARCHAR', command_id: 'VARCHAR',
+          workflow_id: 'VARCHAR', kind: 'VARCHAR', migration_id: 'BIGINT', "offset": 'BIGINT',
+          event_count: 'INTEGER', root_event_ids: 'VARCHAR[]', source_synchronizer: 'VARCHAR',
+          target_synchronizer: 'VARCHAR', unassign_id: 'VARCHAR', submitter: 'VARCHAR',
+          reassignment_counter: 'BIGINT', trace_context: 'VARCHAR', update_data: 'VARCHAR'
         }, union_by_name=true)`;
 
     const sql = `
@@ -208,7 +146,6 @@ async function run() {
 
     await runQuery(sql);
 
-    // Verify file was created and get size
     const nativeFilePath = filePath;
     if (!fs.existsSync(nativeFilePath)) {
       throw new Error(`Parquet file not created: ${nativeFilePath}`);
@@ -218,23 +155,18 @@ async function run() {
     const bytes = stats.size;
 
     // ========== POST-WRITE VALIDATION ==========
-    // Immediately validate the written Parquet file to catch schema issues early
     let validation = { valid: true, rowCount: 0, issues: [] };
     
     try {
-      // 1. Verify file is readable and get row count
       const countResult = await allQuery(`
         SELECT COUNT(*) as cnt FROM read_parquet('${normalizedFilePath}')
       `);
       validation.rowCount = Number(countResult[0]?.cnt || 0);
       
-      // Check row count matches expected
       if (validation.rowCount !== records.length) {
         validation.issues.push(`Row count mismatch: expected ${records.length}, got ${validation.rowCount}`);
       }
       
-      // 2. Verify required columns exist based on type
-      // DuckDB versions differ in parquet_schema() output; use DESCRIBE for portability.
       const schemaResult = await allQuery(`
         DESCRIBE SELECT * FROM read_parquet('${normalizedFilePath}')
       `);
@@ -255,7 +187,6 @@ async function run() {
         }
       }
       
-      // 3. Sample check: verify key columns have data
       if (type === 'events' && validation.rowCount > 0) {
         const sampleCheck = await allQuery(`
           SELECT 
@@ -299,23 +230,18 @@ async function run() {
       fs.unlinkSync(tempNativePath);
     }
 
-    // Close DuckDB
     conn.close();
     db.close();
 
-    // Report success with validation results
-    parentPort.postMessage({
+    return {
       ok: true,
       filePath,
       count: records.length,
       bytes,
       validation,
-    });
-
-    process.exit(0);
+    };
 
   } catch (err) {
-    // Clean up on error
     const tempJsonlPath = filePath.replace('.parquet', '.temp.jsonl').replace(/\\/g, '/');
     const tempNativePath = tempJsonlPath.replace(/\//g, path.sep);
     
@@ -329,22 +255,33 @@ async function run() {
     } catch {}
 
     console.error(`[PARQUET-WORKER] Failed: ${err.message}`);
-    parentPort.postMessage({
+    return {
       ok: false,
       error: err.message,
       filePath,
-    });
-
-    process.exit(1);
+    };
   }
 }
 
-run().catch(err => {
-  console.error('[PARQUET-WORKER] Fatal error:', err.message);
-  parentPort.postMessage({
-    ok: false,
-    error: `Worker fatal: ${err.message}`,
-    filePath,
+// Determine mode based on workerData
+if (workerData === null || workerData === undefined) {
+  // PERSISTENT MODE: Stay alive, process jobs via messages
+  parentPort.on('message', async (job) => {
+    const result = await processJob(job);
+    parentPort.postMessage(result);
   });
-  process.exit(1);
-});
+} else {
+  // LEGACY MODE: Process single job from workerData and exit
+  processJob(workerData).then((result) => {
+    parentPort.postMessage(result);
+    process.exit(result.ok ? 0 : 1);
+  }).catch((err) => {
+    console.error('[PARQUET-WORKER] Fatal error:', err.message);
+    parentPort.postMessage({
+      ok: false,
+      error: `Worker fatal: ${err.message}`,
+      filePath: workerData.filePath,
+    });
+    process.exit(1);
+  });
+}

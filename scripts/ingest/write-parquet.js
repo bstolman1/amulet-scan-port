@@ -455,6 +455,11 @@ export async function bufferUpdates(updates) {
   updatesBuffer.push(...updates);
   
   if (updatesBuffer.length >= MAX_ROWS_PER_FILE) {
+    // Wait for upload queue backpressure to clear before creating more files
+    if (getGCSMode() && shouldPauseWrites()) {
+      console.log(`⏳ [write-parquet] Waiting for upload queue backpressure to clear...`);
+      await drainUploads();
+    }
     return await flushUpdates();
   }
   return null;
@@ -467,6 +472,11 @@ export async function bufferEvents(events) {
   eventsBuffer.push(...events);
   
   if (eventsBuffer.length >= MAX_ROWS_PER_FILE) {
+    // Wait for upload queue backpressure to clear before creating more files
+    if (getGCSMode() && shouldPauseWrites()) {
+      console.log(`⏳ [write-parquet] Waiting for upload queue backpressure to clear...`);
+      await drainUploads();
+    }
     return await flushEvents();
   }
   return null;

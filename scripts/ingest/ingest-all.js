@@ -42,6 +42,9 @@ if (LOCAL_MODE) {
 const passArgs = [];
 if (KEEP_RAW) passArgs.push('--keep-raw');
 
+// Track active child process for graceful shutdown
+let activeChild = null;
+
 /**
  * Run a script and wait for completion
  */
@@ -58,11 +61,15 @@ function runScript(scriptPath, scriptArgs = []) {
       env: process.env
     });
 
+    activeChild = child;
+
     child.on('error', (err) => {
+      activeChild = null;
       reject(new Error(`Failed to start ${scriptPath}: ${err.message}`));
     });
 
     child.on('exit', (code) => {
+      activeChild = null;
       if (code === 0) {
         resolve({ success: true, code });
       } else {
@@ -70,6 +77,31 @@ function runScript(scriptPath, scriptArgs = []) {
       }
     });
   });
+}
+
+/**
+ * Graceful shutdown: forward signal to child, wait up to 5s, then SIGKILL.
+ */
+export function gracefulShutdown(signal, childRef, exitFn = process.exit) {
+  const child = childRef !== undefined ? childRef : activeChild;
+  console.log(`\n\n[ingest-all] Received ${signal} - forwarding to child...`);
+  
+  if (child && !child.killed) {
+    child.kill(signal);
+    const timeout = setTimeout(() => {
+      console.log('[ingest-all] Child did not exit in time, sending SIGKILL');
+      try { child.kill('SIGKILL'); } catch {}
+      exitFn(1);
+    }, 5000);
+    // Unref so timeout doesn't keep process alive if child exits quickly
+    timeout.unref?.();
+    child.on('exit', () => {
+      clearTimeout(timeout);
+      exitFn(0);
+    });
+  } else {
+    exitFn(0);
+  }
 }
 
 /**
@@ -153,16 +185,9 @@ async function main() {
   }
 }
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n\n🛑 Received SIGINT - shutting down...');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('\n\n🛑 Received SIGTERM - shutting down...');
-  process.exit(0);
-});
+// Graceful shutdown - forward signals to child processes
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // Run
 main().catch(err => {

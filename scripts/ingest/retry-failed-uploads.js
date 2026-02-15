@@ -4,6 +4,7 @@
  * 
  * Reads the dead-letter file (failed-uploads.jsonl) and retries each upload.
  * Successfully retried entries are removed from the dead-letter log.
+ * Now includes MD5 integrity verification after each retry (matching primary upload path).
  * 
  * Usage:
  *   node retry-failed-uploads.js              # Retry all failed uploads
@@ -15,6 +16,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync } from 'f
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { verifyUploadIntegrity } from './gcs-upload-queue.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -59,7 +61,14 @@ export function retryUpload(localPath, gcsPath, timeout = 300000) {
       timeout,
       encoding: 'utf8',
     });
-    return { ok: true };
+    
+    // Verify integrity after upload (same as primary upload path)
+    const verification = verifyUploadIntegrity(localPath, gcsPath);
+    if (!verification.ok) {
+      return { ok: false, error: `Integrity check failed: ${verification.error}`, recoverable: true };
+    }
+    
+    return { ok: true, localMD5: verification.localMD5 };
   } catch (err) {
     return { ok: false, error: err.message, recoverable: true };
   }

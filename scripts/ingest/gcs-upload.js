@@ -94,10 +94,13 @@ function calculateBackoffDelay(attempt, baseDelay = DEFAULT_BASE_DELAY_MS, maxDe
  * @param {number} ms - Duration in milliseconds
  */
 function sleep(ms) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    // Busy wait (synchronous sleep for use in sync functions)
-  }
+  // Use Atomics.wait for synchronous sleep without busy-waiting the CPU.
+  // SharedArrayBuffer + Atomics.wait blocks the thread for the specified
+  // duration without spinning, keeping the function synchronous (required
+  // by uploadAndCleanupSync) while not pinning the CPU at 100%.
+  const sharedBuf = new SharedArrayBuffer(4);
+  const view = new Int32Array(sharedBuf);
+  Atomics.wait(view, 0, 0, ms);
 }
 
 /**
@@ -571,6 +574,9 @@ export function getRetryConfig() {
   };
 }
 
+// Export internals for testing
+export { sleep, calculateBackoffDelay, isTransientError };
+
 export default {
   TMP_DIR,
   initGCS,
@@ -586,4 +592,6 @@ export default {
   resetUploadStats,
   getRetryConfig,
   isTransientError,
+  sleep,
+  calculateBackoffDelay,
 };

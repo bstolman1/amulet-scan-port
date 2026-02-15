@@ -49,10 +49,13 @@ const ROW_GROUP_SIZE = parseInt(process.env.PARQUET_ROW_GROUP) || 100000;
 
 
 export class ParquetWriterPool {
-  constructor(maxWorkers) {
+  constructor(maxWorkers, workerScript) {
     this.maxWorkers = maxWorkers;
     this.slots = maxWorkers;
     this.activeWorkers = new Set();
+    this._persistentWorkers = [];   // Persistent worker pool
+    this._idleWorkers = [];         // Workers ready for a job
+    this._workerScript = workerScript || WORKER_SCRIPT;
     this.queue = [];
     this.startTime = Date.now();
     this.stats = {
@@ -64,6 +67,7 @@ export class ParquetWriterPool {
       validatedFiles: 0,
       validationFailures: 0,
       validationIssues: [],
+      workersSpawned: 0,
     };
     this.initialized = false;
   }
@@ -71,10 +75,109 @@ export class ParquetWriterPool {
   async init() {
     if (this.initialized) return;
     console.log(
-      `🔧 Initializing Parquet writer pool with ${this.maxWorkers} threads ` +
+      `🔧 Initializing Parquet writer pool with ${this.maxWorkers} persistent threads ` +
       `(CPU: ${CPU_THREADS}, ROW_GROUP_SIZE: ${ROW_GROUP_SIZE})`
     );
+    
+    // Spawn persistent workers
+    for (let i = 0; i < this.maxWorkers; i++) {
+      this._spawnPersistentWorker();
+    }
+    
     this.initialized = true;
+  }
+
+  /**
+   * Spawn a single persistent worker that stays alive and processes jobs via messages.
+   */
+  _spawnPersistentWorker() {
+    const worker = new Worker(this._workerScript, { workerData: null });
+    this.stats.workersSpawned++;
+    
+    worker._busy = false;
+    worker._resolve = null;
+    worker._reject = null;
+    
+    worker.on('message', (msg) => {
+      const resolve = worker._resolve;
+      const reject = worker._reject;
+      worker._resolve = null;
+      worker._reject = null;
+      worker._busy = false;
+      this.activeWorkers.delete(worker);
+      this._idleWorkers.push(worker);
+      this.slots++;
+      
+      if (msg.ok) {
+        this.stats.completedJobs++;
+        this.stats.totalRecords += msg.count || 0;
+        this.stats.totalBytes += msg.bytes || 0;
+        
+        if (msg.validation) {
+          this.stats.validatedFiles++;
+          if (!msg.validation.valid) {
+            this.stats.validationFailures++;
+            if (this.stats.validationIssues.length < 10) {
+              this.stats.validationIssues.push({
+                file: path.basename(msg.filePath || ''),
+                issues: msg.validation.issues,
+              });
+            }
+            console.warn(`⚠️ Parquet validation failed: ${path.basename(msg.filePath || '')} - ${msg.validation.issues.join(', ')}`);
+          }
+        }
+        
+        resolve?.(msg);
+      } else {
+        this.stats.failedJobs++;
+        reject?.(new Error(msg.error || 'Worker error'));
+      }
+      
+      this._pump();
+    });
+    
+    worker.on('error', (err) => {
+      const reject = worker._reject;
+      worker._resolve = null;
+      worker._reject = null;
+      worker._busy = false;
+      
+      // Remove crashed worker and replace it
+      this._removePersistentWorker(worker);
+      this.stats.failedJobs++;
+      reject?.(err);
+      
+      // Spawn replacement
+      this._spawnPersistentWorker();
+      this._pump();
+    });
+    
+    worker.on('exit', (code) => {
+      if (code !== 0 && !this._shuttingDown) {
+        console.error(`❌ Persistent parquet worker exited with code ${code}, replacing...`);
+        this._removePersistentWorker(worker);
+        
+        const reject = worker._reject;
+        if (reject) {
+          this.stats.failedJobs++;
+          reject(new Error(`Worker crashed with code ${code}`));
+        }
+        
+        // Spawn replacement
+        this._spawnPersistentWorker();
+        this._pump();
+      }
+    });
+    
+    this._persistentWorkers.push(worker);
+    this._idleWorkers.push(worker);
+  }
+
+  _removePersistentWorker(worker) {
+    const idx = this._persistentWorkers.indexOf(worker);
+    if (idx !== -1) this._persistentWorkers.splice(idx, 1);
+    const idleIdx = this._idleWorkers.indexOf(worker);
+    if (idleIdx !== -1) this._idleWorkers.splice(idleIdx, 1);
   }
 
   /**
@@ -152,68 +255,18 @@ export class ParquetWriterPool {
    * Process queued jobs with available workers
    */
   _pump() {
-    while (this.slots > 0 && this.queue.length > 0) {
+    while (this._idleWorkers.length > 0 && this.queue.length > 0) {
+      const worker = this._idleWorkers.shift();
       this.slots--;
       const { job, resolve, reject } = this.queue.shift();
-
-      const worker = new Worker(WORKER_SCRIPT, { workerData: job });
+      
+      worker._busy = true;
+      worker._resolve = resolve;
+      worker._reject = reject;
       this.activeWorkers.add(worker);
-
-      let jobCompleted = false;
-
-      const cleanup = () => {
-        this.activeWorkers.delete(worker);
-        this.slots++;
-        this._pump();
-      };
-
-      worker.once('message', (msg) => {
-        jobCompleted = true;
-
-        if (msg.ok) {
-          this.stats.completedJobs++;
-          this.stats.totalRecords += msg.count || 0;
-          this.stats.totalBytes += msg.bytes || 0;
-          
-          // Track validation results
-          if (msg.validation) {
-            this.stats.validatedFiles++;
-            if (!msg.validation.valid) {
-              this.stats.validationFailures++;
-              // Keep last 10 validation issues for debugging
-              if (this.stats.validationIssues.length < 10) {
-                this.stats.validationIssues.push({
-                  file: path.basename(job.filePath),
-                  issues: msg.validation.issues,
-                });
-              }
-              console.warn(`⚠️ Parquet validation failed: ${path.basename(job.filePath)} - ${msg.validation.issues.join(', ')}`);
-            }
-          }
-          
-          resolve(msg);
-        } else {
-          this.stats.failedJobs++;
-          reject(new Error(msg.error || "Worker error"));
-        }
-
-        cleanup();
-      });
-
-      worker.once('error', (err) => {
-        this.stats.failedJobs++;
-        reject(err);
-        cleanup();
-      });
-
-      worker.once('exit', (code) => {
-        if (!jobCompleted && code !== 0) {
-          console.error(`❌ Parquet worker crashed with exit code ${code}`);
-          this.stats.failedJobs++;
-          reject(new Error(`Worker crashed with code ${code}`));
-        }
-        cleanup();
-      });
+      
+      // Send job to persistent worker via message passing
+      worker.postMessage(job);
     }
   }
 
@@ -252,7 +305,17 @@ export class ParquetWriterPool {
   }
 
   async shutdown() {
+    this._shuttingDown = true;
     await this.drain();
+    
+    // Terminate all persistent workers
+    for (const worker of this._persistentWorkers) {
+      try { worker.terminate(); } catch {}
+    }
+    this._persistentWorkers = [];
+    this._idleWorkers = [];
+    this.activeWorkers.clear();
+    
     console.log("🔧 Parquet writer pool shut down");
     console.log("📊 Final Parquet stats:", this.getStats());
   }
