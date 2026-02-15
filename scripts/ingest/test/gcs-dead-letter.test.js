@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { join } from 'path';
 
-// Mock fs before imports
-vi.mock('fs', async () => {
-  const actual = await vi.importActual('fs');
+// Mock fs with importOriginal to preserve default export
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     appendFileSync: vi.fn(),

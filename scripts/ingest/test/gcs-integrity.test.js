@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock dependencies before imports
-vi.mock('fs', async () => {
-  const actual = await vi.importActual('fs');
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...actual,
     existsSync: vi.fn(() => true),
