@@ -11,7 +11,7 @@
  *   node retry-failed-uploads.js --status     # Show dead-letter stats
  */
 
-import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
@@ -101,7 +101,6 @@ export function processDeadLetterLog(filePath = DEAD_LETTER_FILE, dryRun = false
       // Clean up local file after successful retry
       try {
         if (existsSync(localPath)) {
-          const { unlinkSync } = await import('fs');
           unlinkSync(localPath);
         }
       } catch { }
