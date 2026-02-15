@@ -44,6 +44,7 @@ vi.mock('child_process', () => ({
 
 describe('byte-aware backpressure', () => {
   let GCSUploadQueue;
+  let origPump;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -54,20 +55,11 @@ describe('byte-aware backpressure', () => {
 
     const mod = await import('../gcs-upload-queue.js');
     GCSUploadQueue = mod.default;
-  });
 
-  afterEach(() => {
-    delete process.env.GCS_QUEUE_HIGH_WATER;
-    delete process.env.GCS_QUEUE_LOW_WATER;
-    delete process.env.GCS_BYTE_HIGH_WATER;
-    delete process.env.GCS_BYTE_LOW_WATER;
-  });
-
-  function createQueue() {
-    // Stub _pump on prototype so enqueue() accumulates bytes without dequeuing
-    const origPump = GCSUploadQueue.prototype._pump;
-    GCSUploadQueue.prototype._pump = function() {
-      // Only do backpressure-off check and drain check — no dequeuing
+    // Save and replace _pump so enqueue() never dequeues or processes uploads
+    origPump = GCSUploadQueue.prototype._pump;
+    GCSUploadQueue.prototype._pump = function () {
+      // Preserve backpressure-off and drain logic only
       if (this.isPaused && this.queue.length <= this.queueLowWater && this.queuedBytes <= this.byteLowWater) {
         this.isPaused = false;
       }
@@ -77,31 +69,38 @@ describe('byte-aware backpressure', () => {
         this.drainPromise = null;
       }
     };
-    const queue = new GCSUploadQueue(8);
-    // Restore prototype after construction
-    GCSUploadQueue.prototype._pump = origPump;
-    return queue;
-  }
+  });
+
+  afterEach(() => {
+    // Restore original _pump
+    if (GCSUploadQueue && origPump) {
+      GCSUploadQueue.prototype._pump = origPump;
+    }
+    delete process.env.GCS_QUEUE_HIGH_WATER;
+    delete process.env.GCS_QUEUE_LOW_WATER;
+    delete process.env.GCS_BYTE_HIGH_WATER;
+    delete process.env.GCS_BYTE_LOW_WATER;
+  });
 
   it('triggers backpressure when queued bytes exceed byte high water', () => {
-    const queue = createQueue();
+    const queue = new GCSUploadQueue(8);
 
-    // Each file is 600KB — two should exceed 1MB threshold
     mockExistsSync.mockReturnValue(true);
-    mockStatSync.mockReturnValue({ size: 600 * 1024 });
+    mockStatSync.mockReturnValue({ size: 600 * 1024 }); // 600KB each
 
     queue.enqueue('/tmp/big1.parquet', 'gs://b/big1.parquet');
     expect(queue.shouldPause()).toBe(false);
 
     queue.enqueue('/tmp/big2.parquet', 'gs://b/big2.parquet');
+    // 1200KB > 1MB threshold
     expect(queue.shouldPause()).toBe(true);
   });
 
   it('does not trigger backpressure for many small files under byte threshold', () => {
-    const queue = createQueue();
+    const queue = new GCSUploadQueue(8);
 
     mockExistsSync.mockReturnValue(true);
-    mockStatSync.mockReturnValue({ size: 100 }); // 100 bytes each
+    mockStatSync.mockReturnValue({ size: 100 });
 
     for (let i = 0; i < 10; i++) {
       queue.enqueue(`/tmp/small${i}.parquet`, `gs://b/small${i}.parquet`);
@@ -111,7 +110,7 @@ describe('byte-aware backpressure', () => {
   });
 
   it('tracks peak queue bytes in stats', () => {
-    const queue = createQueue();
+    const queue = new GCSUploadQueue(8);
 
     mockExistsSync.mockReturnValue(true);
     mockStatSync.mockReturnValue({ size: 256 * 1024 }); // 256KB
@@ -124,12 +123,12 @@ describe('byte-aware backpressure', () => {
   });
 
   it('handles statSync failure gracefully (fileSize = 0)', () => {
-    const queue = createQueue();
+    const queue = new GCSUploadQueue(8);
 
     mockExistsSync.mockReturnValue(true);
     mockStatSync.mockImplementation(() => { throw new Error('stat failed'); });
 
-    // Should not throw
+    // Should not throw — fileSize defaults to 0
     queue.enqueue('/tmp/broken.parquet', 'gs://b/broken.parquet');
     expect(queue.shouldPause()).toBe(false);
   });
