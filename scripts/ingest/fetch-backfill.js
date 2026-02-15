@@ -42,9 +42,9 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import os from 'os';
+
 import v8 from 'v8';
-import Piscina from 'piscina';
+// Piscina removed: main-thread decode is faster (structured clone overhead > normalization cost)
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
 
 // Parse command line arguments
@@ -325,56 +325,8 @@ let fetchStats = {
   consecutiveStableWindows: 0,
 };
 
-// ==========================================
-// AUTO-TUNING: DECODE WORKERS
-// ==========================================
-const cpuCount = os.cpus()?.length || 4;
-const BASE_DECODE_WORKERS = parseInt(process.env.DECODE_WORKERS) || Math.floor(cpuCount / 2);
-const MIN_DECODE_WORKERS = parseInt(process.env.MIN_DECODE_WORKERS) || 4;
-const MAX_DECODE_WORKERS = parseInt(process.env.MAX_DECODE_WORKERS) || 16;
-
-let dynamicDecodeWorkers = Math.min(
-  Math.max(BASE_DECODE_WORKERS, MIN_DECODE_WORKERS),
-  MAX_DECODE_WORKERS
-);
-
-const DECODE_TUNE_WINDOW_MS = 30_000;
-let decodeStats = {
-  windowStart: Date.now(),
-  startQueued: 0,
-  endQueued: 0,
-  decoded: 0,
-};
-
-// ==========================================
-// DECODE WORKER POOL (Dynamic)
-// ==========================================
-let decodePool = null;
-let decodePoolFailed = false;
-
-function createDecodePool(maxThreads) {
-  console.log(`   🔧 Creating decode pool with ${maxThreads} workers...`);
-  try {
-    const pool = new Piscina({
-      filename: new URL('./decode-worker.js', import.meta.url).href,
-      minThreads: MIN_DECODE_WORKERS,
-      maxThreads: maxThreads,
-    });
-    console.log(`   ✅ Decode pool ready`);
-    return pool;
-  } catch (err) {
-    console.error(`   ❌ Failed to create decode pool: ${err.message}`);
-    decodePoolFailed = true;
-    return null;
-  }
-}
-
-function getDecodePool() {
-  if (!decodePool && !decodePoolFailed) {
-    decodePool = createDecodePool(dynamicDecodeWorkers);
-  }
-  return decodePool;
-}
+// NOTE: Decode worker pool removed — main-thread decode is faster
+// because structured clone serialization cost exceeds normalization cost
 
 // ==========================================
 // HTTP CLIENT (uses MAX for socket pool)
@@ -569,46 +521,7 @@ function maybeTuneParallelFetches(shardLabel = '') {
 /**
  * Auto-tune decode workers based on queue depth
  */
-async function maybeTuneDecodeWorkers(shardLabel = '') {
-  const now = Date.now();
-  const elapsed = now - decodeStats.windowStart;
-  if (elapsed < DECODE_TUNE_WINDOW_MS) return;
-
-  const { startQueued, endQueued, decoded } = decodeStats;
-  const queueGrowth = endQueued - startQueued;
-
-  // Rule 1 — queue is growing → add workers
-  if (queueGrowth > 0 && dynamicDecodeWorkers < MAX_DECODE_WORKERS) {
-    const old = dynamicDecodeWorkers;
-    dynamicDecodeWorkers++;
-    console.log(`   🔧 Auto-tune${shardLabel}: decode queue growing (+${queueGrowth}) → workers ${old} → ${dynamicDecodeWorkers}`);
-
-    // Recreate pool with new size
-    if (decodePool) {
-      await decodePool.destroy();
-    }
-    decodePool = createDecodePool(dynamicDecodeWorkers);
-  }
-  // Rule 2 — queue empty/shrinking → reduce workers
-  else if (queueGrowth <= 0 && decoded > 0 && dynamicDecodeWorkers > MIN_DECODE_WORKERS) {
-    const old = dynamicDecodeWorkers;
-    dynamicDecodeWorkers--;
-    console.log(`   🔧 Auto-tune${shardLabel}: decode queue stable/shrinking → workers ${old} → ${dynamicDecodeWorkers}`);
-
-    if (decodePool) {
-      await decodePool.destroy();
-    }
-    decodePool = createDecodePool(dynamicDecodeWorkers);
-  }
-
-  // Reset stats
-  decodeStats = {
-    windowStart: now,
-    startQueued: endQueued,
-    endQueued: 0,
-    decoded: 0,
-  };
-}
+// maybeTuneDecodeWorkers removed — no longer using worker pool
 
 /**
  * Load cursor from file (shard-aware)
@@ -765,57 +678,18 @@ function getEventTime(txOrReassign) {
 }
 
 /**
- * Process backfill items using multithreaded decode (Piscina)
- * Falls back to single-threaded if pool unavailable
- * Tracks decode stats for auto-tuning
+ * Process backfill items using main-thread decode (zero serialization overhead)
+ * 
+ * normalizeUpdate/normalizeEvent is pure field mapping (~μs per call).
+ * Piscina structured clone serialization of 1000 large JSON objects per page
+ * costs MORE than the normalization itself, so main-thread is faster.
  */
 async function processBackfillItems(transactions, migrationId) {
-  const pool = getDecodePool();
-  
-  // Fall back to main thread if pool failed
-  if (!pool) {
-    console.log(`   ⚠️ Using main-thread decode (no worker pool)`);
-    const results = transactions.map(tx => decodeInMainThread(tx, migrationId));
-    const updates = [];
-    const events = [];
-    for (const r of results) {
-      if (!r) continue;
-      if (r.update) updates.push(r.update);
-      if (Array.isArray(r.events) && r.events.length > 0) {
-        events.push(...r.events);
-      }
-    }
-    await bufferUpdates(updates);
-    await bufferEvents(events);
-    return { updates: updates.length, events: events.length };
-  }
-  
-  // Track queue depth at start for auto-tuning
-  if (decodeStats.startQueued === 0) {
-    decodeStats.startQueued = pool.queueSize || 0;
-  }
-  
-  // Submit all transactions to worker pool in parallel
-  const tasks = transactions.map((tx) => 
-    pool.run({ tx, migrationId }).then(result => {
-      decodeStats.decoded++;
-      return result;
-    }).catch(err => {
-      console.warn(`   ⚠️ Worker decode failed, using main thread: ${err.message}`);
-      decodeStats.decoded++;
-      return decodeInMainThread(tx, migrationId);
-    })
-  );
-  
-  const results = await Promise.all(tasks);
-
-  // Track queue depth at end for auto-tuning
-  decodeStats.endQueued = pool.queueSize || 0;
-
   const updates = [];
   const events = [];
 
-  for (const r of results) {
+  for (const tx of transactions) {
+    const r = decodeInMainThread(tx, migrationId);
     if (!r) continue;
     if (r.update) updates.push(r.update);
     if (Array.isArray(r.events) && r.events.length > 0) {
@@ -1361,14 +1235,14 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     maxTime,
     extra: {
       parallel_fetches: dynamicParallelFetches,
-      decode_workers: dynamicDecodeWorkers,
+      decode: 'main-thread',
     },
   });
   
   console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...${shardLabel}`);
   console.log(`   Range: ${minTime} to ${maxTime}`);
   console.log(`   Parallel fetches (auto-tuned): ${dynamicParallelFetches} (min=${MIN_PARALLEL_FETCHES}, max=${MAX_PARALLEL_FETCHES})`);
-  console.log(`   Decode workers (auto-tuned): ${dynamicDecodeWorkers} (min=${MIN_DECODE_WORKERS}, max=${MAX_DECODE_WORKERS})`);
+  console.log(`   Decode: main-thread (zero serialization overhead)`);
   
   // CRITICAL FIX: Use AtomicCursor for transactional cursor management
   const atomicCursor = new AtomicCursor(migrationId, synchronizerId, shardIndex);
@@ -1627,7 +1501,6 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         throughput,
         latencyMs: batchLatency,
         parallelFetches: dynamicParallelFetches,
-        decodeWorkers: dynamicDecodeWorkers,
         queuedJobs,
         activeWorkers,
       });
@@ -1643,7 +1516,6 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           avgThroughput: throughput,
           currentThroughput: Math.round((batchUpdates || 0) / (batchLatency / 1000)),
           parallelFetches: dynamicParallelFetches,
-          decodeWorkers: dynamicDecodeWorkers,
           avgLatencyMs: fetchStats.avgLatency,
           p95LatencyMs: fetchStats.p95Latency,
           errorCount: fetchStats.errorCount || 0,
@@ -1675,10 +1547,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       
       // Auto-tune after processing this wave
       maybeTuneParallelFetches(shardLabel);
-      await maybeTuneDecodeWorkers(shardLabel);
       
       // Main progress line with current tuning values
-      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} D:${dynamicDecodeWorkers} | Q: ${queuedJobs}/${activeWorkers}`);
+      console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} | Q: ${queuedJobs}/${activeWorkers}`);
       
       if (reachedEnd || new Date(before).getTime() <= new Date(atOrAfter).getTime()) {
         log('info', 'reached_lower_bound', {
@@ -1938,7 +1809,7 @@ async function runBackfill() {
   
   console.log("\n⚙️  Auto-Tuning Configuration:");
   console.log(`   Parallel Fetches: ${dynamicParallelFetches} (range: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
-  console.log(`   Decode Workers: ${dynamicDecodeWorkers} (range: ${MIN_DECODE_WORKERS}-${MAX_DECODE_WORKERS})`);
+  console.log(`   Decode: main-thread (no worker pool overhead)`);
   console.log(`   Tune Window: ${FETCH_TUNE_WINDOW_MS/1000}s | Latency thresholds: ${LATENCY_LOW_MS}ms / ${LATENCY_HIGH_MS}ms / ${LATENCY_CRITICAL_MS}ms`);
   console.log(`   FLUSH_EVERY_BATCHES: ${FLUSH_EVERY_BATCHES}`);
   if (isSharded) {
@@ -2130,9 +2001,7 @@ async function gracefulShutdown(signal) {
     await flushAll();
     await waitForWrites();
     await shutdown();
-    if (decodePool) {
-      await decodePool.destroy();
-    }
+    // decode pool removed — main-thread decode
     console.log('✅ Graceful shutdown complete');
     process.exit(0);
   } catch (err) {
@@ -2191,8 +2060,6 @@ runBackfill()
     await flushAll();
     await waitForWrites();
     await shutdown();
-    if (decodePool) {
-      await decodePool.destroy();
-    }
+    // decode pool removed — main-thread decode
     process.exit(1);
   });
