@@ -78,14 +78,27 @@ export function retryUpload(localPath, gcsPath, timeout = 300000) {
  * Process the dead-letter log: retry uploads, rewrite log with remaining failures.
  */
 export function processDeadLetterLog(filePath = DEAD_LETTER_FILE, dryRun = false) {
-  const entries = readDeadLetterLog(filePath);
+  const rawEntries = readDeadLetterLog(filePath);
   
-  if (entries.length === 0) {
+  if (rawEntries.length === 0) {
     console.log('✅ No failed uploads to retry.');
-    return { total: 0, retried: 0, stillFailed: 0, noFile: 0 };
+    return { total: 0, retried: 0, stillFailed: 0, noFile: 0, deduplicated: 0 };
   }
 
-  console.log(`📋 Found ${entries.length} failed upload(s) to retry\n`);
+  // Deduplicate by gcsPath — only retry the latest entry for each destination
+  const seen = new Map();
+  for (const entry of rawEntries) {
+    const key = entry.gcsPath || entry.localPath;
+    seen.set(key, entry); // last entry wins (most recent timestamp)
+  }
+  const entries = [...seen.values()];
+  const deduplicated = rawEntries.length - entries.length;
+  
+  if (deduplicated > 0) {
+    console.log(`🔄 Deduplicated ${deduplicated} duplicate entries`);
+  }
+
+  console.log(`📋 Found ${entries.length} unique failed upload(s) to retry\n`);
 
   const remaining = [];
   let retried = 0;
@@ -132,7 +145,7 @@ export function processDeadLetterLog(filePath = DEAD_LETTER_FILE, dryRun = false
     }
   }
 
-  const stats = { total: entries.length, retried, stillFailed: remaining.length, noFile };
+  const stats = { total: rawEntries.length, unique: entries.length, retried, stillFailed: remaining.length, noFile, deduplicated };
   console.log(`\n📊 Results: ${retried} retried, ${remaining.length} still failed, ${noFile} files missing`);
   return stats;
 }

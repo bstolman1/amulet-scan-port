@@ -30,6 +30,9 @@ function getConfigFromEnv() {
     queueLowWater: parseInt(process.env.GCS_QUEUE_LOW_WATER) || 20,
     maxRetries: parseInt(process.env.GCS_MAX_RETRIES) || 3,
     baseDelayMs: parseInt(process.env.GCS_RETRY_BASE_DELAY_MS) || 1000,
+    // Byte-aware backpressure: pause when queued bytes exceed this (default 512MB)
+    byteHighWater: parseInt(process.env.GCS_BYTE_HIGH_WATER) || 512 * 1024 * 1024,
+    byteLowWater: parseInt(process.env.GCS_BYTE_LOW_WATER) || 128 * 1024 * 1024,
   };
 }
 
@@ -192,10 +195,13 @@ class GCSUploadQueue {
     this.queueLowWater = config.queueLowWater;
     this.maxRetries = config.maxRetries;
     this.baseDelayMs = config.baseDelayMs;
+    this.byteHighWater = config.byteHighWater;
+    this.byteLowWater = config.byteLowWater;
     this.queue = [];
     this.activeUploads = 0;
     this.isPaused = false;
     this.isShuttingDown = false;
+    this.queuedBytes = 0; // Track total queued bytes
 
     // Stats
     this.stats = {
@@ -205,6 +211,7 @@ class GCSUploadQueue {
       bytesUploaded: 0,
       startTime: Date.now(),
       peakQueueSize: 0,
+      peakQueueBytes: 0,
       totalRetries: 0,
     };
 
@@ -214,7 +221,7 @@ class GCSUploadQueue {
     this.drainResolve = null;
 
     console.log(`☁️ [upload-queue] Initialized with ${this.maxConcurrent} concurrent uploads`);
-    console.log(`☁️ [upload-queue] Backpressure: pause at ${this.queueHighWater}, resume at ${this.queueLowWater}`);
+    console.log(`☁️ [upload-queue] Backpressure: pause at ${this.queueHighWater} items or ${(this.byteHighWater / 1024 / 1024).toFixed(0)}MB`);
   }
 
   /**
@@ -232,14 +239,25 @@ class GCSUploadQueue {
       return false;
     }
 
-    this.queue.push({ localPath, gcsPath, options, attempts: 0 });
-    this.stats.queued++;
-    this.stats.peakQueueSize = Math.max(this.stats.peakQueueSize, this.queue.length);
+    // Track file size for byte-aware backpressure
+    let fileSize = 0;
+    try {
+      fileSize = existsSync(localPath) ? statSync(localPath).size : 0;
+    } catch { fileSize = 0; }
 
-    // Check for backpressure
-    if (this.queue.length >= this.queueHighWater && !this.isPaused) {
+    this.queue.push({ localPath, gcsPath, options, attempts: 0, fileSize });
+    this.stats.queued++;
+    this.queuedBytes += fileSize;
+    this.stats.peakQueueSize = Math.max(this.stats.peakQueueSize, this.queue.length);
+    this.stats.peakQueueBytes = Math.max(this.stats.peakQueueBytes || 0, this.queuedBytes);
+
+    // Check for backpressure (count-based OR byte-based)
+    if (!this.isPaused && (this.queue.length >= this.queueHighWater || this.queuedBytes >= this.byteHighWater)) {
       this.isPaused = true;
-      console.warn(`⚠️ [upload-queue] Backpressure ON: queue at ${this.queue.length} items`);
+      const reason = this.queuedBytes >= this.byteHighWater
+        ? `${(this.queuedBytes / 1024 / 1024).toFixed(1)}MB queued`
+        : `${this.queue.length} items queued`;
+      console.warn(`⚠️ [upload-queue] Backpressure ON: ${reason}`);
     }
 
     // Pump the queue
@@ -268,14 +286,15 @@ class GCSUploadQueue {
   _pump() {
     while (this.activeUploads < this.maxConcurrent && this.queue.length > 0) {
       const job = this.queue.shift();
+      this.queuedBytes -= (job.fileSize || 0);
       this.activeUploads++;
       this._processUpload(job);
     }
 
-    // Check for low water mark
-    if (this.isPaused && this.queue.length <= this.queueLowWater) {
+    // Check for low water mark (both count AND bytes must be below threshold)
+    if (this.isPaused && this.queue.length <= this.queueLowWater && this.queuedBytes <= this.byteLowWater) {
       this.isPaused = false;
-      console.log(`✅ [upload-queue] Backpressure OFF: queue at ${this.queue.length} items`);
+      console.log(`✅ [upload-queue] Backpressure OFF: ${this.queue.length} items, ${(this.queuedBytes / 1024 / 1024).toFixed(1)}MB`);
     }
 
     // Check for drain completion
