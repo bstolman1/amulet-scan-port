@@ -681,8 +681,8 @@ function getEventTime(txOrReassign) {
  * Process backfill items using main-thread decode (zero serialization overhead)
  * 
  * normalizeUpdate/normalizeEvent is pure field mapping (~μs per call).
- * Piscina structured clone serialization of 1000 large JSON objects per page
- * costs MORE than the normalization itself, so main-thread is faster.
+ * Buffer calls may trigger async flushes — we fire them concurrently
+ * to avoid blocking the fetch loop while parquet files are being written.
  */
 async function processBackfillItems(transactions, migrationId) {
   const updates = [];
@@ -697,8 +697,12 @@ async function processBackfillItems(transactions, migrationId) {
     }
   }
 
-  await bufferUpdates(updates);
-  await bufferEvents(events);
+  // Fire both buffer calls concurrently — each may trigger a flush
+  // but we don't need to serialize updates→events
+  await Promise.all([
+    bufferUpdates(updates),
+    bufferEvents(events),
+  ]);
 
   return { updates: updates.length, events: events.length };
 }
