@@ -529,6 +529,7 @@ export async function bufferEvents(events) {
 
 /**
  * Flush updates buffer to Parquet file
+ * Writes all partitions in PARALLEL to utilize the full worker pool.
  */
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
@@ -538,29 +539,33 @@ export async function flushUpdates() {
   
   // Group by each record's own effective_at — no more first-record-wins
   const groups = groupByPartition(rowsToWrite, 'updates', currentDataSource, currentMigrationId);
-  const results = [];
   
-  for (const [partition, records] of Object.entries(groups)) {
+  // Fire ALL partition writes concurrently to saturate the worker pool
+  const writePromises = Object.entries(groups).map(([partition, records]) => {
     const partitionDir = join(getDataDir(), partition);
     ensureDir(partitionDir);
     const fileName = generateFileName('updates');
     const filePath = join(partitionDir, fileName);
     
-    const result = USE_CLI 
-      ? writeToParquetCLI(records, filePath, 'updates', partition, fileName)
-      : await writeToParquetPool(records, filePath, 'updates', partition, fileName);
+    const doWrite = USE_CLI 
+      ? Promise.resolve(writeToParquetCLI(records, filePath, 'updates', partition, fileName))
+      : writeToParquetPool(records, filePath, 'updates', partition, fileName);
     
-    totalUpdatesWritten += records.length;
-    rowsTuneState.filesWritten++;
-    rowsTuneState.rowsWritten += records.length;
-    if (result) results.push(result);
-  }
+    return doWrite.then(result => {
+      totalUpdatesWritten += records.length;
+      rowsTuneState.filesWritten++;
+      rowsTuneState.rowsWritten += records.length;
+      return result;
+    });
+  });
   
+  const results = (await Promise.all(writePromises)).filter(Boolean);
   return results.length === 1 ? results[0] : results;
 }
 
 /**
  * Flush events buffer to Parquet file
+ * Writes all partitions in PARALLEL to utilize the full worker pool.
  */
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
@@ -570,39 +575,42 @@ export async function flushEvents() {
   
   // Group by each record's own effective_at — no more first-record-wins
   const groups = groupByPartition(rowsToWrite, 'events', currentDataSource, currentMigrationId);
-  const results = [];
   
-  for (const [partition, records] of Object.entries(groups)) {
+  // Fire ALL partition writes concurrently to saturate the worker pool
+  const writePromises = Object.entries(groups).map(([partition, records]) => {
     const partitionDir = join(getDataDir(), partition);
     ensureDir(partitionDir);
     const fileName = generateFileName('events');
     const filePath = join(partitionDir, fileName);
     
-    const result = USE_CLI
-      ? writeToParquetCLI(records, filePath, 'events', partition, fileName)
-      : await writeToParquetPool(records, filePath, 'events', partition, fileName);
+    const doWrite = USE_CLI
+      ? Promise.resolve(writeToParquetCLI(records, filePath, 'events', partition, fileName))
+      : writeToParquetPool(records, filePath, 'events', partition, fileName);
     
-    totalEventsWritten += records.length;
-    rowsTuneState.filesWritten++;
-    rowsTuneState.rowsWritten += records.length;
-    if (result) results.push(result);
-  }
+    return doWrite.then(result => {
+      totalEventsWritten += records.length;
+      rowsTuneState.filesWritten++;
+      rowsTuneState.rowsWritten += records.length;
+      return result;
+    });
+  });
   
+  const results = (await Promise.all(writePromises)).filter(Boolean);
   return results.length === 1 ? results[0] : results;
 }
 
 /**
- * Flush all buffers
+ * Flush all buffers (updates + events in parallel)
  */
 export async function flushAll() {
+  const [updatesResult, eventsResult] = await Promise.all([
+    flushUpdates(),
+    flushEvents(),
+  ]);
+  
   const results = [];
-  
-  const updatesResult = await flushUpdates();
   if (updatesResult) results.push(updatesResult);
-  
-  const eventsResult = await flushEvents();
   if (eventsResult) results.push(eventsResult);
-  
   return results;
 }
 
