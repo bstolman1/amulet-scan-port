@@ -135,11 +135,19 @@ const ALL_SCAN_ENDPOINTS = [
   { name: 'C7-Technology-Services-Limited', url: 'https://scan.sv-1.global.canton.network.c7.digital/api/scan' },
 ];
 
+/**
+ * Determine TLS rejectUnauthorized setting.
+ * Defaults to true (secure). Set INSECURE_TLS=true to disable for dev/self-signed certs.
+ */
+export function getTLSRejectUnauthorized() {
+  return process.env.INSECURE_TLS !== 'true';
+}
+
 // Axios client with explicit timeout (baseURL updated dynamically by probe)
 const client = axios.create({
   baseURL: activeScanUrl,
   timeout: FETCH_TIMEOUT_MS,
-  httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+  httpsAgent: new https.Agent({ rejectUnauthorized: getTLSRejectUnauthorized() }),
 });
 
 // Cross-platform path handling
@@ -997,7 +1005,7 @@ async function probeAllScanEndpoints() {
       try {
         const response = await axios.get(`${ep.url}/v0/dso`, {
           timeout: 10000,
-          httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+          httpsAgent: new https.Agent({ rejectUnauthorized: getTLSRejectUnauthorized() }),
           headers: { 'Accept': 'application/json' },
         });
         const latencyMs = Date.now() - probeStart;
