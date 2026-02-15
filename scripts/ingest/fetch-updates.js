@@ -701,7 +701,7 @@ async function findLatestFromRawData(rawDir) {
           
           try {
             const files = fs.readdirSync(dayPath)
-              .filter(f => f.endsWith('.pb.zst'))
+              .filter(f => f.endsWith('.pb.zst') || f.endsWith('.parquet'))
               .sort()
               .reverse();
             

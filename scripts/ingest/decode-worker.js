@@ -46,13 +46,22 @@ export default async function decodeTask({ tx, migrationId }) {
     if (ce) {
       const ev = normalizeEvent(ce, update.update_id, migrationId, tx, updateInfo);
       ev.event_type = 'reassign_create';
-      events.push(ev);
+      // Guard: skip events with no effective_at to prevent partition crash
+      if (ev.effective_at) {
+        events.push(ev);
+      } else {
+        console.warn(`⚠️ [decode-worker] Skipping reassign_create event with no effective_at: update=${update.update_id}`);
+      }
     }
 
     if (ae) {
       const ev = normalizeEvent(ae, update.update_id, migrationId, tx, updateInfo);
       ev.event_type = 'reassign_archive';
-      events.push(ev);
+      if (ev.effective_at) {
+        events.push(ev);
+      } else {
+        console.warn(`⚠️ [decode-worker] Skipping reassign_archive event with no effective_at: update=${update.update_id}`);
+      }
     }
   } else {
     // Handle regular transaction events
@@ -60,7 +69,12 @@ export default async function decodeTask({ tx, migrationId }) {
     for (const [eventId, rawEvent] of Object.entries(eventsById)) {
       const ev = normalizeEvent(rawEvent, update.update_id, migrationId, rawEvent, updateInfo);
       ev.event_id = eventId;
-      events.push(ev);
+      // Guard: skip events with no effective_at to prevent partition crash
+      if (ev.effective_at) {
+        events.push(ev);
+      } else {
+        console.warn(`⚠️ [decode-worker] Skipping event ${eventId} with no effective_at: update=${update.update_id}`);
+      }
     }
   }
 

@@ -215,7 +215,7 @@ export function normalizeUpdate(raw, options = {}) {
     // These fields are optional per API docs
     workflow_id: update.workflow_id || null,
     command_id: update.command_id || null,
-    offset: parseInt(update.offset) || null,
+    offset: (() => { const o = parseInt(update.offset); return isNaN(o) ? null : o; })(),
     // record_time is PRIMARY ordering key
     record_time: update.record_time ? new Date(update.record_time) : null,
     effective_at: update.effective_at ? new Date(update.effective_at) : null,
@@ -331,8 +331,16 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     if (v instanceof Date) return v;
     if (typeof v === 'number') return new Date(v);
     if (typeof v === 'string') {
-      const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(v);
-      return new Date(hasTz ? v : `${v}Z`);
+      // Normalize space-separated timestamps to ISO 8601 'T' separator
+      // e.g. "2025-01-15 12:00:00" → "2025-01-15T12:00:00"
+      const normalized = v.includes('T') ? v : v.replace(' ', 'T');
+      const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized);
+      const result = new Date(hasTz ? normalized : `${normalized}Z`);
+      if (isNaN(result.getTime())) {
+        console.warn(`[data-schema] asUtcDate: invalid timestamp "${v}"`);
+        return null;
+      }
+      return result;
     }
     return new Date(v);
   };
