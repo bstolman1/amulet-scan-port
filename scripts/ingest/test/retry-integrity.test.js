@@ -1,82 +1,105 @@
 /**
  * Tests for MD5 verification in retry-failed-uploads.js
  * 
- * Tests the retryUpload logic by extracting the core verification pattern
- * and testing it directly, avoiding complex ESM mock issues.
+ * Tests the ACTUAL retryUpload and verifyUploadIntegrity functions
+ * from the real modules, using mocks only for external I/O (gsutil, fs).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
 
-/**
- * This mirrors the exact logic from retryUpload() in retry-failed-uploads.js
- * after the fix. We test the logic directly to verify correct integration
- * with verifyUploadIntegrity.
- */
-function retryUploadLogic({ fileExists, uploadSucceeds, verification }) {
-  if (!fileExists) {
-    return { ok: false, error: 'Local file no longer exists', recoverable: false };
-  }
+// Mock child_process before importing the module under test
+vi.mock('child_process', () => ({
+  execSync: vi.fn(),
+}));
 
-  try {
-    if (!uploadSucceeds) {
-      throw new Error('503 Service Unavailable');
-    }
+// We need to mock fs.existsSync and fs.readFileSync selectively
+// so verifyUploadIntegrity can be tested with controlled inputs
+const originalExistsSync = fs.existsSync;
+const originalReadFileSync = fs.readFileSync;
+
+describe('verifyUploadIntegrity (from gcs-upload-queue.js)', () => {
+  let verifyUploadIntegrity, computeLocalMD5, getGCSObjectMD5;
+  let execSync;
+
+  beforeEach(async () => {
+    const mod = await import('../gcs-upload-queue.js');
+    verifyUploadIntegrity = mod.verifyUploadIntegrity;
+    computeLocalMD5 = mod.computeLocalMD5;
+    getGCSObjectMD5 = mod.getGCSObjectMD5;
     
-    // This is the NEW code added by the fix:
-    // After successful gsutil cp, verify integrity
-    if (!verification.ok) {
-      return { ok: false, error: `Integrity check failed: ${verification.error}`, recoverable: true };
-    }
-    
-    return { ok: true, localMD5: verification.localMD5 };
-  } catch (err) {
-    return { ok: false, error: err.message, recoverable: true };
-  }
-}
-
-describe('retryUpload MD5 verification logic', () => {
-  it('returns ok: true when upload and integrity check both succeed', () => {
-    const result = retryUploadLogic({
-      fileExists: true,
-      uploadSucceeds: true,
-      verification: { ok: true, localMD5: 'abc123', remoteMD5: 'abc123' },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.localMD5).toBe('abc123');
+    const cp = await import('child_process');
+    execSync = cp.execSync;
+    vi.clearAllMocks();
   });
 
-  it('returns ok: false with recoverable: true when hash mismatch', () => {
-    const result = retryUploadLogic({
-      fileExists: true,
-      uploadSucceeds: true,
-      verification: { ok: false, error: 'Hash mismatch: local=abc remote=xyz' },
-    });
+  it('returns ok: true when local and remote MD5 match', () => {
+    // Mock file exists
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    // Mock file content for MD5
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('test content'));
+    // Mock gsutil stat output with matching MD5
+    const crypto = require('crypto');
+    const expectedMD5 = crypto.createHash('md5').update(Buffer.from('test content')).digest('base64');
+    execSync.mockReturnValue(`    Hash (md5):    ${expectedMD5}\n    Size: 12\n`);
+
+    const result = verifyUploadIntegrity('/tmp/test.parquet', 'gs://bucket/test.parquet');
+
+    expect(result.ok).toBe(true);
+    expect(result.localMD5).toBe(expectedMD5);
+    expect(result.remoteMD5).toBe(expectedMD5);
+  });
+
+  it('returns ok: false when MD5 hashes mismatch', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('local content'));
+    execSync.mockReturnValue('    Hash (md5):    DIFFERENT_HASH\n');
+
+    const result = verifyUploadIntegrity('/tmp/test.parquet', 'gs://bucket/test.parquet');
 
     expect(result.ok).toBe(false);
-    expect(result.recoverable).toBe(true);
-    expect(result.error).toContain('Integrity check failed');
     expect(result.error).toContain('Hash mismatch');
   });
 
-  it('returns ok: false when GCS stat fails (cannot retrieve hash)', () => {
-    const result = retryUploadLogic({
-      fileExists: true,
-      uploadSucceeds: true,
-      verification: { ok: false, error: 'Could not retrieve GCS object hash' },
-    });
+  it('returns ok: false when gsutil stat fails', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('content'));
+    execSync.mockImplementation(() => { throw new Error('gsutil not found'); });
+
+    const result = verifyUploadIntegrity('/tmp/test.parquet', 'gs://bucket/test.parquet');
 
     expect(result.ok).toBe(false);
-    expect(result.recoverable).toBe(true);
     expect(result.error).toContain('Could not retrieve');
   });
 
-  it('returns ok: false with recoverable: false when local file missing', () => {
-    const result = retryUploadLogic({
-      fileExists: false,
-      uploadSucceeds: false,
-      verification: {},
-    });
+  it('returns ok: false when local file does not exist', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const result = verifyUploadIntegrity('/tmp/gone.parquet', 'gs://bucket/gone.parquet');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Local file no longer exists');
+  });
+});
+
+describe('retryUpload (from retry-failed-uploads.js)', () => {
+  let retryUpload;
+  let execSync;
+
+  beforeEach(async () => {
+    const cp = await import('child_process');
+    execSync = cp.execSync;
+    vi.clearAllMocks();
+    
+    // Re-import to get fresh module
+    const mod = await import('../retry-failed-uploads.js');
+    retryUpload = mod.retryUpload;
+  });
+
+  it('returns ok: false with recoverable: false when file does not exist', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+    const result = retryUpload('/tmp/missing.parquet', 'gs://bucket/missing.parquet');
 
     expect(result.ok).toBe(false);
     expect(result.recoverable).toBe(false);
@@ -84,53 +107,49 @@ describe('retryUpload MD5 verification logic', () => {
   });
 
   it('returns ok: false with recoverable: true when gsutil cp fails', () => {
-    const result = retryUploadLogic({
-      fileExists: true,
-      uploadSucceeds: false,
-      verification: {},
-    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    execSync.mockImplementation(() => { throw new Error('503 Service Unavailable'); });
+
+    const result = retryUpload('/tmp/test.parquet', 'gs://bucket/test.parquet');
 
     expect(result.ok).toBe(false);
     expect(result.recoverable).toBe(true);
     expect(result.error).toContain('503');
   });
 
-  it('verification is NOT called when upload itself fails', () => {
-    const verifyFn = vi.fn();
+  it('calls verifyUploadIntegrity after successful gsutil cp', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('data'));
     
-    // Simulate upload failure path
-    const fileExists = true;
-    const uploadSucceeds = false;
+    const crypto = require('crypto');
+    const md5 = crypto.createHash('md5').update(Buffer.from('data')).digest('base64');
     
-    if (!fileExists) return;
-    
-    try {
-      if (!uploadSucceeds) throw new Error('Upload failed');
-      // This line should not be reached
-      verifyFn();
-    } catch {
-      // Upload failed, verification skipped
-    }
-    
-    expect(verifyFn).not.toHaveBeenCalled();
-  });
-});
+    // First call: gsutil cp (succeeds), second call: gsutil stat (returns MD5)
+    execSync
+      .mockReturnValueOnce('') // gsutil cp
+      .mockReturnValueOnce(`    Hash (md5):    ${md5}\n`); // gsutil stat
 
-describe('retry-failed-uploads.js source code verification', () => {
-  it('imports verifyUploadIntegrity from gcs-upload-queue.js', async () => {
-    // Read the actual source to verify the import exists
-    const fs = await import('fs');
-    const source = fs.readFileSync('scripts/ingest/retry-failed-uploads.js', 'utf8');
-    
-    expect(source).toContain("import { verifyUploadIntegrity } from './gcs-upload-queue.js'");
+    const result = retryUpload('/tmp/test.parquet', 'gs://bucket/test.parquet');
+
+    expect(result.ok).toBe(true);
+    expect(result.localMD5).toBe(md5);
+    // Verify gsutil was called twice (cp + stat)
+    expect(execSync).toHaveBeenCalledTimes(2);
   });
 
-  it('calls verifyUploadIntegrity after successful gsutil cp', async () => {
-    const fs = await import('fs');
-    const source = fs.readFileSync('scripts/ingest/retry-failed-uploads.js', 'utf8');
+  it('returns ok: false when upload succeeds but integrity check fails', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('data'));
     
-    // Verify the integrity check is in the retryUpload function
-    expect(source).toContain('verifyUploadIntegrity(localPath, gcsPath)');
-    expect(source).toContain('Integrity check failed');
+    // gsutil cp succeeds, gsutil stat returns mismatched hash
+    execSync
+      .mockReturnValueOnce('') // gsutil cp
+      .mockReturnValueOnce('    Hash (md5):    WRONG_HASH\n'); // gsutil stat
+
+    const result = retryUpload('/tmp/test.parquet', 'gs://bucket/test.parquet');
+
+    expect(result.ok).toBe(false);
+    expect(result.recoverable).toBe(true);
+    expect(result.error).toContain('Integrity check failed');
   });
 });

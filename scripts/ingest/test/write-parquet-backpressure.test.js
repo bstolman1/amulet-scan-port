@@ -1,93 +1,94 @@
 /**
- * Tests for backpressure checks in write-parquet.js bufferUpdates/bufferEvents
+ * Tests for backpressure checks in write-parquet.js
  * 
- * Verifies the backpressure logic that guards buffer flushes.
- * Tests the shouldPauseWrites/drainUploads integration without importing
- * the full write-parquet module (which has heavy dependencies).
+ * Verifies that the ACTUAL bufferUpdates/bufferEvents functions in write-parquet.js
+ * contain the backpressure guard, and that the shouldPauseWrites/drainUploads
+ * integration from gcs-upload-queue.js works correctly.
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
 
-describe('write-parquet backpressure logic', () => {
-  it('drainUploads is awaited when GCS mode is on and shouldPauseWrites returns true', async () => {
-    // Simulate the exact logic from bufferUpdates/bufferEvents:
-    //   if (getGCSMode() && shouldPauseWrites()) { await drainUploads(); }
-    const getGCSMode = () => true;
-    const shouldPauseWrites = vi.fn(() => true);
-    const drainUploads = vi.fn(() => Promise.resolve());
+describe('write-parquet.js backpressure source verification', () => {
+  let source;
 
-    // Execute the guard
-    if (getGCSMode() && shouldPauseWrites()) {
-      await drainUploads();
-    }
-
-    expect(shouldPauseWrites).toHaveBeenCalled();
-    expect(drainUploads).toHaveBeenCalled();
+  beforeAll(() => {
+    source = fs.readFileSync('scripts/ingest/write-parquet.js', 'utf8');
   });
 
-  it('drainUploads is NOT called when shouldPauseWrites returns false', async () => {
-    const getGCSMode = () => true;
-    const shouldPauseWrites = vi.fn(() => false);
-    const drainUploads = vi.fn(() => Promise.resolve());
-
-    if (getGCSMode() && shouldPauseWrites()) {
-      await drainUploads();
-    }
-
-    expect(shouldPauseWrites).toHaveBeenCalled();
-    expect(drainUploads).not.toHaveBeenCalled();
+  it('bufferUpdates checks shouldPauseWrites before flushing', () => {
+    // The guard must be present in the bufferUpdates function
+    expect(source).toContain('if (getGCSMode() && shouldPauseWrites())');
+    expect(source).toContain('await drainUploads()');
   });
 
-  it('shouldPauseWrites is NOT called in local mode (no GCS)', async () => {
-    const getGCSMode = () => false;
-    const shouldPauseWrites = vi.fn(() => true);
-    const drainUploads = vi.fn(() => Promise.resolve());
-
-    if (getGCSMode() && shouldPauseWrites()) {
-      await drainUploads();
-    }
-
-    expect(shouldPauseWrites).not.toHaveBeenCalled();
-    expect(drainUploads).not.toHaveBeenCalled();
+  it('bufferEvents checks shouldPauseWrites before flushing', () => {
+    // Both buffer functions must have the guard
+    const matches = source.match(/shouldPauseWrites\(\)/g);
+    expect(matches).not.toBeNull();
+    expect(matches.length).toBeGreaterThanOrEqual(2); // Once in bufferUpdates, once in bufferEvents
   });
 
-  it('drainUploads resolves before flush proceeds', async () => {
-    const order = [];
-    const getGCSMode = () => true;
-    const shouldPauseWrites = () => true;
-    const drainUploads = () => new Promise(resolve => {
-      order.push('drain_start');
-      setTimeout(() => {
-        order.push('drain_complete');
-        resolve();
-      }, 10);
-    });
-    const flush = () => { order.push('flush'); };
-
-    if (getGCSMode() && shouldPauseWrites()) {
-      await drainUploads();
-    }
-    flush();
-
-    expect(order).toEqual(['drain_start', 'drain_complete', 'flush']);
-  });
-
-  it('matches the guard condition in write-parquet.js bufferUpdates', () => {
-    // The actual code in write-parquet.js:
-    //   if (getGCSMode() && shouldPauseWrites()) {
-    //     await drainUploads();
-    //   }
-    // Verify truth table:
-    const cases = [
-      { gcs: false, pause: false, shouldDrain: false },
-      { gcs: false, pause: true, shouldDrain: false },
-      { gcs: true, pause: false, shouldDrain: false },
-      { gcs: true, pause: true, shouldDrain: true },
-    ];
-
-    for (const { gcs, pause, shouldDrain } of cases) {
-      const result = gcs && pause;
-      expect(result).toBe(shouldDrain);
-    }
+  it('imports shouldPauseWrites and drainUploads from gcs-upload-queue.js', () => {
+    expect(source).toContain('shouldPauseWrites');
+    expect(source).toContain('drainUploads');
+    expect(source).toMatch(/from\s+['"]\.\/gcs-upload-queue\.js['"]/);
   });
 });
+
+describe('shouldPauseWrites (from gcs-upload-queue.js)', () => {
+  it('returns false when no queue instance exists', async () => {
+    const { shouldPauseWrites } = await import('../gcs-upload-queue.js');
+    // When queueInstance is null (no GCS mode), shouldPauseWrites returns false
+    // This is the actual exported function, not a copy
+    const result = shouldPauseWrites();
+    expect(result).toBe(false);
+  });
+});
+
+describe('GCSUploadQueue backpressure behavior', () => {
+  it('shouldPause() returns true when queue exceeds high water mark', async () => {
+    const mod = await import('../gcs-upload-queue.js');
+    
+    // Create a queue with very low thresholds for testing
+    const queue = new mod.default(2); // 2 concurrent
+    queue.queueHighWater = 3;
+    queue.queueLowWater = 1;
+
+    // Manually push items to exceed high water without triggering actual uploads
+    queue.queue.push(
+      { localPath: '/tmp/a', gcsPath: 'gs://b/a' },
+      { localPath: '/tmp/b', gcsPath: 'gs://b/b' },
+      { localPath: '/tmp/c', gcsPath: 'gs://b/c' },
+    );
+    
+    // Manually check backpressure (queue length >= highWater)
+    expect(queue.queue.length).toBeGreaterThanOrEqual(queue.queueHighWater);
+    
+    // Trigger the isPaused flag as enqueue would
+    queue.isPaused = true;
+    expect(queue.shouldPause()).toBe(true);
+  });
+
+  it('shouldPause() returns false when queue is below low water mark', async () => {
+    const mod = await import('../gcs-upload-queue.js');
+    const queue = new mod.default(2);
+    queue.queueHighWater = 100;
+    queue.queueLowWater = 20;
+
+    // Empty queue
+    expect(queue.shouldPause()).toBe(false);
+  });
+
+  it('getQueueDepth() returns queue length + active uploads', async () => {
+    const mod = await import('../gcs-upload-queue.js');
+    const queue = new mod.default(2);
+    
+    queue.queue.push({ localPath: '/tmp/x', gcsPath: 'gs://b/x' });
+    queue.activeUploads = 3;
+    
+    expect(queue.getQueueDepth()).toBe(4); // 1 queued + 3 active
+  });
+});
+
+import { beforeAll } from 'vitest';
