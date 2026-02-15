@@ -64,10 +64,22 @@ describe('byte-aware backpressure', () => {
   });
 
   function createQueue() {
-    // Stub _processUpload on prototype BEFORE construction so _pump never processes jobs
-    const origProcess = GCSUploadQueue.prototype._processUpload;
-    GCSUploadQueue.prototype._processUpload = vi.fn();
+    // Stub _pump on prototype so enqueue() accumulates bytes without dequeuing
+    const origPump = GCSUploadQueue.prototype._pump;
+    GCSUploadQueue.prototype._pump = function() {
+      // Only do backpressure-off check and drain check — no dequeuing
+      if (this.isPaused && this.queue.length <= this.queueLowWater && this.queuedBytes <= this.byteLowWater) {
+        this.isPaused = false;
+      }
+      if (this.drainResolve && this.activeUploads === 0 && this.queue.length === 0) {
+        this.drainResolve();
+        this.drainResolve = null;
+        this.drainPromise = null;
+      }
+    };
     const queue = new GCSUploadQueue(8);
+    // Restore prototype after construction
+    GCSUploadQueue.prototype._pump = origPump;
     return queue;
   }
 
