@@ -318,12 +318,13 @@ export function uploadAndCleanupSync(localPath, gcsPath, options = {}) {
             if (match && match[1] !== localMD5) {
               throw new Error(`Integrity check failed: local=${localMD5} remote=${match[1]}`);
             }
-            if (match) {
-              console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${localMD5})`);
+            if (!match) {
+              throw new Error('Integrity check failed: could not parse remote MD5 hash');
             }
+            console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${localMD5})`);
           } catch (verifyErr) {
-            if (verifyErr.message.includes('Integrity check failed')) throw verifyErr;
-            console.warn(`⚠️ [gcs-upload] Hash verification skipped: ${verifyErr.message}`);
+            // All verification failures trigger retry — don't skip silently
+            throw verifyErr;
           }
         }
         
@@ -455,12 +456,13 @@ export async function uploadAndCleanup(localPath, gcsPath, options = {}) {
             if (match && match[1] !== localMD5) {
               throw new Error(`Integrity check failed: local=${localMD5} remote=${match[1]}`);
             }
-            if (match) {
-              console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${localMD5})`);
+            if (!match) {
+              throw new Error('Integrity check failed: could not parse remote MD5 hash');
             }
+            console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${localMD5})`);
           } catch (verifyErr) {
-            if (verifyErr.message.includes('Integrity check failed')) throw verifyErr;
-            console.warn(`⚠️ [gcs-upload] Hash verification skipped: ${verifyErr.message}`);
+            // All verification failures trigger retry — don't skip silently
+            throw verifyErr;
           }
         }
         
