@@ -17,8 +17,9 @@
  *   await queue.drain();                // Wait for all uploads to complete
  */
 
-import { spawn } from 'child_process';
-import { existsSync, unlinkSync, statSync, appendFileSync, mkdirSync } from 'fs';
+import { spawn, execSync } from 'child_process';
+import { existsSync, unlinkSync, statSync, appendFileSync, mkdirSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import path from 'path';
 // LAZY env var reading - called at queue creation time, not module load time
 // This is critical because ESM hoists imports before dotenv.config() runs
@@ -90,8 +91,62 @@ export function getDeadLetterPath() {
 }
 
 /**
- * Execute gsutil cp using spawn (non-blocking)
+ * Compute MD5 hash of a local file (Base64-encoded, matching GCS format).
  */
+export function computeLocalMD5(localPath) {
+  const data = readFileSync(localPath);
+  return createHash('md5').update(data).digest('base64');
+}
+
+/**
+ * Get the MD5 hash of a GCS object using gsutil stat.
+ * Returns null if the hash cannot be retrieved.
+ */
+export function getGCSObjectMD5(gcsPath, timeout = 30000) {
+  try {
+    const output = execSync(`gsutil stat "${gcsPath}"`, {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout,
+    });
+    // gsutil stat outputs "Hash (md5):    <base64hash>"
+    const match = output.match(/Hash \(md5\):\s+(\S+)/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify upload integrity by comparing local and remote MD5 hashes.
+ * 
+ * @param {string} localPath - Local file path
+ * @param {string} gcsPath - GCS URI
+ * @returns {{ ok: boolean, localMD5?: string, remoteMD5?: string, error?: string }}
+ */
+export function verifyUploadIntegrity(localPath, gcsPath) {
+  try {
+    if (!existsSync(localPath)) {
+      return { ok: false, error: 'Local file no longer exists for verification' };
+    }
+    
+    const localMD5 = computeLocalMD5(localPath);
+    const remoteMD5 = getGCSObjectMD5(gcsPath);
+    
+    if (!remoteMD5) {
+      return { ok: false, localMD5, error: 'Could not retrieve GCS object hash' };
+    }
+    
+    if (localMD5 !== remoteMD5) {
+      return { ok: false, localMD5, remoteMD5, error: `Hash mismatch: local=${localMD5} remote=${remoteMD5}` };
+    }
+    
+    return { ok: true, localMD5, remoteMD5 };
+  } catch (err) {
+    return { ok: false, error: `Verification failed: ${err.message}` };
+  }
+}
+
 function gsutilUpload(localPath, gcsPath, timeout = 300000) {
   return new Promise((resolve, reject) => {
     const proc = spawn('gsutil', ['-q', 'cp', localPath, gcsPath], {
@@ -258,14 +313,25 @@ class GCSUploadQueue {
         try {
           await gsutilUpload(localPath, gcsPath, options.timeout || 300000);
 
-          // Success
+          // Verify upload integrity via MD5 hash comparison
+          const skipVerify = options.skipVerify || process.env.GCS_SKIP_VERIFY === 'true';
+          if (!skipVerify) {
+            const verification = verifyUploadIntegrity(localPath, gcsPath);
+            if (!verification.ok) {
+              // Hash mismatch — treat as a failed upload attempt
+              throw new Error(`Integrity check failed: ${verification.error}`);
+            }
+            console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${verification.localMD5})`);
+          }
+
+          // Success — integrity confirmed
           this.stats.completed++;
           this.stats.bytesUploaded += fileSize;
 
           const retryInfo = attempt > 0 ? ` (retry ${attempt})` : '';
           console.log(`☁️ Uploaded ${path.basename(localPath)} (${(fileSize / 1024).toFixed(1)}KB)${retryInfo}`);
 
-          // Delete local file
+          // Delete local file — safe now that integrity is verified
           try {
             unlinkSync(localPath);
             console.log(`🗑️ Deleted ${path.basename(localPath)}`);
