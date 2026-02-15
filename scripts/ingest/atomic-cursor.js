@@ -15,7 +15,7 @@
  * This module ensures cursor ONLY updates AFTER data is durable.
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, statSync, openSync, fsyncSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
 
 // Configuration - cross-platform path handling
@@ -63,6 +63,11 @@ export function atomicWriteFile(filePath, data) {
     // Write to temp file
     const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
     writeFileSync(tempPath, content, { encoding: 'utf8', flag: 'w' });
+    
+    // fsync to ensure data is durable on disk before rename
+    const fd = openSync(tempPath, 'r');
+    fsyncSync(fd);
+    closeSync(fd);
     
     // Backup existing file if it exists
     if (existsSync(filePath)) {
