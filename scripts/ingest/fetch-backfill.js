@@ -729,11 +729,7 @@ async function processBackfillItems(transactions, migrationId) {
     return { updates: updates.length, events: events.length };
   }
 
-  // Split into batches, decode in workers, and buffer each result immediately
-  // This avoids accumulating all decoded results in memory before buffering
-  let totalUpdates = 0;
-  let totalEvents = 0;
-
+  // Split into batches and send to worker pool
   const batchPromises = [];
   for (let i = 0; i < transactions.length; i += DECODE_BATCH_SIZE) {
     const chunk = transactions.slice(i, i + DECODE_BATCH_SIZE);
@@ -750,25 +746,27 @@ async function processBackfillItems(transactions, migrationId) {
           if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
         }
         return { updates, events };
-      }).then(async (r) => {
-        // Buffer immediately as each batch completes — don't accumulate
-        const uLen = r.updates ? r.updates.length : 0;
-        const eLen = r.events ? r.events.length : 0;
-        if (uLen > 0 || eLen > 0) {
-          await Promise.all([
-            uLen > 0 ? bufferUpdates(r.updates) : Promise.resolve(),
-            eLen > 0 ? bufferEvents(r.events) : Promise.resolve(),
-          ]);
-        }
-        totalUpdates += uLen;
-        totalEvents += eLen;
       })
     );
   }
 
-  await Promise.all(batchPromises);
+  const batchResults = await Promise.all(batchPromises);
 
-  return { updates: totalUpdates, events: totalEvents };
+  // Merge all batch results
+  const allUpdates = [];
+  const allEvents = [];
+  for (const r of batchResults) {
+    if (r.updates) allUpdates.push(...r.updates);
+    if (r.events) allEvents.push(...r.events);
+  }
+
+  // Buffer concurrently
+  await Promise.all([
+    bufferUpdates(allUpdates),
+    bufferEvents(allEvents),
+  ]);
+
+  return { updates: allUpdates.length, events: allEvents.length };
 }
 
 /**
