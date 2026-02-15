@@ -64,9 +64,10 @@ describe('byte-aware backpressure', () => {
   });
 
   function createQueue() {
+    // Stub _processUpload on prototype BEFORE construction so _pump never processes jobs
+    const origProcess = GCSUploadQueue.prototype._processUpload;
+    GCSUploadQueue.prototype._processUpload = vi.fn();
     const queue = new GCSUploadQueue(8);
-    // Prevent _pump from actually processing uploads — isolate backpressure logic
-    queue._processUpload = vi.fn();
     return queue;
   }
 
