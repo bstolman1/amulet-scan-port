@@ -44,7 +44,7 @@ import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 
 import v8 from 'v8';
-// Piscina removed: main-thread decode is faster (structured clone overhead > normalization cost)
+import Piscina from 'piscina';
 import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
 
 // Parse command line arguments
@@ -325,8 +325,33 @@ let fetchStats = {
   consecutiveStableWindows: 0,
 };
 
-// NOTE: Decode worker pool removed — main-thread decode is faster
-// because structured clone serialization cost exceeds normalization cost
+// ==========================================
+// BATCHED DECODE WORKER POOL
+// ==========================================
+// Decode runs in worker threads to keep the main event loop free for HTTP I/O.
+// Batched messages (~250 txs per message) amortize structured clone overhead.
+const DECODE_BATCH_SIZE = parseInt(process.env.DECODE_BATCH_SIZE) || 250;
+const DECODE_WORKERS = parseInt(process.env.DECODE_WORKERS) || 4;
+
+let decodePool = null;
+let decodePoolFailed = false;
+
+function getDecodePool() {
+  if (!decodePool && !decodePoolFailed) {
+    try {
+      decodePool = new Piscina({
+        filename: new URL('./decode-worker.js', import.meta.url).href,
+        minThreads: 2,
+        maxThreads: DECODE_WORKERS,
+      });
+      console.log(`   ✅ Batched decode pool ready (${DECODE_WORKERS} workers, batch=${DECODE_BATCH_SIZE})`);
+    } catch (err) {
+      console.error(`   ❌ Failed to create decode pool: ${err.message}`);
+      decodePoolFailed = true;
+    }
+  }
+  return decodePool;
+}
 
 // ==========================================
 // HTTP CLIENT (uses MAX for socket pool)
@@ -678,33 +703,70 @@ function getEventTime(txOrReassign) {
 }
 
 /**
- * Process backfill items using main-thread decode (zero serialization overhead)
+ * Process backfill items using BATCHED worker pool decode
  * 
- * normalizeUpdate/normalizeEvent is pure field mapping (~μs per call).
- * Buffer calls may trigger async flushes — we fire them concurrently
- * to avoid blocking the fetch loop while parquet files are being written.
+ * Sends chunks of ~250 txs per Piscina message (not 1 per message).
+ * This keeps decode OFF the main event loop (freeing it for HTTP I/O)
+ * while amortizing structured clone overhead across many txs.
+ * Falls back to main-thread decode if pool unavailable.
  */
 async function processBackfillItems(transactions, migrationId) {
-  const updates = [];
-  const events = [];
-
-  for (const tx of transactions) {
-    const r = decodeInMainThread(tx, migrationId);
-    if (!r) continue;
-    if (r.update) updates.push(r.update);
-    if (Array.isArray(r.events) && r.events.length > 0) {
-      events.push(...r.events);
+  const pool = getDecodePool();
+  
+  if (!pool) {
+    // Fallback: main-thread decode
+    const updates = [];
+    const events = [];
+    for (const tx of transactions) {
+      const r = decodeInMainThread(tx, migrationId);
+      if (!r) continue;
+      if (r.update) updates.push(r.update);
+      if (Array.isArray(r.events) && r.events.length > 0) {
+        events.push(...r.events);
+      }
     }
+    await Promise.all([bufferUpdates(updates), bufferEvents(events)]);
+    return { updates: updates.length, events: events.length };
   }
 
-  // Fire both buffer calls concurrently — each may trigger a flush
-  // but we don't need to serialize updates→events
+  // Split into batches and send to worker pool
+  const batchPromises = [];
+  for (let i = 0; i < transactions.length; i += DECODE_BATCH_SIZE) {
+    const chunk = transactions.slice(i, i + DECODE_BATCH_SIZE);
+    batchPromises.push(
+      pool.run({ txs: chunk, migrationId }).catch(err => {
+        // Fallback: decode this chunk on main thread
+        console.warn(`   ⚠️ Worker batch failed, main-thread fallback: ${err.message}`);
+        const updates = [];
+        const events = [];
+        for (const tx of chunk) {
+          const r = decodeInMainThread(tx, migrationId);
+          if (!r) continue;
+          if (r.update) updates.push(r.update);
+          if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
+        }
+        return { updates, events };
+      })
+    );
+  }
+
+  const batchResults = await Promise.all(batchPromises);
+
+  // Merge all batch results
+  const allUpdates = [];
+  const allEvents = [];
+  for (const r of batchResults) {
+    if (r.updates) allUpdates.push(...r.updates);
+    if (r.events) allEvents.push(...r.events);
+  }
+
+  // Buffer concurrently
   await Promise.all([
-    bufferUpdates(updates),
-    bufferEvents(events),
+    bufferUpdates(allUpdates),
+    bufferEvents(allEvents),
   ]);
 
-  return { updates: updates.length, events: events.length };
+  return { updates: allUpdates.length, events: allEvents.length };
 }
 
 /**
@@ -2018,7 +2080,7 @@ async function gracefulShutdown(signal) {
     await flushAll();
     await waitForWrites();
     await shutdown();
-    // decode pool removed — main-thread decode
+    if (decodePool) await decodePool.destroy();
     console.log('✅ Graceful shutdown complete');
     process.exit(0);
   } catch (err) {
@@ -2077,6 +2139,6 @@ runBackfill()
     await flushAll();
     await waitForWrites();
     await shutdown();
-    // decode pool removed — main-thread decode
+    if (decodePool) await decodePool.destroy();
     process.exit(1);
   });
