@@ -226,9 +226,9 @@ function mapUpdateRecord(r) {
   };
 
   return {
-    update_id: String(r.update_id || r.id || ''),
-    update_type: String(r.update_type || r.type || ''),
-    synchronizer_id: String(r.synchronizer_id || r.synchronizer || ''),
+    update_id: String(r.update_id ?? r.id ?? ''),
+    update_type: String(r.update_type ?? r.type ?? ''),
+    synchronizer_id: String(r.synchronizer_id ?? r.synchronizer ?? ''),
     effective_at: safeTimestamp(r.effective_at),
     recorded_at: safeTimestamp(r.recorded_at || r.timestamp),
     record_time: safeTimestamp(r.record_time),
@@ -278,11 +278,11 @@ function mapEventRecord(r) {
   };
 
   return {
-    event_id: String(r.event_id || r.id || ''),
-    update_id: String(r.update_id || ''),
-    event_type: String(r.event_type || r.type || ''),
-    event_type_original: String(r.event_type_original || r.type_original || ''),
-    synchronizer_id: String(r.synchronizer_id || r.synchronizer || ''),
+    event_id: String(r.event_id ?? r.id ?? ''),
+    update_id: String(r.update_id ?? ''),
+    event_type: String(r.event_type ?? r.type ?? ''),
+    event_type_original: String(r.event_type_original ?? r.type_original ?? ''),
+    synchronizer_id: String(r.synchronizer_id ?? r.synchronizer ?? ''),
     effective_at: safeTimestamp(r.effective_at),
     recorded_at: safeTimestamp(r.recorded_at || r.timestamp),
     // Keep a dedicated ingestion timestamp column for audit/debug parity with schema
@@ -701,17 +701,28 @@ export function purgeMigrationData(migrationId) {
     return { deletedFiles: 0, deletedDirs: 0 };
   }
   
-  const entries = readdirSync(dataDir, { withFileTypes: true });
+  // Walk source/type subdirectories to find migration= folders
+  // Structure: raw/{source}/{type}/migration=X/...
+  const sources = ['backfill', 'updates'];
+  const types = ['updates', 'events'];
   
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith(migrationPrefix)) {
-      const dirPath = join(dataDir, entry.name);
-      try {
-        rmSync(dirPath, { recursive: true, force: true });
-        deletedDirs++;
-        console.log(`   🗑️ Deleted partition: ${entry.name}`);
-      } catch (err) {
-        console.error(`   ❌ Failed to delete ${dirPath}: ${err.message}`);
+  for (const source of sources) {
+    for (const type of types) {
+      const typeDir = join(dataDir, source, type);
+      if (!existsSync(typeDir)) continue;
+      
+      const entries = readdirSync(typeDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name === migrationPrefix) {
+          const dirPath = join(typeDir, entry.name);
+          try {
+            rmSync(dirPath, { recursive: true, force: true });
+            deletedDirs++;
+            console.log(`   🗑️ Deleted partition: ${source}/${type}/${entry.name}`);
+          } catch (err) {
+            console.error(`   ❌ Failed to delete ${dirPath}: ${err.message}`);
+          }
+        }
       }
     }
   }
