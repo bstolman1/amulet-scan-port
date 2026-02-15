@@ -162,7 +162,7 @@ const __dirname = dirname(__filename);
 // TLS config (secure by default)
 // Set INSECURE_TLS=true only in controlled environments with self-signed certs.
 // Uses per-agent rejectUnauthorized (consistent with fetch-updates.js) instead of
-// the global NODE_TLS_REJECT_UNAUTHORIZED which affects ALL HTTP clients in the process.
+// a global TLS override env var which affects ALL HTTP clients in the process.
 const INSECURE_TLS = process.env.INSECURE_TLS === 'true';
 
 // Configuration - BALANCED DEFAULTS for stability
