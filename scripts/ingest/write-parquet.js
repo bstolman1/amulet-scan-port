@@ -72,7 +72,48 @@ function getDataDir() {
   return _dataDir;
 }
 
-const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 5000;
+const MIN_ROWS_PER_FILE = parseInt(process.env.MIN_ROWS_PER_FILE) || 5000;
+const MAX_ROWS_PER_FILE_CAP = parseInt(process.env.MAX_ROWS_PER_FILE) || 50000;
+let dynamicRowsPerFile = MIN_ROWS_PER_FILE;
+
+// Auto-tune rows-per-file based on write throughput
+const ROWS_TUNE_WINDOW_MS = 30000;
+let rowsTuneState = {
+  windowStart: Date.now(),
+  filesWritten: 0,
+  rowsWritten: 0,
+};
+
+function maybeTuneRowsPerFile() {
+  const now = Date.now();
+  const elapsed = now - rowsTuneState.windowStart;
+  if (elapsed < ROWS_TUNE_WINDOW_MS) return;
+
+  const { filesWritten, rowsWritten } = rowsTuneState;
+  if (filesWritten === 0) {
+    rowsTuneState = { windowStart: now, filesWritten: 0, rowsWritten: 0 };
+    return;
+  }
+
+  const rowsPerSec = (rowsWritten / elapsed) * 1000;
+  const old = dynamicRowsPerFile;
+
+  // If throughput is high and we're producing many small files, batch more rows
+  if (rowsPerSec > 2000 && filesWritten > 3 && dynamicRowsPerFile < MAX_ROWS_PER_FILE_CAP) {
+    dynamicRowsPerFile = Math.min(MAX_ROWS_PER_FILE_CAP, Math.round(dynamicRowsPerFile * 1.5));
+  }
+  // If throughput is low, shrink to flush sooner (keep data moving)
+  else if (rowsPerSec < 500 && dynamicRowsPerFile > MIN_ROWS_PER_FILE) {
+    dynamicRowsPerFile = Math.max(MIN_ROWS_PER_FILE, Math.round(dynamicRowsPerFile * 0.7));
+  }
+
+  if (dynamicRowsPerFile !== old) {
+    console.log(`   🔧 Auto-tune: ROWS_PER_FILE ${old} → ${dynamicRowsPerFile} (${rowsPerSec.toFixed(0)} rows/s, ${filesWritten} files in ${(elapsed/1000).toFixed(0)}s)`);
+  }
+
+  rowsTuneState = { windowStart: now, filesWritten: 0, rowsWritten: 0 };
+}
+
 const USE_CLI = process.env.PARQUET_USE_CLI === 'true';
 
 /**
@@ -454,7 +495,9 @@ async function writeToParquetPool(records, filePath, type, partition, fileName) 
 export async function bufferUpdates(updates) {
   updatesBuffer.push(...updates);
   
-  if (updatesBuffer.length >= MAX_ROWS_PER_FILE) {
+  maybeTuneRowsPerFile();
+  
+  if (updatesBuffer.length >= dynamicRowsPerFile) {
     // Wait for upload queue backpressure to clear before creating more files
     if (getGCSMode() && shouldPauseWrites()) {
       console.log(`⏳ [write-parquet] Waiting for upload queue backpressure to clear...`);
@@ -471,7 +514,9 @@ export async function bufferUpdates(updates) {
 export async function bufferEvents(events) {
   eventsBuffer.push(...events);
   
-  if (eventsBuffer.length >= MAX_ROWS_PER_FILE) {
+  maybeTuneRowsPerFile();
+  
+  if (eventsBuffer.length >= dynamicRowsPerFile) {
     // Wait for upload queue backpressure to clear before creating more files
     if (getGCSMode() && shouldPauseWrites()) {
       console.log(`⏳ [write-parquet] Waiting for upload queue backpressure to clear...`);
@@ -506,6 +551,8 @@ export async function flushUpdates() {
       : await writeToParquetPool(records, filePath, 'updates', partition, fileName);
     
     totalUpdatesWritten += records.length;
+    rowsTuneState.filesWritten++;
+    rowsTuneState.rowsWritten += records.length;
     if (result) results.push(result);
   }
   
@@ -536,6 +583,8 @@ export async function flushEvents() {
       : await writeToParquetPool(records, filePath, 'events', partition, fileName);
     
     totalEventsWritten += records.length;
+    rowsTuneState.filesWritten++;
+    rowsTuneState.rowsWritten += records.length;
     if (result) results.push(result);
   }
   
@@ -574,7 +623,8 @@ export function getBufferStats() {
     events: eventsBuffer.length,
     updatesBuffered: updatesBuffer.length,
     eventsBuffered: eventsBuffer.length,
-    maxRowsPerFile: MAX_ROWS_PER_FILE,
+    maxRowsPerFile: dynamicRowsPerFile,
+    maxRowsPerFileCap: MAX_ROWS_PER_FILE_CAP,
     mode: USE_CLI ? 'cli' : 'pool',
     gcsMode: getGCSMode(),
     queuedJobs: poolStats?.queuedJobs || 0,
