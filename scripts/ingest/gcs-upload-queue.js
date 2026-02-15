@@ -18,7 +18,8 @@
  */
 
 import { spawn, execSync } from 'child_process';
-import { existsSync, unlinkSync, statSync, appendFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync, statSync, appendFileSync, mkdirSync } from 'fs';
+import { createHash } from 'crypto';
 import path from 'path';
 // LAZY env var reading - called at queue creation time, not module load time
 // This is critical because ESM hoists imports before dotenv.config() runs
