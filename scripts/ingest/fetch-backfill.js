@@ -160,11 +160,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // TLS config (secure by default)
-// Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
-const INSECURE_TLS = ['1', 'true', 'yes'].includes(String(process.env.INSECURE_TLS || '').toLowerCase());
-if (INSECURE_TLS) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
+// Set INSECURE_TLS=true only in controlled environments with self-signed certs.
+// Uses per-agent rejectUnauthorized (consistent with fetch-updates.js) instead of
+// the global NODE_TLS_REJECT_UNAUTHORIZED which affects ALL HTTP clients in the process.
+const INSECURE_TLS = process.env.INSECURE_TLS === 'true';
 
 // Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
