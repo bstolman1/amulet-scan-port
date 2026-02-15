@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { DashboardLayout } from './DashboardLayout';
 
-// Helper functions
 const getByText = (container: HTMLElement, text: string | RegExp) => {
   const elements = container.querySelectorAll('*');
   return Array.from(elements).find(el => {
@@ -15,8 +15,17 @@ const getByText = (container: HTMLElement, text: string | RegExp) => {
   });
 };
 
-const getLink = (container: HTMLElement, name: string | RegExp) => {
-  const links = container.querySelectorAll('a');
+const getButton = (container: HTMLElement, name: string | RegExp) => {
+  const buttons = container.querySelectorAll('button');
+  return Array.from(buttons).find(btn => {
+    const content = btn.textContent || '';
+    if (typeof name === 'string') return content.includes(name);
+    return name.test(content);
+  });
+};
+
+const getLink = (name: string | RegExp) => {
+  const links = document.querySelectorAll('a');
   return Array.from(links).find(link => {
     const content = link.textContent || '';
     if (typeof name === 'string') return content.toLowerCase().includes(name.toLowerCase());
@@ -24,16 +33,9 @@ const getLink = (container: HTMLElement, name: string | RegExp) => {
   });
 };
 
-const getAllLinks = (container: HTMLElement) => Array.from(container.querySelectorAll('a'));
-
-// Create a fresh QueryClient for each test
 const createTestQueryClient = () =>
   new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
+    defaultOptions: { queries: { retry: false } },
   });
 
 describe('DashboardLayout', () => {
@@ -71,90 +73,67 @@ describe('DashboardLayout', () => {
   });
 
   describe('navigation', () => {
-    it('renders Dashboard link', () => {
+    it('renders navigation group buttons', () => {
       const { container } = renderWithRouter();
-      expect(getLink(container, 'Dashboard')).toBeDefined();
-    });
-
-    it('renders Supply link', () => {
-      const { container } = renderWithRouter();
-      expect(getLink(container, 'Supply')).toBeDefined();
-    });
-
-    it('renders Governance link', () => {
-      const { container } = renderWithRouter();
-      const governanceLink = getLink(container, /^Governance$/);
-      expect(governanceLink).toBeDefined();
-    });
-
-    it('renders Validators/SVs link', () => {
-      const { container } = renderWithRouter();
-      expect(getLink(container, 'Validators/SVs')).toBeDefined();
-    });
-
-    it('renders all core navigation items', () => {
-      const { container } = renderWithRouter();
-      
-      const expectedLinks = [
-        'Dashboard',
-        'Supply',
-        'Rich List',
-        'Transactions',
-        'Transfers',
-        'Governance',
-        'ANS',
-        'Templates',
-        'Admin',
+      const expectedGroups = [
+        'Overview', 'Governance', 'Burn/Mint', 'Validators',
+        'Rewards', 'Exchange Data', 'Services', 'Statistics',
       ];
-
-      for (const linkName of expectedLinks) {
-        const link = getLink(container, linkName);
-        expect(link).toBeDefined();
+      for (const groupName of expectedGroups) {
+        expect(getButton(container, groupName)).toBeDefined();
       }
     });
 
-    it('has correct href for Dashboard', () => {
+    it('shows Dashboard link when Overview dropdown is opened', async () => {
       const { container } = renderWithRouter();
-      const dashboardLink = getLink(container, 'Dashboard');
-      expect(dashboardLink?.getAttribute('href')).toBe('/');
+      const user = userEvent.setup();
+      const overviewBtn = getButton(container, 'Overview')!;
+      await user.click(overviewBtn);
+      expect(getLink(/Dashboard/i)).toBeDefined();
     });
 
-    it('has correct href for Governance', () => {
+    it('shows Governance link when Governance dropdown is opened', async () => {
       const { container } = renderWithRouter();
-      const governanceLink = getLink(container, /^Governance$/);
-      expect(governanceLink?.getAttribute('href')).toBe('/governance');
+      const user = userEvent.setup();
+      const govBtn = getButton(container, 'Governance')!;
+      await user.click(govBtn);
+      expect(getLink(/Governance/)).toBeDefined();
     });
 
-    it('has correct href for Templates', () => {
+    it('has correct href for Dashboard', async () => {
       const { container } = renderWithRouter();
-      const templatesLink = getLink(container, 'Templates');
-      expect(templatesLink?.getAttribute('href')).toBe('/templates');
+      const user = userEvent.setup();
+      await user.click(getButton(container, 'Overview')!);
+      const link = getLink(/Dashboard/i);
+      expect(link?.getAttribute('href')).toBe('/');
+    });
+
+    it('has correct href for Governance', async () => {
+      const { container } = renderWithRouter();
+      const user = userEvent.setup();
+      await user.click(getButton(container, 'Governance')!);
+      const link = getLink(/^Governance$/);
+      expect(link?.getAttribute('href')).toBe('/governance');
     });
   });
 
   describe('active state', () => {
-    it('highlights Dashboard link when on root path', () => {
+    it('highlights Overview group when on root path', () => {
       const { container } = renderWithRouter('/');
-      const dashboardLink = getLink(container, 'Dashboard');
-      expect(dashboardLink?.className).toContain('bg-primary/10');
+      const overviewBtn = getButton(container, 'Overview');
+      expect(overviewBtn?.className).toContain('bg-primary/10');
     });
 
-    it('highlights Governance link when on governance path', () => {
+    it('highlights Governance group when on governance path', () => {
       const { container } = renderWithRouter('/governance');
-      const governanceLink = getLink(container, /^Governance$/);
-      expect(governanceLink?.className).toContain('bg-primary/10');
+      const govBtn = getButton(container, 'Governance');
+      expect(govBtn?.className).toContain('bg-primary/10');
     });
 
-    it('does not highlight inactive links', () => {
+    it('does not highlight inactive groups', () => {
       const { container } = renderWithRouter('/governance');
-      const dashboardLink = getLink(container, 'Dashboard');
-      expect(dashboardLink?.className).not.toContain('bg-primary/10');
-    });
-
-    it('applies hover styles to inactive links', () => {
-      const { container } = renderWithRouter('/');
-      const supplyLink = getLink(container, 'Supply');
-      expect(supplyLink?.className).toContain('hover:bg-muted/50');
+      const overviewBtn = getButton(container, 'Overview');
+      expect(overviewBtn?.className).not.toContain('bg-primary/10');
     });
   });
 
