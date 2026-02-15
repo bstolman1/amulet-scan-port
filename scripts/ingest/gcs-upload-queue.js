@@ -492,4 +492,20 @@ export function shouldPauseWrites() {
   return queueInstance?.shouldPause() ?? false;
 }
 
+/**
+ * Wait for backpressure to clear WITHOUT fully draining.
+ * Polls every 200ms until the queue drops below low water marks.
+ * Times out after 30s to prevent permanent stalls.
+ */
+export async function waitForBackpressureRelief(timeoutMs = 30000) {
+  if (!queueInstance || !queueInstance.shouldPause()) return;
+  const start = Date.now();
+  while (queueInstance.shouldPause() && (Date.now() - start) < timeoutMs) {
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (queueInstance.shouldPause()) {
+    console.warn(`⚠️ [upload-queue] Backpressure relief timeout after ${timeoutMs}ms — continuing anyway`);
+  }
+}
+
 export default GCSUploadQueue;
