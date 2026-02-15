@@ -8,9 +8,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'crypto';
 
-// Mock both child_process and fs via vi.mock so ESM named imports are intercepted
-const mockExecSync = vi.fn();
-const mockSpawn = vi.fn();
+// vi.hoisted ensures these are available when vi.mock factories run (hoisted above const)
+const {
+  mockExecSync, mockSpawn,
+  mockExistsSync, mockReadFileSync, mockStatSync,
+  mockUnlinkSync, mockWriteFileSync, mockAppendFileSync, mockMkdirSync,
+} = vi.hoisted(() => ({
+  mockExecSync: vi.fn(),
+  mockSpawn: vi.fn(),
+  mockExistsSync: vi.fn(),
+  mockReadFileSync: vi.fn(),
+  mockStatSync: vi.fn(),
+  mockUnlinkSync: vi.fn(),
+  mockWriteFileSync: vi.fn(),
+  mockAppendFileSync: vi.fn(),
+  mockMkdirSync: vi.fn(),
+}));
 
 vi.mock('child_process', () => ({
   execSync: mockExecSync,
@@ -18,19 +31,20 @@ vi.mock('child_process', () => ({
   default: { execSync: mockExecSync, spawn: mockSpawn },
 }));
 
-const mockExistsSync = vi.fn();
-const mockReadFileSync = vi.fn();
-const mockStatSync = vi.fn();
-const mockUnlinkSync = vi.fn();
-const mockWriteFileSync = vi.fn();
-const mockAppendFileSync = vi.fn();
-const mockMkdirSync = vi.fn();
-
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    default: actual,
+    default: {
+      ...actual,
+      existsSync: mockExistsSync,
+      readFileSync: mockReadFileSync,
+      statSync: mockStatSync,
+      unlinkSync: mockUnlinkSync,
+      writeFileSync: mockWriteFileSync,
+      appendFileSync: mockAppendFileSync,
+      mkdirSync: mockMkdirSync,
+    },
     existsSync: mockExistsSync,
     readFileSync: mockReadFileSync,
     statSync: mockStatSync,
@@ -131,7 +145,6 @@ describe('retryUpload (from retry-failed-uploads.js)', () => {
     
     const md5 = createHash('md5').update(Buffer.from('data')).digest('base64');
     
-    // First call: gsutil cp (succeeds), second call: gsutil stat (returns MD5)
     mockExecSync
       .mockReturnValueOnce('') // gsutil cp
       .mockReturnValueOnce(`    Hash (md5):    ${md5}\n`); // gsutil stat
@@ -147,7 +160,6 @@ describe('retryUpload (from retry-failed-uploads.js)', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(Buffer.from('data'));
     
-    // gsutil cp succeeds, gsutil stat returns mismatched hash
     mockExecSync
       .mockReturnValueOnce('') // gsutil cp
       .mockReturnValueOnce('    Hash (md5):    WRONG_HASH\n'); // gsutil stat
