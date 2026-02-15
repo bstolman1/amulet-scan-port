@@ -47,6 +47,7 @@ import {
   drainUploads,
   shutdownUploadQueue,
   shouldPauseWrites,
+  waitForBackpressureRelief,
 } from './gcs-upload-queue.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -500,8 +501,8 @@ export async function bufferUpdates(updates) {
   if (updatesBuffer.length >= dynamicRowsPerFile) {
     // Wait for upload queue backpressure to clear before creating more files
     if (getGCSMode() && shouldPauseWrites()) {
-      console.log(`⏳ [write-parquet] Waiting for upload queue backpressure to clear...`);
-      await drainUploads();
+      console.log(`⏳ [write-parquet] Waiting for upload backpressure relief...`);
+      await waitForBackpressureRelief();
     }
     return await flushUpdates();
   }
@@ -519,8 +520,8 @@ export async function bufferEvents(events) {
   if (eventsBuffer.length >= dynamicRowsPerFile) {
     // Wait for upload queue backpressure to clear before creating more files
     if (getGCSMode() && shouldPauseWrites()) {
-      console.log(`⏳ [write-parquet] Waiting for upload queue backpressure to clear...`);
-      await drainUploads();
+      console.log(`⏳ [write-parquet] Waiting for upload backpressure relief...`);
+      await waitForBackpressureRelief();
     }
     return await flushEvents();
   }
