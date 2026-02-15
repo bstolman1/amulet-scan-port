@@ -16,10 +16,14 @@ vi.mock('fs', async () => {
   };
 });
 
-vi.mock('child_process', () => ({
-  spawn: vi.fn(),
-  execSync: vi.fn(),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+    execSync: vi.fn(),
+  };
+});
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
