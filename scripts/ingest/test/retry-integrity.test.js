@@ -9,9 +9,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 
 // Mock child_process before importing the module under test
-vi.mock('child_process', () => ({
-  execSync: vi.fn(),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+    execSync: vi.fn(),
+  };
+});
 
 // We need to mock fs.existsSync and fs.readFileSync selectively
 // so verifyUploadIntegrity can be tested with controlled inputs
