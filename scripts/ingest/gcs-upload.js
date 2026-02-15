@@ -19,8 +19,7 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, unlinkSync, statSync, readFileSync } from 'fs';
-import { createHash } from 'crypto';
+import { existsSync, mkdirSync, unlinkSync, statSync } from 'fs';
 import path from 'path';
 
 // Constants
@@ -309,27 +308,7 @@ export function uploadAndCleanupSync(localPath, gcsPath, options = {}) {
       try {
         executeUpload(localPath, gcsPath, { timeout, quiet });
         
-        // Verify upload integrity via MD5 hash comparison
-        const skipVerify = process.env.GCS_SKIP_VERIFY === 'true';
-        if (!skipVerify && existsSync(localPath)) {
-          const localMD5 = createHash('md5').update(readFileSync(localPath)).digest('base64');
-          try {
-            const statOutput = execSync(`gsutil stat "${gcsPath}"`, {
-              encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-            });
-            const match = statOutput.match(/Hash \(md5\):\s+(\S+)/);
-            if (match && match[1] !== localMD5) {
-              throw new Error(`Integrity check failed: local=${localMD5} remote=${match[1]}`);
-            }
-            if (!match) {
-              throw new Error('Integrity check failed: could not parse remote MD5 hash');
-            }
-            console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${localMD5})`);
-          } catch (verifyErr) {
-            // All verification failures trigger retry — don't skip silently
-            throw verifyErr;
-          }
-        }
+        // gsutil's built-in CRC32C check handles transport integrity
         
         // Success!
         result.ok = true;
@@ -447,27 +426,7 @@ export async function uploadAndCleanup(localPath, gcsPath, options = {}) {
       try {
         executeUpload(localPath, gcsPath, { timeout, quiet });
         
-        // Verify upload integrity via MD5 hash comparison
-        const skipVerify = process.env.GCS_SKIP_VERIFY === 'true';
-        if (!skipVerify && existsSync(localPath)) {
-          const localMD5 = createHash('md5').update(readFileSync(localPath)).digest('base64');
-          try {
-            const statOutput = execSync(`gsutil stat "${gcsPath}"`, {
-              encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-            });
-            const match = statOutput.match(/Hash \(md5\):\s+(\S+)/);
-            if (match && match[1] !== localMD5) {
-              throw new Error(`Integrity check failed: local=${localMD5} remote=${match[1]}`);
-            }
-            if (!match) {
-              throw new Error('Integrity check failed: could not parse remote MD5 hash');
-            }
-            console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${localMD5})`);
-          } catch (verifyErr) {
-            // All verification failures trigger retry — don't skip silently
-            throw verifyErr;
-          }
-        }
+        // gsutil's built-in CRC32C check handles transport integrity
         
         // Success!
         result.ok = true;

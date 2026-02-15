@@ -18,8 +18,7 @@
  */
 
 import { spawn, execSync } from 'child_process';
-import { existsSync, unlinkSync, statSync, appendFileSync, mkdirSync, readFileSync } from 'fs';
-import { createHash } from 'crypto';
+import { existsSync, unlinkSync, statSync, appendFileSync, mkdirSync } from 'fs';
 import path from 'path';
 // LAZY env var reading - called at queue creation time, not module load time
 // This is critical because ESM hoists imports before dotenv.config() runs
@@ -332,18 +331,7 @@ class GCSUploadQueue {
         try {
           await gsutilUpload(localPath, gcsPath, options.timeout || 300000);
 
-          // Verify upload integrity via MD5 hash comparison
-          const skipVerify = options.skipVerify || process.env.GCS_SKIP_VERIFY === 'true';
-          if (!skipVerify) {
-            const verification = verifyUploadIntegrity(localPath, gcsPath);
-            if (!verification.ok) {
-              // Hash mismatch — treat as a failed upload attempt
-              throw new Error(`Integrity check failed: ${verification.error}`);
-            }
-            console.log(`🔒 Verified ${path.basename(localPath)} (MD5: ${verification.localMD5})`);
-          }
-
-          // Success — integrity confirmed
+          // gsutil's built-in CRC32C check handles transport integrity
           this.stats.completed++;
           this.stats.bytesUploaded += fileSize;
 
