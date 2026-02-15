@@ -889,6 +889,10 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
   let totalTxs = 0;
   let earliestTime = sliceBefore;
   
+  // Pipeline: allow up to N process callbacks to run concurrently while fetching
+  const MAX_INFLIGHT_PROCESS = 3;
+  const inflightProcesses = [];
+  
   while (true) {
     // Check if we've passed the lower bound of this slice
     if (new Date(currentBefore).getTime() <= new Date(sliceAfter).getTime()) {
@@ -935,9 +939,16 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
       }
     }
     
-    // STREAM: Process immediately instead of accumulating
+    // PIPELINE: Fire-and-forget process callback, apply backpressure if too many inflight
     if (uniqueTxs.length > 0) {
-      await processCallback(uniqueTxs);
+      // Wait for oldest inflight to complete if at capacity
+      if (inflightProcesses.length >= MAX_INFLIGHT_PROCESS) {
+        await inflightProcesses.shift();
+      }
+      const processPromise = processCallback(uniqueTxs).catch(err => {
+        console.error(`   ❌ Process callback error in slice ${sliceIndex}: ${err.message}`);
+      });
+      inflightProcesses.push(processPromise);
       totalTxs += uniqueTxs.length;
     }
     
@@ -974,6 +985,11 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
     if (seenUpdateIds.size > 50000) {
       seenUpdateIds.clear();
     }
+  }
+  
+  // Wait for all remaining inflight processes to complete
+  if (inflightProcesses.length > 0) {
+    await Promise.all(inflightProcesses);
   }
   
   return { sliceIndex, totalTxs, earliestTime };
