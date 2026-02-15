@@ -18,7 +18,7 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync, unlinkSync, statSync } from 'fs';
+import { existsSync, unlinkSync, statSync, appendFileSync, mkdirSync } from 'fs';
 import path from 'path';
 // LAZY env var reading - called at queue creation time, not module load time
 // This is critical because ESM hoists imports before dotenv.config() runs
@@ -53,6 +53,40 @@ function calculateBackoffDelay(attempt, baseDelay = 1000) {
   const exponentialDelay = baseDelay * Math.pow(2, attempt);
   const jitter = exponentialDelay * 0.25 * (Math.random() * 2 - 1);
   return Math.min(exponentialDelay + jitter, 30000);
+}
+
+// Dead-letter log directory
+const DEAD_LETTER_DIR = '/tmp/ledger_raw';
+const DEAD_LETTER_FILE = path.join(DEAD_LETTER_DIR, 'failed-uploads.jsonl');
+
+/**
+ * Log a failed upload to the dead-letter file for later retry.
+ * Each line is a JSON object with localPath, gcsPath, error, and timestamp.
+ */
+export function logFailedUpload(localPath, gcsPath, error, keepFile = true) {
+  try {
+    if (!existsSync(DEAD_LETTER_DIR)) {
+      mkdirSync(DEAD_LETTER_DIR, { recursive: true });
+    }
+    const entry = {
+      localPath,
+      gcsPath,
+      error: error || 'Unknown error',
+      timestamp: new Date().toISOString(),
+      fileExists: existsSync(localPath),
+    };
+    appendFileSync(DEAD_LETTER_FILE, JSON.stringify(entry) + '\n');
+    console.error(`📋 [dead-letter] Logged failed upload: ${path.basename(localPath)} → ${gcsPath}`);
+  } catch (logErr) {
+    console.error(`❌ [dead-letter] Failed to write dead-letter log: ${logErr.message}`);
+  }
+}
+
+/**
+ * Get path to the dead-letter file.
+ */
+export function getDeadLetterPath() {
+  return DEAD_LETTER_FILE;
 }
 
 /**
@@ -253,13 +287,21 @@ class GCSUploadQueue {
       this.stats.failed++;
       console.error(`❌ [upload-queue] Upload failed: ${path.basename(localPath)}: ${lastError?.message}`);
 
-      // Still delete local file to prevent disk fill
-      if (existsSync(localPath)) {
+      // Log to dead-letter file for later retry
+      logFailedUpload(localPath, gcsPath, lastError?.message);
+
+      // Keep local file if it exists so retry script can re-upload it
+      // Only delete if explicitly configured to free disk space
+      const deleteOnFailure = options.deleteOnFailure !== undefined ? options.deleteOnFailure : false;
+      if (deleteOnFailure && existsSync(localPath)) {
         try {
           unlinkSync(localPath);
+          console.warn(`⚠️ [upload-queue] Deleted failed file (deleteOnFailure=true): ${path.basename(localPath)}`);
         } catch (e) {
           console.error(`⚠️ Failed to delete ${localPath}: ${e.message}`);
         }
+      } else if (existsSync(localPath)) {
+        console.log(`📂 [upload-queue] Keeping local file for retry: ${path.basename(localPath)}`);
       }
 
     } finally {
