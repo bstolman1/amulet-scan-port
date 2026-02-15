@@ -843,7 +843,7 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
   let earliestTime = sliceBefore;
   
   // Pipeline: allow up to N process callbacks to run concurrently while fetching
-  const MAX_INFLIGHT_PROCESS = 3;
+  const MAX_INFLIGHT_PROCESS = parseInt(process.env.MAX_INFLIGHT_PROCESS || '8', 10);
   const inflightProcesses = [];
   
   while (true) {
