@@ -704,9 +704,10 @@ async function processBackfillItems(transactions, migrationId) {
 }
 
 /**
- * Fallback: decode in main thread (same logic as decode-worker.js)
+ * Decode in main thread — primary decode path (no worker pool overhead)
+ * Includes effective_at guard to prevent partition crashes from null timestamps.
  */
-function decodeInMainThread(tx, migrationId) {
+export function decodeInMainThread(tx, migrationId) {
   const isReassignment = !!tx.event;
   const update = normalizeUpdate(tx);
   update.migration_id = migrationId;
@@ -732,19 +733,31 @@ function decodeInMainThread(tx, migrationId) {
     if (ce) {
       const ev = normalizeEvent(ce, update.update_id, migrationId, tx, updateInfo);
       ev.event_type = 'reassign_create';
-      events.push(ev);
+      if (ev.effective_at) {
+        events.push(ev);
+      } else {
+        console.warn(`⚠️ [decode] Skipping reassign_create with no effective_at: update=${update.update_id}`);
+      }
     }
     if (ae) {
       const ev = normalizeEvent(ae, update.update_id, migrationId, tx, updateInfo);
       ev.event_type = 'reassign_archive';
-      events.push(ev);
+      if (ev.effective_at) {
+        events.push(ev);
+      } else {
+        console.warn(`⚠️ [decode] Skipping reassign_archive with no effective_at: update=${update.update_id}`);
+      }
     }
   } else {
     const eventsById = txData.events_by_id || tx.events_by_id || {};
     for (const [eventId, rawEvent] of Object.entries(eventsById)) {
       const ev = normalizeEvent(rawEvent, update.update_id, migrationId, rawEvent, updateInfo);
       ev.event_id = eventId;
-      events.push(ev);
+      if (ev.effective_at) {
+        events.push(ev);
+      } else {
+        console.warn(`⚠️ [decode] Skipping event ${eventId} with no effective_at: update=${update.update_id}`);
+      }
     }
   }
 
