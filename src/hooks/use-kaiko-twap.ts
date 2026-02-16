@@ -55,13 +55,16 @@ export function useKaikoTwap(params: TwapParams | null, enabled = true) {
         decimals = 5,
       } = params;
 
+      // Kaiko API treats end_time as exclusive, so add +1 hour to include the last candle
+      const inclusiveEnd = new Date(new Date(endTime).getTime() + 60 * 60 * 1000).toISOString();
+
       const sp = new URLSearchParams({
         exchange,
         instrument_class: instrumentClass,
         instrument,
         interval,
         start_time: startTime,
-        end_time: endTime,
+        end_time: inclusiveEnd,
         decimals: String(decimals),
       });
 
@@ -111,10 +114,13 @@ export function useKaikoVwTwap(params: VwTwapParams | null, enabled = true) {
       if (!params) throw new Error('No params');
       const { interval = '5m', startTime, endTime, decimals = 5 } = params;
 
+      // Kaiko API treats end_time as exclusive, so add +1 hour to include the last candle
+      const inclusiveEnd = new Date(new Date(endTime).getTime() + 60 * 60 * 1000).toISOString();
+
       const sp = new URLSearchParams({
         interval,
         start_time: startTime,
-        end_time: endTime,
+        end_time: inclusiveEnd,
         decimals: String(decimals),
       });
 
