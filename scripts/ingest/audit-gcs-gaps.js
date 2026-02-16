@@ -36,8 +36,12 @@ dotenv.config({ path: join(__dirname, '.env') });
 const args = process.argv.slice(2);
 
 function argVal(name) {
-  const arg = args.find(a => a.startsWith(`--${name}=`));
-  return arg ? arg.split('=')[1] : null;
+  const idx = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`));
+  if (idx === -1) return null;
+  const arg = args[idx];
+  if (arg.includes('=')) return arg.split('=').slice(1).join('=');
+  // Space-separated: --start 2024-07-01
+  return (idx + 1 < args.length && !args[idx + 1].startsWith('--')) ? args[idx + 1] : null;
 }
 
 const now = new Date();
