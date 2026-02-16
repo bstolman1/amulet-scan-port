@@ -17,6 +17,7 @@ import { CCCandlestickChart } from "@/components/CCCandlestickChart";
 import { CCPriceTicker } from "@/components/CCPriceTicker";
 import { CCPriceAlerts } from "@/components/CCPriceAlerts";
 import { CCTimeframeComparison } from "@/components/CCTimeframeComparison";
+import { CCTwapCard } from "@/components/CCTwapCard";
 
 // Exchange to instrument mapping based on Kaiko reference data
 const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
@@ -322,6 +323,8 @@ export default function KaikoFeed() {
           {/* CC Overview Tab */}
           <TabsContent value="cc-overview" className="space-y-6">
             <CCPriceTicker enabled={status?.configured && activeTab === 'cc-overview'} />
+            
+            <CCTwapCard enabled={status?.configured && activeTab === 'cc-overview'} />
             
             <CCTimeframeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
             

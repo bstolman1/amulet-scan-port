@@ -291,6 +291,120 @@ function getExchangeName(code) {
 }
 
 /**
+ * GET /api/kaiko/twap
+ * Computes Time-Weighted Average Price from OHLCV close prices
+ * 
+ * Query params:
+ * - exchange: Exchange code (default: krkn)
+ * - instrument_class: Instrument class (default: spot)
+ * - instrument: Trading pair (default: cc-usd)
+ * - interval: Candle interval used for TWAP calc (default: 5m)
+ * - start_time: ISO 8601 start (required)
+ * - end_time: ISO 8601 end (required)
+ * - decimals: Number of decimal places (default: 5, max: 18)
+ */
+router.get('/twap', async (req, res) => {
+  if (!KAIKO_API_KEY) {
+    return res.status(500).json({ 
+      error: 'KAIKO_API_KEY not configured',
+      message: 'Please set KAIKO_API_KEY in your server/.env file'
+    });
+  }
+
+  const {
+    exchange = 'krkn',
+    instrument_class = 'spot',
+    instrument = 'cc-usd',
+    interval = '5m',
+    start_time,
+    end_time,
+    decimals = '5',
+  } = req.query;
+
+  if (!start_time || !end_time) {
+    return res.status(400).json({ error: 'start_time and end_time are required' });
+  }
+
+  const decimalPlaces = Math.min(Math.max(parseInt(decimals) || 5, 0), 18);
+
+  console.log(`📊 Computing TWAP: ${exchange}/${instrument_class}/${instrument} interval=${interval} from ${start_time} to ${end_time}`);
+
+  try {
+    // Fetch all candles in the window — paginate if needed
+    let allCandles = [];
+    let nextUrl = null;
+    let page = 0;
+
+    do {
+      const url = nextUrl ? new URL(nextUrl) : new URL(
+        `${KAIKO_BASE_URL}/exchanges/${exchange}/${instrument_class}/${instrument}/aggregations/count_ohlcv_vwap`
+      );
+
+      if (!nextUrl) {
+        url.searchParams.set('interval', interval);
+        url.searchParams.set('sort', 'asc');
+        url.searchParams.set('page_size', '1000');
+        url.searchParams.set('start_time', start_time);
+        url.searchParams.set('end_time', end_time);
+      }
+
+      const response = await fetch(url.toString(), {
+        headers: { 'Accept': 'application/json', 'X-Api-Key': KAIKO_API_KEY },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ Kaiko TWAP fetch error (${response.status}):`, errorText);
+        return res.status(response.status).json({ error: `Kaiko API error: ${response.status}`, message: errorText });
+      }
+
+      const data = await response.json();
+      allCandles = allCandles.concat(data.data || []);
+      nextUrl = data.next_url || null;
+      page++;
+    } while (nextUrl && page < 20); // safety cap
+
+    // Filter candles with valid close prices
+    const validCandles = allCandles.filter(c => c.close !== null && c.close !== undefined);
+
+    if (validCandles.length === 0) {
+      return res.json({
+        result: 'no_data',
+        twap: null,
+        candle_count: 0,
+        message: 'No candles with close prices in the specified range',
+      });
+    }
+
+    // TWAP = arithmetic mean of close prices (equal time weight per candle)
+    const closes = validCandles.map(c => parseFloat(c.close));
+    const twap = closes.reduce((sum, p) => sum + p, 0) / closes.length;
+
+    res.json({
+      result: 'success',
+      twap: twap.toFixed(decimalPlaces),
+      twap_raw: twap,
+      candle_count: validCandles.length,
+      total_candles_fetched: allCandles.length,
+      interval,
+      exchange,
+      instrument,
+      instrument_class,
+      start_time,
+      end_time,
+      decimals: decimalPlaces,
+      first_candle: validCandles[0]?.timestamp,
+      last_candle: validCandles[validCandles.length - 1]?.timestamp,
+    });
+
+    console.log(`✅ TWAP computed: ${twap.toFixed(decimalPlaces)} from ${validCandles.length} candles`);
+  } catch (err) {
+    console.error('❌ TWAP computation failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/kaiko/status
  * Check if Kaiko API is configured
  */
