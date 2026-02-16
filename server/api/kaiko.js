@@ -364,8 +364,13 @@ router.get('/twap', async (req, res) => {
       page++;
     } while (nextUrl && page < 20); // safety cap
 
-    // Filter candles with valid close prices
-    const validCandles = allCandles.filter(c => c.close !== null && c.close !== undefined);
+    // Filter candles with valid OHLC prices
+    const validCandles = allCandles.filter(c =>
+      c.open !== null && c.open !== undefined &&
+      c.high !== null && c.high !== undefined &&
+      c.low !== null && c.low !== undefined &&
+      c.close !== null && c.close !== undefined
+    );
 
     if (validCandles.length === 0) {
       return res.json({
@@ -376,9 +381,15 @@ router.get('/twap', async (req, res) => {
       });
     }
 
-    // TWAP = arithmetic mean of close prices (equal time weight per candle)
-    const closes = validCandles.map(c => parseFloat(c.close));
-    const twap = closes.reduce((sum, p) => sum + p, 0) / closes.length;
+    // TWAP = arithmetic mean of (O+H+L+C)/4 per candle (typical price, equal time weight)
+    const typicalPrices = validCandles.map(c => {
+      const o = parseFloat(c.open);
+      const h = parseFloat(c.high);
+      const l = parseFloat(c.low);
+      const cl = parseFloat(c.close);
+      return (o + h + l + cl) / 4;
+    });
+    const twap = typicalPrices.reduce((sum, p) => sum + p, 0) / typicalPrices.length;
 
     res.json({
       result: 'success',
@@ -500,11 +511,12 @@ router.get('/vw-twap', async (req, res) => {
     const timestampMap = new Map();
     for (const ex of exchangeData) {
       for (const c of ex.candles) {
-        if (c.close === null || c.close === undefined) continue;
+        if (c.open == null || c.high == null || c.low == null || c.close == null) continue;
         const ts = c.timestamp;
+        const typicalPrice = (parseFloat(c.open) + parseFloat(c.high) + parseFloat(c.low) + parseFloat(c.close)) / 4;
         if (!timestampMap.has(ts)) timestampMap.set(ts, []);
         timestampMap.get(ts).push({
-          close: parseFloat(c.close),
+          price: typicalPrice,
           volume: parseFloat(c.volume || '0'),
           exchange: ex.exchange,
           instrument: ex.instrument,
@@ -512,16 +524,15 @@ router.get('/vw-twap', async (req, res) => {
       }
     }
 
-    // For each timestamp, compute volume-weighted close
+    // For each timestamp, compute volume-weighted typical price
     const vwCloses = [];
     for (const [ts, entries] of timestampMap) {
       const totalVol = entries.reduce((s, e) => s + e.volume, 0);
       if (totalVol === 0) {
-        // Equal weight if no volume
-        const avg = entries.reduce((s, e) => s + e.close, 0) / entries.length;
+        const avg = entries.reduce((s, e) => s + e.price, 0) / entries.length;
         vwCloses.push({ ts, price: avg });
       } else {
-        const vwPrice = entries.reduce((s, e) => s + e.close * e.volume, 0) / totalVol;
+        const vwPrice = entries.reduce((s, e) => s + e.price * e.volume, 0) / totalVol;
         vwCloses.push({ ts, price: vwPrice });
       }
     }
