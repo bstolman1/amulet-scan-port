@@ -293,12 +293,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 </strong></span>
                 <span>Interval: <strong>{data.interval}</strong></span>
                 <span>Precision: <strong>{data.decimals} dp</strong></span>
-                {mode === 'vw' && vwData?.first_slice && vwData?.last_slice && (
-                  <span>Range: {formatInTimeZone(new Date(vwData.first_slice), 'UTC', "MMM d HH:mm")} → {formatInTimeZone(new Date(vwData.last_slice), 'UTC', "MMM d HH:mm")} UTC</span>
-                )}
-                {mode === 'single' && singleData?.first_candle && singleData?.last_candle && (
-                  <span>Range: {formatInTimeZone(new Date(singleData.first_candle), 'UTC', "MMM d HH:mm")} → {formatInTimeZone(new Date(singleData.last_candle), 'UTC', "MMM d HH:mm")} UTC</span>
-                )}
+                <span>Range: {formatInTimeZone(new Date(startTime), 'UTC', "MMM d HH:mm")} → {formatInTimeZone(new Date(endTime), 'UTC', "MMM d HH:mm")} UTC</span>
               </div>
 
               {/* VW exchange breakdown */}
