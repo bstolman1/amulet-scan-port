@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { subHours, startOfDay, endOfDay } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { CalendarIcon, Clock, RefreshCw, Globe, Building2 } from "lucide-react";
+import { CalendarIcon, Clock, RefreshCw, Globe, Building2, ChevronDown, ChevronUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,8 +10,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useKaikoTwap, useKaikoVwTwap } from "@/hooks/use-kaiko-twap";
+import type { TwapCandle } from "@/hooks/use-kaiko-twap";
 
 const TWAP_INTERVALS = [
   { value: '1m', label: '1 Min' },
@@ -52,6 +55,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
   const [useCustomDates, setUseCustomDates] = useState(false);
+  const [showCandles, setShowCandles] = useState(false);
 
   const exchangeConfig = EXCHANGES.find(e => e.value === selectedExchange) || EXCHANGES[0];
 
@@ -280,6 +284,53 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {/* Hourly candle drill-down */}
+              {mode === 'single' && singleData?.candles && singleData.candles.length > 0 && (
+                <div className="mt-2 pt-2 border-t">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs gap-1 px-0 h-6 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowCandles(!showCandles)}
+                  >
+                    {showCandles ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    {showCandles ? 'Hide' : 'Show'} Candle Breakdown ({singleData.candles.length})
+                  </Button>
+                  {showCandles && (
+                    <ScrollArea className="mt-2 max-h-[400px] rounded border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="text-[10px]">
+                            <TableHead className="py-1 px-2">Time (UTC)</TableHead>
+                            <TableHead className="py-1 px-2 text-right">Open</TableHead>
+                            <TableHead className="py-1 px-2 text-right">High</TableHead>
+                            <TableHead className="py-1 px-2 text-right">Low</TableHead>
+                            <TableHead className="py-1 px-2 text-right">Close</TableHead>
+                            <TableHead className="py-1 px-2 text-right">Volume</TableHead>
+                            <TableHead className="py-1 px-2 text-right">Avg (OHLC/4)</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {singleData.candles.map((c: TwapCandle) => (
+                            <TableRow key={c.timestamp} className="text-[11px] font-mono">
+                              <TableCell className="py-1 px-2 whitespace-nowrap">
+                                {formatInTimeZone(new Date(c.timestamp), 'UTC', "yyyy-MM-dd HH:mm")}
+                              </TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.open.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.high.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.low.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.close.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.volume.toLocaleString(undefined, { maximumFractionDigits: 1 })}</TableCell>
+                              <TableCell className="py-1 px-2 text-right font-semibold">{c.typical_price.toFixed(6)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </ScrollArea>
+                  )}
                 </div>
               )}
             </div>
