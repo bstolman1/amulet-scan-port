@@ -327,11 +327,11 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                     {showCandles ? 'Hide' : 'Show'} Candle Breakdown ({singleData.candles.length})
                   </Button>
                   {showCandles && (
-                    <ScrollArea className="mt-2 max-h-[400px] rounded border">
+                    <ScrollArea className="mt-2 max-h-[600px] rounded border">
                       <Table>
                         <TableHeader>
                           <TableRow className="text-[10px]">
-                            <TableHead className="py-1 px-2">Time (UTC)</TableHead>
+                            <TableHead className="py-1 px-2 w-[160px]">Time (UTC)</TableHead>
                             <TableHead className="py-1 px-2 text-right">Open</TableHead>
                             <TableHead className="py-1 px-2 text-right">High</TableHead>
                             <TableHead className="py-1 px-2 text-right">Low</TableHead>
@@ -343,15 +343,15 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                         <TableBody>
                           {singleData.candles.map((c: TwapCandle) => (
                             <TableRow key={c.timestamp} className="text-[11px] font-mono">
-                              <TableCell className="py-1 px-2 whitespace-nowrap">
-                                {formatInTimeZone(new Date(c.timestamp), 'UTC', "yyyy-MM-dd HH:mm")}
+                              <TableCell className="py-1 px-2 whitespace-nowrap tabular-nums w-[160px]">
+                                {formatInTimeZone(new Date(c.timestamp), 'UTC', "yyyy-MM-dd  HH:mm")}
                               </TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.open.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.high.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.low.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.close.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.volume.toLocaleString(undefined, { maximumFractionDigits: 1 })}</TableCell>
-                              <TableCell className="py-1 px-2 text-right font-semibold">{c.typical_price.toFixed(6)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right tabular-nums">{c.open.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right tabular-nums">{c.high.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right tabular-nums">{c.low.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right tabular-nums">{c.close.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right tabular-nums">{c.volume.toLocaleString(undefined, { maximumFractionDigits: 1 })}</TableCell>
+                              <TableCell className="py-1 px-2 text-right font-semibold tabular-nums">{c.typical_price.toFixed(6)}</TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
