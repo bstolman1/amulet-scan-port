@@ -892,15 +892,14 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
       }
     }
     
-    // PIPELINE: Fire-and-forget process callback, apply backpressure if too many inflight
+    // PIPELINE: Process callback with backpressure — errors MUST propagate
+    // to prevent cursor advancement past unwritten data
     if (uniqueTxs.length > 0) {
       // Wait for oldest inflight to complete if at capacity
       if (inflightProcesses.length >= MAX_INFLIGHT_PROCESS) {
         await inflightProcesses.shift();
       }
-      const processPromise = processCallback(uniqueTxs).catch(err => {
-        console.error(`   ❌ Process callback error in slice ${sliceIndex}: ${err.message}`);
-      });
+      const processPromise = processCallback(uniqueTxs);
       inflightProcesses.push(processPromise);
       totalTxs += uniqueTxs.length;
     }
