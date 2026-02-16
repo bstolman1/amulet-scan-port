@@ -2,7 +2,7 @@
 /**
  * GCS Gap Audit Tool
  * 
- * Walks every day partition in GCS for a given month and detects:
+ * Walks every day partition in GCS for a given date range and detects:
  *   1. Missing calendar days (no partition exists)
  *   2. Intra-day time gaps between consecutive Parquet files
  *   3. Updates vs Events partition mismatches (one exists but not the other)
@@ -13,7 +13,8 @@
  * Usage:
  *   node audit-gcs-gaps.js                          # Audit current month
  *   node audit-gcs-gaps.js --month=2 --year=2026    # Audit Feb 2026
- *   node audit-gcs-gaps.js --month=2 --year=2026 --migration=4
+ *   node audit-gcs-gaps.js --start=2024-07-01 --end=2025-12-10  # Date range
+ *   node audit-gcs-gaps.js --migration=3
  *   node audit-gcs-gaps.js --verbose                # Show per-file details
  *   node audit-gcs-gaps.js --source=updates         # Only scan live data
  *   node audit-gcs-gaps.js --source=backfill        # Only scan backfill data
@@ -40,13 +41,42 @@ function argVal(name) {
 }
 
 const now = new Date();
-const TARGET_YEAR = parseInt(argVal('year') || now.getUTCFullYear());
-const TARGET_MONTH = parseInt(argVal('month') || (now.getUTCMonth() + 1));
+const START_DATE = argVal('start');  // e.g. 2024-07-01
+const END_DATE = argVal('end');      // e.g. 2025-12-10
 const TARGET_MIGRATION = argVal('migration') ? parseInt(argVal('migration')) : null;
 const VERBOSE = args.includes('--verbose') || args.includes('-v');
-const SOURCE_FILTER = argVal('source'); // 'updates', 'backfill', or null (both)
-const GAP_THRESHOLD_S = parseInt(argVal('gap-threshold') || '300'); // 5 min default
+const SOURCE_FILTER = argVal('source');
+const GAP_THRESHOLD_S = parseInt(argVal('gap-threshold') || '300');
 const BUCKET = process.env.GCS_BUCKET || 'canton-bucket';
+
+/**
+ * Build list of {year, month, startDay, endDay} objects to audit.
+ * Supports --start/--end range or legacy --month/--year single month.
+ */
+function buildMonthRanges() {
+  if (START_DATE && END_DATE) {
+    const s = new Date(START_DATE + 'T00:00:00Z');
+    const e = new Date(END_DATE + 'T00:00:00Z');
+    const ranges = [];
+    let cur = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), 1));
+    while (cur <= e) {
+      const y = cur.getUTCFullYear();
+      const m = cur.getUTCMonth() + 1;
+      const firstDay = (y === s.getUTCFullYear() && m === s.getUTCMonth() + 1) ? s.getUTCDate() : 1;
+      const lastOfMonth = new Date(y, m, 0).getDate();
+      const lastDay = (y === e.getUTCFullYear() && m === e.getUTCMonth() + 1) ? e.getUTCDate() : lastOfMonth;
+      ranges.push({ year: y, month: m, startDay: firstDay, endDay: lastDay });
+      cur = new Date(Date.UTC(y, m, 1)); // next month
+    }
+    return ranges;
+  }
+  // Legacy single-month mode
+  const y = parseInt(argVal('year') || now.getUTCFullYear());
+  const m = parseInt(argVal('month') || (now.getUTCMonth() + 1));
+  const isCurrentMonth = y === now.getUTCFullYear() && m === (now.getUTCMonth() + 1);
+  const lastDay = isCurrentMonth ? now.getUTCDate() : new Date(y, m, 0).getDate();
+  return [{ year: y, month: m, startDay: 1, endDay: lastDay }];
+}
 
 // ─────────────────────────────────────────────────────────────
 // GCS helpers
@@ -149,14 +179,14 @@ function discoverMigrations(sourcePrefix) {
  * Audit a single type (updates or events) under a migration for the target month.
  * Returns { daysFound, dayResults, missingDays }.
  */
-function auditMigrationMonth(migPath, migrationId, type) {
-  const totalDays = daysInMonth(TARGET_YEAR, TARGET_MONTH);
+function auditMigrationMonth(migPath, migrationId, type, range) {
+  const { year, month, startDay, endDay } = range;
   const dayResults = [];
   const missingDays = [];
   
   // Check which day partitions exist for this month
   // Path: migPath/year=YYYY/month=M/
-  const monthPrefix = `${migPath}year=${TARGET_YEAR}/month=${TARGET_MONTH}/`;
+  const monthPrefix = `${migPath}year=${year}/month=${month}/`;
   const dayLines = gsutilLs(monthPrefix);
   
   // Parse existing day partitions
@@ -171,13 +201,9 @@ function auditMigrationMonth(migPath, migrationId, type) {
     }
   }
   
-  // Determine scan range: if this is the current month, only check up to today
-  const isCurrentMonth = TARGET_YEAR === now.getUTCFullYear() && TARGET_MONTH === (now.getUTCMonth() + 1);
-  const lastDayToCheck = isCurrentMonth ? now.getUTCDate() : totalDays;
-  
-  // Check each calendar day
-  for (let d = 1; d <= lastDayToCheck; d++) {
-    const dateStr = formatDate(TARGET_YEAR, TARGET_MONTH, d);
+  // Check each calendar day in range
+  for (let d = startDay; d <= endDay; d++) {
+    const dateStr = formatDate(year, month, d);
     
     if (!existingDays.has(d)) {
       missingDays.push(d);
@@ -226,7 +252,7 @@ function auditMigrationMonth(migPath, migrationId, type) {
     });
   }
   
-  return { daysFound: existingDays.size, dayResults, missingDays, lastDayChecked: lastDayToCheck };
+  return { daysFound: existingDays.size, dayResults, missingDays, lastDayChecked: endDay };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -234,10 +260,17 @@ function auditMigrationMonth(migPath, migrationId, type) {
 // ─────────────────────────────────────────────────────────────
 
 function main() {
-  const monthName = new Date(TARGET_YEAR, TARGET_MONTH - 1).toLocaleString('en', { month: 'long' });
+  const ranges = buildMonthRanges();
+  const rangeLabel = START_DATE && END_DATE
+    ? `${START_DATE} → ${END_DATE}`
+    : (() => {
+        const r = ranges[0];
+        const monthName = new Date(r.year, r.month - 1).toLocaleString('en', { month: 'long' });
+        return `${monthName} ${r.year}`;
+      })();
   
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`  GCS GAP AUDIT — ${monthName} ${TARGET_YEAR}`);
+  console.log(`  GCS GAP AUDIT — ${rangeLabel}`);
   console.log(`  Bucket: gs://${BUCKET}`);
   console.log(`  Gap threshold: ${GAP_THRESHOLD_S}s`);
   if (TARGET_MIGRATION !== null) console.log(`  Migration filter: ${TARGET_MIGRATION}`);
@@ -282,57 +315,64 @@ function main() {
       for (const mig of migsToScan) {
         console.log(`\n  📂 migration=${mig.id}`);
         
-        const result = auditMigrationMonth(mig.path, mig.id, type);
+        let migOk = 0, migGaps = 0, migMissing = 0, migEmpty = 0, migIntraGaps = 0, migChecked = 0;
         
-        const okDays = result.dayResults.filter(d => d.status === 'ok').length;
-        const gapDays = result.dayResults.filter(d => d.status === 'gaps').length;
-        const missingDays = result.dayResults.filter(d => d.status === 'missing').length;
-        const emptyDays = result.dayResults.filter(d => d.status === 'empty').length;
-        const dayGaps = result.dayResults.reduce((sum, d) => sum + d.gaps.length, 0);
-        
-        totalGaps += dayGaps;
-        totalMissingDays += missingDays;
-        totalEmptyDays += emptyDays;
-        
-        summaryRows.push({
-          path: `${tag}/migration=${mig.id}`,
-          checked: result.lastDayChecked,
-          ok: okDays,
-          gaps: gapDays,
-          missing: missingDays,
-          empty: emptyDays,
-          intraGaps: dayGaps,
-        });
-        
-        // Print day-by-day results
-        for (const day of result.dayResults) {
-          if (day.status === 'ok') {
-            if (VERBOSE) {
-              console.log(`     ✅ ${day.date}  ${day.fileCount} files  [${day.earliest} → ${day.latest}]`);
-            }
-          } else if (day.status === 'missing') {
-            console.log(`     ❌ ${day.date}  MISSING — no partition exists`);
-          } else if (day.status === 'empty') {
-            console.log(`     ⚠️  ${day.date}  EMPTY — partition exists but no .parquet files`);
-          } else if (day.status === 'gaps') {
-            console.log(`     ⚠️  ${day.date}  ${day.fileCount} files, ${day.gaps.length} gap(s):`);
-            for (const gap of day.gaps) {
-              console.log(`        🕳️  ${gap.gapFormatted} gap: ${gap.afterTs} → ${gap.beforeTs}`);
+        for (const range of ranges) {
+          const result = auditMigrationMonth(mig.path, mig.id, type, range);
+          
+          const okDays = result.dayResults.filter(d => d.status === 'ok').length;
+          const gapDays = result.dayResults.filter(d => d.status === 'gaps').length;
+          const missingDays = result.dayResults.filter(d => d.status === 'missing').length;
+          const emptyDays = result.dayResults.filter(d => d.status === 'empty').length;
+          const dayGaps = result.dayResults.reduce((sum, d) => sum + d.gaps.length, 0);
+          
+          totalGaps += dayGaps;
+          totalMissingDays += missingDays;
+          totalEmptyDays += emptyDays;
+          migOk += okDays;
+          migGaps += gapDays;
+          migMissing += missingDays;
+          migEmpty += emptyDays;
+          migIntraGaps += dayGaps;
+          migChecked += result.lastDayChecked;
+          
+          // Print day-by-day results
+          for (const day of result.dayResults) {
+            if (day.status === 'ok') {
               if (VERBOSE) {
-                console.log(`           after: ${gap.afterFile}`);
-                console.log(`           before: ${gap.beforeFile}`);
+                console.log(`     ✅ ${day.date}  ${day.fileCount} files  [${day.earliest} → ${day.latest}]`);
+              }
+            } else if (day.status === 'missing') {
+              console.log(`     ❌ ${day.date}  MISSING — no partition exists`);
+            } else if (day.status === 'empty') {
+              console.log(`     ⚠️  ${day.date}  EMPTY — partition exists but no .parquet files`);
+            } else if (day.status === 'gaps') {
+              console.log(`     ⚠️  ${day.date}  ${day.fileCount} files, ${day.gaps.length} gap(s):`);
+              for (const gap of day.gaps) {
+                console.log(`        🕳️  ${gap.gapFormatted} gap: ${gap.afterTs} → ${gap.beforeTs}`);
+                if (VERBOSE) {
+                  console.log(`           after: ${gap.afterFile}`);
+                  console.log(`           before: ${gap.beforeFile}`);
+                }
               }
             }
           }
         }
         
         // Compact summary for this migration
-        if (!VERBOSE) {
-          const okCount = result.dayResults.filter(d => d.status === 'ok').length;
-          if (okCount > 0) {
-            console.log(`     ✅ ${okCount} day(s) OK (use --verbose to see details)`);
-          }
+        if (!VERBOSE && migOk > 0) {
+          console.log(`     ✅ ${migOk} day(s) OK (use --verbose to see details)`);
         }
+        
+        summaryRows.push({
+          path: `${tag}/migration=${mig.id}`,
+          checked: migChecked,
+          ok: migOk,
+          gaps: migGaps,
+          missing: migMissing,
+          empty: migEmpty,
+          intraGaps: migIntraGaps,
+        });
       }
       console.log();
     }
@@ -365,30 +405,37 @@ function main() {
         continue;
       }
       
-      // Compare day partitions
-      const monthPrefixU = `${uMig.path}year=${TARGET_YEAR}/month=${TARGET_MONTH}/`;
-      const monthPrefixE = `${eMig.path}year=${TARGET_YEAR}/month=${TARGET_MONTH}/`;
+      // Compare day partitions across all months in range
+      let totalUDays = 0, totalEDays = 0, allUOnly = [], allEOnly = [];
+      for (const range of ranges) {
+        const monthPrefixU = `${uMig.path}year=${range.year}/month=${range.month}/`;
+        const monthPrefixE = `${eMig.path}year=${range.year}/month=${range.month}/`;
+        
+        const uDays = new Set(gsutilLs(monthPrefixU)
+          .map(l => l.match(/day=(\d+)/)?.[1])
+          .filter(Boolean)
+          .map(Number));
+        const eDays = new Set(gsutilLs(monthPrefixE)
+          .map(l => l.match(/day=(\d+)/)?.[1])
+          .filter(Boolean)
+          .map(Number));
+        
+        totalUDays += uDays.size;
+        totalEDays += eDays.size;
+        const uOnly = [...uDays].filter(d => !eDays.has(d)).map(d => formatDate(range.year, range.month, d));
+        const eOnly = [...eDays].filter(d => !uDays.has(d)).map(d => formatDate(range.year, range.month, d));
+        allUOnly.push(...uOnly);
+        allEOnly.push(...eOnly);
+      }
       
-      const uDays = new Set(gsutilLs(monthPrefixU)
-        .map(l => l.match(/day=(\d+)/)?.[1])
-        .filter(Boolean)
-        .map(Number));
-      const eDays = new Set(gsutilLs(monthPrefixE)
-        .map(l => l.match(/day=(\d+)/)?.[1])
-        .filter(Boolean)
-        .map(Number));
-      
-      const uOnly = [...uDays].filter(d => !eDays.has(d)).sort((a, b) => a - b);
-      const eOnly = [...eDays].filter(d => !uDays.has(d)).sort((a, b) => a - b);
-      
-      if (uOnly.length === 0 && eOnly.length === 0) {
-        console.log(`  ✅ ${source}/migration=${migId}: updates and events have same ${uDays.size} day partitions`);
+      if (allUOnly.length === 0 && allEOnly.length === 0) {
+        console.log(`  ✅ ${source}/migration=${migId}: updates and events aligned (${totalUDays} day partitions)`);
       } else {
-        if (uOnly.length > 0) {
-          console.log(`  ⚠️  ${source}/migration=${migId}: days in updates but NOT events: ${uOnly.join(', ')}`);
+        if (allUOnly.length > 0) {
+          console.log(`  ⚠️  ${source}/migration=${migId}: days in updates but NOT events: ${allUOnly.join(', ')}`);
         }
-        if (eOnly.length > 0) {
-          console.log(`  ⚠️  ${source}/migration=${migId}: days in events but NOT updates: ${eOnly.join(', ')}`);
+        if (allEOnly.length > 0) {
+          console.log(`  ⚠️  ${source}/migration=${migId}: days in events but NOT updates: ${allEOnly.join(', ')}`);
         }
       }
     }
@@ -396,7 +443,7 @@ function main() {
   
   // ── Final summary ──────────────────────────────────────────
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log(`  SUMMARY — ${monthName} ${TARGET_YEAR}`);
+  console.log(`  SUMMARY — ${rangeLabel}`);
   console.log('═══════════════════════════════════════════════════════════════\n');
   
   console.log('  Path                                  Days  OK  Gaps  Missing  Empty  IntraGaps');
