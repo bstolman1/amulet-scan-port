@@ -404,6 +404,172 @@ router.get('/twap', async (req, res) => {
   }
 });
 
+// All CC spot exchanges for volume-weighted TWAP
+const CC_SPOT_EXCHANGES = [
+  { exchange: 'krkn', instrument: 'cc-usd', class: 'spot' },
+  { exchange: 'krkn', instrument: 'cc-usdt', class: 'spot' },
+  { exchange: 'krkn', instrument: 'cc-usdc', class: 'spot' },
+  { exchange: 'gate', instrument: 'cc-usdt', class: 'spot' },
+  { exchange: 'kcon', instrument: 'cc-usdt', class: 'spot' },
+  { exchange: 'mexc', instrument: 'cc-usdt', class: 'spot' },
+  { exchange: 'mexc', instrument: 'cc-usdc', class: 'spot' },
+  { exchange: 'bbsp', instrument: 'cc-usdt', class: 'spot' },
+  { exchange: 'bbsp', instrument: 'cc-usdc', class: 'spot' },
+  { exchange: 'hitb', instrument: 'cc-usdt', class: 'spot' },
+  { exchange: 'cnex', instrument: 'cc-usdt', class: 'spot' },
+];
+
+/**
+ * Fetch all OHLCV candles for a single exchange/instrument in a time window
+ */
+async function fetchAllCandles(exchange, instrumentClass, instrument, interval, startTime, endTime) {
+  let allCandles = [];
+  let nextUrl = null;
+  let page = 0;
+
+  do {
+    const url = nextUrl ? new URL(nextUrl) : new URL(
+      `${KAIKO_BASE_URL}/exchanges/${exchange}/${instrumentClass}/${instrument}/aggregations/count_ohlcv_vwap`
+    );
+    if (!nextUrl) {
+      url.searchParams.set('interval', interval);
+      url.searchParams.set('sort', 'asc');
+      url.searchParams.set('page_size', '1000');
+      url.searchParams.set('start_time', startTime);
+      url.searchParams.set('end_time', endTime);
+    }
+    const response = await fetch(url.toString(), {
+      headers: { 'Accept': 'application/json', 'X-Api-Key': KAIKO_API_KEY },
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    allCandles = allCandles.concat(data.data || []);
+    nextUrl = data.next_url || null;
+    page++;
+  } while (nextUrl && page < 10);
+
+  return allCandles;
+}
+
+/**
+ * GET /api/kaiko/vw-twap
+ * Volume-Weighted TWAP across all CC spot exchanges.
+ * For each candle timestamp, computes a volume-weighted close price across exchanges,
+ * then averages those across time (TWAP).
+ * 
+ * Query params:
+ * - interval: Candle interval (default: 5m)
+ * - start_time: ISO 8601 start (required)
+ * - end_time: ISO 8601 end (required)
+ * - decimals: decimal places (default: 5, max: 18)
+ */
+router.get('/vw-twap', async (req, res) => {
+  if (!KAIKO_API_KEY) {
+    return res.status(500).json({ error: 'KAIKO_API_KEY not configured' });
+  }
+
+  const { interval = '5m', start_time, end_time, decimals = '5' } = req.query;
+
+  if (!start_time || !end_time) {
+    return res.status(400).json({ error: 'start_time and end_time are required' });
+  }
+
+  const decimalPlaces = Math.min(Math.max(parseInt(decimals) || 5, 0), 18);
+
+  console.log(`📊 Computing VW-TWAP across ${CC_SPOT_EXCHANGES.length} CC pairs, interval=${interval}`);
+
+  try {
+    // Fetch candles from all exchanges in parallel
+    const exchangeResults = await Promise.allSettled(
+      CC_SPOT_EXCHANGES.map(async (ex) => {
+        const candles = await fetchAllCandles(ex.exchange, ex.class, ex.instrument, interval, start_time, end_time);
+        return { ...ex, candles };
+      })
+    );
+
+    const exchangeData = exchangeResults
+      .filter(r => r.status === 'fulfilled')
+      .map(r => r.value)
+      .filter(r => r.candles.length > 0);
+
+    if (exchangeData.length === 0) {
+      return res.json({ result: 'no_data', twap: null, candle_count: 0, exchanges_with_data: 0 });
+    }
+
+    // Build a map: timestamp -> [{ close, volume, exchange, instrument }]
+    const timestampMap = new Map();
+    for (const ex of exchangeData) {
+      for (const c of ex.candles) {
+        if (c.close === null || c.close === undefined) continue;
+        const ts = c.timestamp;
+        if (!timestampMap.has(ts)) timestampMap.set(ts, []);
+        timestampMap.get(ts).push({
+          close: parseFloat(c.close),
+          volume: parseFloat(c.volume || '0'),
+          exchange: ex.exchange,
+          instrument: ex.instrument,
+        });
+      }
+    }
+
+    // For each timestamp, compute volume-weighted close
+    const vwCloses = [];
+    for (const [ts, entries] of timestampMap) {
+      const totalVol = entries.reduce((s, e) => s + e.volume, 0);
+      if (totalVol === 0) {
+        // Equal weight if no volume
+        const avg = entries.reduce((s, e) => s + e.close, 0) / entries.length;
+        vwCloses.push({ ts, price: avg });
+      } else {
+        const vwPrice = entries.reduce((s, e) => s + e.close * e.volume, 0) / totalVol;
+        vwCloses.push({ ts, price: vwPrice });
+      }
+    }
+
+    if (vwCloses.length === 0) {
+      return res.json({ result: 'no_data', twap: null, candle_count: 0, exchanges_with_data: exchangeData.length });
+    }
+
+    vwCloses.sort((a, b) => a.ts - b.ts);
+
+    // TWAP = mean of volume-weighted prices across time
+    const twap = vwCloses.reduce((s, v) => s + v.price, 0) / vwCloses.length;
+
+    // Per-exchange volume breakdown
+    const exchangeBreakdown = exchangeData.map(ex => {
+      const validCandles = ex.candles.filter(c => c.close !== null);
+      const totalVol = validCandles.reduce((s, c) => s + parseFloat(c.volume || '0'), 0);
+      return {
+        exchange: ex.exchange,
+        instrument: ex.instrument,
+        candle_count: validCandles.length,
+        total_volume: totalVol,
+      };
+    }).sort((a, b) => b.total_volume - a.total_volume);
+
+    res.json({
+      result: 'success',
+      twap: twap.toFixed(decimalPlaces),
+      twap_raw: twap,
+      time_slices: vwCloses.length,
+      exchanges_with_data: exchangeData.length,
+      total_exchange_pairs: CC_SPOT_EXCHANGES.length,
+      interval,
+      start_time,
+      end_time,
+      decimals: decimalPlaces,
+      first_slice: vwCloses[0]?.ts,
+      last_slice: vwCloses[vwCloses.length - 1]?.ts,
+      exchange_breakdown: exchangeBreakdown,
+    });
+
+    console.log(`✅ VW-TWAP: ${twap.toFixed(decimalPlaces)} from ${vwCloses.length} time slices across ${exchangeData.length} exchanges`);
+  } catch (err) {
+    console.error('❌ VW-TWAP computation failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /**
  * GET /api/kaiko/status
  * Check if Kaiko API is configured

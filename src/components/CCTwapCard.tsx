@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
-import { format, subDays, subHours, startOfDay, endOfDay } from "date-fns";
-import { CalendarIcon, Clock, BarChart3, RefreshCw } from "lucide-react";
+import { format, subHours, startOfDay, endOfDay } from "date-fns";
+import { CalendarIcon, Clock, RefreshCw, Globe, Building2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -8,8 +8,9 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { useKaikoTwap } from "@/hooks/use-kaiko-twap";
+import { useKaikoTwap, useKaikoVwTwap } from "@/hooks/use-kaiko-twap";
 
 const TWAP_INTERVALS = [
   { value: '1m', label: '1 Min' },
@@ -43,6 +44,7 @@ interface CCTwapCardProps {
 }
 
 export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
+  const [mode, setMode] = useState<'single' | 'vw'>('single');
   const [selectedExchange, setSelectedExchange] = useState('krkn');
   const [twapInterval, setTwapInterval] = useState('5m');
   const [activePreset, setActivePreset] = useState<string>('24H');
@@ -67,7 +69,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
     };
   }, [useCustomDates, startDate, endDate, activePreset]);
 
-  const params = useMemo(() => ({
+  const singleParams = useMemo(() => ({
     exchange: selectedExchange,
     instrument: exchangeConfig.instrument,
     interval: twapInterval,
@@ -76,7 +78,18 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
     decimals: 5,
   }), [selectedExchange, exchangeConfig.instrument, twapInterval, startTime, endTime]);
 
-  const { data, isLoading, error, refetch, isFetching } = useKaikoTwap(params, enabled);
+  const vwParams = useMemo(() => ({
+    interval: twapInterval,
+    startTime,
+    endTime,
+    decimals: 5,
+  }), [twapInterval, startTime, endTime]);
+
+  const singleQuery = useKaikoTwap(singleParams, enabled && mode === 'single');
+  const vwQuery = useKaikoVwTwap(vwParams, enabled && mode === 'vw');
+
+  const activeQuery = mode === 'single' ? singleQuery : vwQuery;
+  const { data, isLoading, error, refetch, isFetching } = activeQuery;
 
   const handlePreset = (label: string) => {
     setActivePreset(label);
@@ -87,19 +100,17 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
 
   const handleStartDateSelect = (date: Date | undefined) => {
     setStartDate(date);
-    if (date) {
-      setUseCustomDates(true);
-      setActivePreset('');
-    }
+    if (date) { setUseCustomDates(true); setActivePreset(''); }
   };
 
   const handleEndDateSelect = (date: Date | undefined) => {
     setEndDate(date);
-    if (date) {
-      setUseCustomDates(true);
-      setActivePreset('');
-    }
+    if (date) { setUseCustomDates(true); setActivePreset(''); }
   };
+
+  // Type narrowing helpers
+  const vwData = mode === 'vw' ? (data as import("@/hooks/use-kaiko-twap").VwTwapResponse | undefined) : undefined;
+  const singleData = mode === 'single' ? (data as import("@/hooks/use-kaiko-twap").TwapResponse | undefined) : undefined;
 
   return (
     <Card>
@@ -113,22 +124,36 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Mode toggle */}
+        <Tabs value={mode} onValueChange={(v) => setMode(v as 'single' | 'vw')}>
+          <TabsList className="h-8">
+            <TabsTrigger value="single" className="text-xs gap-1.5 px-3">
+              <Building2 className="h-3 w-3" /> Single Exchange
+            </TabsTrigger>
+            <TabsTrigger value="vw" className="text-xs gap-1.5 px-3">
+              <Globe className="h-3 w-3" /> Volume-Weighted (All CC)
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
         {/* Controls row */}
         <div className="flex flex-wrap gap-3 items-end">
-          {/* Exchange */}
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Exchange</label>
-            <Select value={selectedExchange} onValueChange={setSelectedExchange}>
-              <SelectTrigger className="w-[130px] h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {EXCHANGES.map(ex => (
-                  <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {/* Exchange - only for single mode */}
+          {mode === 'single' && (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Exchange</label>
+              <Select value={selectedExchange} onValueChange={setSelectedExchange}>
+                <SelectTrigger className="w-[130px] h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXCHANGES.map(ex => (
+                    <SelectItem key={ex.value} value={ex.value}>{ex.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Interval */}
           <div className="space-y-1">
@@ -145,7 +170,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
             </Select>
           </div>
 
-          {/* Start Date Picker */}
+          {/* Start Date */}
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Start Date</label>
             <Popover>
@@ -159,19 +184,13 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="single"
-                  selected={startDate}
-                  onSelect={handleStartDateSelect}
-                  disabled={(date) => date > new Date()}
-                  initialFocus
-                  className={cn("p-3 pointer-events-auto")}
-                />
+                <Calendar mode="single" selected={startDate} onSelect={handleStartDateSelect}
+                  disabled={(date) => date > new Date()} initialFocus className={cn("p-3 pointer-events-auto")} />
               </PopoverContent>
             </Popover>
           </div>
 
-          {/* End Date Picker */}
+          {/* End Date */}
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">End Date</label>
             <Popover>
@@ -185,14 +204,9 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="single"
-                  selected={endDate}
-                  onSelect={handleEndDateSelect}
+                <Calendar mode="single" selected={endDate} onSelect={handleEndDateSelect}
                   disabled={(date) => date > new Date() || (startDate ? date < startDate : false)}
-                  initialFocus
-                  className={cn("p-3 pointer-events-auto")}
-                />
+                  initialFocus className={cn("p-3 pointer-events-auto")} />
               </PopoverContent>
             </Popover>
           </div>
@@ -201,13 +215,8 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
         {/* Preset range buttons */}
         <div className="flex flex-wrap gap-1.5">
           {PRESET_RANGES.map(p => (
-            <Button
-              key={p.label}
-              variant={activePreset === p.label ? "default" : "outline"}
-              size="sm"
-              className="h-7 text-xs px-3"
-              onClick={() => handlePreset(p.label)}
-            >
+            <Button key={p.label} variant={activePreset === p.label ? "default" : "outline"}
+              size="sm" className="h-7 text-xs px-3" onClick={() => handlePreset(p.label)}>
               {p.label}
             </Button>
           ))}
@@ -225,23 +234,52 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
           ) : data?.result === 'no_data' ? (
             <p className="text-sm text-muted-foreground">No trade data available for this range</p>
           ) : data?.twap ? (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-baseline gap-3">
                 <span className="text-3xl font-mono font-bold tracking-tight">
                   ${data.twap}
                 </span>
                 <Badge variant="outline" className="text-xs">
-                  {exchangeConfig.label} · {exchangeConfig.instrument.toUpperCase()}
+                  {mode === 'single'
+                    ? `${exchangeConfig.label} · ${exchangeConfig.instrument.toUpperCase()}`
+                    : `${vwData?.exchanges_with_data || 0}/${vwData?.total_exchange_pairs || 0} CC pairs`
+                  }
                 </Badge>
+                {mode === 'vw' && (
+                  <Badge variant="secondary" className="text-xs">Volume-Weighted</Badge>
+                )}
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>Candles: <strong>{data.candle_count}</strong></span>
+                <span>{mode === 'vw' ? 'Time slices' : 'Candles'}: <strong>
+                  {mode === 'vw' ? vwData?.time_slices : singleData?.candle_count}
+                </strong></span>
                 <span>Interval: <strong>{data.interval}</strong></span>
-                <span>
-                  Range: {data.first_candle ? format(new Date(data.first_candle), "MMM d HH:mm") : '—'} → {data.last_candle ? format(new Date(data.last_candle), "MMM d HH:mm") : '—'}
-                </span>
                 <span>Precision: <strong>{data.decimals} dp</strong></span>
+                {mode === 'vw' && vwData?.first_slice && vwData?.last_slice && (
+                  <span>Range: {format(new Date(vwData.first_slice), "MMM d HH:mm")} → {format(new Date(vwData.last_slice), "MMM d HH:mm")}</span>
+                )}
+                {mode === 'single' && singleData?.first_candle && singleData?.last_candle && (
+                  <span>Range: {format(new Date(singleData.first_candle), "MMM d HH:mm")} → {format(new Date(singleData.last_candle), "MMM d HH:mm")}</span>
+                )}
               </div>
+
+              {/* VW exchange breakdown */}
+              {mode === 'vw' && vwData?.exchange_breakdown && vwData.exchange_breakdown.length > 0 && (
+                <div className="mt-2 pt-2 border-t">
+                  <p className="text-xs text-muted-foreground mb-1.5">Volume breakdown by exchange:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {vwData.exchange_breakdown.map(ex => {
+                      const totalVol = vwData.exchange_breakdown!.reduce((s, e) => s + e.total_volume, 0);
+                      const pct = totalVol > 0 ? ((ex.total_volume / totalVol) * 100).toFixed(1) : '0';
+                      return (
+                        <Badge key={`${ex.exchange}-${ex.instrument}`} variant="outline" className="text-[10px] font-mono">
+                          {ex.exchange}/{ex.instrument} — {pct}%
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">Select a time range to compute TWAP</p>
