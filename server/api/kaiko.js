@@ -391,6 +391,17 @@ router.get('/twap', async (req, res) => {
     });
     const twap = typicalPrices.reduce((sum, p) => sum + p, 0) / typicalPrices.length;
 
+    // Build per-candle breakdown for drill-down
+    const candleBreakdown = validCandles.map((c, i) => ({
+      timestamp: c.timestamp,
+      open: parseFloat(c.open),
+      high: parseFloat(c.high),
+      low: parseFloat(c.low),
+      close: parseFloat(c.close),
+      volume: parseFloat(c.volume || '0'),
+      typical_price: typicalPrices[i],
+    }));
+
     res.json({
       result: 'success',
       twap: twap.toFixed(decimalPlaces),
@@ -406,6 +417,7 @@ router.get('/twap', async (req, res) => {
       decimals: decimalPlaces,
       first_candle: validCandles[0]?.timestamp,
       last_candle: validCandles[validCandles.length - 1]?.timestamp,
+      candles: candleBreakdown,
     });
 
     console.log(`✅ TWAP computed: ${twap.toFixed(decimalPlaces)} from ${validCandles.length} candles`);

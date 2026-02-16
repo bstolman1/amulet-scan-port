@@ -1,6 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/duckdb-api-client";
 
+export interface TwapCandle {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  typical_price: number;
+}
+
 export interface TwapResponse {
   result: string;
   twap: string | null;
@@ -16,6 +26,7 @@ export interface TwapResponse {
   decimals: number;
   first_candle?: number;
   last_candle?: number;
+  candles?: TwapCandle[];
   message?: string;
 }
 
