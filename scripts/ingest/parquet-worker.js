@@ -114,8 +114,18 @@ async function processJob(job) {
     const tempJsonlPath = normalizedFilePath.replace('.parquet', '.temp.jsonl');
     const tempNativePath = tempJsonlPath.replace(/\//g, path.sep);
     
-    const lines = records.map(r => JSON.stringify(r));
-    fs.writeFileSync(tempNativePath, lines.join('\n') + '\n');
+    // Write records in chunks to avoid V8 max string length limit
+    const CHUNK_SIZE = 5000;
+    const fd = fs.openSync(tempNativePath, 'w');
+    try {
+      for (let i = 0; i < records.length; i += CHUNK_SIZE) {
+        const chunk = records.slice(i, i + CHUNK_SIZE);
+        const block = chunk.map(r => JSON.stringify(r)).join('\n') + '\n';
+        fs.writeSync(fd, block);
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
 
     const readFn = type === 'events'
       ? `read_json_auto('${tempJsonlPath}', columns={
