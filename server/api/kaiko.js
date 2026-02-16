@@ -388,7 +388,8 @@ router.get('/twap', async (req, res) => {
       const h = Number(parseFloat(c.high).toFixed(5));
       const l = Number(parseFloat(c.low).toFixed(5));
       const cl = Number(parseFloat(c.close).toFixed(5));
-      return (o + h + l + cl) / 4;
+      // Typical price rounded to 6dp to match spreadsheet intermediate precision
+      return Number(((o + h + l + cl) / 4).toFixed(6));
     });
     const twap = typicalPrices.reduce((sum, p) => sum + p, 0) / typicalPrices.length;
 
@@ -530,7 +531,8 @@ router.get('/vw-twap', async (req, res) => {
         const h = Number(parseFloat(c.high).toFixed(5));
         const l = Number(parseFloat(c.low).toFixed(5));
         const cl = Number(parseFloat(c.close).toFixed(5));
-        const typicalPrice = (o + h + l + cl) / 4;
+        // Typical price rounded to 6dp to match spreadsheet intermediate precision
+        const typicalPrice = Number(((o + h + l + cl) / 4).toFixed(6));
         if (!timestampMap.has(ts)) timestampMap.set(ts, []);
         timestampMap.get(ts).push({
           price: typicalPrice,
