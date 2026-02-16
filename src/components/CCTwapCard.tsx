@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import { format, subHours, startOfDay, endOfDay } from "date-fns";
+import { subHours, startOfDay, endOfDay } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { CalendarIcon, Clock, RefreshCw, Globe, Building2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -118,6 +119,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
         <div className="flex items-center gap-2">
           <Clock className="h-5 w-5 text-primary" />
           <CardTitle className="text-lg">TWAP — Time-Weighted Average Price</CardTitle>
+          <Badge variant="secondary" className="text-[10px] font-mono">UTC</Badge>
         </div>
         <Button variant="ghost" size="icon" onClick={() => refetch()} disabled={isFetching}>
           <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
@@ -180,7 +182,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                   !startDate && "text-muted-foreground"
                 )}>
                   <CalendarIcon className="mr-1 h-3 w-3" />
-                  {startDate ? format(startDate, "MMM d, yyyy") : "Pick start"}
+                  {startDate ? formatInTimeZone(startDate, 'UTC', "MMM d, yyyy") : "Pick start"}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
@@ -200,7 +202,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                   !endDate && "text-muted-foreground"
                 )}>
                   <CalendarIcon className="mr-1 h-3 w-3" />
-                  {endDate ? format(endDate, "MMM d, yyyy") : "Pick end"}
+                  {endDate ? formatInTimeZone(endDate, 'UTC', "MMM d, yyyy") : "Pick end"}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
@@ -256,10 +258,10 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 <span>Interval: <strong>{data.interval}</strong></span>
                 <span>Precision: <strong>{data.decimals} dp</strong></span>
                 {mode === 'vw' && vwData?.first_slice && vwData?.last_slice && (
-                  <span>Range: {format(new Date(vwData.first_slice), "MMM d HH:mm")} → {format(new Date(vwData.last_slice), "MMM d HH:mm")}</span>
+                  <span>Range: {formatInTimeZone(new Date(vwData.first_slice), 'UTC', "MMM d HH:mm")} → {formatInTimeZone(new Date(vwData.last_slice), 'UTC', "MMM d HH:mm")} UTC</span>
                 )}
                 {mode === 'single' && singleData?.first_candle && singleData?.last_candle && (
-                  <span>Range: {format(new Date(singleData.first_candle), "MMM d HH:mm")} → {format(new Date(singleData.last_candle), "MMM d HH:mm")}</span>
+                  <span>Range: {formatInTimeZone(new Date(singleData.first_candle), 'UTC', "MMM d HH:mm")} → {formatInTimeZone(new Date(singleData.last_candle), 'UTC', "MMM d HH:mm")} UTC</span>
                 )}
               </div>
 
