@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { subHours, startOfDay, endOfDay } from "date-fns";
+import { subHours } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { CalendarIcon, Clock, RefreshCw, Globe, Building2, ChevronDown, ChevronUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,17 +53,23 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
   const [twapInterval, setTwapInterval] = useState('5m');
   const [activePreset, setActivePreset] = useState<string>('24H');
   const [startDate, setStartDate] = useState<Date | undefined>(undefined);
+  const [startHour, setStartHour] = useState<string>('0');
   const [endDate, setEndDate] = useState<Date | undefined>(undefined);
+  const [endHour, setEndHour] = useState<string>('23');
   const [useCustomDates, setUseCustomDates] = useState(false);
   const [showCandles, setShowCandles] = useState(false);
+
+  const UTC_HOURS = Array.from({ length: 24 }, (_, i) => String(i));
 
   const exchangeConfig = EXCHANGES.find(e => e.value === selectedExchange) || EXCHANGES[0];
 
   const { startTime, endTime } = useMemo(() => {
     if (useCustomDates && startDate && endDate) {
+      const s = new Date(Date.UTC(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), parseInt(startHour, 10), 0, 0));
+      const e = new Date(Date.UTC(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), parseInt(endHour, 10), 0, 0));
       return {
-        startTime: startOfDay(startDate).toISOString(),
-        endTime: endOfDay(endDate).toISOString(),
+        startTime: s.toISOString(),
+        endTime: e.toISOString(),
       };
     }
     const preset = PRESET_RANGES.find(p => p.label === activePreset);
@@ -72,7 +78,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
       startTime: subHours(now, preset?.hours || 24).toISOString(),
       endTime: now.toISOString(),
     };
-  }, [useCustomDates, startDate, endDate, activePreset]);
+  }, [useCustomDates, startDate, startHour, endDate, endHour, activePreset]);
 
   const singleParams = useMemo(() => ({
     exchange: selectedExchange,
@@ -101,6 +107,8 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
     setUseCustomDates(false);
     setStartDate(undefined);
     setEndDate(undefined);
+    setStartHour('0');
+    setEndHour('23');
   };
 
   const handleStartDateSelect = (date: Date | undefined) => {
@@ -176,45 +184,69 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
             </Select>
           </div>
 
-          {/* Start Date */}
+          {/* Start Date + Hour */}
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Start Date</label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm" className={cn(
-                  "w-[140px] justify-start text-left font-normal h-8 text-sm",
-                  !startDate && "text-muted-foreground"
-                )}>
-                  <CalendarIcon className="mr-1 h-3 w-3" />
-                  {startDate ? formatInTimeZone(startDate, 'UTC', "MMM d, yyyy") : "Pick start"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="single" selected={startDate} onSelect={handleStartDateSelect}
-                  disabled={(date) => date > new Date()} initialFocus className={cn("p-3 pointer-events-auto")} />
-              </PopoverContent>
-            </Popover>
+            <label className="text-xs text-muted-foreground">Start (UTC)</label>
+            <div className="flex gap-1">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className={cn(
+                    "w-[130px] justify-start text-left font-normal h-8 text-sm",
+                    !startDate && "text-muted-foreground"
+                  )}>
+                    <CalendarIcon className="mr-1 h-3 w-3" />
+                    {startDate ? formatInTimeZone(startDate, 'UTC', "MMM d, yyyy") : "Pick date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={startDate} onSelect={handleStartDateSelect}
+                    disabled={(date) => date > new Date()} initialFocus className={cn("p-3 pointer-events-auto")} />
+                </PopoverContent>
+              </Popover>
+              <Select value={startHour} onValueChange={(v) => { setStartHour(v); if (startDate) { setUseCustomDates(true); setActivePreset(''); } }}>
+                <SelectTrigger className="w-[72px] h-8 text-sm font-mono">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {UTC_HOURS.map(h => (
+                    <SelectItem key={h} value={h} className="font-mono">{h.padStart(2, '0')}:00</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
-          {/* End Date */}
+          {/* End Date + Hour */}
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">End Date</label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm" className={cn(
-                  "w-[140px] justify-start text-left font-normal h-8 text-sm",
-                  !endDate && "text-muted-foreground"
-                )}>
-                  <CalendarIcon className="mr-1 h-3 w-3" />
-                  {endDate ? formatInTimeZone(endDate, 'UTC', "MMM d, yyyy") : "Pick end"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="single" selected={endDate} onSelect={handleEndDateSelect}
-                  disabled={(date) => date > new Date() || (startDate ? date < startDate : false)}
-                  initialFocus className={cn("p-3 pointer-events-auto")} />
-              </PopoverContent>
-            </Popover>
+            <label className="text-xs text-muted-foreground">End (UTC)</label>
+            <div className="flex gap-1">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className={cn(
+                    "w-[130px] justify-start text-left font-normal h-8 text-sm",
+                    !endDate && "text-muted-foreground"
+                  )}>
+                    <CalendarIcon className="mr-1 h-3 w-3" />
+                    {endDate ? formatInTimeZone(endDate, 'UTC', "MMM d, yyyy") : "Pick date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={endDate} onSelect={handleEndDateSelect}
+                    disabled={(date) => date > new Date() || (startDate ? date < startDate : false)}
+                    initialFocus className={cn("p-3 pointer-events-auto")} />
+                </PopoverContent>
+              </Popover>
+              <Select value={endHour} onValueChange={(v) => { setEndHour(v); if (endDate) { setUseCustomDates(true); setActivePreset(''); } }}>
+                <SelectTrigger className="w-[72px] h-8 text-sm font-mono">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {UTC_HOURS.map(h => (
+                    <SelectItem key={h} value={h} className="font-mono">{h.padStart(2, '0')}:00</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
 
