@@ -346,10 +346,10 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                               <TableCell className="py-1 px-2 whitespace-nowrap">
                                 {formatInTimeZone(new Date(c.timestamp), 'UTC', "yyyy-MM-dd HH:mm")}
                               </TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.open.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.high.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.low.toFixed(5)}</TableCell>
-                              <TableCell className="py-1 px-2 text-right">{c.close.toFixed(5)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.open.toFixed(6)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.high.toFixed(6)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.low.toFixed(6)}</TableCell>
+                              <TableCell className="py-1 px-2 text-right">{c.close.toFixed(6)}</TableCell>
                               <TableCell className="py-1 px-2 text-right">{c.volume.toLocaleString(undefined, { maximumFractionDigits: 1 })}</TableCell>
                               <TableCell className="py-1 px-2 text-right font-semibold">{c.typical_price.toFixed(6)}</TableCell>
                             </TableRow>
