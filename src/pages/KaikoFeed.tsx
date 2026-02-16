@@ -8,7 +8,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, AssetMetricData } from "@/hooks/use-kaiko-ohlcv";
-import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2, Bell } from "lucide-react";
+import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2, Bell, Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { CCPriceChart } from "@/components/CCPriceChart";
 import { CCMarketOverview } from "@/components/CCMarketOverview";
@@ -661,8 +662,36 @@ export default function KaikoFeed() {
                           <TableHead className="text-right">Volume (USD)</TableHead>
                           <TableHead className="text-right">Volume (Asset)</TableHead>
                           <TableHead className="text-right">Total Trades</TableHead>
-                          <TableHead className="text-right">Off-Chain Vol</TableHead>
-                          <TableHead className="text-right">On-Chain Vol</TableHead>
+                          <TableHead className="text-right">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="inline-flex items-center gap-1 cursor-help">
+                                    Off-Chain Vol
+                                    <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-[220px]">
+                                  <p>Volume traded on centralized exchanges (CEXs) where settlement occurs off the Canton ledger.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </TableHead>
+                          <TableHead className="text-right">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="inline-flex items-center gap-1 cursor-help">
+                                    On-Chain Vol
+                                    <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-[220px]">
+                                  <p>Volume from decentralized venues where trades settle directly on the Canton Network ledger.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
