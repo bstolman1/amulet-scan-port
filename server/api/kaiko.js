@@ -382,12 +382,12 @@ router.get('/twap', async (req, res) => {
     }
 
     // TWAP = arithmetic mean of (O+H+L+C)/4 per candle (typical price, equal time weight)
+    // Use raw parseFloat values — no intermediate rounding — to match spreadsheet methodology
     const typicalPrices = validCandles.map(c => {
-      // Methodology: round OHLC to 5dp before typical price calc to match spreadsheet precision
-      const o = Number(parseFloat(c.open).toFixed(5));
-      const h = Number(parseFloat(c.high).toFixed(5));
-      const l = Number(parseFloat(c.low).toFixed(5));
-      const cl = Number(parseFloat(c.close).toFixed(5));
+      const o = parseFloat(c.open);
+      const h = parseFloat(c.high);
+      const l = parseFloat(c.low);
+      const cl = parseFloat(c.close);
       return (o + h + l + cl) / 4;
     });
     const twap = typicalPrices.reduce((sum, p) => sum + p, 0) / typicalPrices.length;
@@ -395,10 +395,10 @@ router.get('/twap', async (req, res) => {
     // Build per-candle breakdown for drill-down
     const candleBreakdown = validCandles.map((c, i) => ({
       timestamp: c.timestamp,
-      open: Number(parseFloat(c.open).toFixed(5)),
-      high: Number(parseFloat(c.high).toFixed(5)),
-      low: Number(parseFloat(c.low).toFixed(5)),
-      close: Number(parseFloat(c.close).toFixed(5)),
+      open: parseFloat(c.open),
+      high: parseFloat(c.high),
+      low: parseFloat(c.low),
+      close: parseFloat(c.close),
       volume: parseFloat(c.volume || '0'),
       typical_price: typicalPrices[i],
     }));
@@ -526,10 +526,10 @@ router.get('/vw-twap', async (req, res) => {
       for (const c of ex.candles) {
         if (c.open == null || c.high == null || c.low == null || c.close == null) continue;
         const ts = c.timestamp;
-        const o = Number(parseFloat(c.open).toFixed(5));
-        const h = Number(parseFloat(c.high).toFixed(5));
-        const l = Number(parseFloat(c.low).toFixed(5));
-        const cl = Number(parseFloat(c.close).toFixed(5));
+        const o = parseFloat(c.open);
+        const h = parseFloat(c.high);
+        const l = parseFloat(c.low);
+        const cl = parseFloat(c.close);
         const typicalPrice = (o + h + l + cl) / 4;
         if (!timestampMap.has(ts)) timestampMap.set(ts, []);
         timestampMap.get(ts).push({
