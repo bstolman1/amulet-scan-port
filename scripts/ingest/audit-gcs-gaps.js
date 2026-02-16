@@ -50,6 +50,7 @@ const END_DATE = argVal('end');      // e.g. 2025-12-10
 const TARGET_MIGRATION = argVal('migration') ? parseInt(argVal('migration')) : null;
 const VERBOSE = args.includes('--verbose') || args.includes('-v');
 const SOURCE_FILTER = argVal('source');
+const MERGED = args.includes('--merged') || (START_DATE && END_DATE && !args.includes('--per-migration'));
 const GAP_THRESHOLD_S = parseInt(argVal('gap-threshold') || '300');
 const BUCKET = process.env.GCS_BUCKET || 'canton-bucket';
 
@@ -279,6 +280,7 @@ function main() {
   console.log(`  Gap threshold: ${GAP_THRESHOLD_S}s`);
   if (TARGET_MIGRATION !== null) console.log(`  Migration filter: ${TARGET_MIGRATION}`);
   if (SOURCE_FILTER) console.log(`  Source filter: ${SOURCE_FILTER}`);
+  if (MERGED) console.log(`  Mode: MERGED (any migration covers a day → OK)`);
   console.log('═══════════════════════════════════════════════════════════════\n');
   
   const sources = SOURCE_FILTER 
@@ -316,67 +318,132 @@ function main() {
         continue;
       }
       
-      for (const mig of migsToScan) {
-        console.log(`\n  📂 migration=${mig.id}`);
+      console.log(`  📂 Migrations found: ${migsToScan.map(m => m.id).join(', ')}`);
+      
+      if (MERGED) {
+        // ── MERGED MODE: combine all migrations, report per-day best status ──
+        // Key: "YYYY-MM-DD" → { status, fileCount, gaps, earliest, latest, fromMig }
+        const merged = new Map();
         
-        let migOk = 0, migGaps = 0, migMissing = 0, migEmpty = 0, migIntraGaps = 0, migChecked = 0;
-        
-        for (const range of ranges) {
-          const result = auditMigrationMonth(mig.path, mig.id, type, range);
-          
-          const okDays = result.dayResults.filter(d => d.status === 'ok').length;
-          const gapDays = result.dayResults.filter(d => d.status === 'gaps').length;
-          const missingDays = result.dayResults.filter(d => d.status === 'missing').length;
-          const emptyDays = result.dayResults.filter(d => d.status === 'empty').length;
-          const dayGaps = result.dayResults.reduce((sum, d) => sum + d.gaps.length, 0);
-          
-          totalGaps += dayGaps;
-          totalMissingDays += missingDays;
-          totalEmptyDays += emptyDays;
-          migOk += okDays;
-          migGaps += gapDays;
-          migMissing += missingDays;
-          migEmpty += emptyDays;
-          migIntraGaps += dayGaps;
-          migChecked += result.lastDayChecked;
-          
-          // Print day-by-day results
-          for (const day of result.dayResults) {
-            if (day.status === 'ok') {
-              if (VERBOSE) {
-                console.log(`     ✅ ${day.date}  ${day.fileCount} files  [${day.earliest} → ${day.latest}]`);
-              }
-            } else if (day.status === 'missing') {
-              console.log(`     ❌ ${day.date}  MISSING — no partition exists`);
-            } else if (day.status === 'empty') {
-              console.log(`     ⚠️  ${day.date}  EMPTY — partition exists but no .parquet files`);
-            } else if (day.status === 'gaps') {
-              console.log(`     ⚠️  ${day.date}  ${day.fileCount} files, ${day.gaps.length} gap(s):`);
-              for (const gap of day.gaps) {
-                console.log(`        🕳️  ${gap.gapFormatted} gap: ${gap.afterTs} → ${gap.beforeTs}`);
-                if (VERBOSE) {
-                  console.log(`           after: ${gap.afterFile}`);
-                  console.log(`           before: ${gap.beforeFile}`);
-                }
+        for (const mig of migsToScan) {
+          for (const range of ranges) {
+            const result = auditMigrationMonth(mig.path, mig.id, type, range);
+            for (const day of result.dayResults) {
+              const existing = merged.get(day.date);
+              // Pick the best status: ok > gaps > empty > missing
+              const rank = { ok: 3, gaps: 2, empty: 1, missing: 0 };
+              if (!existing || rank[day.status] > rank[existing.status]) {
+                merged.set(day.date, { ...day, fromMig: mig.id });
               }
             }
           }
         }
         
-        // Compact summary for this migration
-        if (!VERBOSE && migOk > 0) {
-          console.log(`     ✅ ${migOk} day(s) OK (use --verbose to see details)`);
+        // Sort by date and print
+        const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+        let okCount = 0, gapCount = 0, missingCount = 0, emptyCount = 0, intraGaps = 0;
+        
+        for (const [dateStr, day] of sorted) {
+          if (day.status === 'ok') {
+            okCount++;
+            if (VERBOSE) {
+              console.log(`     ✅ ${dateStr}  mig=${day.fromMig}  ${day.fileCount} files  [${day.earliest} → ${day.latest}]`);
+            }
+          } else if (day.status === 'missing') {
+            missingCount++;
+            console.log(`     ❌ ${dateStr}  MISSING — no migration has data`);
+          } else if (day.status === 'empty') {
+            emptyCount++;
+            console.log(`     ⚠️  ${dateStr}  EMPTY — partition exists (mig=${day.fromMig}) but no .parquet files`);
+          } else if (day.status === 'gaps') {
+            gapCount++;
+            intraGaps += day.gaps.length;
+            console.log(`     ⚠️  ${dateStr}  mig=${day.fromMig}  ${day.fileCount} files, ${day.gaps.length} gap(s):`);
+            for (const gap of day.gaps) {
+              console.log(`        🕳️  ${gap.gapFormatted} gap: ${gap.afterTs} → ${gap.beforeTs}`);
+            }
+          }
         }
         
+        if (!VERBOSE && okCount > 0) {
+          console.log(`     ✅ ${okCount} day(s) OK (use --verbose to see details)`);
+        }
+        
+        totalGaps += intraGaps;
+        totalMissingDays += missingCount;
+        totalEmptyDays += emptyCount;
+        
         summaryRows.push({
-          path: `${tag}/migration=${mig.id}`,
-          checked: migChecked,
-          ok: migOk,
-          gaps: migGaps,
-          missing: migMissing,
-          empty: migEmpty,
-          intraGaps: migIntraGaps,
+          path: `${tag} (merged)`,
+          checked: sorted.length,
+          ok: okCount,
+          gaps: gapCount,
+          missing: missingCount,
+          empty: emptyCount,
+          intraGaps,
         });
+      } else {
+        // ── PER-MIGRATION MODE (original behavior) ──
+        for (const mig of migsToScan) {
+          console.log(`\n  📂 migration=${mig.id}`);
+          
+          let migOk = 0, migGaps = 0, migMissing = 0, migEmpty = 0, migIntraGaps = 0, migChecked = 0;
+          
+          for (const range of ranges) {
+            const result = auditMigrationMonth(mig.path, mig.id, type, range);
+            
+            const okDays = result.dayResults.filter(d => d.status === 'ok').length;
+            const gapDays = result.dayResults.filter(d => d.status === 'gaps').length;
+            const missingDays = result.dayResults.filter(d => d.status === 'missing').length;
+            const emptyDays = result.dayResults.filter(d => d.status === 'empty').length;
+            const dayGaps = result.dayResults.reduce((sum, d) => sum + d.gaps.length, 0);
+            
+            totalGaps += dayGaps;
+            totalMissingDays += missingDays;
+            totalEmptyDays += emptyDays;
+            migOk += okDays;
+            migGaps += gapDays;
+            migMissing += missingDays;
+            migEmpty += emptyDays;
+            migIntraGaps += dayGaps;
+            migChecked += result.lastDayChecked;
+            
+            for (const day of result.dayResults) {
+              if (day.status === 'ok') {
+                if (VERBOSE) {
+                  console.log(`     ✅ ${day.date}  ${day.fileCount} files  [${day.earliest} → ${day.latest}]`);
+                }
+              } else if (day.status === 'missing') {
+                console.log(`     ❌ ${day.date}  MISSING — no partition exists`);
+              } else if (day.status === 'empty') {
+                console.log(`     ⚠️  ${day.date}  EMPTY — partition exists but no .parquet files`);
+              } else if (day.status === 'gaps') {
+                console.log(`     ⚠️  ${day.date}  ${day.fileCount} files, ${day.gaps.length} gap(s):`);
+                for (const gap of day.gaps) {
+                  console.log(`        🕳️  ${gap.gapFormatted} gap: ${gap.afterTs} → ${gap.beforeTs}`);
+                  if (VERBOSE) {
+                    console.log(`           after: ${gap.afterFile}`);
+                    console.log(`           before: ${gap.beforeFile}`);
+                  }
+                }
+              }
+            }
+          }
+          
+          if (!VERBOSE && migOk > 0) {
+            console.log(`     ✅ ${migOk} day(s) OK (use --verbose to see details)`);
+          }
+          
+          summaryRows.push({
+            path: `${tag}/migration=${mig.id}`,
+            checked: migChecked,
+            ok: migOk,
+            gaps: migGaps,
+            missing: migMissing,
+            empty: migEmpty,
+            intraGaps: migIntraGaps,
+          });
+        }
       }
       console.log();
     }
@@ -409,7 +476,6 @@ function main() {
         continue;
       }
       
-      // Compare day partitions across all months in range
       let totalUDays = 0, totalEDays = 0, allUOnly = [], allEOnly = [];
       for (const range of ranges) {
         const monthPrefixU = `${uMig.path}year=${range.year}/month=${range.month}/`;
@@ -475,7 +541,6 @@ function main() {
   
   console.log('\n═══════════════════════════════════════════════════════════════\n');
   
-  // Exit with error code if gaps found
   if (totalGaps > 0 || totalMissingDays > 0) {
     process.exit(1);
   }
