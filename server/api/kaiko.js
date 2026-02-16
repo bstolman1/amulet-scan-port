@@ -388,8 +388,7 @@ router.get('/twap', async (req, res) => {
       const h = Number(parseFloat(c.high).toFixed(5));
       const l = Number(parseFloat(c.low).toFixed(5));
       const cl = Number(parseFloat(c.close).toFixed(5));
-      // Typical price rounded to 6dp to match spreadsheet intermediate precision
-      return Number(((o + h + l + cl) / 4).toFixed(6));
+      return (o + h + l + cl) / 4;
     });
     const twap = typicalPrices.reduce((sum, p) => sum + p, 0) / typicalPrices.length;
 
@@ -422,7 +421,7 @@ router.get('/twap', async (req, res) => {
       candles: candleBreakdown,
     });
 
-    console.log(`✅ TWAP computed: ${twap.toFixed(decimalPlaces)} from ${validCandles.length} candles`);
+    console.log(`✅ TWAP computed: ${twap.toFixed(decimalPlaces)} (raw: ${twap.toPrecision(15)}) from ${validCandles.length} candles`);
   } catch (err) {
     console.error('❌ TWAP computation failed:', err.message);
     res.status(500).json({ error: err.message });
@@ -531,8 +530,7 @@ router.get('/vw-twap', async (req, res) => {
         const h = Number(parseFloat(c.high).toFixed(5));
         const l = Number(parseFloat(c.low).toFixed(5));
         const cl = Number(parseFloat(c.close).toFixed(5));
-        // Typical price rounded to 6dp to match spreadsheet intermediate precision
-        const typicalPrice = Number(((o + h + l + cl) / 4).toFixed(6));
+        const typicalPrice = (o + h + l + cl) / 4;
         if (!timestampMap.has(ts)) timestampMap.set(ts, []);
         timestampMap.get(ts).push({
           price: typicalPrice,
