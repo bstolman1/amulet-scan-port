@@ -2,7 +2,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, TrendingDown, Users, Calendar, Download, ChevronLeft, ChevronRight } from "lucide-react";
+import { TrendingUp, Users, Calendar, Download, ChevronLeft, ChevronRight } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +13,6 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, AreaCh
 import { useUsageStats } from "@/hooks/use-usage-stats";
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
 import { useEffect, useState } from "react";
-import { Progress } from "@/components/ui/progress";
 
 const Stats = () => {
   // Schedule daily sync for config data
@@ -586,140 +585,8 @@ const Stats = () => {
             )}
           </div>
         </Card>
-
-        {/* Round Statistics Section */}
-        <RoundStatsSection latestRound={latestRound} />
       </div>
     </DashboardLayout>
-  );
-};
-
-/* ---- Round Statistics (formerly separate page) ---- */
-
-const RoundStatCard = ({
-  label,
-  value,
-  color,
-  isChange,
-}: {
-  label: string;
-  value: string;
-  color?: string;
-  isChange?: boolean;
-}) => {
-  const parsed = parseFloat(value);
-  const isPositive = parsed >= 0;
-  const dynamicColor = isChange && !color ? (isPositive ? "text-success" : "text-destructive") : (color ?? "");
-
-  return (
-    <div className="p-4 rounded-lg bg-muted/30">
-      <p className="text-sm text-muted-foreground mb-1">{label}</p>
-      <p className={`text-xl font-bold ${dynamicColor}`}>
-        {isNaN(parsed)
-          ? value
-          : `${parsed.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${!label.toLowerCase().includes("rate") ? "CC" : ""}`}
-      </p>
-    </div>
-  );
-};
-
-const RoundStatsSection = ({ latestRound }: { latestRound: any }) => {
-  const [roundRange, setRoundRange] = useState<{ start: number; end: number } | null>(null);
-
-  useEffect(() => {
-    if (latestRound && !roundRange) {
-      const end = latestRound.round;
-      const start = Math.max(0, end - 20);
-      setRoundRange({ start, end });
-    }
-  }, [latestRound, roundRange]);
-
-  const { data: roundTotals, isLoading } = useQuery({
-    queryKey: ["roundTotalsSection", roundRange],
-    queryFn: () =>
-      scanApi.fetchRoundTotals({
-        start_round: roundRange!.start,
-        end_round: roundRange!.end,
-      }),
-    enabled: !!roundRange,
-  });
-
-  const stats = roundTotals?.entries.slice().reverse() || [];
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-2xl font-bold mb-2">Round Statistics</h3>
-        <p className="text-muted-foreground">Detailed statistics for closed mining rounds</p>
-      </div>
-
-      {isLoading ? (
-        <div className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-64 w-full" />
-          ))}
-        </div>
-      ) : stats.length === 0 ? (
-        <Card className="glass-card p-6">
-          <p className="text-muted-foreground text-center">No round statistics available</p>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {stats.map((stat) => {
-            const changeValue = parseFloat(stat.change_to_initial_amount_as_of_round_zero);
-            const isPositive = changeValue >= 0;
-
-            return (
-              <Card key={stat.closed_round} className="glass-card">
-                <div className="p-6">
-                  <div className="flex items-center justify-between mb-6">
-                    <div>
-                      <h3 className="text-2xl font-bold">Round {stat.closed_round}</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Closed: {new Date(stat.closed_round_effective_at).toLocaleString()}
-                      </p>
-                    </div>
-                    <div
-                      className={`flex items-center space-x-2 px-3 py-1 rounded-lg ${
-                        isPositive ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"
-                      }`}
-                    >
-                      {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-                      <span className="text-sm font-medium">
-                        {isPositive ? "+" : ""}
-                        {changeValue.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <RoundStatCard label="App Rewards" value={stat.app_rewards} color="text-primary" />
-                    <RoundStatCard label="Validator Rewards" value={stat.validator_rewards} color="text-accent" />
-                    <RoundStatCard label="Total Balance" value={stat.total_amulet_balance} />
-                    <RoundStatCard label="Fee Rate Change" value={stat.change_to_holding_fees_rate} />
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
-                    <RoundStatCard label="Cumulative App Rewards" value={stat.cumulative_app_rewards} />
-                    <RoundStatCard label="Cumulative Validator Rewards" value={stat.cumulative_validator_rewards} />
-                    <RoundStatCard
-                      label="Cumulative Change (Initial Amount)"
-                      value={stat.cumulative_change_to_initial_amount_as_of_round_zero}
-                      isChange
-                    />
-                    <RoundStatCard
-                      label="Cumulative Change (Holding Fee Rate)"
-                      value={stat.cumulative_change_to_holding_fees_rate}
-                      isChange
-                    />
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-    </div>
   );
 };
 

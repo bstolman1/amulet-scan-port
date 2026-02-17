@@ -6,6 +6,7 @@ import {
   BarChart3,
   Coins,
   Database,
+  Layers,
   
   Zap,
   Globe,
@@ -109,6 +110,7 @@ const navigationGroups: NavGroup[] = [
     label: "Statistics",
     items: [
       { name: "Statistics", href: "/stats", icon: Database },
+      { name: "Round Stats", href: "/round-stats", icon: Layers },
       { name: "Member Traffic", href: "/member-traffic", icon: TrendingUp },
     ],
   },
