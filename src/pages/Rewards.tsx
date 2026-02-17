@@ -220,7 +220,7 @@ export default function Rewards() {
                   <TableRow>
                     <TableHead className="w-12">Rank</TableHead>
                     <TableHead>Validator</TableHead>
-                    <TableHead className="text-right">Traffic Purchased</TableHead>
+                    <TableHead className="text-right">Traffic Purchased (MB)</TableHead>
                     <TableHead className="text-right">CC Spent</TableHead>
                     <TableHead className="text-right"># Purchases</TableHead>
                   </TableRow>
@@ -237,7 +237,7 @@ export default function Rewards() {
                         <code className="text-xs">{v.validator.slice(0, 24)}...</code>
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {v.totalTrafficPurchased?.toLocaleString() || "—"}
+                        {(v.totalTrafficPurchased / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 }) || "—"}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {parseFloat(v.totalCcSpent || "0").toLocaleString(undefined, { maximumFractionDigits: 2 })}
