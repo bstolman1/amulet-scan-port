@@ -586,7 +586,8 @@ const Stats = () => {
           </div>
         </Card>
 
-        {/* Usage Statistics Section */}
+        {/* Usage Statistics Section - commented out */}
+        {/*
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <h3 className="text-2xl font-bold">Usage Statistics</h3>
@@ -625,269 +626,27 @@ const Stats = () => {
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Cumulative Unique Parties */}
             <Card className="glass-card">
               <div className="p-6">
                 <h4 className="text-lg font-semibold mb-4">Cumulative Unique Parties</h4>
-                {usageLoading ? (
-                  <Skeleton className="h-[250px] w-full" />
-                ) : usageError ? (
-                  <div className="h-[250px] flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-sm text-destructive mb-2">Failed to load data</p>
-                      <p className="text-xs text-muted-foreground">API connection issue</p>
-                    </div>
-                  </div>
-                ) : usageChartData.cumulativeParties.length === 0 ? (
-                  <div className="h-[250px] flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground mb-2">No data available</p>
-                      <p className="text-xs text-muted-foreground">Total Parties: {usageChartData.totalParties || 0}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <ChartContainer
-                    config={{
-                      parties: {
-                        label: "Cumulative Parties",
-                        color: "hsl(var(--chart-1))",
-                      },
-                    }}
-                    className="h-[250px] w-full"
-                  >
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={usageChartData.cumulativeParties}>
-                        <defs>
-                          <linearGradient id="colorParties" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" opacity={0.3} />
-                        <XAxis
-                          dataKey="date"
-                          className="text-xs"
-                          tick={{ fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(value) => {
-                            const date = new Date(value);
-                            return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                          }}
-                        />
-                        <YAxis
-                          className="text-xs"
-                          tick={{ fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(value) => value.toLocaleString()}
-                        />
-                        <ChartTooltip
-                          content={<ChartTooltipContent />}
-                          labelFormatter={(value) => {
-                            const date = new Date(value);
-                            return date.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            });
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="parties"
-                          stroke="hsl(var(--chart-1))"
-                          fill="url(#colorParties)"
-                          strokeWidth={2}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </ChartContainer>
-                )}
+                ...
               </div>
             </Card>
-
-            {/* Daily Active Users */}
             <Card className="glass-card">
               <div className="p-6">
                 <h4 className="text-lg font-semibold mb-4">Daily Active Users</h4>
-                {usageLoading ? (
-                  <Skeleton className="h-[250px] w-full" />
-                ) : usageError ? (
-                  <div className="h-[250px] flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-sm text-destructive mb-2">Failed to load data</p>
-                      <p className="text-xs text-muted-foreground">API connection issue</p>
-                    </div>
-                  </div>
-                ) : usageChartData.dailyActiveUsers.length === 0 ? (
-                  <div className="h-[250px] flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground mb-2">No data available</p>
-                      <p className="text-xs text-muted-foreground">Avg Users: {usageChartData.totalDailyUsers || 0}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <ChartContainer
-                    config={{
-                      daily: {
-                        label: "Users (Daily)",
-                        color: "hsl(var(--chart-2))",
-                      },
-                      avg7d: {
-                        label: "Users (7d Avg)",
-                        color: "hsl(var(--chart-3))",
-                      },
-                    }}
-                    className="h-[250px] w-full"
-                  >
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={usageChartData.dailyActiveUsers}>
-                        <defs>
-                          <linearGradient id="colorDaily" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--chart-2))" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="hsl(var(--chart-2))" stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="colorAvg" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--chart-3))" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="hsl(var(--chart-3))" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" opacity={0.3} />
-                        <XAxis
-                          dataKey="date"
-                          className="text-xs"
-                          tick={{ fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(value) => {
-                            const date = new Date(value);
-                            return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                          }}
-                        />
-                        <YAxis className="text-xs" tick={{ fill: "hsl(var(--muted-foreground))" }} />
-                        <ChartTooltip
-                          content={<ChartTooltipContent />}
-                          labelFormatter={(value) => {
-                            const date = new Date(value);
-                            return date.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            });
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="daily"
-                          stroke="hsl(var(--chart-2))"
-                          fill="url(#colorDaily)"
-                          strokeWidth={2}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="avg7d"
-                          stroke="hsl(var(--chart-3))"
-                          fill="url(#colorAvg)"
-                          strokeWidth={2}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </ChartContainer>
-                )}
+                ...
               </div>
             </Card>
-
-            {/* Daily Transactions */}
             <Card className="glass-card">
               <div className="p-6">
                 <h4 className="text-lg font-semibold mb-4">Daily Transactions</h4>
-                {usageLoading ? (
-                  <Skeleton className="h-[250px] w-full" />
-                ) : usageError ? (
-                  <div className="h-[250px] flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-sm text-destructive mb-2">Failed to load data</p>
-                      <p className="text-xs text-muted-foreground">API connection issue</p>
-                    </div>
-                  </div>
-                ) : usageChartData.dailyTransactions.length === 0 ? (
-                  <div className="h-[250px] flex items-center justify-center">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground mb-2">No data available</p>
-                      <p className="text-xs text-muted-foreground">
-                        Total TX: {usageChartData.totalTransactions?.toLocaleString() || 0}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <ChartContainer
-                    config={{
-                      daily: {
-                        label: "TX (Daily)",
-                        color: "hsl(var(--chart-4))",
-                      },
-                      avg7d: {
-                        label: "TX (7d Avg)",
-                        color: "hsl(var(--chart-5))",
-                      },
-                    }}
-                    className="h-[250px] w-full"
-                  >
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={usageChartData.dailyTransactions}>
-                        <defs>
-                          <linearGradient id="colorTxDaily" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--chart-4))" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="hsl(var(--chart-4))" stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="colorTxAvg" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="hsl(var(--chart-5))" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="hsl(var(--chart-5))" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" opacity={0.3} />
-                        <XAxis
-                          dataKey="date"
-                          className="text-xs"
-                          tick={{ fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(value) => {
-                            const date = new Date(value);
-                            return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                          }}
-                        />
-                        <YAxis
-                          className="text-xs"
-                          tick={{ fill: "hsl(var(--muted-foreground))" }}
-                          tickFormatter={(value) => value.toLocaleString()}
-                        />
-                        <ChartTooltip
-                          content={<ChartTooltipContent />}
-                          labelFormatter={(value) => {
-                            const date = new Date(value);
-                            return date.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            });
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="daily"
-                          stroke="hsl(var(--chart-4))"
-                          fill="url(#colorTxDaily)"
-                          strokeWidth={2}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="avg7d"
-                          stroke="hsl(var(--chart-5))"
-                          fill="url(#colorTxAvg)"
-                          strokeWidth={2}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </ChartContainer>
-                )}
+                ...
               </div>
             </Card>
           </div>
         </div>
+        */}
       </div>
     </DashboardLayout>
   );
