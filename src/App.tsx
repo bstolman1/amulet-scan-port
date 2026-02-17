@@ -19,7 +19,7 @@ import RichList from "./pages/RichList";
 // Validators & Rounds
 import Validators from "./pages/Validators";
 import ValidatorLicenses from "./pages/ValidatorLicenses";
-import RoundStats from "./pages/RoundStats";
+
 import TrafficStatus from "./pages/TrafficStatus";
 import Sequencers from "./pages/Sequencers";
 
@@ -103,7 +103,7 @@ const App = () => (
             {/* Validators & Rounds */}
             <Route path="/validators" element={<Validators />} />
             <Route path="/validator-licenses" element={<ValidatorLicenses />} />
-            <Route path="/round-stats" element={<RoundStats />} />
+            <Route path="/round-stats" element={<Stats />} /> {/* Redirect legacy route */}
             <Route path="/traffic-status" element={<TrafficStatus />} />
             <Route path="/sequencers" element={<Sequencers />} />
             
