@@ -66,15 +66,15 @@ const navigationGroups: NavGroup[] = [
       { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
     ],
   },
-  {
-    label: "Burn/Mint",
-    items: [
-      { name: "Mint", href: "/supply", icon: Coins },
-      { name: "Transactions", href: "/transactions", icon: Activity },
-      { name: "Transfers", href: "/transfers", icon: ArrowRightLeft },
-      { name: "Rich List", href: "/rich-list", icon: Wallet },
-    ],
-  },
+  // {
+  //   label: "Burn/Mint",
+  //   items: [
+  //     { name: "Mint", href: "/supply", icon: Coins },
+  //     { name: "Transactions", href: "/transactions", icon: Activity },
+  //     { name: "Transfers", href: "/transfers", icon: ArrowRightLeft },
+  //     { name: "Rich List", href: "/rich-list", icon: Wallet },
+  //   ],
+  // },
   {
     label: "Validators",
     items: [
@@ -97,14 +97,14 @@ const navigationGroups: NavGroup[] = [
       { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
     ],
   },
-  {
-    label: "Services",
-    items: [
-      { name: "ANS", href: "/ans", icon: Globe },
-      { name: "Featured Apps", href: "/apps", icon: Package },
-      { name: "Subscriptions", href: "/subscriptions", icon: Package },
-    ],
-  },
+  // {
+  //   label: "Services",
+  //   items: [
+  //     { name: "ANS", href: "/ans", icon: Globe },
+  //     { name: "Featured Apps", href: "/apps", icon: Package },
+  //     { name: "Subscriptions", href: "/subscriptions", icon: Package },
+  //   ],
+  // },
   {
     label: "Statistics",
     items: [
