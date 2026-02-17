@@ -6,7 +6,7 @@ import {
   BarChart3,
   Coins,
   Database,
-  Layers,
+  
   Zap,
   Globe,
   Package,
@@ -81,7 +81,7 @@ const navigationGroups: NavGroup[] = [
       { name: "Validators", href: "/validators", icon: Zap },
       { name: "Licenses", href: "/validator-licenses", icon: Ticket },
       { name: "Sequencers", href: "/sequencers", icon: Network },
-      { name: "Round Stats", href: "/round-stats", icon: Layers },
+      
       { name: "Traffic Status", href: "/traffic-status", icon: Radio },
     ],
   },
