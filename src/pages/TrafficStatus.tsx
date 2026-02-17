@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,14 @@ export default function TrafficStatus() {
     queryKey: ["dsoInfo"],
     queryFn: () => scanApi.fetchDsoInfo(),
   });
+
+  // Auto-populate domain ID from DSO info
+  useEffect(() => {
+    const globalDomainId = dsoInfo?.dso_rules?.domain_id;
+    if (globalDomainId && !domainId) {
+      setDomainId(globalDomainId);
+    }
+  }, [dsoInfo]);
 
   const handleSearch = () => {
     if (domainId && memberId) {
