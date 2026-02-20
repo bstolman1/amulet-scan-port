@@ -19,7 +19,7 @@
   "chunkSize": 4096,
   "batchSize": 1000,
 
-  "targetMigration": 3,
+  "targetMigration": 4,
 
   "dirs": {
     "_comment": "These are fallback defaults. Override with DATA_DIR and CURSOR_DIR environment variables.",
