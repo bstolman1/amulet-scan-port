@@ -1912,6 +1912,7 @@ async function runBackfill() {
   const MAX_MIGRATION_RESCAN_ROUNDS = 10;
 
   for (let round = 0; round < MAX_MIGRATION_RESCAN_ROUNDS; round++) {
+    console.log(`\n🔄 Migration scan round ${round + 1}/${MAX_MIGRATION_RESCAN_ROUNDS}...`);
     let migrations = await detectMigrations();
 
     // Filter to target migration if specified
@@ -1925,7 +1926,11 @@ async function runBackfill() {
 
     // Only process migrations we haven't processed yet
     const pending = migrations.filter(id => !processedMigrations.has(id));
-    if (pending.length === 0) break;
+    console.log(`   Detected migrations: [${migrations.join(', ')}] | Already processed: [${[...processedMigrations].join(', ')}] | Pending: [${pending.join(', ')}]`);
+    if (pending.length === 0) {
+      console.log(`   ✅ No pending migrations in round ${round + 1}. All detected migrations processed.`);
+      break;
+    }
 
     for (const migrationId of pending) {
       processedMigrations.add(migrationId);
@@ -1976,6 +1981,7 @@ async function runBackfill() {
           continue;
         }
 
+        console.log(`   🔧 Processing migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...`);
         const { updates, events } = await backfillSynchronizer(
           migrationId, synchronizerId, minTime, maxTime,
           isSharded ? SHARD_INDEX : null,
@@ -2119,15 +2125,22 @@ process.on('unhandledRejection', (reason, promise) => {
 // Run backfill, then start live updates ONLY if all migrations are complete
 runBackfill()
   .then(async (result) => {
+    console.log(`\n📋 Exit decision: success=${result?.success}, allMigrationsComplete=${result?.allMigrationsComplete}`);
+    if (result?.pendingMigrations?.length) {
+      console.log(`   Pending: ${result.pendingMigrations.map(p => `M${p.migrationId}${p.shard !== null ? `/S${p.shard}` : ''}`).join(', ')}`);
+    }
+    
     if (result?.success && result?.allMigrationsComplete) {
       // Small delay to ensure all file handles are released
       await new Promise(resolve => setTimeout(resolve, 1000));
       await startLiveUpdates();
     } else if (result?.success && !result?.allMigrationsComplete) {
       console.log(`\n${"═".repeat(80)}`);
-      console.log(`⏸️ Backfill for target migration complete, but other migrations remain.`);
+      console.log(`⏸️ Backfill complete for processed migrations, but other migrations remain.`);
       console.log(`   Live updates will start once ALL migrations are backfilled.`);
-      console.log(`   Run backfill again without TARGET_MIGRATION to process remaining migrations.`);
+      if (TARGET_MIGRATION) {
+        console.log(`   TARGET_MIGRATION=${TARGET_MIGRATION} was set. Unset it to process all migrations.`);
+      }
       console.log(`${"═".repeat(80)}\n`);
       process.exit(0);
     }

@@ -9,7 +9,7 @@ set TARGET_MIGRATION=%2
 
 REM Defaults - 6 shards balances parallelism with data distribution
 if "%SHARD_COUNT%"=="" set SHARD_COUNT=6
-if "%TARGET_MIGRATION%"=="" set TARGET_MIGRATION=4
+if "%TARGET_MIGRATION%"=="" set TARGET_MIGRATION=
 
 REM Data directory - unified location for all data
 if "%DATA_DIR%"=="" set DATA_DIR=C:\ledger_raw
