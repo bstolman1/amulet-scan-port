@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, AreaChart, Area } from "recharts";
-import { useUsageStats } from "@/hooks/use-usage-stats";
+
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
 import { useEffect, useState } from "react";
 
@@ -53,8 +53,6 @@ const Stats = () => {
     enabled: !!latestRound,
   });
 
-  // Usage statistics via transactions API
-  const { data: usageChartData, isLoading: usageLoading, error: usageError } = useUsageStats(90);
 
   // Calculate rounds per day based on recent data using timestamps
   const roundsPerDay = (() => {
