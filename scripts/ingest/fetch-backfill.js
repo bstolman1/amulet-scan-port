@@ -41,7 +41,7 @@ dotenv.config({ path: join(__dirname_early, '.env') });
 import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statfsSync } from 'fs';
 
 import v8 from 'v8';
 import Piscina from 'piscina';
@@ -230,7 +230,29 @@ function checkMemoryPressure() {
     heapPressureEvents++;
   }
   
-  return { pressure, critical, heap };
+  // Also check /tmp disk space in GCS mode
+  let diskPressure = false;
+  if (isGCSMode()) {
+    try {
+      const stats = statfsSync('/tmp');
+      const freeBytes = stats.bfree * stats.bsize;
+      const freeMB = Math.round(freeBytes / 1024 / 1024);
+      const totalBytes = stats.blocks * stats.bsize;
+      const usedPct = ((1 - freeBytes / totalBytes) * 100).toFixed(1);
+      
+      // Warn at 1GB free, critical at 500MB
+      if (freeMB < 500) {
+        diskPressure = true;
+        console.warn(`   💾 CRITICAL: /tmp only ${freeMB}MB free (${usedPct}% used) - GCS uploads may be backing up!`);
+      } else if (freeMB < 1024) {
+        console.warn(`   💾 WARNING: /tmp only ${freeMB}MB free (${usedPct}% used)`);
+      }
+    } catch {
+      // statfsSync not available on all platforms, ignore
+    }
+  }
+  
+  return { pressure: pressure || diskPressure, critical, heap, diskPressure };
 }
 
 /**
@@ -245,7 +267,17 @@ async function waitForMemoryRelief(shardLabel = '') {
   while (Date.now() - startWait < maxWaitMs) {
     const heap = getHeapUsage();
     
-    if (heap.ratio <= HEAP_PRESSURE_THRESHOLD * 0.9) {
+    // Check both heap AND disk
+    let diskOk = true;
+    if (isGCSMode()) {
+      try {
+        const stats = statfsSync('/tmp');
+        const freeMB = Math.round((stats.bfree * stats.bsize) / 1024 / 1024);
+        diskOk = freeMB >= 500;
+      } catch { diskOk = true; }
+    }
+    
+    if (heap.ratio <= HEAP_PRESSURE_THRESHOLD * 0.9 && diskOk) {
       // Below 90% of threshold = safe to continue
       if (drainCycles > 0) {
         console.log(`   ✅ Memory pressure relieved: ${heap.usedMB}MB / ${heap.limitMB}MB (${(heap.ratio * 100).toFixed(1)}%)${shardLabel}`);
@@ -1644,6 +1676,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     } catch (err) {
       const status = err.response?.status;
       const msg = err.response?.data?.error || err.message;
+      const errCode = err.code || '';
       
       logError('batch', err, {
         migration: migrationId,
@@ -1653,11 +1686,35 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         cursor_before: before,
       });
       
-      console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}): ${msg}${shardLabel}`);
+      console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}, code=${errCode}): ${msg}${shardLabel}`);
       
-      // Save cursor and retry for transient errors
-      if ([429, 500, 502, 503, 504].includes(status)) {
+      // Determine if this error is transient (should retry)
+      const isHttpTransient = [429, 500, 502, 503, 504].includes(status);
+      const isDiskTransient = /ENOSPC|EMFILE|ENFILE|EAGAIN|EBUSY|disk full|no space left/i.test(msg + errCode);
+      const isWorkerTransient = /worker crashed|worker error|worker exited/i.test(msg);
+      const isGCSTransient = /timeout|timed out|connection reset|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
+      const isSliceTransient = /slice.*failed/i.test(msg) && (msg.includes('503') || msg.includes('429') || msg.includes('500'));
+      const isTransient = isHttpTransient || isDiskTransient || isWorkerTransient || isGCSTransient || isSliceTransient;
+      
+      if (isTransient) {
         consecutiveTransientErrors++;
+        
+        // Log what type of transient error
+        const errorType = isHttpTransient ? 'HTTP' : isDiskTransient ? 'DISK' : isWorkerTransient ? 'WORKER' : isGCSTransient ? 'NETWORK' : 'SLICE';
+        console.log(`   🔍 Error classified as transient (${errorType})${shardLabel}`);
+        
+        // DISK PRESSURE: Drain GCS uploads to free /tmp space
+        if (isDiskTransient && GCS_MODE) {
+          console.log(`   💾 Disk pressure detected - draining GCS upload queue to free /tmp space...${shardLabel}`);
+          try {
+            await flushAll();
+            await waitForWrites();
+            await drainUploads();
+            console.log(`   ✅ GCS drain complete, /tmp space should be freed${shardLabel}`);
+          } catch (drainErr) {
+            console.error(`   ⚠️ GCS drain failed: ${drainErr.message}${shardLabel}`);
+          }
+        }
         
         // COOLDOWN MODE: After 3 consecutive transient errors, drop to minimal concurrency
         if (consecutiveTransientErrors >= 3 && dynamicParallelFetches > 1) {
@@ -1667,14 +1724,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         }
         
         // EXPONENTIAL BACKOFF: 5s, 10s, 20s, 40s, max 60s
-        const backoffDelay = Math.min(5000 * Math.pow(2, consecutiveTransientErrors - 1), 60000);
-        console.log(`   ⏳ Transient error #${consecutiveTransientErrors}, backing off ${Math.round(backoffDelay / 1000)}s...${shardLabel}`);
+        // Disk errors get longer backoff to allow GCS uploads to clear space
+        const baseDelay = isDiskTransient ? 10000 : 5000;
+        const backoffDelay = Math.min(baseDelay * Math.pow(2, consecutiveTransientErrors - 1), 60000);
+        console.log(`   ⏳ Transient error #${consecutiveTransientErrors} (${errorType}), backing off ${Math.round(backoffDelay / 1000)}s...${shardLabel}`);
         
         atomicCursor.saveAtomic({
           last_before: before,
           total_updates: totalUpdates,
           total_events: totalEvents,
-          error: msg,
+          error: `${errorType}: ${msg}`,
           error_at: new Date().toISOString(),
           min_time: minTime,
           max_time: maxTime,
@@ -1685,6 +1744,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       }
       
       // CRITICAL: Non-transient error - log fatal and throw
+      console.error(`   💀 NON-TRANSIENT ERROR - process will exit. Error: ${msg}${shardLabel}`);
       logFatal('batch', err, {
         migration: migrationId,
         synchronizer: synchronizerId.substring(0, 30),
@@ -2098,8 +2158,17 @@ async function gracefulShutdown(signal) {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
+// DIAGNOSTIC: Log exactly why the process is exiting
+let exitReason = 'unknown';
+process.on('exit', (code) => {
+  console.log(`\n🚪 Process exiting with code ${code} (reason: ${exitReason})`);
+  const heap = getHeapUsage();
+  console.log(`   Heap at exit: ${heap.usedMB}MB / ${heap.limitMB}MB (${(heap.ratio * 100).toFixed(1)}%)`);
+});
+
 // Catch uncaught exceptions to prevent exit code null
 process.on('uncaughtException', async (err) => {
+  exitReason = `uncaughtException: ${err.message}`;
   console.error('\n💥 Uncaught exception:', err.message);
   console.error(err.stack);
   
@@ -2116,6 +2185,7 @@ process.on('uncaughtException', async (err) => {
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
+  exitReason = `unhandledRejection: ${reason?.message || reason}`;
   console.error('\n💥 Unhandled rejection at:', promise);
   console.error('Reason:', reason);
   // Let the uncaughtException handler deal with it
@@ -2131,10 +2201,12 @@ runBackfill()
     }
     
     if (result?.success && result?.allMigrationsComplete) {
+      exitReason = 'all_migrations_complete → starting live updates';
       // Small delay to ensure all file handles are released
       await new Promise(resolve => setTimeout(resolve, 1000));
       await startLiveUpdates();
     } else if (result?.success && !result?.allMigrationsComplete) {
+      exitReason = 'migrations_remaining';
       console.log(`\n${"═".repeat(80)}`);
       console.log(`⏸️ Backfill complete for processed migrations, but other migrations remain.`);
       console.log(`   Live updates will start once ALL migrations are backfilled.`);
@@ -2146,6 +2218,7 @@ runBackfill()
     }
   })
   .catch(async err => {
+    exitReason = `fatal_error: ${err.message}`;
     console.error('\n❌ FATAL:', err.message);
     console.error(err.stack);
     await flushAll();
