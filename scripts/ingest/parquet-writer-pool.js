@@ -89,8 +89,20 @@ export class ParquetWriterPool {
 
   /**
    * Spawn a single persistent worker that stays alive and processes jobs via messages.
+   * Includes respawn guard: if a worker slot crashes >5 times in 60s, stop respawning.
    */
   _spawnPersistentWorker() {
+    // Respawn guard — prevent infinite crash loops
+    if (!this._respawnCrashes) this._respawnCrashes = [];
+    const now = Date.now();
+    // Prune crashes older than 60s
+    this._respawnCrashes = this._respawnCrashes.filter(t => now - t < 60000);
+    if (this._respawnCrashes.length >= 5) {
+      console.error(`🚨 FATAL: Worker respawn loop detected (${this._respawnCrashes.length} crashes in 60s). Stopping respawn.`);
+      return;
+    }
+    this._respawnCrashes.push(now);
+
     const worker = new Worker(this._workerScript, { workerData: null });
     this.stats.workersSpawned++;
     

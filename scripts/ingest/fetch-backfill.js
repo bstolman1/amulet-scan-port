@@ -640,31 +640,62 @@ function sanitize(str) {
 async function detectMigrations() {
   console.log("🔎 Detecting available migrations via /v0/backfilling/migration-info");
 
+  const MIGRATION_DETECT_RETRIES = 3;
   const migrations = [];
   let id = 0;
 
   while (true) {
-    try {
-      const res = await client.post("/v0/backfilling/migration-info", {
-        migration_id: id,
-      });
+    let succeeded = false;
+    let confirmed404 = false;
 
-      if (res.data?.record_time_range) {
-        const ranges = res.data.record_time_range || [];
-        const minTime = ranges[0]?.min || 'unknown';
-        const maxTime = ranges[0]?.max || 'unknown';
-        migrations.push(id);
-        console.log(`  • migration_id=${id} ranges=${ranges.length} (${minTime} to ${maxTime})`);
-        id++;
-      } else {
+    for (let attempt = 1; attempt <= MIGRATION_DETECT_RETRIES; attempt++) {
+      try {
+        const res = await client.post("/v0/backfilling/migration-info", {
+          migration_id: id,
+        });
+
+        if (res.data?.record_time_range) {
+          const ranges = res.data.record_time_range || [];
+          const minTime = ranges[0]?.min || 'unknown';
+          const maxTime = ranges[0]?.max || 'unknown';
+          migrations.push(id);
+          console.log(`  • migration_id=${id} ranges=${ranges.length} (${minTime} to ${maxTime})`);
+          succeeded = true;
+          break;
+        } else {
+          // Valid response but no data — treat as end
+          confirmed404 = true;
+          break;
+        }
+      } catch (err) {
+        const status = err.response?.status;
+        if (status === 404) {
+          confirmed404 = true;
+          break;
+        }
+
+        // Transient error (503, 429, 5xx, timeout) — retry with backoff
+        const isTransient = [429, 500, 502, 503, 504].includes(status) ||
+          /timeout|ETIMEDOUT|ECONNRESET|socket hang up/i.test(err.message);
+
+        if (isTransient && attempt < MIGRATION_DETECT_RETRIES) {
+          const delay = 2000 * Math.pow(2, attempt - 1);
+          console.warn(`   ⚠️ Transient error probing migration_id=${id} (status=${status || 'network'}, attempt ${attempt}/${MIGRATION_DETECT_RETRIES}), retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+
+        console.error(`❌ Error probing migration_id=${id} after ${attempt} attempts:`, status, err.message);
+        confirmed404 = true; // Conservative: stop scanning but don't crash
         break;
       }
-    } catch (err) {
-      if (err.response && err.response.status === 404) {
-        // No more migrations
-        break;
-      }
-      console.error(`❌ Error probing migration_id=${id}:`, err.response?.status, err.message);
+    }
+
+    if (confirmed404) break;
+    if (succeeded) {
+      id++;
+    } else {
+      console.warn(`   ⚠️ Could not confirm migration_id=${id} after ${MIGRATION_DETECT_RETRIES} retries, stopping scan`);
       break;
     }
   }
@@ -1701,6 +1732,22 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         
         // Log what type of transient error
         const errorType = isHttpTransient ? 'HTTP' : isDiskTransient ? 'DISK' : isWorkerTransient ? 'WORKER' : isGCSTransient ? 'NETWORK' : 'SLICE';
+        
+        // MAX CONSECUTIVE TRANSIENT ERROR CAP: Save cursor and exit cleanly
+        const MAX_CONSECUTIVE_TRANSIENT_ERRORS = 50;
+        if (consecutiveTransientErrors >= MAX_CONSECUTIVE_TRANSIENT_ERRORS) {
+          console.error(`   💀 ${MAX_CONSECUTIVE_TRANSIENT_ERRORS} consecutive transient errors reached — saving cursor and exiting to allow restart${shardLabel}`);
+          atomicCursor.saveAtomic({
+            last_before: before,
+            total_updates: totalUpdates,
+            total_events: totalEvents,
+            error: `MAX_TRANSIENT_ERRORS: ${errorType}: ${msg}`,
+            error_at: new Date().toISOString(),
+            min_time: minTime,
+            max_time: maxTime,
+          });
+          process.exit(1);
+        }
         console.log(`   🔍 Error classified as transient (${errorType})${shardLabel}`);
         
         // DISK PRESSURE: Drain GCS uploads to free /tmp space
@@ -2183,13 +2230,14 @@ process.on('uncaughtException', async (err) => {
   process.exit(1);
 });
 
-// Handle unhandled promise rejections
+// Handle unhandled promise rejections — log but do NOT re-throw.
+// Re-throwing triggers uncaughtException which kills the process.
+// The specific subsystem that created the promise should handle its own errors.
 process.on('unhandledRejection', (reason, promise) => {
   exitReason = `unhandledRejection: ${reason?.message || reason}`;
   console.error('\n💥 Unhandled rejection at:', promise);
   console.error('Reason:', reason);
-  // Let the uncaughtException handler deal with it
-  throw reason;
+  console.error('⚠️ Continuing execution — subsystem should handle its own errors');
 });
 
 // Run backfill, then start live updates ONLY if all migrations are complete
