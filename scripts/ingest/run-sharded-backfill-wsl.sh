@@ -27,7 +27,7 @@ export MAX_ROWS_PER_FILE=${MAX_ROWS_PER_FILE:-15000}
 export ZSTD_LEVEL=${ZSTD_LEVEL:-1}
 export CHUNK_SIZE=${CHUNK_SIZE:-4096}
 
-export TARGET_MIGRATION=${TARGET_MIGRATION:-4}
+export TARGET_MIGRATION=${TARGET_MIGRATION:-}
 
 # Directories (Windows-mounted)
 export DATA_DIR=${DATA_DIR:-/mnt/c/ledger_raw}

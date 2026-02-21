@@ -3,7 +3,7 @@
 
 param(
     [int]$ShardCount = 4,
-    [int]$TargetMigration = 4
+    [int]$TargetMigration = 0
 )
 
 Write-Host "========================================"
