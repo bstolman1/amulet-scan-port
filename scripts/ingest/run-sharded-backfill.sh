@@ -13,7 +13,7 @@ DEFAULT_SHARDS=$P_CORES
 
 # --- CLI Args ---
 SHARD_COUNT="${1:-$DEFAULT_SHARDS}"
-TARGET_MIGRATION="${2:-3}"
+TARGET_MIGRATION="${2:-4}"
 
 # --- Environment Defaults (can be overridden) ---
 # Use /mnt/c/ledger_raw for Windows interop (maps to C:\ledger_raw)
