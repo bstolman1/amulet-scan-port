@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import kaikoLogo from "@/assets/kaiko-logo-rgb_color.svg";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -277,8 +278,11 @@ export default function KaikoFeed() {
       <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Kaiko Feed</h1>
-            <p className="text-muted-foreground">Market Data: OHLCV, Asset Metrics & Analytics</p>
+            <h1 className="text-3xl font-bold">Exchange Data</h1>
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <span className="text-sm">Powered by</span>
+              <img src={kaikoLogo} alt="Kaiko" className="h-5" />
+            </div>
           </div>
           <Button
             variant="outline"
