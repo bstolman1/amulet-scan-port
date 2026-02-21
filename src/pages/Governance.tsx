@@ -443,7 +443,7 @@ const Governance = () => {
             ) : (
               <>
                 <p className="text-3xl font-bold text-chart-2 mb-1">{totalProposals}</p>
-                <p className="text-xs text-muted-foreground">Local ACS</p>
+                <p className="text-xs text-muted-foreground">All proposals</p>
               </>
             )}
           </Card>
