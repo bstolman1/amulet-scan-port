@@ -281,7 +281,9 @@ export default function KaikoFeed() {
             <h1 className="text-3xl font-bold">Exchange Data</h1>
             <div className="flex items-center gap-2 text-muted-foreground">
               <span className="text-sm">Powered by</span>
-              <img src={kaikoLogo} alt="Kaiko" className="h-5 brightness-0 invert" />
+              <a href="https://www.kaiko.com/" target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity">
+                <img src={kaikoLogo} alt="Kaiko" className="h-5 brightness-0 invert" />
+              </a>
             </div>
           </div>
           <Button
