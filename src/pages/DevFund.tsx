@@ -4,10 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Coins, AlertTriangle, Package, Clock, Hash, Copy, Check } from "lucide-react";
+import { Coins, AlertTriangle, Package, Clock, Hash, Copy, Check, Search, X } from "lucide-react";
 import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
+import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 const safeFormatDate = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "N/A";
@@ -41,6 +42,18 @@ const CopyButton = ({ text }: { text: string }) => {
 
 const DevFund = () => {
   const { data: coupons, isLoading, error } = useDevFundCoupons();
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    if (!coupons) return [];
+    if (!search.trim()) return coupons;
+    const q = search.toLowerCase();
+    return coupons.filter(c =>
+      c.contract.contract_id.toLowerCase().includes(q) ||
+      c.contract.template_id.toLowerCase().includes(q) ||
+      c.domain_id.toLowerCase().includes(q)
+    );
+  }, [coupons, search]);
 
   return (
     <DashboardLayout>
@@ -123,8 +136,22 @@ const DevFund = () => {
 
         {/* Coupons table */}
         <Card>
-          <div className="p-4 border-b border-border">
-            <h2 className="text-lg font-semibold text-foreground">Unclaimed Coupons</h2>
+          <div className="p-4 border-b border-border flex items-center justify-between gap-4">
+            <h2 className="text-lg font-semibold text-foreground shrink-0">Unclaimed Coupons</h2>
+            <div className="relative max-w-sm w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Filter by contract ID, template, or domain…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9 pr-8"
+              />
+              {search && (
+                <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
           {isLoading ? (
             <div className="p-4 space-y-3">
@@ -132,11 +159,15 @@ const DevFund = () => {
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
-          ) : !coupons || coupons.length === 0 ? (
+          ) : filtered.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">
               <Coins className="h-12 w-12 mx-auto mb-4 opacity-30" />
-              <p className="text-lg font-medium">No unclaimed coupons</p>
-              <p className="text-sm mt-1">All development fund coupons have been claimed.</p>
+              <p className="text-lg font-medium">{search ? "No matching coupons" : "No unclaimed coupons"}</p>
+              <p className="text-sm mt-1">
+                {search
+                  ? `No coupons match "${search}".`
+                  : "All development fund coupons have been claimed."}
+              </p>
             </div>
           ) : (
             <Table>
@@ -149,7 +180,7 @@ const DevFund = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {coupons.map((coupon) => (
+                {filtered.map((coupon) => (
                   <TableRow key={coupon.contract.contract_id}>
                     <TableCell className="font-mono text-xs">
                       <span title={coupon.contract.contract_id}>
@@ -175,6 +206,11 @@ const DevFund = () => {
                 ))}
               </TableBody>
             </Table>
+          )}
+          {!isLoading && search && filtered.length > 0 && (
+            <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">
+              Showing {filtered.length} of {coupons?.length ?? 0} coupons
+            </div>
           )}
         </Card>
       </div>
