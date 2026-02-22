@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Coins, AlertTriangle, Package, Clock, Hash, Copy, Check, Search, X } from "lucide-react";
 import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
+import { pickAmountAsCC } from "@/lib/amount-utils";
 import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { useState, useMemo } from "react";
@@ -65,6 +66,15 @@ const DevFund = () => {
     );
   }, [coupons, search]);
 
+  const extractAmount = (coupon: typeof coupons extends (infer T)[] ? T : never) => {
+    return pickAmountAsCC(coupon.contract.payload);
+  };
+
+  const totalAmount = useMemo(() => {
+    if (!coupons) return 0;
+    return coupons.reduce((sum, c) => sum + pickAmountAsCC(c.contract.payload), 0);
+  }, [coupons]);
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -98,12 +108,21 @@ const DevFund = () => {
         )}
 
         {/* Summary cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card className="p-5 space-y-2">
             <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Package className="h-4 w-4" />
-              <span>Total Unclaimed</span>
+              <Coins className="h-4 w-4" />
+              <span>Total Amount (CC)</span>
             </div>
+            {isLoading ? (
+              <Skeleton className="h-8 w-28" />
+            ) : (
+              <p className="text-3xl font-bold text-foreground">
+                {totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+              </p>
+            )}
+          </Card>
+          <Card className="p-5 space-y-2">
             {isLoading ? (
               <Skeleton className="h-8 w-20" />
             ) : (
@@ -186,6 +205,7 @@ const DevFund = () => {
                    <TableHead className="w-8"></TableHead>
                    <TableHead>Contract ID</TableHead>
                    <TableHead>Template</TableHead>
+                   <TableHead className="text-right">Amount (CC)</TableHead>
                    <TableHead>Domain</TableHead>
                    <TableHead>Created At</TableHead>
                  </TableRow>
@@ -211,6 +231,9 @@ const DevFund = () => {
                             {coupon.contract.template_id.split(":").pop() || coupon.contract.template_id}
                           </Badge>
                         </TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          {extractAmount(coupon).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                        </TableCell>
                         <TableCell className="font-mono text-xs">
                           <span title={coupon.domain_id}>{truncateId(coupon.domain_id, 12)}</span>
                           <CopyButton text={coupon.domain_id} />
@@ -221,7 +244,7 @@ const DevFund = () => {
                       </TableRow>
                       {isExpanded && (
                         <TableRow key={`${id}-detail`}>
-                          <TableCell colSpan={5} className="bg-muted/30 p-0">
+                          <TableCell colSpan={6} className="bg-muted/30 p-0">
                             <div className="p-4 max-h-96 overflow-auto">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Full Contract JSON</span>
