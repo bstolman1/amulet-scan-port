@@ -9,6 +9,7 @@ import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
 import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { useState, useMemo } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 const safeFormatDate = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "N/A";
@@ -43,6 +44,15 @@ const CopyButton = ({ text }: { text: string }) => {
 const DevFund = () => {
   const { data: coupons, isLoading, error } = useDevFundCoupons();
   const [search, setSearch] = useState("");
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
   const filtered = useMemo(() => {
     if (!coupons) return [];
@@ -172,38 +182,61 @@ const DevFund = () => {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Contract ID</TableHead>
-                  <TableHead>Template</TableHead>
-                  <TableHead>Domain</TableHead>
-                  <TableHead>Created At</TableHead>
-                </TableRow>
+                 <TableRow>
+                   <TableHead className="w-8"></TableHead>
+                   <TableHead>Contract ID</TableHead>
+                   <TableHead>Template</TableHead>
+                   <TableHead>Domain</TableHead>
+                   <TableHead>Created At</TableHead>
+                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((coupon) => (
-                  <TableRow key={coupon.contract.contract_id}>
-                    <TableCell className="font-mono text-xs">
-                      <span title={coupon.contract.contract_id}>
-                        {truncateId(coupon.contract.contract_id)}
-                      </span>
-                      <CopyButton text={coupon.contract.contract_id} />
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className="font-mono text-xs">
-                        {coupon.contract.template_id.split(":").pop() || coupon.contract.template_id}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      <span title={coupon.domain_id}>
-                        {truncateId(coupon.domain_id, 12)}
-                      </span>
-                      <CopyButton text={coupon.domain_id} />
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {safeFormatDate(coupon.contract.created_at)}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {filtered.map((coupon) => {
+                  const id = coupon.contract.contract_id;
+                  const isExpanded = expandedIds.has(id);
+                  return (
+                    <>
+                      <TableRow key={id} className="cursor-pointer hover:bg-muted/50" onClick={() => toggleExpand(id)}>
+                        <TableCell className="w-8 px-2">
+                          {isExpanded
+                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <span title={id}>{truncateId(id)}</span>
+                          <CopyButton text={id} />
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary" className="font-mono text-xs">
+                            {coupon.contract.template_id.split(":").pop() || coupon.contract.template_id}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <span title={coupon.domain_id}>{truncateId(coupon.domain_id, 12)}</span>
+                          <CopyButton text={coupon.domain_id} />
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {safeFormatDate(coupon.contract.created_at)}
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && (
+                        <TableRow key={`${id}-detail`}>
+                          <TableCell colSpan={5} className="bg-muted/30 p-0">
+                            <div className="p-4 max-h-96 overflow-auto">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Full Contract JSON</span>
+                                <CopyButton text={JSON.stringify(coupon, null, 2)} />
+                              </div>
+                              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-all bg-background/50 rounded-md border border-border p-3">
+                                {JSON.stringify(coupon, null, 2)}
+                              </pre>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
