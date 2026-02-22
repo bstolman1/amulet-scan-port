@@ -33,6 +33,7 @@ import Governance from "./pages/Governance";
 import GovernanceFlow from "./pages/GovernanceFlow";
 import Elections from "./pages/Elections";
 import DSOState from "./pages/DSOState";
+import DevFund from "./pages/DevFund";
 
 // Services
 import ANS from "./pages/ANS";
@@ -117,6 +118,7 @@ const App = () => (
             <Route path="/governance-flow" element={<GovernanceFlow />} />
             <Route path="/elections" element={<Elections />} />
             <Route path="/dso-state" element={<DSOState />} />
+            <Route path="/dev-fund" element={<DevFund />} />
             
             {/* Services */}
             <Route path="/ans" element={<ANS />} />
