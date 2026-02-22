@@ -65,6 +65,7 @@ const navigationGroups: NavGroup[] = [
     items: [
       { name: "Governance", href: "/governance", icon: Vote },
       { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
+      { name: "Dev Fund", href: "/dev-fund", icon: Coins },
     ],
   },
   // {
