@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Coins, AlertTriangle, Package, Clock, Hash, Copy, Check, Search, X } from "lucide-react";
 import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
-import { pickAmountAsCC } from "@/lib/amount-utils";
+import { pickAmount } from "@/lib/amount-utils";
 import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { useState, useMemo } from "react";
@@ -67,12 +67,13 @@ const DevFund = () => {
   }, [coupons, search]);
 
   const extractAmount = (coupon: typeof coupons extends (infer T)[] ? T : never) => {
-    return pickAmountAsCC(coupon.contract.payload);
+    // Payload amount is already in CC (human-readable), not raw ledger units
+    return pickAmount(coupon.contract.payload);
   };
 
   const totalAmount = useMemo(() => {
     if (!coupons) return 0;
-    return coupons.reduce((sum, c) => sum + pickAmountAsCC(c.contract.payload), 0);
+    return coupons.reduce((sum, c) => sum + pickAmount(c.contract.payload), 0);
   }, [coupons]);
 
   return (
