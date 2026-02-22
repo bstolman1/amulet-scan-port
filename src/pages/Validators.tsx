@@ -18,8 +18,6 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
-import { SVWeightHistoryChart } from "@/components/SVWeightHistoryChart";
-import { SVWeightStackedChart } from "@/components/SVWeightStackedChart";
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -607,11 +605,7 @@ const Validators = () => {
           </Card>
         )}
 
-        {/* SV Weight History Chart */}
-        <SVWeightHistoryChart />
-
-        {/* SV Distribution Stacked Chart */}
-        <SVWeightStackedChart />
+        {/* SV Weight History and Distribution charts removed */}
 
         {/* ───────────────────────────── */}
         {/* ACTIVE VALIDATORS SECTION */}
@@ -671,7 +665,11 @@ const ActiveValidatorsSection = () => {
           const lastActiveDate = livenessInfo?.lastCollectedInRound
             ? roundDates.get(livenessInfo.lastCollectedInRound)
             : undefined;
-          return { ...validator, lastActiveDate };
+          return {
+            ...validator,
+            lastActiveDate,
+            numRoundsMissed: livenessInfo?.numRoundsMissed ?? 0,
+          };
         }),
       };
     },
@@ -766,13 +764,19 @@ const ActiveValidatorsSection = () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm text-muted-foreground mb-1">Rounds Collected</p>
                         <p className="text-2xl font-bold text-primary">
                           {parseFloat(validator.rewards).toLocaleString(undefined, {
                             maximumFractionDigits: 0,
                           })}
+                        </p>
+                      </div>
+                      <div className="p-4 rounded-lg bg-background/50">
+                        <p className="text-sm text-muted-foreground mb-1">Missed Rounds</p>
+                        <p className={`text-2xl font-bold ${validator.numRoundsMissed > 0 ? "text-destructive" : "text-success"}`}>
+                          {validator.numRoundsMissed.toLocaleString()}
                         </p>
                       </div>
                       <div className="p-4 rounded-lg bg-background/50">
