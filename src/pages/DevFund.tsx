@@ -4,13 +4,13 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Coins, AlertTriangle, Package, Clock, Copy, Check, Search, X } from "lucide-react";
+import { Coins, AlertTriangle, Package, Clock, Copy, Check, Search, X, ChevronDown, ChevronRight } from "lucide-react";
 import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
 import { pickAmount } from "@/lib/amount-utils";
 import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { useState, useMemo } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 const safeFormatDate = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "N/A";
@@ -151,6 +151,58 @@ const DevFund = () => {
             )}
           </Card>
         </div>
+
+        {/* Distribution Chart */}
+        {!isLoading && coupons && coupons.length > 0 && (
+          <Card className="p-5 space-y-3">
+            <h2 className="text-lg font-semibold text-foreground">Coupon Amount Distribution</h2>
+            <p className="text-sm text-muted-foreground">Each bar represents one coupon, sorted by amount descending</p>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={[...coupons]
+                    .map((c, i) => ({
+                      index: i + 1,
+                      amount: pickAmount(c.contract.payload),
+                      id: c.contract.contract_id.slice(0, 8) + "…",
+                    }))
+                    .sort((a, b) => b.amount - a.amount)}
+                  margin={{ top: 5, right: 20, left: 20, bottom: 5 }}
+                >
+                  <XAxis
+                    dataKey="index"
+                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                    label={{ value: "Coupon #", position: "insideBottom", offset: -2, style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 } }}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                    tickFormatter={(v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : v.toString()}
+                    label={{ value: "Amount (CC)", angle: -90, position: "insideLeft", style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 } }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "hsl(var(--popover))",
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "8px",
+                      color: "hsl(var(--popover-foreground))",
+                      fontSize: 13,
+                    }}
+                    formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + " CC", "Amount"]}
+                    labelFormatter={(label: number) => `Coupon #${label}`}
+                  />
+                  <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
+                    {[...coupons]
+                      .map(c => pickAmount(c.contract.payload))
+                      .sort((a, b) => b - a)
+                      .map((_, i) => (
+                        <Cell key={i} fill={`hsl(var(--primary) / ${0.4 + 0.6 * (1 - i / Math.max(coupons.length - 1, 1))})`} />
+                      ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        )}
 
         {/* Coupons table */}
         <Card>
