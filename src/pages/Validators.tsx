@@ -632,6 +632,7 @@ const Validators = () => {
 // Subcomponent for Active Validators Section
 // ─────────────────────────────
 const ActiveValidatorsSection = () => {
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const { toast } = useToast();
 
   const {
@@ -700,6 +701,13 @@ const ActiveValidatorsSection = () => {
   ).length || 0;
   const inactiveCount = totalValidators - activeCount;
 
+  const filteredValidators = useMemo(() => {
+    if (!topValidators?.validatorsAndRewards) return [];
+    if (statusFilter === "active") return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed === 0);
+    if (statusFilter === "inactive") return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed > 0);
+    return topValidators.validatorsAndRewards;
+  }, [topValidators, statusFilter]);
+
   return (
     <>
       <div className="flex items-center justify-between mt-8">
@@ -711,18 +719,27 @@ const ActiveValidatorsSection = () => {
         </div>
       </div>
 
-      {/* Active / Inactive counts */}
+      {/* Active / Inactive counts — clickable as filters */}
       {!isLoading && !isError && totalValidators > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <Card className="p-5 space-y-1">
+          <Card
+            className={`p-5 space-y-1 cursor-pointer transition-all ${statusFilter === "all" ? "ring-2 ring-primary" : "hover:bg-muted/50"}`}
+            onClick={() => setStatusFilter("all")}
+          >
             <p className="text-sm text-muted-foreground">Total Validators</p>
             <p className="text-3xl font-bold text-foreground">{totalValidators}</p>
           </Card>
-          <Card className="p-5 space-y-1">
+          <Card
+            className={`p-5 space-y-1 cursor-pointer transition-all ${statusFilter === "active" ? "ring-2 ring-success" : "hover:bg-muted/50"}`}
+            onClick={() => setStatusFilter("active")}
+          >
             <p className="text-sm text-muted-foreground">Active (0 Missed Rounds)</p>
             <p className="text-3xl font-bold text-success">{activeCount}</p>
           </Card>
-          <Card className="p-5 space-y-1">
+          <Card
+            className={`p-5 space-y-1 cursor-pointer transition-all ${statusFilter === "inactive" ? "ring-2 ring-destructive" : "hover:bg-muted/50"}`}
+            onClick={() => setStatusFilter("inactive")}
+          >
             <p className="text-sm text-muted-foreground">Inactive (Missed Rounds &gt; 0)</p>
             <p className={`text-3xl font-bold ${inactiveCount > 0 ? "text-destructive" : "text-muted-foreground"}`}>{inactiveCount}</p>
           </Card>
@@ -743,13 +760,15 @@ const ActiveValidatorsSection = () => {
                 Unable to load validator data. The API endpoint may be unavailable.
               </p>
             </div>
-          ) : !topValidators?.validatorsAndRewards?.length ? (
+          ) : !filteredValidators.length ? (
             <div className="text-center p-8">
-              <p className="text-muted-foreground">No validator data available</p>
+              <p className="text-muted-foreground">
+                No {statusFilter !== "all" ? statusFilter : ""} validators found
+              </p>
             </div>
           ) : (
             <div className="space-y-4">
-              {topValidators.validatorsAndRewards.map((validator, index) => {
+              {filteredValidators.map((validator, index) => {
                 const rank = index + 1;
                 return (
                   <div
