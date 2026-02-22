@@ -93,9 +93,6 @@ const DevFund = () => {
               <p className="text-sm text-muted-foreground">Unclaimed development fund coupons on the Canton Network</p>
             </div>
           </div>
-          <Badge variant="outline" className="text-sm">
-            {isLoading ? "…" : `${coupons?.length ?? 0} coupons`}
-          </Badge>
         </div>
 
         {/* Error state */}
@@ -124,6 +121,10 @@ const DevFund = () => {
             )}
           </Card>
           <Card className="p-5 space-y-2">
+            <div className="flex items-center gap-2 text-muted-foreground text-sm">
+              <Package className="h-4 w-4" />
+              <span>Total Coupons</span>
+            </div>
             {isLoading ? (
               <Skeleton className="h-8 w-20" />
             ) : (
