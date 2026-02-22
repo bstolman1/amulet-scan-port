@@ -40,8 +40,8 @@ function getMaxWorkersFromEnv() {
     parseInt(process.env.MAX_CONCURRENT_WRITES) ||
     parseInt(process.env.WORKER_POOL_SIZE);
   
-  // Default: CPU threads minus 1 (leave 1 core for main thread)
-  return envValue || Math.max(2, CPU_THREADS - 1);
+  // Default: half of CPU threads, capped at 6 to avoid DuckDB concurrency crashes
+  return envValue || Math.min(6, Math.max(2, Math.floor(CPU_THREADS / 2)));
 }
 
 // Row group size for Parquet files (affects read performance)
