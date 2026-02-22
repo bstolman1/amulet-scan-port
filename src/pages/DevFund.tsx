@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Coins, AlertTriangle, Package, Clock, Hash, Copy, Check, Search, X } from "lucide-react";
+import { Coins, AlertTriangle, Package, Clock, Copy, Check, Search, X } from "lucide-react";
 import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
 import { pickAmount } from "@/lib/amount-utils";
 import { Input } from "@/components/ui/input";
@@ -109,7 +109,7 @@ const DevFund = () => {
         )}
 
         {/* Summary cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="p-5 space-y-2">
             <div className="flex items-center gap-2 text-muted-foreground text-sm">
               <Coins className="h-4 w-4" />
@@ -128,19 +128,6 @@ const DevFund = () => {
               <Skeleton className="h-8 w-20" />
             ) : (
               <p className="text-3xl font-bold text-foreground">{coupons?.length ?? 0}</p>
-            )}
-          </Card>
-          <Card className="p-5 space-y-2">
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Hash className="h-4 w-4" />
-              <span>Unique Domains</span>
-            </div>
-            {isLoading ? (
-              <Skeleton className="h-8 w-20" />
-            ) : (
-              <p className="text-3xl font-bold text-foreground">
-                {new Set(coupons?.map(c => c.domain_id) ?? []).size}
-              </p>
             )}
           </Card>
           <Card className="p-5 space-y-2">
@@ -206,9 +193,8 @@ const DevFund = () => {
                    <TableHead className="w-8"></TableHead>
                    <TableHead>Contract ID</TableHead>
                    <TableHead>Template</TableHead>
-                   <TableHead className="text-right">Amount (CC)</TableHead>
-                   <TableHead>Domain</TableHead>
-                   <TableHead>Created At</TableHead>
+                    <TableHead className="text-right">Amount (CC)</TableHead>
+                    <TableHead>Created At</TableHead>
                  </TableRow>
               </TableHeader>
               <TableBody>
@@ -235,17 +221,13 @@ const DevFund = () => {
                         <TableCell className="text-right font-mono text-sm">
                           {extractAmount(coupon).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          <span title={coupon.domain_id}>{truncateId(coupon.domain_id, 12)}</span>
-                          <CopyButton text={coupon.domain_id} />
-                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {safeFormatDate(coupon.contract.created_at)}
                         </TableCell>
                       </TableRow>
                       {isExpanded && (
                         <TableRow key={`${id}-detail`}>
-                          <TableCell colSpan={6} className="bg-muted/30 p-0">
+                          <TableCell colSpan={5} className="bg-muted/30 p-0">
                             <div className="p-4 max-h-96 overflow-auto">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Full Contract JSON</span>
