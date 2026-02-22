@@ -694,17 +694,40 @@ const ActiveValidatorsSection = () => {
     return parts[0] || partyId;
   };
 
+  const totalValidators = topValidators?.validatorsAndRewards?.length || 0;
+  const activeCount = topValidators?.validatorsAndRewards?.filter(
+    (v) => v.numRoundsMissed === 0
+  ).length || 0;
+  const inactiveCount = totalValidators - activeCount;
+
   return (
     <>
       <div className="flex items-center justify-between mt-8">
         <div>
-          <h2 className="text-3xl font-bold mb-2">Active Validators</h2>
+          <h2 className="text-3xl font-bold mb-2">Validators</h2>
           <p className="text-muted-foreground">
-            All {topValidators?.validatorsAndRewards?.length || 0} active validators on the Canton
-            Network
+            {totalValidators} validators on the Canton Network
           </p>
         </div>
       </div>
+
+      {/* Active / Inactive counts */}
+      {!isLoading && !isError && totalValidators > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <Card className="p-5 space-y-1">
+            <p className="text-sm text-muted-foreground">Total Validators</p>
+            <p className="text-3xl font-bold text-foreground">{totalValidators}</p>
+          </Card>
+          <Card className="p-5 space-y-1">
+            <p className="text-sm text-muted-foreground">Active (0 Missed Rounds)</p>
+            <p className="text-3xl font-bold text-success">{activeCount}</p>
+          </Card>
+          <Card className="p-5 space-y-1">
+            <p className="text-sm text-muted-foreground">Inactive (Missed Rounds &gt; 0)</p>
+            <p className={`text-3xl font-bold ${inactiveCount > 0 ? "text-destructive" : "text-muted-foreground"}`}>{inactiveCount}</p>
+          </Card>
+        </div>
+      )}
 
       <Card className="glass-card">
         <div className="p-6">
