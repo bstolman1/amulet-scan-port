@@ -238,7 +238,6 @@ const DevFund = () => {
                  <TableRow>
                    <TableHead className="w-8"></TableHead>
                    <TableHead>Contract ID</TableHead>
-                   <TableHead>Template</TableHead>
                     <TableHead className="text-right">Amount (CC)</TableHead>
                     <TableHead>Created At</TableHead>
                  </TableRow>
@@ -259,11 +258,6 @@ const DevFund = () => {
                           <span title={id}>{truncateId(id)}</span>
                           <CopyButton text={id} />
                         </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary" className="font-mono text-xs">
-                            {coupon.contract.template_id.split(":").pop() || coupon.contract.template_id}
-                          </Badge>
-                        </TableCell>
                         <TableCell className="text-right font-mono text-sm">
                           {extractAmount(coupon).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
                         </TableCell>
@@ -273,7 +267,7 @@ const DevFund = () => {
                       </TableRow>
                       {isExpanded && (
                         <TableRow key={`${id}-detail`}>
-                          <TableCell colSpan={5} className="bg-muted/30 p-0">
+                          <TableCell colSpan={4} className="bg-muted/30 p-0">
                             <div className="p-4 max-h-96 overflow-auto">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Full Contract JSON</span>
