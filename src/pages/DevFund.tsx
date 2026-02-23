@@ -10,7 +10,7 @@ import { pickAmount } from "@/lib/amount-utils";
 import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { useState, useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 const safeFormatDate = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "N/A";
@@ -190,14 +190,7 @@ const DevFund = () => {
                     formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + " CC", "Amount"]}
                     labelFormatter={(label: number) => `Coupon #${label}`}
                   />
-                  <Bar dataKey="amount" radius={[4, 4, 0, 0]} minPointSize={15}>
-                    {[...coupons]
-                      .map(c => pickAmount(c.contract.payload))
-                      .sort((a, b) => b - a)
-                      .map((_, i) => (
-                        <Cell key={i} fill={`hsl(var(--primary) / ${0.4 + 0.6 * (1 - i / Math.max(coupons.length - 1, 1))})`} />
-                      ))}
-                  </Bar>
+                  <Bar dataKey="amount" radius={[4, 4, 0, 0]} minPointSize={15} fill="hsl(var(--primary))" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
