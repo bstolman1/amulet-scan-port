@@ -175,12 +175,9 @@ const DevFund = () => {
                     label={{ value: "Coupon #", position: "insideBottom", offset: -2, style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 } }}
                   />
                   <YAxis
-                    scale="log"
-                    domain={['auto', 'auto']}
-                    allowDataOverflow
                     tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                    tickFormatter={(v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : v < 1 ? v.toFixed(2) : v.toString()}
-                    label={{ value: "Amount (CC) — log scale", angle: -90, position: "insideLeft", style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 } }}
+                    tickFormatter={(v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${(v / 1_000).toFixed(0)}K` : v.toString()}
+                    label={{ value: "Amount (CC)", angle: -90, position: "insideLeft", style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 } }}
                   />
                   <Tooltip
                     contentStyle={{
@@ -193,7 +190,7 @@ const DevFund = () => {
                     formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + " CC", "Amount"]}
                     labelFormatter={(label: number) => `Coupon #${label}`}
                   />
-                  <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
+                  <Bar dataKey="amount" radius={[4, 4, 0, 0]} minPointSize={5}>
                     {[...coupons]
                       .map(c => pickAmount(c.contract.payload))
                       .sort((a, b) => b - a)
