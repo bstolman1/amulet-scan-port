@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { extractHostname, createDispatcher } from '../lib/undici-dispatcher.js';
 import { 
   getCurrentEndpoint, 
+  getAllEndpoints,
   getHealthStats,
   setEndpointByName,
   checkAllEndpoints,
@@ -59,6 +60,53 @@ router.post('/_endpoint', (req, res) => {
   } else {
     res.status(404).json({ error: 'Endpoint not found' });
   }
+});
+
+/**
+ * Best-of-all-SVs handler for dev fund coupons.
+ * Queries all healthy endpoints in parallel, returns the largest result set.
+ */
+router.get('/v0/unclaimed-development-fund-coupons', async (req, res) => {
+  const endpoints = getAllEndpoints().filter(e => e.health?.healthy !== false);
+  console.log(`[Scan Proxy] Best-of-all query across ${endpoints.length} healthy endpoints for dev fund coupons`);
+
+  const results = await Promise.allSettled(
+    endpoints.map(async (ep) => {
+      const hostname = extractHostname(ep.url);
+      const dispatcher = hostname ? createDispatcher(hostname) : undefined;
+      const url = `${ep.url}/v0/unclaimed-development-fund-coupons`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          ...(hostname ? { Host: hostname } : {}),
+        },
+        ...(dispatcher ? { dispatcher } : {}),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const coupons = data['unclaimed-development-fund-coupons'] || [];
+      console.log(`[Scan Proxy]   ${ep.name}: ${coupons.length} coupons`);
+      recordSuccess(ep.url);
+      return { name: ep.name, data, count: coupons.length };
+    })
+  );
+
+  const successful = results
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value);
+
+  if (successful.length === 0) {
+    return res.status(502).json({ error: 'All endpoints failed for dev fund coupons' });
+  }
+
+  // Return the result with the most coupons
+  const best = successful.reduce((a, b) => a.count >= b.count ? a : b);
+  console.log(`[Scan Proxy] Best result: ${best.name} with ${best.count} coupons`);
+  res.set('X-Scan-Endpoint', best.name);
+  res.set('X-Scan-Endpoints-Queried', successful.length.toString());
+  res.json(best.data);
 });
 
 /**
