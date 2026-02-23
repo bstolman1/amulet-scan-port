@@ -190,7 +190,7 @@ const DevFund = () => {
                     formatter={(value: number) => [value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + " CC", "Amount"]}
                     labelFormatter={(label: number) => `Coupon #${label}`}
                   />
-                  <Bar dataKey="amount" radius={[4, 4, 0, 0]} minPointSize={5}>
+                  <Bar dataKey="amount" radius={[4, 4, 0, 0]} minPointSize={15}>
                     {[...coupons]
                       .map(c => pickAmount(c.contract.payload))
                       .sort((a, b) => b - a)
