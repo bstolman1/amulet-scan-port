@@ -6,6 +6,8 @@ setlocal enabledelayedexpansion
 
 set SHARD_COUNT=%1
 set TARGET_MIGRATION=%2
+set START_MIGRATION=%3
+set END_MIGRATION=%4
 
 REM Defaults - 6 shards balances parallelism with data distribution
 if "%SHARD_COUNT%"=="" set SHARD_COUNT=6
@@ -53,7 +55,7 @@ REM Launch each shard in a new window with all env vars
 for /L %%i in (0,1,%SHARD_COUNT%) do (
     if %%i lss %SHARD_COUNT% (
         echo Starting Shard %%i of %SHARD_COUNT%...
-        start "Shard %%i" cmd /k "set SHARD_INDEX=%%i&&set SHARD_TOTAL=%SHARD_COUNT%&&set TARGET_MIGRATION=%TARGET_MIGRATION%&&set %ENV_VARS%&&node fetch-backfill.js"
+        start "Shard %%i" cmd /k "set SHARD_INDEX=%%i&&set SHARD_TOTAL=%SHARD_COUNT%&&set TARGET_MIGRATION=%TARGET_MIGRATION%&&set START_MIGRATION=%START_MIGRATION%&&set END_MIGRATION=%END_MIGRATION%&&set %ENV_VARS%&&node fetch-backfill.js"
         timeout /t 2 /nobreak >nul
     )
 )

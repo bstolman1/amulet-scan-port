@@ -28,6 +28,8 @@ export ZSTD_LEVEL=${ZSTD_LEVEL:-1}
 export CHUNK_SIZE=${CHUNK_SIZE:-4096}
 
 export TARGET_MIGRATION=${TARGET_MIGRATION:-}
+export START_MIGRATION=${START_MIGRATION:-}
+export END_MIGRATION=${END_MIGRATION:-}
 
 # Directories (Windows-mounted)
 export DATA_DIR=${DATA_DIR:-/mnt/c/ledger_raw}
@@ -43,7 +45,8 @@ echo "  Parallel fetches:    $PARALLEL_FETCHES (auto: $MIN_PARALLEL_FETCHES-$MAX
 echo "  Decode workers:      $DECODE_WORKERS (auto: $MIN_DECODE_WORKERS-$MAX_DECODE_WORKERS)"
 echo "  Writer workers:      $MAX_BINARY_WORKERS (static)"
 echo "  Max rows per file:   $MAX_ROWS_PER_FILE"
-echo "  Target migration:    $TARGET_MIGRATION"
+echo "  Target migration:    ${TARGET_MIGRATION:-auto}"
+echo "  Migration range:     ${START_MIGRATION:-0} → ${END_MIGRATION:-∞}"
 echo "  Data dir:            $DATA_DIR"
 echo ""
 
@@ -59,6 +62,8 @@ for i in $(seq 0 $((SHARD_COUNT-1))); do
     SHARD_INDEX=$i \
     SHARD_TOTAL=$SHARD_COUNT \
     TARGET_MIGRATION=$TARGET_MIGRATION \
+    START_MIGRATION=$START_MIGRATION \
+    END_MIGRATION=$END_MIGRATION \
     DATA_DIR=$DATA_DIR \
     PARALLEL_FETCHES=$PARALLEL_FETCHES \
     MIN_PARALLEL_FETCHES=$MIN_PARALLEL_FETCHES \

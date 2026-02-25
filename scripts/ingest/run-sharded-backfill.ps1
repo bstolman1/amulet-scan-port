@@ -3,7 +3,9 @@
 
 param(
     [int]$ShardCount = 4,
-    [int]$TargetMigration = 0
+    [int]$TargetMigration = 0,
+    [int]$StartMigration = -1,
+    [int]$EndMigration = -1
 )
 
 Write-Host "========================================"
@@ -30,7 +32,9 @@ for ($i = 0; $i -lt $ShardCount; $i++) {
         TARGET_MIGRATION = $TargetMigration
     }
     
-    $envString = "set SHARD_INDEX=$i && set SHARD_TOTAL=$ShardCount && set TARGET_MIGRATION=$TargetMigration"
+    $startMigEnv = if ($StartMigration -ge 0) { "set START_MIGRATION=$StartMigration && " } else { "" }
+    $endMigEnv = if ($EndMigration -ge 0) { "set END_MIGRATION=$EndMigration && " } else { "" }
+    $envString = "set SHARD_INDEX=$i && set SHARD_TOTAL=$ShardCount && set TARGET_MIGRATION=$TargetMigration && $startMigEnv$endMigEnv"
     
     Start-Process cmd -ArgumentList "/k", "cd /d `"$PSScriptRoot`" && $envString && node fetch-backfill.js" -WindowStyle Normal
     

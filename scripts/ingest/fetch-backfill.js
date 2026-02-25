@@ -313,6 +313,8 @@ async function waitForMemoryRelief(shardLabel = '') {
 const SHARD_INDEX = parseInt(process.env.SHARD_INDEX) || 0;
 const SHARD_TOTAL = parseInt(process.env.SHARD_TOTAL) || 1;
 const TARGET_MIGRATION = process.env.TARGET_MIGRATION ? parseInt(process.env.TARGET_MIGRATION) : null;
+const START_MIGRATION = process.env.START_MIGRATION != null ? parseInt(process.env.START_MIGRATION) : null;
+const END_MIGRATION = process.env.END_MIGRATION != null ? parseInt(process.env.END_MIGRATION) : null;
 
 function assertConfig(condition, message) {
   if (!condition) {
@@ -1999,8 +2001,10 @@ async function runBackfill() {
   if (isSharded) {
     console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL} (0-indexed)`);
   }
-  if (TARGET_MIGRATION) {
+  if (TARGET_MIGRATION != null) {
     console.log(`   TARGET_MIGRATION: ${TARGET_MIGRATION} only`);
+  } else if (START_MIGRATION != null || END_MIGRATION != null) {
+    console.log(`   MIGRATION RANGE: ${START_MIGRATION ?? 0} → ${END_MIGRATION ?? '∞'}`);
   }
   console.log("   Processing: Migrations sequentially (0 → 1 → 2 → 3...) ");
   console.log("   CURSOR_DIR:", CURSOR_DIR);
@@ -2021,11 +2025,19 @@ async function runBackfill() {
     console.log(`\n🔄 Migration scan round ${round + 1}/${MAX_MIGRATION_RESCAN_ROUNDS}...`);
     let migrations = await detectMigrations();
 
-    // Filter to target migration if specified
-    if (TARGET_MIGRATION) {
+    // Filter to target migration(s) if specified
+    if (TARGET_MIGRATION != null) {
       migrations = migrations.filter(id => id === TARGET_MIGRATION);
       if (!migrations.length) {
         console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`);
+        return { success: false, allMigrationsComplete: false };
+      }
+    } else if (START_MIGRATION != null || END_MIGRATION != null) {
+      const lo = START_MIGRATION ?? 0;
+      const hi = END_MIGRATION ?? Infinity;
+      migrations = migrations.filter(id => id >= lo && id <= hi);
+      if (!migrations.length) {
+        console.log(`⚠️ No migrations found in range ${lo}–${hi}. Exiting.`);
         return { success: false, allMigrationsComplete: false };
       }
     }
@@ -2257,8 +2269,10 @@ runBackfill()
       console.log(`\n${"═".repeat(80)}`);
       console.log(`⏸️ Backfill complete for processed migrations, but other migrations remain.`);
       console.log(`   Live updates will start once ALL migrations are backfilled.`);
-      if (TARGET_MIGRATION) {
+      if (TARGET_MIGRATION != null) {
         console.log(`   TARGET_MIGRATION=${TARGET_MIGRATION} was set. Unset it to process all migrations.`);
+      } else if (START_MIGRATION != null || END_MIGRATION != null) {
+        console.log(`   MIGRATION RANGE ${START_MIGRATION ?? 0}–${END_MIGRATION ?? '∞'} was set. Unset to process all.`);
       }
       console.log(`${"═".repeat(80)}\n`);
       process.exit(0);
