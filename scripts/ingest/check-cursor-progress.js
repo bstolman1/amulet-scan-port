@@ -116,19 +116,43 @@ function progressBar(pct, width = 20) {
 
 function cursorStatus(cursor) {
   if (cursor.complete) return '✅ Complete';
-  if (!cursor.last_before) return '⏳ Not started';
+  if (!cursor.last_before && !(cursor.total_updates > 0 || cursor.total_events > 0)) return '⏳ Not started';
 
-  const updatedAt = cursor.updated_at || cursor._file_mtime;
-  if (updatedAt) {
-    const age = Date.now() - new Date(updatedAt).getTime();
+  // Use file mtime as ground truth for activity (more reliable than updated_at
+  // since cursor file is only rewritten when a slice completes or transaction occurs)
+  const mtime = cursor._file_mtime;
+  const updatedAt = cursor.updated_at;
+  const latestActivity = mtime
+    ? new Date(mtime).getTime()
+    : updatedAt ? new Date(updatedAt).getTime() : 0;
+
+  if (latestActivity > 0) {
+    const age = Date.now() - latestActivity;
     if (age > STALE_THRESHOLD_MS) {
       const secsAgo = Math.round(age / 1000);
-      return `⚠️  Stalled (${secsAgo}s ago)`;
+      return `⚠️  Stalled (last write ${secsAgo}s ago)`;
     }
     const secsAgo = Math.round(age / 1000);
-    return `🔄 Active (updated ${secsAgo}s ago)`;
+    return `🔄 Active (file updated ${secsAgo}s ago)`;
   }
   return '🔄 Active';
+}
+
+/**
+ * Detect if cursor is waiting for contiguous slice completion.
+ * With parallel slices, the cursor only advances when slice 0..N are all done,
+ * so data may be flowing (events growing) while cursor position stays at max_time.
+ */
+function isWaitingForSlices(cursor) {
+  if (cursor.complete) return false;
+  if (!cursor.max_time || !cursor.last_before) return false;
+
+  const maxMs = new Date(cursor.max_time).getTime();
+  const curMs = new Date(cursor.last_before).getTime();
+  // Cursor hasn't moved from max_time (or very close to it)
+  const stuck = Math.abs(curMs - maxMs) < 60_000; // within 1 minute of max
+  const hasData = (cursor.total_updates || 0) > 0 || (cursor.total_events || 0) > 0;
+  return stuck && hasData;
 }
 
 // ── Group by migration ─────────────────────────────────────
@@ -160,13 +184,21 @@ function groupByMigration(cursors) {
 function aggregateMigration(group) {
   const { shards } = group;
   const allComplete = shards.every(s => s.complete);
-  const anyStarted = shards.some(s => s.last_before);
+  const anyStarted = shards.some(s => s.last_before || (s.total_updates || 0) > 0);
   const totalUpdates = shards.reduce((s, c) => s + (c.total_updates || 0), 0);
   const totalEvents = shards.reduce((s, c) => s + (c.total_events || 0), 0);
 
-  // Weighted average progress
+  // Pending data (slices in-flight)
+  const pendingUpdates = shards.reduce((s, c) => s + (c.pending_updates || 0), 0);
+  const pendingEvents = shards.reduce((s, c) => s + (c.pending_events || 0), 0);
+  const inTransaction = shards.some(s => s.in_transaction);
+
+  // Cursor-based progress (only advances when contiguous slices complete)
   const pcts = shards.map(s => calcProgress(s));
   const avgProgress = pcts.length > 0 ? pcts.reduce((a, b) => a + b, 0) / pcts.length : 0;
+
+  // Check if we're in the "parallel slices filling" state
+  const waitingForSlices = shards.some(s => isWaitingForSlices(s));
 
   // Best ETA estimate: max across shards (slowest determines completion)
   const etas = shards.map(s => calcETA(s)).filter(e => e != null);
@@ -177,6 +209,14 @@ function aggregateMigration(group) {
     .filter(s => !s.complete && s.last_before)
     .sort((a, b) => new Date(b.last_before).getTime() - new Date(a.last_before).getTime())[0];
 
+  // Deepest pending_before across shards (shows how far parallel slices have reached)
+  const pendingBefores = shards
+    .filter(s => s.pending_before)
+    .map(s => s.pending_before);
+  const deepestPending = pendingBefores.length > 0
+    ? pendingBefores.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0]
+    : null;
+
   // Synchronizer (should be same for all shards in a migration)
   const synchronizer = shards[0]?.synchronizer_id || 'unknown';
 
@@ -184,23 +224,22 @@ function aggregateMigration(group) {
   const minTime = shards[0]?.min_time;
   const maxTime = shards[0]?.max_time;
 
-  // Status: check staleness across all active shards
+  // Status: use file mtime for activity detection
   let status;
   if (allComplete) {
     status = '✅ Complete';
   } else if (!anyStarted) {
     status = '⏳ Not started';
   } else {
-    // Use the most recent updated_at across shards
     const activeShards = shards.filter(s => !s.complete);
-    const latestUpdate = activeShards
-      .map(s => new Date(s.updated_at || s._file_mtime || 0).getTime())
+    const latestMtime = activeShards
+      .map(s => new Date(s._file_mtime || 0).getTime())
       .reduce((a, b) => Math.max(a, b), 0);
-    const age = Date.now() - latestUpdate;
+    const age = Date.now() - latestMtime;
     if (age > STALE_THRESHOLD_MS) {
-      status = `⚠️  Stalled (${Math.round(age / 1000)}s ago)`;
+      status = `⚠️  Stalled (last write ${Math.round(age / 1000)}s ago)`;
     } else {
-      status = `🔄 Active (updated ${Math.round(age / 1000)}s ago)`;
+      status = `🔄 Active (file updated ${Math.round(age / 1000)}s ago)`;
     }
   }
 
@@ -210,9 +249,14 @@ function aggregateMigration(group) {
     minTime,
     maxTime,
     cursorAt: activeShard?.last_before || null,
+    deepestPending,
     progress: Math.min(allComplete ? 100 : avgProgress, allComplete ? 100 : 99.9),
     totalUpdates,
     totalEvents,
+    pendingUpdates,
+    pendingEvents,
+    inTransaction,
+    waitingForSlices,
     eta: etaMs,
     status,
     complete: allComplete,
@@ -222,9 +266,12 @@ function aggregateMigration(group) {
       shard_index: s.shard_index,
       progress: calcProgress(s),
       last_before: s.last_before,
+      pending_before: s.pending_before || null,
       complete: !!s.complete,
       total_updates: s.total_updates || 0,
       total_events: s.total_events || 0,
+      pending_updates: s.pending_updates || 0,
+      in_transaction: !!s.in_transaction,
       status: cursorStatus(s),
     })),
   };
@@ -280,8 +327,12 @@ function outputPretty(migrations) {
       continue;
     }
 
-    if (!m.cursorAt) {
+    if (!m.cursorAt && !m.waitingForSlices) {
       console.log(`  Status:         ${m.status}`);
+      if (m.totalUpdates > 0 || m.totalEvents > 0) {
+        console.log(`  Updates:        ${formatNum(m.totalUpdates)}`);
+        console.log(`  Events:         ${formatNum(m.totalEvents)}`);
+      }
       continue;
     }
 
@@ -290,14 +341,32 @@ function outputPretty(migrations) {
       : m.synchronizer;
 
     console.log(`  Synchronizer:   ${syncShort}`);
-    console.log(`  Cursor at:      ${m.cursorAt}`);
+
     if (m.minTime && m.maxTime) {
       console.log(`  Range:          ${m.minTime.substring(0, 10)} → ${m.maxTime.substring(0, 10)}`);
     }
-    console.log(`  Progress:       ${progressBar(m.progress)} ${m.progress.toFixed(1)}%`);
-    console.log(`  Updates:        ${formatNum(m.totalUpdates)}`);
-    console.log(`  Events:         ${formatNum(m.totalEvents)}`);
-    console.log(`  ETA:            ${formatDuration(m.eta)}`);
+
+    // Show cursor position progress
+    if (m.progress > 0.1) {
+      console.log(`  Cursor at:      ${m.cursorAt}`);
+      console.log(`  Cursor prog:    ${progressBar(m.progress)} ${m.progress.toFixed(1)}%`);
+    } else if (m.waitingForSlices) {
+      console.log(`  Cursor at:      ${m.cursorAt}  (waiting for slices to complete)`);
+      console.log(`  Cursor prog:    ${progressBar(0)} 0.0%  ⏳ parallel slices filling`);
+    }
+
+    // Show deepest pending position (where the farthest parallel slice has reached)
+    if (m.deepestPending) {
+      console.log(`  Deepest slice:  ${m.deepestPending}`);
+    }
+
+    // Volume stats
+    console.log(`  Updates:        ${formatNum(m.totalUpdates)}${m.pendingUpdates > 0 ? ` (+${formatNum(m.pendingUpdates)} pending)` : ''}`);
+    console.log(`  Events:         ${formatNum(m.totalEvents)}${m.pendingEvents > 0 ? ` (+${formatNum(m.pendingEvents)} pending)` : ''}`);
+    if (m.inTransaction) {
+      console.log(`  Transaction:    🔒 In-flight (data being written)`);
+    }
+    console.log(`  ETA:            ${m.progress > 0.1 ? formatDuration(m.eta) : 'Waiting for cursor to advance'}`);
     console.log(`  Status:         ${m.status}`);
 
     // Show per-shard breakdown if multiple shards
