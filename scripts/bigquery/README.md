@@ -45,3 +45,33 @@ The `01-create-base-views.sql` script creates unified views that combine backfil
 - `updates_raw` - Union of backfill_updates_raw + live_updates_raw with `data_source` column
 
 This allows queries to transparently access all data without caring about the source.
+
+## Deduplication Strategy
+
+The ingestion pipeline may produce occasional duplicate records due to:
+- Parallel slice processing with bounded dedup sets (cleared at 500K entries)
+- Process restarts that re-fetch from the last cursor position
+- Crash recovery that replays data from the GCS-confirmed checkpoint
+
+**Downstream views MUST deduplicate** using a window function:
+
+```sql
+-- For updates:
+SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY update_id ORDER BY recorded_at DESC) AS _rn
+  FROM `project.dataset.updates_raw`
+)
+WHERE _rn = 1;
+
+-- For events:
+SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY event_id, update_id ORDER BY recorded_at DESC) AS _rn
+  FROM `project.dataset.events_raw`
+)
+WHERE _rn = 1;
+```
+
+Apply this pattern in silver-layer views (`silver/` directory) to ensure uniqueness.
+Duplicate rates are typically < 0.01% of total records.

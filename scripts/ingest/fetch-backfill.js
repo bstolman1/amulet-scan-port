@@ -582,16 +582,13 @@ function maybeTuneParallelFetches(shardLabel = '') {
 
 /**
  * Load cursor from file (shard-aware)
+ * 
+ * FIXED: Now delegates to loadCursorLegacy from atomic-cursor.js which uses
+ * readCursorSafe() — this supports backup (.bak) recovery if the main cursor
+ * file is corrupted, and handles empty/malformed files gracefully.
  */
 function loadCursor(migrationId, synchronizerId, shardIndex = null) {
-  const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
-  const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
-  
-  if (existsSync(cursorFile)) {
-    return JSON.parse(readFileSync(cursorFile, 'utf8'));
-  }
-  
-  return null;
+  return loadCursorLegacy(migrationId, synchronizerId, shardIndex);
 }
 
 /**
@@ -997,7 +994,9 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
     }
     
     // Memory safety
-    if (seenUpdateIds.size > 50000) {
+    // Memory safety: clear dedup set at 500K entries (~40MB)
+    // Raised from 50K to reduce duplicate risk within high-density time slices
+    if (seenUpdateIds.size > 500000) {
       seenUpdateIds.clear();
     }
   }
