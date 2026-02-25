@@ -475,7 +475,8 @@ function buildScanEndpointRotation() {
   return ordered;
 }
 
-const scanEndpointRotation = buildScanEndpointRotation();
+const SCAN_PROBE_TIMEOUT_MS = parseInt(process.env.SCAN_PROBE_TIMEOUT_MS || '10000', 10);
+let scanEndpointRotation = buildScanEndpointRotation();
 let currentScanEndpointIndex = Math.max(0, scanEndpointRotation.indexOf(activeScanUrl));
 
 function rotateScanEndpoint(reason = '') {
@@ -505,6 +506,79 @@ function maybeRotateScanEndpoint(error, context = '') {
   lastScanRotationAt = now;
   const reason = `${context || 'fetch'}: ${error?.code || error?.response?.status || error?.message || 'transient error'}`;
   return rotateScanEndpoint(reason);
+}
+
+/**
+ * Probe all configured Scan endpoints and keep only healthy ones in rotation.
+ * This prevents repeated failover into dead endpoints during long backfills.
+ */
+async function probeScanEndpoints() {
+  if (!scanEndpointRotation.length) return;
+
+  console.log(`\n🔎 Probing ${scanEndpointRotation.length} Scan endpoints (GET /v0/dso)...`);
+
+  const probeResults = await Promise.allSettled(
+    scanEndpointRotation.map(async (url) => {
+      const started = Date.now();
+      try {
+        const response = await client.get('/v0/dso', {
+          baseURL: url,
+          timeout: SCAN_PROBE_TIMEOUT_MS,
+          headers: { Accept: 'application/json' },
+        });
+
+        return {
+          url,
+          healthy: response.status >= 200 && response.status < 300,
+          status: response.status,
+          latencyMs: Date.now() - started,
+        };
+      } catch (error) {
+        return {
+          url,
+          healthy: false,
+          status: error?.response?.status || null,
+          error: error?.code || error?.message || 'probe_failed',
+          latencyMs: Date.now() - started,
+        };
+      }
+    })
+  );
+
+  const results = probeResults
+    .filter((r) => r.status === 'fulfilled')
+    .map((r) => r.value);
+
+  const healthy = results
+    .filter((r) => r.healthy)
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+
+  for (const r of results) {
+    const icon = r.healthy ? '✅' : '❌';
+    const detail = r.healthy
+      ? `HTTP ${r.status} in ${r.latencyMs}ms`
+      : `${r.error || `HTTP ${r.status || 'n/a'}`} (${r.latencyMs}ms)`;
+    console.log(`   ${icon} ${r.url} — ${detail}`);
+  }
+
+  if (healthy.length === 0) {
+    console.warn('   ⚠️ No healthy Scan endpoints found in probe; keeping original rotation list.');
+    return;
+  }
+
+  scanEndpointRotation = healthy.map((r) => r.url);
+
+  if (!scanEndpointRotation.includes(activeScanUrl)) {
+    const previous = activeScanUrl;
+    activeScanUrl = scanEndpointRotation[0];
+    client.defaults.baseURL = activeScanUrl;
+    currentScanEndpointIndex = 0;
+    console.warn(`   🔁 Active endpoint was unhealthy. Switching ${previous} -> ${activeScanUrl}`);
+  } else {
+    currentScanEndpointIndex = scanEndpointRotation.indexOf(activeScanUrl);
+  }
+
+  console.log(`   ✅ Endpoint rotation initialized with ${scanEndpointRotation.length} healthy endpoint(s).`);
 }
 
 /**
@@ -1265,9 +1339,12 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
 
   // Helper to run a single slice with retries
   const SLICE_MAX_RETRIES = 3;
-  const runSliceWithRetry = async (sliceIndex, sliceBefore, sliceAfter) => {
+  const SALVAGE_MAX_RETRIES = 5;
+  const runSliceWithRetry = async (sliceIndex, sliceBefore, sliceAfter, options = {}) => {
+    const { maxRetries = SLICE_MAX_RETRIES, phase = 'parallel' } = options;
     let lastError;
-    for (let attempt = 0; attempt < SLICE_MAX_RETRIES; attempt++) {
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const result = await fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex, async (txs) => {
           // Cross-slice dedup (cheap and safe)
@@ -1293,22 +1370,23 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
             await processCallback(unique, sliceIndex);
           }
         });
-        
+
         // Mark slice as completed ONLY after all its data is processed
         sliceCompleted[sliceIndex] = true;
-        
+
         return result; // Success
       } catch (err) {
         lastError = err;
-        if (attempt < SLICE_MAX_RETRIES - 1) {
+        if (attempt < maxRetries - 1) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 10000) + Math.random() * 1000;
-          console.log(`   ⏳ Slice ${sliceIndex} failed (attempt ${attempt + 1}/${SLICE_MAX_RETRIES}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
+          console.log(`   ⏳ Slice ${sliceIndex} failed (${phase}, attempt ${attempt + 1}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
           await new Promise(r => setTimeout(r, delay));
         }
       }
     }
+
     // All retries exhausted - slice NOT marked complete
-    console.error(`   ❌ Slice ${sliceIndex} failed after ${SLICE_MAX_RETRIES} attempts: ${lastError.message}`);
+    console.error(`   ❌ Slice ${sliceIndex} failed after ${maxRetries} attempts (${phase}): ${lastError.message}`);
     return { sliceIndex, totalTxs: 0, earliestTime: sliceBefore, error: lastError };
   };
 
@@ -1320,7 +1398,26 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   }
 
   // Wait for all slices to complete
-  const sliceResults = await Promise.all(slicePromises);
+  let sliceResults = await Promise.all(slicePromises);
+
+  // Salvage pass: retry failed slices one-by-one to avoid aborting full batch
+  // because of a single flaky endpoint window.
+  let failedSlices = sliceResults.filter(s => s.error);
+  if (failedSlices.length > 0) {
+    console.warn(`   🛟 Salvage mode: retrying ${failedSlices.length} failed slice(s) sequentially...`);
+
+    for (const failed of failedSlices) {
+      const idx = failed.sliceIndex;
+      const { sliceBefore, sliceAfter } = sliceBoundaries[idx];
+      const salvaged = await runSliceWithRetry(idx, sliceBefore, sliceAfter, {
+        maxRetries: SALVAGE_MAX_RETRIES,
+        phase: 'salvage',
+      });
+      sliceResults[idx] = salvaged;
+    }
+
+    failedSlices = sliceResults.filter(s => s.error);
+  }
 
   // Find earliest time across all slices (for stats only)
   for (const slice of sliceResults) {
@@ -1330,7 +1427,6 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
   }
 
   const totalTxs = sliceResults.reduce((sum, s) => sum + (s.totalTxs || 0), 0);
-  const failedSlices = sliceResults.filter(s => s.error);
   const hasError = failedSlices.length > 0;
 
   // Calculate final safe cursor boundary
@@ -2061,6 +2157,13 @@ async function areAllMigrationsComplete() {
 async function runBackfill() {
   const isSharded = SHARD_TOTAL > 1;
   const shardLabel = isSharded ? ` [SHARD ${SHARD_INDEX}/${SHARD_TOTAL}]` : '';
+
+  // Pre-flight: probe Scan endpoints so failover rotation starts from known healthy nodes.
+  try {
+    await probeScanEndpoints();
+  } catch (err) {
+    console.warn(`⚠️ Endpoint probe failed, continuing with static rotation: ${err.message}`);
+  }
 
   console.log("\n" + "=".repeat(80));
   console.log(`🚀 Starting Canton ledger backfill (Auto-Tuning Mode)${shardLabel}`);
