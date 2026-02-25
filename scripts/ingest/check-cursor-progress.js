@@ -30,6 +30,19 @@ const MIGRATION_FILTER = args.includes('--migration')
 const REFRESH_INTERVAL = 3000;
 const STALE_THRESHOLD_MS = 60_000; // 60s
 
+// ── Known expected event volumes per migration ─────────────
+// Used for volume-based progress when cursor hasn't advanced yet.
+// These are approximate totals from the Scan API migration-info.
+const EXPECTED_EVENTS = {
+  0: 10_200_000,
+  1: 6_400_000,
+  2: 101_000_000,
+  3: 717_000_000,
+};
+
+// ── Watch mode state (for rate calculation) ────────────────
+let previousSnapshot = null;
+
 // ── Cursor loading ─────────────────────────────────────────
 
 function loadCursors() {
@@ -104,6 +117,14 @@ function formatDuration(ms) {
   const m = Math.floor((ms % 3_600_000) / 60_000);
   return h > 0 ? `~${h}h ${m}m` : `~${m}m`;
 }
+
+function shardStartedAt(shards) {
+  const starts = shards
+    .filter(s => s.started_at)
+    .map(s => new Date(s.started_at).getTime());
+  return starts.length > 0 ? Math.min(...starts) : null;
+}
+
 
 function formatNum(n) {
   return (n || 0).toLocaleString();
@@ -267,6 +288,7 @@ function aggregateMigration(group) {
       progress: calcProgress(s),
       last_before: s.last_before,
       pending_before: s.pending_before || null,
+      started_at: s.started_at || null,
       complete: !!s.complete,
       total_updates: s.total_updates || 0,
       total_events: s.total_events || 0,
@@ -346,13 +368,22 @@ function outputPretty(migrations) {
       console.log(`  Range:          ${m.minTime.substring(0, 10)} → ${m.maxTime.substring(0, 10)}`);
     }
 
+    // Volume-based progress (works even when cursor hasn't advanced)
+    const expectedEvents = EXPECTED_EVENTS[m.migrationId];
+    const volumePct = expectedEvents ? (m.totalEvents / expectedEvents) * 100 : null;
+
     // Show cursor position progress
     if (m.progress > 0.1) {
       console.log(`  Cursor at:      ${m.cursorAt}`);
       console.log(`  Cursor prog:    ${progressBar(m.progress)} ${m.progress.toFixed(1)}%`);
     } else if (m.waitingForSlices) {
-      console.log(`  Cursor at:      ${m.cursorAt}  (waiting for slices to complete)`);
-      console.log(`  Cursor prog:    ${progressBar(0)} 0.0%  ⏳ parallel slices filling`);
+      console.log(`  Cursor at:      ${m.cursorAt}  (waiting for slices)`);
+    }
+
+    // Volume-based progress bar (the one that actually moves)
+    if (volumePct != null) {
+      const cappedVolPct = Math.min(volumePct, 100);
+      console.log(`  Volume prog:    ${progressBar(cappedVolPct)} ${cappedVolPct.toFixed(1)}%  (${formatNum(m.totalEvents)} / ~${formatNum(expectedEvents)})`);
     }
 
     // Show deepest pending position (where the farthest parallel slice has reached)
@@ -366,8 +397,36 @@ function outputPretty(migrations) {
     if (m.inTransaction) {
       console.log(`  Transaction:    🔒 In-flight (data being written)`);
     }
-    console.log(`  ETA:            ${m.progress > 0.1 ? formatDuration(m.eta) : 'Waiting for cursor to advance'}`);
+
+    // ETA based on volume if cursor hasn't moved
+    if (m.progress > 0.1) {
+      console.log(`  ETA:            ${formatDuration(m.eta)}`);
+    } else if (volumePct != null && volumePct > 0 && m.shards[0]?.started_at) {
+      // Use started_at from cursor to estimate volume-based ETA
+      const startedAt = shardStartedAt(m.shards);
+      if (startedAt) {
+        const elapsed = Date.now() - startedAt;
+        const totalEstimate = (elapsed / volumePct) * 100;
+        const remaining = totalEstimate - elapsed;
+        console.log(`  ETA:            ${formatDuration(remaining > 0 ? remaining : 0)}  (volume-based estimate)`);
+      } else {
+        console.log(`  ETA:            Calculating...`);
+      }
+    } else {
+      console.log(`  ETA:            Calculating...`);
+    }
+
     console.log(`  Status:         ${m.status}`);
+
+    // Rate calculation in watch mode
+    if (WATCH_MODE && previousSnapshot) {
+      const prevM = previousSnapshot.find(p => p.migrationId === m.migrationId);
+      if (prevM && prevM.totalEvents < m.totalEvents) {
+        const delta = m.totalEvents - prevM.totalEvents;
+        const rate = Math.round(delta / (REFRESH_INTERVAL / 1000));
+        console.log(`  Rate:           ~${formatNum(rate)} events/sec`);
+      }
+    }
 
     // Show per-shard breakdown if multiple shards
     if (m.shardCount > 1) {
@@ -399,12 +458,16 @@ function outputPretty(migrations) {
 function run() {
   const cursors = loadCursors();
   const migrations = groupByMigration(cursors);
+  const summaries = migrations.map(aggregateMigration);
 
   if (JSON_MODE) {
     outputJSON(migrations);
   } else {
     outputPretty(migrations);
   }
+
+  // Save snapshot for rate calculation in watch mode
+  previousSnapshot = summaries;
 }
 
 if (WATCH_MODE) {
@@ -416,4 +479,5 @@ if (WATCH_MODE) {
   setInterval(refresh, REFRESH_INTERVAL);
 } else {
   run();
+}
 }
