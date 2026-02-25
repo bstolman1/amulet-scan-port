@@ -167,6 +167,25 @@ const INSECURE_TLS = process.env.INSECURE_TLS === 'true';
 
 // Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
+let activeScanUrl = SCAN_URL;
+
+// Known Scan endpoints for backfill failover (same pool as live ingestion)
+const BACKFILL_SCAN_ENDPOINTS = [
+  SCAN_URL,
+  'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan',
+  'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan',
+  'https://scan.sv-1.global.canton.network.cumberland.io/api/scan',
+  'https://scan.sv-2.global.canton.network.cumberland.io/api/scan',
+  'https://scan.sv-1.global.canton.network.fivenorth.io/api/scan',
+  'https://scan.sv-1.global.canton.network.tradeweb.com/api/scan',
+  'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan',
+  'https://scan.sv-1.global.canton.network.lcv.mpch.io/api/scan',
+  'https://scan.sv-1.global.canton.network.mpch.io/api/scan',
+  'https://scan.sv-1.global.canton.network.orb1lp.mpch.io/api/scan',
+  'https://scan.sv.global.canton.network.sv-nodeops.com/api/scan',
+  'https://scan.sv-1.global.canton.network.c7.digital/api/scan',
+];
+
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
 // Cross-platform path handling
 import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
@@ -391,7 +410,7 @@ function getDecodePool() {
 // HTTP CLIENT (uses MAX for socket pool)
 // ==========================================
 const client = axios.create({
-  baseURL: SCAN_URL,
+  baseURL: activeScanUrl,
   httpAgent: new HttpAgent({
     keepAlive: true,
     keepAliveMsecs: 60000,
@@ -413,6 +432,81 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+const SCAN_ROTATE_COOLDOWN_MS = parseInt(process.env.SCAN_ROTATE_COOLDOWN_MS || '8000', 10);
+let lastScanRotationAt = 0;
+
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ERR_BAD_RESPONSE',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNABORTED',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPROTO',
+]);
+
+function isTransientFetchError(error) {
+  const status = error?.response?.status;
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || '');
+
+  if (Number.isFinite(status) && (status === 429 || (status >= 500 && status <= 599))) {
+    return true;
+  }
+
+  if (TRANSIENT_NETWORK_CODES.has(code)) {
+    return true;
+  }
+
+  return /timeout|socket|hang up|ECONNRESET|ETIMEDOUT|ssl3_get_record|wrong version number/i.test(message);
+}
+
+function buildScanEndpointRotation() {
+  const seen = new Set();
+  const ordered = [];
+
+  for (const url of BACKFILL_SCAN_ENDPOINTS) {
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    ordered.push(url);
+  }
+
+  return ordered;
+}
+
+const scanEndpointRotation = buildScanEndpointRotation();
+let currentScanEndpointIndex = Math.max(0, scanEndpointRotation.indexOf(activeScanUrl));
+
+function rotateScanEndpoint(reason = '') {
+  if (scanEndpointRotation.length < 2) {
+    return false;
+  }
+
+  currentScanEndpointIndex = (currentScanEndpointIndex + 1) % scanEndpointRotation.length;
+  activeScanUrl = scanEndpointRotation[currentScanEndpointIndex];
+  client.defaults.baseURL = activeScanUrl;
+
+  const reasonText = reason ? ` (${reason})` : '';
+  console.warn(`   🔁 Rotating Scan endpoint -> ${activeScanUrl}${reasonText}`);
+  return true;
+}
+
+function maybeRotateScanEndpoint(error, context = '') {
+  if (!isTransientFetchError(error)) {
+    return false;
+  }
+
+  const now = Date.now();
+  if (now - lastScanRotationAt < SCAN_ROTATE_COOLDOWN_MS) {
+    return false;
+  }
+
+  lastScanRotationAt = now;
+  const reason = `${context || 'fetch'}: ${error?.code || error?.response?.status || error?.message || 'transient error'}`;
+  return rotateScanEndpoint(reason);
+}
+
 /**
  * Retry with exponential backoff + fetch stats tracking
  * 
@@ -426,7 +520,7 @@ async function retryWithBackoff(fn, options = {}) {
     baseDelay = 1000,
     maxDelay = 30000,
     context = '',
-    shouldRetry = (error) => isRetryableError(error),
+    shouldRetry = (error) => isTransientFetchError(error) || isRetryableError(error),
   } = options;
 
   let lastError;
@@ -459,7 +553,14 @@ async function retryWithBackoff(fn, options = {}) {
       fetchStats.errorCount = (fetchStats.errorCount || 0) + 1;
       
       // Check if we should retry
-      if (attempt === maxRetries || !shouldRetry(error)) {
+      const retryable = shouldRetry(error);
+
+      // On repeated transient errors, rotate to another Scan endpoint
+      if (retryable && attempt >= 1) {
+        maybeRotateScanEndpoint(error, context || 'backfill');
+      }
+
+      if (attempt === maxRetries || !retryable) {
         // CRITICAL: Log and throw - do not silently continue
         const contextStr = context ? `[${context}] ` : '';
         console.error(
@@ -1548,18 +1649,23 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         const sliceList = failedSlices.map(s => `slice ${s.sliceIndex}: ${s.error}`).join(', ');
 
         // Treat slice failures as transient if they are predominantly retryable
-        // (e.g. 503 from upstream). This ensures the existing batch backoff
-        // logic runs instead of hard-failing batch 0.
+        // (e.g. 503 from upstream or network-level ERR_BAD_RESPONSE).
         const statuses = failedSlices.map(s => s.status).filter(Boolean);
-        const has503 = statuses.includes(503) || sliceList.includes('status code 503');
-        const has429 = statuses.includes(429) || sliceList.includes('status code 429');
-        const has5xx = statuses.some(s => [500, 502, 503, 504].includes(s));
-        const isTransient = has503 || has429 || has5xx;
+        const codes = failedSlices
+          .map(s => String(s.code || '').toUpperCase())
+          .filter(Boolean);
+
+        const has429 = statuses.includes(429);
+        const has5xx = statuses.some(s => s >= 500 && s <= 599);
+        const hasErrBadResponse = codes.includes('ERR_BAD_RESPONSE');
+        const hasNetworkCode = codes.some(c => TRANSIENT_NETWORK_CODES.has(c));
+        const isTransient = has429 || has5xx || hasErrBadResponse || hasNetworkCode;
 
         const e = new Error(`${failedSlices.length} slice(s) failed: ${sliceList}. Cursor NOT advanced to prevent data gaps.`);
         if (isTransient) {
           // Mimic axios error shape so the catch block treats it as transient.
-          e.response = { status: has503 ? 503 : (has429 ? 429 : 503) };
+          e.response = { status: has429 ? 429 : 503 };
+          e.code = hasErrBadResponse ? 'ERR_BAD_RESPONSE' : (codes[0] || undefined);
         }
         throw e;
       }
@@ -1721,18 +1827,20 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}, code=${errCode}): ${msg}${shardLabel}`);
       
       // Determine if this error is transient (should retry)
-      const isHttpTransient = [429, 500, 502, 503, 504].includes(status);
+      const isHttpTransient = Number.isFinite(status) && (status === 429 || (status >= 500 && status <= 599));
+      const normalizedCode = String(errCode).toUpperCase();
+      const isCodeTransient = TRANSIENT_NETWORK_CODES.has(normalizedCode);
       const isDiskTransient = /ENOSPC|EMFILE|ENFILE|EAGAIN|EBUSY|disk full|no space left/i.test(msg + errCode);
       const isWorkerTransient = /worker crashed|worker error|worker exited/i.test(msg);
-      const isGCSTransient = /timeout|timed out|connection reset|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg);
-      const isSliceTransient = /slice.*failed/i.test(msg) && (msg.includes('503') || msg.includes('429') || msg.includes('500'));
-      const isTransient = isHttpTransient || isDiskTransient || isWorkerTransient || isGCSTransient || isSliceTransient;
+      const isGCSTransient = /timeout|timed out|connection reset|ECONNRESET|ETIMEDOUT|socket hang up|ssl3_get_record|wrong version number/i.test(msg + errCode);
+      const isSliceTransient = /slice.*failed/i.test(msg) && (/\b(429|5\d\d)\b/.test(msg) || isCodeTransient);
+      const isTransient = isHttpTransient || isCodeTransient || isDiskTransient || isWorkerTransient || isGCSTransient || isSliceTransient;
       
       if (isTransient) {
         consecutiveTransientErrors++;
         
         // Log what type of transient error
-        const errorType = isHttpTransient ? 'HTTP' : isDiskTransient ? 'DISK' : isWorkerTransient ? 'WORKER' : isGCSTransient ? 'NETWORK' : 'SLICE';
+        const errorType = isHttpTransient ? 'HTTP' : isCodeTransient ? 'NETWORK_CODE' : isDiskTransient ? 'DISK' : isWorkerTransient ? 'WORKER' : isGCSTransient ? 'NETWORK' : 'SLICE';
         
         // MAX CONSECUTIVE TRANSIENT ERROR CAP: Save cursor and exit cleanly
         const MAX_CONSECUTIVE_TRANSIENT_ERRORS = 50;
@@ -1956,7 +2064,8 @@ async function runBackfill() {
 
   console.log("\n" + "=".repeat(80));
   console.log(`🚀 Starting Canton ledger backfill (Auto-Tuning Mode)${shardLabel}`);
-  console.log("   SCAN_URL:", SCAN_URL);
+  console.log("   SCAN_URL (active):", activeScanUrl);
+  console.log("   SCAN failover endpoints:", scanEndpointRotation.length);
   console.log("   BATCH_SIZE:", BATCH_SIZE);
   console.log("   INSECURE_TLS:", INSECURE_TLS ? 'ENABLED (unsafe)' : 'disabled');
   console.log("=".repeat(80));
