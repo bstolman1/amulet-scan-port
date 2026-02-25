@@ -483,4 +483,3 @@ if (WATCH_MODE) {
 } else {
   run();
 }
-}
