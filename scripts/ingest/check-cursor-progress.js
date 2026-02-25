@@ -28,7 +28,7 @@ const MIGRATION_FILTER = args.includes('--migration')
   ? parseInt(args[args.indexOf('--migration') + 1], 10)
   : null;
 const REFRESH_INTERVAL = 3000;
-const STALE_THRESHOLD_MS = 60_000; // 60s
+const STALE_THRESHOLD_MS = 600_000; // 10 minutes (parallel slices may not update cursor for a while)
 
 // ── Known expected update volumes per migration ────────────
 // CCView total: ~152M updates (as of 2025-02-25).
