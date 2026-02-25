@@ -30,14 +30,14 @@ const MIGRATION_FILTER = args.includes('--migration')
 const REFRESH_INTERVAL = 3000;
 const STALE_THRESHOLD_MS = 60_000; // 60s
 
-// ── Known expected event volumes per migration ─────────────
-// Used for volume-based progress when cursor hasn't advanced yet.
-// These are approximate totals from the Scan API migration-info.
-const EXPECTED_EVENTS = {
-  0: 10_200_000,
-  1: 6_400_000,
-  2: 101_000_000,
-  3: 717_000_000,
+// ── Known expected update volumes per migration ────────────
+// Based on CCView total (151.96M updates as of 2025-02).
+// Updates are the authoritative count; events are ~7-8x updates.
+const EXPECTED_UPDATES = {
+  0: 2_750_000,
+  1: 1_660_000,
+  2: 12_570_000,
+  3: 135_000_000,  // ~152M total minus M0-M2 (~17M)
 };
 
 // ── Watch mode state (for rate calculation) ────────────────
@@ -368,9 +368,9 @@ function outputPretty(migrations) {
       console.log(`  Range:          ${m.minTime.substring(0, 10)} → ${m.maxTime.substring(0, 10)}`);
     }
 
-    // Volume-based progress (works even when cursor hasn't advanced)
-    const expectedEvents = EXPECTED_EVENTS[m.migrationId];
-    const volumePct = expectedEvents ? (m.totalEvents / expectedEvents) * 100 : null;
+    // Volume-based progress using UPDATES (verifiable against CCView)
+    const expectedUpdates = EXPECTED_UPDATES[m.migrationId];
+    const volumePct = expectedUpdates ? (m.totalUpdates / expectedUpdates) * 100 : null;
 
     // Show cursor position progress
     if (m.progress > 0.1) {
@@ -383,7 +383,7 @@ function outputPretty(migrations) {
     // Volume-based progress bar (the one that actually moves)
     if (volumePct != null) {
       const cappedVolPct = Math.min(volumePct, 100);
-      console.log(`  Volume prog:    ${progressBar(cappedVolPct)} ${cappedVolPct.toFixed(1)}%  (${formatNum(m.totalEvents)} / ~${formatNum(expectedEvents)})`);
+      console.log(`  Volume prog:    ${progressBar(cappedVolPct)} ${cappedVolPct.toFixed(1)}%  (${formatNum(m.totalUpdates)} / ~${formatNum(expectedUpdates)} updates)`);
     }
 
     // Show deepest pending position (where the farthest parallel slice has reached)
@@ -402,13 +402,12 @@ function outputPretty(migrations) {
     if (m.progress > 0.1) {
       console.log(`  ETA:            ${formatDuration(m.eta)}`);
     } else if (volumePct != null && volumePct > 0 && m.shards[0]?.started_at) {
-      // Use started_at from cursor to estimate volume-based ETA
       const startedAt = shardStartedAt(m.shards);
       if (startedAt) {
         const elapsed = Date.now() - startedAt;
         const totalEstimate = (elapsed / volumePct) * 100;
         const remaining = totalEstimate - elapsed;
-        console.log(`  ETA:            ${formatDuration(remaining > 0 ? remaining : 0)}  (volume-based estimate)`);
+        console.log(`  ETA:            ${formatDuration(remaining > 0 ? remaining : 0)}  (based on ${formatNum(expectedUpdates)} expected updates)`);
       } else {
         console.log(`  ETA:            Calculating...`);
       }
