@@ -31,13 +31,17 @@ const REFRESH_INTERVAL = 3000;
 const STALE_THRESHOLD_MS = 60_000; // 60s
 
 // ── Known expected update volumes per migration ────────────
-// Based on CCView total (151.96M updates as of 2025-02).
-// Updates are the authoritative count; events are ~7-8x updates.
+// CCView total: ~152M updates (as of 2025-02-25).
+// M0-M2 confirmed from completed cursors. M3/M4 estimated by
+// proportional day-count split of remaining ~135M:
+//   M3: 168 days (Jun 25–Dec 10) → ~92M
+//   M4:  77 days (Dec 10–Feb 25) → ~43M
 const EXPECTED_UPDATES = {
   0: 2_750_000,
   1: 1_660_000,
   2: 12_570_000,
-  3: 135_000_000,  // ~152M total minus M0-M2 (~17M)
+  3: 92_000_000,
+  4: 43_000_000,
 };
 
 // ── Watch mode state (for rate calculation) ────────────────
