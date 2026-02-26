@@ -189,9 +189,10 @@ async function processJob(job) {
     const bytes = stats.size;
 
     // ========== SAMPLING-BASED VALIDATION ==========
-    let validation = { valid: true, rowCount: records.length, issues: [] };
+    let validation = { valid: true, rowCount: records.length, issues: [], sampled: false };
     
     if (shouldValidate()) {
+      validation.sampled = true;
       try {
         const countResult = await allQuery(`
           SELECT COUNT(*) as cnt FROM read_parquet('${normalizedFilePath}')
