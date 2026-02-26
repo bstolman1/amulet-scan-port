@@ -1,73 +1,115 @@
 
 
-# Build `check-cursor-progress.js` — Cursor-Based Backfill Progress CLI
+## Performance Upgrade Plan — No Additional Sharding
 
-## Problem
+### Bottleneck Analysis
 
-The existing `check-backfill-progress.js` checks GCS folder presence (partition-based), which is meaningless for a cursor-driven, non-sequential pipeline. `shard-progress.js` works but is shard-focused. You need a simple tool that reads cursor files, compares `last_before` against migration time boundaries, and shows real progress.
-
-## What Gets Built
-
-A new script: `scripts/ingest/check-cursor-progress.js`
-
-### Behavior
+After reading the full pipeline (`fetch-backfill.js`, `write-parquet.js`, `parquet-worker.js`, `gcs-upload-queue.js`, `gcs-upload.js`), there are **four high-impact bottlenecks** that can be eliminated:
 
 ```text
-$ node check-cursor-progress.js
+Current Pipeline (per batch of 1000 txs):
 
-═══════════════════════════════════════════════════════════════
-📊 BACKFILL PROGRESS (Cursor-Based)
-═══════════════════════════════════════════════════════════════
-
-Migration 0
-  Synchronizer: global-domain__...
-  Cursor at:      2025-03-12T14:22:00Z
-  Range:          2025-01-15 → 2025-04-01
-  Progress:       [████████████████░░░░] 78.2%
-  Updates:        12,340,000
-  Events:         45,120,000
-  ETA:            ~3h 20m
-  Status:         🔄 Active (updated 12s ago)
-
-Migration 1
-  Status:         ✅ Complete
-
-Migration 2
-  Status:         ⏳ Not started
-
-Migration 3
-  Cursor at:      2025-09-15T08:00:00Z
-  Range:          2025-06-25 → 2025-12-10
-  Progress:       [█████████████░░░░░░░] 67.3%
-  ...
-
-───────────────────────────────────────────────────────────────
-Overall: 2/4 complete | 61.2% total
-───────────────────────────────────────────────────────────────
+  API fetch → decode → JSON.stringify each record
+    → write temp .jsonl file to disk
+      → DuckDB: new Database(':memory:') + connect()
+        → DuckDB: read_json_auto(tempfile) → COPY TO .parquet
+          → DuckDB: re-read .parquet for validation (COUNT, DESCRIBE, sample)
+            → close DB + close conn
+              → spawn gsutil child process → upload → delete local
 ```
 
-### Flags
+Each of these steps has unnecessary overhead that compounds across millions of files.
 
-- `--watch` / `-w` — Refresh every 3 seconds (reuses pattern from `shard-progress.js`)
-- `--migration N` — Show only migration N
-- `--json` — Output as JSON (for piping to other tools)
+---
 
-### Technical Approach
+### Change 1: Replace `gsutil` CLI with `@google-cloud/storage` SDK
 
-1. **Read cursor directory** via `getCursorDir()` from `path-utils.js` — same resolution logic as the pipeline itself
-2. **Parse all `cursor-*.json` files** — extract `migration_id`, `synchronizer_id`, `last_before`, `min_time`, `max_time`, `complete`, `total_updates`, `total_events`, `started_at`, `updated_at`
-3. **Calculate progress** using `(max_time - last_before) / (max_time - min_time)` — the backfill moves backward from `max_time` toward `min_time`, so `last_before` approaching `min_time` means done
-4. **Calculate ETA** from `(elapsed_time / progress_pct) * remaining_pct`
-5. **Detect stale cursors** — if `updated_at` is >60s old, mark as stalled
-6. **Group by migration** — aggregate shards if present (sum updates/events, use weighted average progress)
-7. **Completion check** — if `complete === true` OR `last_before <= min_time`, mark migration done
+**File:** `scripts/ingest/gcs-upload-queue.js`
 
-### Changes
+**Problem:** Every upload spawns a `gsutil` child process. At 48 concurrent uploads, that's 48 OS processes with their own Python runtimes, each doing TLS handshake independently. Process spawn overhead is ~50-100ms per file.
 
-| File | Action |
-|---|---|
-| `scripts/ingest/check-cursor-progress.js` | **Replace** entirely — cursor-based instead of partition-based |
-| `scripts/ingest/check-backfill-progress.js` | Keep as-is (still useful for GCS audit, different purpose) |
+**Fix:** Replace `gsutilUpload()` with the `@google-cloud/storage` Node.js SDK. This gives:
+- Connection pooling and HTTP/2 multiplexing (one TLS session, many uploads)
+- No process spawn overhead
+- Streaming upload support (pipe file directly)
+- Native resumable uploads for large files
 
-The new script reuses `getCursorDir` from `path-utils.js` so it respects `CURSOR_DIR` and `DATA_DIR` env vars, and works on both Windows and Linux without hardcoded paths.
+**Expected speedup:** 3-5x on GCS upload throughput.
+
+**Implementation:**
+- Install `@google-cloud/storage`
+- Replace `gsutilUpload()` function with SDK-based `streamUpload()`
+- Keep the same queue/backpressure/retry architecture
+- Remove `computeLocalMD5` / `getGCSObjectMD5` (SDK handles integrity via CRC32C automatically)
+
+---
+
+### Change 2: Reuse DuckDB connections in persistent workers
+
+**File:** `scripts/ingest/parquet-worker.js`
+
+**Problem:** Every Parquet file write does `new duckdb.Database(':memory:')` + `db.connect()` + `conn.close()` + `db.close()`. DuckDB initialization is expensive (~20-50ms per instance). At 50K files per migration, that's 15-40 minutes of pure DuckDB init overhead.
+
+**Fix:** Create the DuckDB instance once when the persistent worker starts, reuse it across all jobs. Just run the COPY query on each message.
+
+**Expected speedup:** 2x on Parquet write throughput.
+
+**Implementation:**
+- Move `duckdb.Database(':memory:')` and `db.connect()` to module-level initialization (runs once per worker thread)
+- Remove `conn.close()` / `db.close()` from `processJob()`
+- Add cleanup only in the worker exit handler
+
+---
+
+### Change 3: Make post-write validation sampling-based
+
+**File:** `scripts/ingest/parquet-worker.js`
+
+**Problem:** Every single Parquet file is re-read after writing for validation (COUNT, DESCRIBE, sample queries). This doubles the I/O per file and adds 3 DuckDB queries per write.
+
+**Fix:** Validate only every Nth file (e.g., every 20th). The pipeline has been stable — full validation on every file is unnecessary overhead.
+
+**Expected speedup:** ~30% on Parquet write latency.
+
+**Implementation:**
+- Add a `PARQUET_VALIDATION_SAMPLE_RATE` env var (default: 20 = validate 1 in 20 files)
+- Track a counter in the persistent worker, only run validation queries when `counter % sampleRate === 0`
+- Still validate the first 5 files on startup for early error detection
+
+---
+
+### Change 4: Increase `MAX_ROWS_PER_FILE` floor and reduce file count
+
+**File:** `scripts/ingest/write-parquet.js`, `.env`
+
+**Problem:** With `MIN_ROWS_PER_FILE=5000`, the pipeline produces many small files. Each file incurs: DuckDB init, JSONL write, Parquet write, validation, GCS upload, GCS delete. Fewer, larger files amortize all this overhead.
+
+**Fix:** Raise `MIN_ROWS_PER_FILE` to 25,000 and `MAX_ROWS_PER_FILE` to 100,000. This reduces total file count by ~5x, cutting per-file overhead proportionally.
+
+**Expected speedup:** 2-3x overall (fewer files = fewer DuckDB inits, fewer GCS uploads, fewer disk operations).
+
+**Implementation:**
+- Update `.env`: `MIN_ROWS_PER_FILE=25000`, `MAX_ROWS_PER_FILE=100000`
+- Verify `PARQUET_ROW_GROUP=100000` is set for efficient read performance
+
+---
+
+### Combined Expected Impact
+
+```text
+Current:  ~500 updates/sec sustained
+After:    ~3000-5000 updates/sec sustained (6-10x improvement)
+```
+
+The changes are independent and can be implemented incrementally:
+1. Change 4 (env vars only) — immediate, zero risk
+2. Change 2 (reuse DuckDB) — small code change, high impact
+3. Change 3 (sampling validation) — small code change, moderate impact
+4. Change 1 (GCS SDK) — largest change, highest impact on upload-bound runs
+
+### Technical Notes
+
+- Change 1 requires `npm install @google-cloud/storage` in `scripts/ingest/`
+- Change 2 requires testing that DuckDB in-memory state doesn't leak across jobs (it shouldn't since each COPY reads from a fresh temp file)
+- All changes are backward-compatible — no cursor format changes, no GCS path changes
 
