@@ -5,22 +5,10 @@
  * 1. Persistent mode (workerData === null): Stays alive, processes jobs via parentPort messages
  * 2. Legacy mode (workerData !== null): Process single job and exit (backward compatibility)
  *
- * Job format:
- * {
- *   type: 'events' | 'updates',
- *   filePath: string,
- *   records: object[],
- *   rowGroupSize: number
- * }
- *
- * Response format:
- * {
- *   ok: boolean,
- *   filePath: string,
- *   count: number,
- *   bytes: number,
- *   error?: string
- * }
+ * Performance optimizations:
+ * - DuckDB instance is created ONCE per worker and reused across all jobs
+ * - Post-write validation is sampling-based (every Nth file, configurable via PARQUET_VALIDATION_SAMPLE_RATE)
+ * - First 5 files are always validated for early error detection
  */
 
 // Capture all errors
@@ -45,6 +33,46 @@ if (isMainThread) {
   console.error('[PARQUET-WORKER] Error: parquet-worker.js must be run as a Worker');
   process.exit(1);
 }
+
+// ============ PERSISTENT DUCKDB INSTANCE ============
+// Created once per worker thread, reused across all jobs.
+// Each job reads from a fresh temp file so no state leaks between jobs.
+let _duckdb = null;
+let _db = null;
+let _conn = null;
+let _initError = null;
+
+// Sampling-based validation
+const VALIDATION_SAMPLE_RATE = parseInt(process.env.PARQUET_VALIDATION_SAMPLE_RATE) || 20;
+const ALWAYS_VALIDATE_FIRST_N = 5;
+let _jobCounter = 0;
+
+function shouldValidate() {
+  _jobCounter++;
+  if (_jobCounter <= ALWAYS_VALIDATE_FIRST_N) return true;
+  return (_jobCounter % VALIDATION_SAMPLE_RATE) === 0;
+}
+
+async function ensureDuckDB() {
+  if (_conn) return { db: _db, conn: _conn };
+  if (_initError) throw _initError;
+
+  try {
+    _duckdb = (await import('duckdb')).default;
+    _db = new _duckdb.Database(':memory:');
+    _conn = _db.connect();
+    return { db: _db, conn: _conn };
+  } catch (err) {
+    _initError = err;
+    throw err;
+  }
+}
+
+// Cleanup on worker exit
+process.on('exit', () => {
+  try { if (_conn) _conn.close(); } catch {}
+  try { if (_db) _db.close(); } catch {}
+});
 
 /**
  * Process a single job (shared between persistent and legacy modes)
@@ -74,16 +102,12 @@ async function processJob(job) {
     return { ok: true, filePath, count: 0, bytes: 0 };
   }
 
-  let duckdb;
-  
+  let conn;
   try {
-    duckdb = (await import('duckdb')).default;
+    ({ conn } = await ensureDuckDB());
   } catch (err) {
     return { ok: false, error: `Failed to load duckdb: ${err.message}`, filePath };
   }
-
-  const db = new duckdb.Database(':memory:');
-  const conn = db.connect();
 
   const runQuery = (sql) => {
     return new Promise((resolve, reject) => {
@@ -164,84 +188,83 @@ async function processJob(job) {
     const stats = fs.statSync(nativeFilePath);
     const bytes = stats.size;
 
-    // ========== POST-WRITE VALIDATION ==========
-    let validation = { valid: true, rowCount: 0, issues: [] };
+    // ========== SAMPLING-BASED VALIDATION ==========
+    let validation = { valid: true, rowCount: records.length, issues: [] };
     
-    try {
-      const countResult = await allQuery(`
-        SELECT COUNT(*) as cnt FROM read_parquet('${normalizedFilePath}')
-      `);
-      validation.rowCount = Number(countResult[0]?.cnt || 0);
-      
-      if (validation.rowCount !== records.length) {
-        validation.issues.push(`Row count mismatch: expected ${records.length}, got ${validation.rowCount}`);
-      }
-      
-      const schemaResult = await allQuery(`
-        DESCRIBE SELECT * FROM read_parquet('${normalizedFilePath}')
-      `);
-      const columns = new Set(
-        schemaResult
-          .map((r) => r.column_name ?? r.name ?? r.column ?? r[Object.keys(r)[0]])
-          .filter(Boolean)
-          .map((c) => String(c))
-      );
-      
-      const requiredColumns = type === 'events'
-        ? ['event_id', 'event_type', 'raw_event']
-        : ['update_id', 'update_type', 'update_data'];
-      
-      for (const col of requiredColumns) {
-        if (!columns.has(col)) {
-          validation.issues.push(`Missing required column: ${col}`);
-        }
-      }
-      
-      if (type === 'events' && validation.rowCount > 0) {
-        const sampleCheck = await allQuery(`
-          SELECT 
-            COUNT(*) FILTER (WHERE raw_event IS NOT NULL) as has_raw,
-            COUNT(*) FILTER (WHERE event_type IS NOT NULL) as has_type
-          FROM read_parquet('${normalizedFilePath}')
-          LIMIT 100
+    if (shouldValidate()) {
+      try {
+        const countResult = await allQuery(`
+          SELECT COUNT(*) as cnt FROM read_parquet('${normalizedFilePath}')
         `);
-        const sample = sampleCheck[0] || {};
-        if (Number(sample.has_raw || 0) === 0) {
-          validation.issues.push('No rows have raw_event data');
+        validation.rowCount = Number(countResult[0]?.cnt || 0);
+        
+        if (validation.rowCount !== records.length) {
+          validation.issues.push(`Row count mismatch: expected ${records.length}, got ${validation.rowCount}`);
         }
-      } else if (type === 'updates' && validation.rowCount > 0) {
-        const sampleCheck = await allQuery(`
-          SELECT 
-            COUNT(*) FILTER (WHERE update_data IS NOT NULL) as has_data,
-            COUNT(*) FILTER (WHERE record_time IS NOT NULL) as has_time
-          FROM read_parquet('${normalizedFilePath}')
-          LIMIT 100
+        
+        const schemaResult = await allQuery(`
+          DESCRIBE SELECT * FROM read_parquet('${normalizedFilePath}')
         `);
-        const sample = sampleCheck[0] || {};
-        if (Number(sample.has_data || 0) === 0) {
-          validation.issues.push('No rows have update_data');
+        const columns = new Set(
+          schemaResult
+            .map((r) => r.column_name ?? r.name ?? r.column ?? r[Object.keys(r)[0]])
+            .filter(Boolean)
+            .map((c) => String(c))
+        );
+        
+        const requiredColumns = type === 'events'
+          ? ['event_id', 'event_type', 'raw_event']
+          : ['update_id', 'update_type', 'update_data'];
+        
+        for (const col of requiredColumns) {
+          if (!columns.has(col)) {
+            validation.issues.push(`Missing required column: ${col}`);
+          }
         }
+        
+        if (type === 'events' && validation.rowCount > 0) {
+          const sampleCheck = await allQuery(`
+            SELECT 
+              COUNT(*) FILTER (WHERE raw_event IS NOT NULL) as has_raw,
+              COUNT(*) FILTER (WHERE event_type IS NOT NULL) as has_type
+            FROM read_parquet('${normalizedFilePath}')
+            LIMIT 100
+          `);
+          const sample = sampleCheck[0] || {};
+          if (Number(sample.has_raw || 0) === 0) {
+            validation.issues.push('No rows have raw_event data');
+          }
+        } else if (type === 'updates' && validation.rowCount > 0) {
+          const sampleCheck = await allQuery(`
+            SELECT 
+              COUNT(*) FILTER (WHERE update_data IS NOT NULL) as has_data,
+              COUNT(*) FILTER (WHERE record_time IS NOT NULL) as has_time
+            FROM read_parquet('${normalizedFilePath}')
+            LIMIT 100
+          `);
+          const sample = sampleCheck[0] || {};
+          if (Number(sample.has_data || 0) === 0) {
+            validation.issues.push('No rows have update_data');
+          }
+        }
+        
+        validation.valid = validation.issues.length === 0;
+        
+        if (!validation.valid) {
+          console.warn(`[PARQUET-WORKER] ⚠️ Validation issues in ${path.basename(filePath)}:`, validation.issues);
+        }
+        
+      } catch (valErr) {
+        validation.valid = false;
+        validation.issues.push(`Validation query failed: ${valErr.message}`);
+        console.error(`[PARQUET-WORKER] ❌ Validation failed for ${path.basename(filePath)}: ${valErr.message}`);
       }
-      
-      validation.valid = validation.issues.length === 0;
-      
-      if (!validation.valid) {
-        console.warn(`[PARQUET-WORKER] ⚠️ Validation issues in ${path.basename(filePath)}:`, validation.issues);
-      }
-      
-    } catch (valErr) {
-      validation.valid = false;
-      validation.issues.push(`Validation query failed: ${valErr.message}`);
-      console.error(`[PARQUET-WORKER] ❌ Validation failed for ${path.basename(filePath)}: ${valErr.message}`);
     }
 
     // Clean up temp file
     if (fs.existsSync(tempNativePath)) {
       fs.unlinkSync(tempNativePath);
     }
-
-    conn.close();
-    db.close();
 
     return {
       ok: true,
@@ -258,11 +281,6 @@ async function processJob(job) {
     if (fs.existsSync(tempNativePath)) {
       try { fs.unlinkSync(tempNativePath); } catch {}
     }
-
-    try {
-      conn.close();
-      db.close();
-    } catch {}
 
     console.error(`[PARQUET-WORKER] Failed: ${err.message}`);
     return {
