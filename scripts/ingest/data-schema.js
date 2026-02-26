@@ -466,11 +466,22 @@ export function getUtcPartition(effectiveAt) {
   if (isNaN(d.getTime())) {
     throw new Error(`getUtcPartition: invalid timestamp "${effectiveAt}"`);
   }
-  return {
-    year: d.getUTCFullYear(),
-    month: d.getUTCMonth() + 1,  // 1-12, no padding for INT64 inference
-    day: d.getUTCDate(),          // 1-31, no padding for INT64 inference
-  };
+  const year = d.getUTCFullYear();
+  const month = d.getUTCMonth() + 1;  // 1-12, no padding for INT64 inference
+  const day = d.getUTCDate();          // 1-31, no padding for INT64 inference
+
+  // Safety guard: reject impossible values (catches corrupt timestamps)
+  if (year < 2020 || year > 2030) {
+    throw new Error(`getUtcPartition: year ${year} out of range [2020-2030] from "${effectiveAt}" — likely microsecond timestamp`);
+  }
+  if (month < 1 || month > 12) {
+    throw new Error(`getUtcPartition: month ${month} out of range [1-12] from "${effectiveAt}"`);
+  }
+  if (day < 1 || day > 31) {
+    throw new Error(`getUtcPartition: day ${day} out of range [1-31] from "${effectiveAt}"`);
+  }
+
+  return { year, month, day };
 }
 
 export function getPartitionPath(timestamp, migrationId = null, type = 'updates', source = 'backfill') {
