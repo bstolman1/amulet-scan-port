@@ -1587,14 +1587,16 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   const atomicCursor = new AtomicCursor(migrationId, synchronizerId, shardIndex);
   
   // Load existing cursor state
+  // NOTE: atomicCursor.load() returns this.confirmedState which uses camelCase keys
+  // (lastBefore, totalUpdates, totalEvents). Use those camelCase fields below.
   let cursorState = atomicCursor.load();
-  let before = cursorState?.last_before || maxTime;
+  let before = cursorState?.lastBefore || maxTime;
   const atOrAfter = minTime;
-  
-  // CRITICAL: Check if cursor.last_before is already at or before minTime
+
+  // CRITICAL: Check if cursor.lastBefore is already at or before minTime
   // This means we've already processed everything.
-  if (cursorState && cursorState.last_before) {
-    const lastBeforeMs = new Date(cursorState.last_before).getTime();
+  if (cursorState && cursorState.lastBefore) {
+    const lastBeforeMs = new Date(cursorState.lastBefore).getTime();
     const minTimeMs = new Date(minTime).getTime();
 
     if (lastBeforeMs <= minTimeMs) {
@@ -1602,11 +1604,11 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         migration: migrationId,
         synchronizer: synchronizerId.substring(0, 30),
         shard: shardIndex,
-        last_before: cursorState.last_before,
+        last_before: cursorState.lastBefore,
         min_time: minTime,
       });
-      
-      console.log(`   ⚠️ Cursor last_before (${cursorState.last_before}) is at or before minTime (${minTime})`);
+
+      console.log(`   ⚠️ Cursor last_before (${cursorState.lastBefore}) is at or before minTime (${minTime})`);
       console.log(`   ⚠️ This synchronizer appears complete. Ensuring writer queues are drained before marking complete.`);
 
       // Flush any in-memory buffers and wait for pending writes.
@@ -1629,9 +1631,6 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       // Mark complete atomically
       if (!cursorState.complete || hasPendingWork) {
         atomicCursor.saveAtomic({
-          ...cursorState,
-          pending_writes: pendingWritesAccurate,
-          buffered_records: bufferedRecords,
           complete: !hasPendingWork,
           min_time: minTime,
           max_time: maxTime,
@@ -1641,9 +1640,9 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           migrationId,
           synchronizerId,
           shardIndex,
-          lastBefore: cursorState.last_before,
-          totalUpdates: cursorState.total_updates || 0,
-          totalEvents: cursorState.total_events || 0,
+          lastBefore: cursorState.lastBefore,
+          totalUpdates: cursorState.totalUpdates || 0,
+          totalEvents: cursorState.totalEvents || 0,
           complete: !hasPendingWork,
           pendingWrites: pendingWritesAccurate,
         });
@@ -1653,7 +1652,7 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         }
       }
 
-      return { updates: cursorState.total_updates || 0, events: cursorState.total_events || 0 };
+      return { updates: cursorState.totalUpdates || 0, events: cursorState.totalEvents || 0 };
     }
 
     // Log cursor state for debugging
@@ -1661,19 +1660,19 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       migrationId,
       synchronizerId,
       shardIndex,
-      lastBefore: cursorState.last_before,
-      totalUpdates: cursorState.total_updates || 0,
-      totalEvents: cursorState.total_events || 0,
+      lastBefore: cursorState.lastBefore,
+      totalUpdates: cursorState.totalUpdates || 0,
+      totalEvents: cursorState.totalEvents || 0,
       complete: cursorState.complete || false,
     });
-    
+
     console.log(
-      `   📍 Resuming from cursor: last_before=${cursorState.last_before}, updates=${cursorState.total_updates || 0}, complete=${cursorState.complete || false}`,
+      `   📍 Resuming from cursor: last_before=${cursorState.lastBefore}, updates=${cursorState.totalUpdates || 0}, complete=${cursorState.complete || false}`,
     );
   }
-  
-  let totalUpdates = cursorState?.total_updates || 0;
-  let totalEvents = cursorState?.total_events || 0;
+
+  let totalUpdates = cursorState?.totalUpdates || 0;
+  let totalEvents = cursorState?.totalEvents || 0;
   let batchCount = 0;
   const startTime = Date.now();
   let lastMetricsLog = Date.now();
