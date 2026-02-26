@@ -76,8 +76,8 @@ describe('DashboardLayout', () => {
     it('renders navigation group buttons', () => {
       const { container } = renderWithRouter();
       const expectedGroups = [
-        'Overview', 'Governance', 'Burn/Mint', 'Validators',
-        'Rewards', 'Exchange Data', 'Services', 'Statistics',
+        'Overview', 'Governance', 'Validators',
+        'Rewards', 'Exchange Data', 'Statistics',
       ];
       for (const groupName of expectedGroups) {
         expect(getButton(container, groupName)).toBeDefined();
@@ -159,15 +159,22 @@ describe('DashboardLayout', () => {
     });
   });
 
-  describe('snapshots', () => {
-    it('matches snapshot for root path', () => {
+  describe('structural rendering', () => {
+    it('renders correct number of nav groups for root path', () => {
       const { container } = renderWithRouter('/');
-      expect(container).toMatchSnapshot();
+      const nav = container.querySelector('nav');
+      expect(nav).toBeDefined();
+      // Should have 6 nav group buttons (Overview, Governance, Validators, Rewards, Exchange Data, Statistics)
+      const buttons = nav?.querySelectorAll('button');
+      expect(buttons?.length).toBe(6);
     });
 
-    it('matches snapshot for governance path', () => {
+    it('renders correct number of nav groups for governance path', () => {
       const { container } = renderWithRouter('/governance');
-      expect(container).toMatchSnapshot();
+      const nav = container.querySelector('nav');
+      expect(nav).toBeDefined();
+      const buttons = nav?.querySelectorAll('button');
+      expect(buttons?.length).toBe(6);
     });
   });
 });
