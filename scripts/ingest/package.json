@@ -27,6 +27,7 @@
     "validate:gcs": "node verify-gcs-parquet.js"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.0.0",
     "@mongodb-js/zstd": "^7.0.0",
     "axios": "^1.7.0",
     "bignumber.js": "^9.1.2",
