@@ -228,7 +228,14 @@ function auditMigrationFromIndex(fileIndex, ranges) {
       const files = parseFilesWithTimestamps(filePaths);
       
       if (files.length === 0) {
-        dayResults.push({ day: d, date: dateStr, status: 'empty', fileCount: 0, gaps: [] });
+        // Files exist but timestamps couldn't be extracted (e.g. offset-based filenames
+        // like updates-1771189136334-77bd2ac9.parquet vs timestamp-based names).
+        // This is still valid data — just no intra-day gap analysis possible.
+        if (filePaths.length > 0) {
+          dayResults.push({ day: d, date: dateStr, status: 'ok', fileCount: filePaths.length, gaps: [], earliest: null, latest: null });
+        } else {
+          dayResults.push({ day: d, date: dateStr, status: 'empty', fileCount: 0, gaps: [] });
+        }
         continue;
       }
       
