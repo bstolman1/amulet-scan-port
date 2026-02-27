@@ -233,6 +233,60 @@ function backupCursorToGCS(cursorPath) {
   }
 }
 
+/**
+ * Restore cursor files from GCS if they don't exist locally.
+ * Runs at startup to recover from VM restarts or /tmp clears.
+ */
+function restoreCursorsFromGCS() {
+  const GCS_BUCKET = process.env.GCS_BUCKET;
+  if (!GCS_BUCKET) return;
+
+  try {
+    // List all cursor files in GCS
+    const output = execSync(
+      `gsutil ls gs://${GCS_BUCKET}/cursors/cursor-*.json 2>/dev/null`,
+      { stdio: 'pipe', timeout: 15000 }
+    ).toString().trim();
+
+    if (!output) {
+      console.log('  ℹ️ No cursor backups found in GCS');
+      return;
+    }
+
+    const gcsCursors = output.split('\n').filter(Boolean);
+    let restored = 0;
+
+    for (const gcsPath of gcsCursors) {
+      const fileName = gcsPath.split('/').pop();
+      const localPath = join(CURSOR_DIR, fileName);
+
+      if (existsSync(localPath)) continue; // Local cursor exists, skip
+
+      try {
+        execSync(`gsutil -q cp "${gcsPath}" "${localPath}"`, {
+          stdio: 'pipe',
+          timeout: 15000,
+        });
+        restored++;
+        console.log(`  ☁️ Restored cursor from GCS: ${fileName}`);
+      } catch (cpErr) {
+        console.warn(`  ⚠️ Failed to restore ${fileName}: ${cpErr.message}`);
+      }
+    }
+
+    if (restored > 0) {
+      console.log(`  ✅ Restored ${restored} cursor(s) from GCS`);
+    } else {
+      console.log('  ℹ️ All GCS cursors already exist locally');
+    }
+  } catch (err) {
+    // No cursors in GCS or gsutil failed — not fatal
+    if (!err.message?.includes('matched no objects')) {
+      console.warn(`  ⚠️ GCS cursor restore failed: ${err.message}`);
+    }
+  }
+}
+
 // ==========================================
 // MEMORY-AWARE THROTTLING (Heap Pressure)
 // ==========================================
@@ -2259,6 +2313,13 @@ async function runBackfill() {
 
   // Ensure cursor directory exists
   mkdirSync(CURSOR_DIR, { recursive: true });
+
+  // ─────────────────────────────────────────────────────────────
+  // GCS CURSOR RESTORE: Pull cursors from GCS if missing locally
+  // ─────────────────────────────────────────────────────────────
+  if (GCS_MODE) {
+    restoreCursorsFromGCS();
+  }
 
   let grandTotalUpdates = 0;
   let grandTotalEvents = 0;
