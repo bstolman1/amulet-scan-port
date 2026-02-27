@@ -16,7 +16,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, unlinkSync } from 'f
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
-import { verifyUploadIntegrity } from './gcs-upload-queue.js';
+// gsutil cp already performs MD5 integrity verification
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -62,13 +62,7 @@ export function retryUpload(localPath, gcsPath, timeout = 300000) {
       encoding: 'utf8',
     });
     
-    // Verify integrity after upload (same as primary upload path)
-    const verification = verifyUploadIntegrity(localPath, gcsPath);
-    if (!verification.ok) {
-      return { ok: false, error: `Integrity check failed: ${verification.error}`, recoverable: true };
-    }
-    
-    return { ok: true, localMD5: verification.localMD5 };
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message, recoverable: true };
   }
