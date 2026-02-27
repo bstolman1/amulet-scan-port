@@ -113,7 +113,7 @@ function gsutilLs(prefix) {
  */
 function bulkListParquet(migPath) {
   process.stderr.write(`    ⏳ Listing all files under ${migPath.replace(`gs://${BUCKET}/`, '')}...`);
-  const output = exec(`gsutil ls -r "${migPath}**/*.parquet" 2>/dev/null || true`, { timeout: 120000 });
+  const output = exec(`gsutil ls -r "${migPath}" 2>/dev/null || true`, { timeout: 120000 });
   if (!output) {
     process.stderr.write(' 0 files\n');
     return new Map();
