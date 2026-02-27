@@ -42,6 +42,7 @@ import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statfsSync } from 'fs';
+import { execSync } from 'child_process';
 
 import v8 from 'v8';
 import Piscina from 'piscina';
@@ -203,6 +204,34 @@ const GCS_CHECKPOINT_INTERVAL = parseInt(process.env.GCS_CHECKPOINT_INTERVAL) ||
 
 // Import GCS upload queue functions for checkpoint draining
 import { drainUploads, getUploadQueue } from './gcs-upload-queue.js';
+
+// GCS cursor backup interval (every N checkpoints)
+const GCS_CURSOR_BACKUP_INTERVAL = parseInt(process.env.GCS_CURSOR_BACKUP_INTERVAL) || 3;
+let gcsCursorBackupCounter = 0;
+
+/**
+ * Backup cursor to GCS (non-blocking)
+ * Mirrors fetch-updates.js pattern for crash recovery across VM restarts.
+ */
+function backupCursorToGCS(cursorPath) {
+  const GCS_BUCKET = process.env.GCS_BUCKET;
+  if (!GCS_BUCKET) return;
+
+  const cursorName = cursorPath.split('/').pop();
+  const gcsPath = `gs://${GCS_BUCKET}/cursors/${cursorName}`;
+
+  try {
+    execSync(`gsutil -q cp "${cursorPath}" "${gcsPath}"`, {
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+    console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
+  } catch (err) {
+    const stderr = err.stderr?.toString?.() || '';
+    console.warn(`  ⚠️ Failed to backup cursor to GCS: ${err.message}`);
+    if (stderr) console.warn(`     gsutil stderr: ${stderr.trim()}`);
+  }
+}
 
 // ==========================================
 // MEMORY-AWARE THROTTLING (Heap Pressure)
@@ -1884,6 +1913,12 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
         // Confirm GCS position in cursor
         atomicCursor.confirmGCS(before, totalUpdates, totalEvents);
         
+        // Periodically backup cursor file to GCS for cross-VM recovery
+        gcsCursorBackupCounter++;
+        if (gcsCursorBackupCounter % GCS_CURSOR_BACKUP_INTERVAL === 0) {
+          backupCursorToGCS(atomicCursor.cursorPath);
+        }
+        
         const checkpointMs = Date.now() - checkpointStart;
         console.log(`   ✅ GCS checkpoint confirmed at ${before} (${checkpointMs}ms)${shardLabel}`);
       }
@@ -2040,10 +2075,11 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
     max_time: maxTime,
   });
   
-  // Confirm GCS for the final position
+  // Confirm GCS for the final position and backup cursor
   if (GCS_MODE) {
     atomicCursor.confirmGCS(before, totalUpdates, totalEvents);
-    console.log(`   ✅ GCS cursor confirmed at final position${shardLabel}`);
+    backupCursorToGCS(atomicCursor.cursorPath);
+    console.log(`   ✅ GCS cursor confirmed and backed up at final position${shardLabel}`);
   }
   
   // Structured log: synchronizer complete
