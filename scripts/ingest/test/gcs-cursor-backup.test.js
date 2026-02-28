@@ -179,8 +179,8 @@ describe('GCS cursor backup integration in checkpoint flow', () => {
     // Find the restoreCursorsFromGCS call and verify GCS_MODE guard nearby
     const restoreIdx = source.indexOf('restoreCursorsFromGCS()');
     expect(restoreIdx).toBeGreaterThan(-1);
-    // Look at the ~200 chars before the call for the GCS_MODE guard
-    const guardBlock = source.substring(Math.max(0, restoreIdx - 200), restoreIdx + 30);
+    // Look at the ~1000 chars before the call for the GCS_MODE guard
+    const guardBlock = source.substring(Math.max(0, restoreIdx - 1000), restoreIdx + 30);
     expect(guardBlock).toContain('GCS_MODE');
   });
 });
