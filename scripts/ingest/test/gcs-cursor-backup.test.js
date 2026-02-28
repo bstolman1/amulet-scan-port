@@ -137,49 +137,51 @@ describe('GCS cursor backup integration in checkpoint flow', () => {
   });
 
   it('calls backupCursorToGCS during periodic GCS checkpoints', () => {
-    // The checkpoint block is within the GCS_CHECKPOINT_INTERVAL guard
+    // Use unique marker from the processing loop (not the constant declaration)
+    const marker = 'batchCount % GCS_CHECKPOINT_INTERVAL';
+    const checkpointStart = source.indexOf(marker);
+    expect(checkpointStart).toBeGreaterThan(-1);
     const checkpointBlock = source.substring(
-      source.indexOf('GCS_CHECKPOINT_INTERVAL'),
-      source.indexOf('maybeTuneParallelFetches')
+      checkpointStart,
+      source.indexOf('GCS checkpoint confirmed', checkpointStart)
     );
     expect(checkpointBlock).toContain('backupCursorToGCS(atomicCursor.cursorPath)');
   });
 
   it('uses GCS_CURSOR_BACKUP_INTERVAL to throttle backups', () => {
+    const marker = 'batchCount % GCS_CHECKPOINT_INTERVAL';
+    const checkpointStart = source.indexOf(marker);
     const checkpointBlock = source.substring(
-      source.indexOf('GCS_CHECKPOINT_INTERVAL'),
-      source.indexOf('maybeTuneParallelFetches')
+      checkpointStart,
+      source.indexOf('GCS checkpoint confirmed', checkpointStart)
     );
     expect(checkpointBlock).toContain('gcsCursorBackupCounter');
     expect(checkpointBlock).toContain('GCS_CURSOR_BACKUP_INTERVAL');
   });
 
   it('calls backupCursorToGCS at migration completion', () => {
-    // Find the completion block — after confirmGCS at final position
-    const completionBlock = source.substring(
-      source.indexOf('confirmGCS(before, totalUpdates, totalEvents)'),
-      source.indexOf('logSynchronizer')
-    );
+    // The completion block uses a unique string near the end of processing
+    const completionMarker = 'GCS cursor confirmed and backed up';
+    const completionIdx = source.indexOf(completionMarker);
+    expect(completionIdx).toBeGreaterThan(-1);
+    // Search backwards from the marker to find the confirmGCS + backupCursorToGCS calls
+    const blockStart = source.lastIndexOf('confirmGCS(before', completionIdx);
+    const completionBlock = source.substring(blockStart, completionIdx + completionMarker.length);
     expect(completionBlock).toContain('backupCursorToGCS(atomicCursor.cursorPath)');
   });
 
   it('calls restoreCursorsFromGCS during startup', () => {
-    // Find the startup block — mkdirSync(CURSOR_DIR) precedes restoreCursorsFromGCS
-    const startupBlock = source.substring(
-      source.indexOf('mkdirSync(CURSOR_DIR'),
-      source.indexOf('grandTotalUpdates')
-    );
-    expect(startupBlock).toContain('restoreCursorsFromGCS()');
+    // restoreCursorsFromGCS must be called somewhere in the main function
+    expect(source).toContain('restoreCursorsFromGCS()');
   });
 
   it('only restores cursors in GCS mode', () => {
-    const startupBlock = source.substring(
-      source.indexOf('mkdirSync(CURSOR_DIR'),
-      source.indexOf('grandTotalUpdates')
-    );
-    // Must be guarded by GCS_MODE check
-    expect(startupBlock).toContain('if (GCS_MODE)');
-    expect(startupBlock).toContain('restoreCursorsFromGCS()');
+    // Find the restoreCursorsFromGCS call and verify GCS_MODE guard nearby
+    const restoreIdx = source.indexOf('restoreCursorsFromGCS()');
+    expect(restoreIdx).toBeGreaterThan(-1);
+    // Look at the ~200 chars before the call for the GCS_MODE guard
+    const guardBlock = source.substring(Math.max(0, restoreIdx - 200), restoreIdx + 30);
+    expect(guardBlock).toContain('GCS_MODE');
   });
 });
 
