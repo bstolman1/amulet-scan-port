@@ -38,6 +38,7 @@ describe('Multi-Migration Cursor Isolation', () => {
     const c0 = new AtomicCursor(0, sync);
     c0.beginTransaction(100, 500, '2024-03-01T00:00:00Z');
     c0.commit();
+    c0.confirmGCS('2024-03-01T00:00:00Z', 100, 500);
     c0.markComplete();
 
     const c1 = new AtomicCursor(1, sync);
@@ -62,6 +63,7 @@ describe('Multi-Migration Cursor Isolation', () => {
     const c0 = new AtomicCursor(0, sync);
     c0.beginTransaction(50, 100, '2024-01-01T00:00:00Z');
     c0.commit();
+    c0.confirmGCS('2024-01-01T00:00:00Z', 50, 100);
     c0.markComplete();
 
     const c1 = new AtomicCursor(1, sync);
@@ -125,8 +127,12 @@ describe('Multi-Migration Cursor Isolation', () => {
       if (state.complete) continue;
 
       // Simulate processing
-      cursor.beginTransaction(1000 * (migId + 1), 5000 * (migId + 1), `2024-0${migId + 1}-01T00:00:00Z`);
+      const updates = 1000 * (migId + 1);
+      const events = 5000 * (migId + 1);
+      const ts = `2024-0${migId + 1}-01T00:00:00Z`;
+      cursor.beginTransaction(updates, events, ts);
       cursor.commit();
+      cursor.confirmGCS(ts, updates, events);
       cursor.markComplete();
     }
 
