@@ -1,24 +1,24 @@
 #!/usr/bin/env node
 /**
  * Canton Ledger Backfill Script - Direct Parquet Version
- * 
+ *
  * Fetches historical ledger data using the backfilling API
  * and writes directly to Parquet files (default) or binary (--keep-raw).
- * 
+ *
  * CRITICAL FIXES APPLIED:
  * 1. Explicit fetch result states (SUCCESS_DATA, SUCCESS_EMPTY, FAILURE)
  *    - Network errors now FAIL HARD instead of silently continuing
  *    - No more "0 updates but success" on transient failures
- * 
+ *
  * 2. Atomic cursor transactions
  *    - Cursor only advances AFTER data is confirmed on disk
  *    - Uses write-to-temp-then-rename pattern for crash safety
  *    - Recovery from partial writes on restart
- * 
+ *
  * Usage:
  *   node fetch-backfill.js              # Writes directly to Parquet (default)
  *   node fetch-backfill.js --keep-raw   # Also writes to .pb.zst files
- * 
+ *
  * Optimizations:
  * - Parallel API fetching (configurable concurrency)
  * - Prefetch queue for continuous data flow
@@ -27,13 +27,16 @@
  */
 
 // CRITICAL: Load .env BEFORE any other imports that depend on env vars
-// Note: ESM hoists static imports, so we use a sync approach here
-// and rely on write-parquet.js using dynamic env checks, not module-level constants
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { promisify } from 'util';
+import { exec as execCb, execFile as execFileCb } from 'child_process';
 
-// Get the directory of this script to find .env reliably
+const execAsync = promisify(execCb);
+// FIX #6: Use execFile (safer, no shell injection) for gsutil calls
+const execFileAsync = promisify(execFileCb);
+
 const __filename_early = fileURLToPath(import.meta.url);
 const __dirname_early = dirname(__filename_early);
 dotenv.config({ path: join(__dirname_early, '.env') });
@@ -41,12 +44,11 @@ dotenv.config({ path: join(__dirname_early, '.env') });
 import axios from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statfsSync } from 'fs';
-import { execSync } from 'child_process';
+import { existsSync, mkdirSync, statfsSync } from 'fs';
 
 import v8 from 'v8';
 import Piscina from 'piscina';
-import { normalizeUpdate, normalizeEvent, getPartitionPath } from './data-schema.js';
+import { normalizeUpdate, normalizeEvent, getPartitionPath, flattenEventsInTreeOrder } from './data-schema.js';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -55,7 +57,6 @@ const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
 const USE_PARQUET = !RAW_ONLY;
 const USE_BINARY = KEEP_RAW || RAW_ONLY;
 
-// Use Parquet writer by default, binary writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter from './write-binary.js';
 
@@ -66,14 +67,14 @@ import {
   successEmpty,
   failure,
   isRetryableError,
-  retryFetch,
-  assertSuccess,
+  // FIX #8: retryFetch and assertSuccess are imported by fetch-result.js but
+  // never used here — retryWithBackoff is the authoritative retry mechanism in
+  // this file. Removing the dead imports prevents confusion about which path runs.
 } from './fetch-result.js';
 
 // CRITICAL FIX #2: Import atomic cursor operations
 import { AtomicCursor, atomicWriteFile, loadCursorLegacy, isCursorComplete } from './atomic-cursor.js';
 
-// Structured JSON logging for long run debugging
 import {
   log,
   logBatch,
@@ -87,40 +88,25 @@ import {
   logSummary,
 } from './structured-logger.js';
 
-// Unified writer functions that delegate to appropriate writer(s)
+// Unified writer functions
 async function bufferUpdates(updates) {
-  if (USE_BINARY) {
-    await binaryWriter.bufferUpdates(updates);
-  }
-  if (USE_PARQUET) {
-    return parquetWriter.bufferUpdates(updates);
-  }
+  if (USE_BINARY) await binaryWriter.bufferUpdates(updates);
+  if (USE_PARQUET) return parquetWriter.bufferUpdates(updates);
 }
 
 async function bufferEvents(events) {
-  if (USE_BINARY) {
-    await binaryWriter.bufferEvents(events);
-  }
-  if (USE_PARQUET) {
-    return parquetWriter.bufferEvents(events);
-  }
+  if (USE_BINARY) await binaryWriter.bufferEvents(events);
+  if (USE_PARQUET) return parquetWriter.bufferEvents(events);
 }
 
 async function flushAll() {
   const results = [];
-  if (USE_BINARY) {
-    const binaryResults = await binaryWriter.flushAll();
-    results.push(...binaryResults);
-  }
-  if (USE_PARQUET) {
-    const parquetResults = await parquetWriter.flushAll();
-    results.push(...parquetResults);
-  }
+  if (USE_BINARY) results.push(...await binaryWriter.flushAll());
+  if (USE_PARQUET) results.push(...await parquetWriter.flushAll());
   return results;
 }
 
 function getBufferStats() {
-  // Return parquet stats by default, include binary if using it
   const stats = USE_PARQUET ? parquetWriter.getBufferStats() : { updates: 0, events: 0, pendingWrites: 0 };
   if (USE_BINARY) {
     const binaryStats = binaryWriter.getBufferStats();
@@ -131,24 +117,15 @@ function getBufferStats() {
 }
 
 async function waitForWrites() {
-  if (USE_BINARY) {
-    await binaryWriter.waitForWrites();
-  }
-  if (USE_PARQUET) {
-    await parquetWriter.waitForWrites();
-  }
+  if (USE_BINARY) await binaryWriter.waitForWrites();
+  if (USE_PARQUET) await parquetWriter.waitForWrites();
 }
 
 async function shutdown() {
-  if (USE_BINARY) {
-    await binaryWriter.shutdown();
-  }
-  if (USE_PARQUET) {
-    await parquetWriter.shutdown();
-  }
+  if (USE_BINARY) await binaryWriter.shutdown();
+  if (USE_PARQUET) await parquetWriter.shutdown();
 }
 
-// Import bulletproof components for zero data loss
 import {
   IntegrityCursor,
   WriteVerifier,
@@ -160,17 +137,11 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// TLS config (secure by default)
-// Set INSECURE_TLS=true only in controlled environments with self-signed certs.
-// Uses per-agent rejectUnauthorized (consistent with fetch-updates.js) instead of
-// a global TLS override env var which affects ALL HTTP clients in the process.
 const INSECURE_TLS = process.env.INSECURE_TLS === 'true';
 
-// Configuration - BALANCED DEFAULTS for stability
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 let activeScanUrl = SCAN_URL;
 
-// Known Scan endpoints for backfill failover (same pool as live ingestion)
 const BACKFILL_SCAN_ENDPOINTS = [
   SCAN_URL,
   'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan',
@@ -187,35 +158,33 @@ const BACKFILL_SCAN_ENDPOINTS = [
   'https://scan.sv-1.global.canton.network.c7.digital/api/scan',
 ];
 
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000; // API max is 1000
-// Cross-platform path handling
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
+
 import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
-// GCS preflight checks
 import { runPreflightChecks } from './gcs-preflight.js';
 
 const BASE_DATA_DIR = getBaseDataDir();
 const CURSOR_DIR = getCursorDir();
 const GCS_MODE = isGCSMode();
 const FLUSH_EVERY_BATCHES = parseInt(process.env.FLUSH_EVERY_BATCHES) || 5;
-
-// GCS checkpoint interval: drain upload queue every N batches for crash safety
-// Lower = safer but slower, Higher = faster but larger re-fetch window on crash
 const GCS_CHECKPOINT_INTERVAL = parseInt(process.env.GCS_CHECKPOINT_INTERVAL) || 50;
 
-// Import GCS upload queue functions for checkpoint draining
 import { drainUploads, getUploadQueue } from './gcs-upload-queue.js';
 
-// GCS cursor backup interval (every N checkpoints)
 const GCS_CURSOR_BACKUP_INTERVAL = parseInt(process.env.GCS_CURSOR_BACKUP_INTERVAL) || 3;
 let gcsCursorBackupCounter = 0;
 let gcsCursorBackupConsecutiveFailures = 0;
 const GCS_CURSOR_BACKUP_MAX_FAILURES = parseInt(process.env.GCS_CURSOR_BACKUP_MAX_FAILURES) || 5;
 
 /**
- * Backup cursor to GCS (non-blocking)
- * Mirrors fetch-updates.js pattern for crash recovery across VM restarts.
+ * Backup cursor to GCS (non-blocking async).
+ *
+ * FIX #6: Replaced synchronous execSync (which blocked the event loop for up
+ * to 10 seconds per call) with async execFileAsync so HTTP I/O, pending writes,
+ * and GCS uploads can continue while the gsutil copy runs. Uses execFile instead
+ * of exec to avoid shell injection risks from cursorPath.
  */
-function backupCursorToGCS(cursorPath) {
+async function backupCursorToGCS(cursorPath) {
   const GCS_BUCKET = process.env.GCS_BUCKET;
   if (!GCS_BUCKET) return;
 
@@ -223,20 +192,22 @@ function backupCursorToGCS(cursorPath) {
   const gcsPath = `gs://${GCS_BUCKET}/cursors/${cursorName}`;
 
   try {
-    execSync(`gsutil -q cp "${cursorPath}" "${gcsPath}"`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
-    gcsCursorBackupConsecutiveFailures = 0; // Reset on success
+    // FIX #6: execFileAsync — async, no event loop block, no shell injection
+    await execFileAsync('gsutil', ['-q', 'cp', cursorPath, gcsPath], { timeout: 15000 });
+    gcsCursorBackupConsecutiveFailures = 0;
     console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
   } catch (err) {
     gcsCursorBackupConsecutiveFailures++;
     const stderr = err.stderr?.toString?.() || '';
-    console.warn(`  ⚠️ Failed to backup cursor to GCS (${gcsCursorBackupConsecutiveFailures}/${GCS_CURSOR_BACKUP_MAX_FAILURES}): ${err.message}`);
+    console.warn(
+      `  ⚠️ Failed to backup cursor to GCS ` +
+      `(${gcsCursorBackupConsecutiveFailures}/${GCS_CURSOR_BACKUP_MAX_FAILURES}): ${err.message}`
+    );
     if (stderr) console.warn(`     gsutil stderr: ${stderr.trim()}`);
-    
+
     if (gcsCursorBackupConsecutiveFailures >= GCS_CURSOR_BACKUP_MAX_FAILURES) {
-      const fatalMsg = `🔴 FATAL: GCS cursor backup failed ${gcsCursorBackupConsecutiveFailures} consecutive times. ` +
+      const fatalMsg =
+        `🔴 FATAL: GCS cursor backup failed ${gcsCursorBackupConsecutiveFailures} consecutive times. ` +
         `Cursor progress is NOT being persisted to cloud — risk of major data re-processing on crash.`;
       console.error(fatalMsg);
       throw new Error(fatalMsg);
@@ -246,19 +217,18 @@ function backupCursorToGCS(cursorPath) {
 
 /**
  * Restore cursor files from GCS if they don't exist locally.
- * Runs at startup to recover from VM restarts or /tmp clears.
  */
-function restoreCursorsFromGCS() {
+async function restoreCursorsFromGCS() {
   const GCS_BUCKET = process.env.GCS_BUCKET;
   if (!GCS_BUCKET) return;
 
   try {
-    // List all cursor files in GCS
-    const output = execSync(
+    const { stdout } = await execAsync(
       `gsutil ls gs://${GCS_BUCKET}/cursors/cursor-*.json 2>/dev/null`,
-      { stdio: 'pipe', timeout: 15000 }
-    ).toString().trim();
+      { timeout: 15000 }
+    );
 
+    const output = stdout.trim();
     if (!output) {
       console.log('  ℹ️ No cursor backups found in GCS');
       return;
@@ -270,14 +240,10 @@ function restoreCursorsFromGCS() {
     for (const gcsPath of gcsCursors) {
       const fileName = gcsPath.split('/').pop();
       const localPath = join(CURSOR_DIR, fileName);
-
-      if (existsSync(localPath)) continue; // Local cursor exists, skip
+      if (existsSync(localPath)) continue;
 
       try {
-        execSync(`gsutil -q cp "${gcsPath}" "${localPath}"`, {
-          stdio: 'pipe',
-          timeout: 15000,
-        });
+        await execFileAsync('gsutil', ['-q', 'cp', gcsPath, localPath], { timeout: 15000 });
         restored++;
         console.log(`  ☁️ Restored cursor from GCS: ${fileName}`);
       } catch (cpErr) {
@@ -291,7 +257,6 @@ function restoreCursorsFromGCS() {
       console.log('  ℹ️ All GCS cursors already exist locally');
     }
   } catch (err) {
-    // No cursors in GCS or gsutil failed — not fatal
     if (!err.message?.includes('matched no objects')) {
       console.warn(`  ⚠️ GCS cursor restore failed: ${err.message}`);
     }
@@ -299,19 +264,15 @@ function restoreCursorsFromGCS() {
 }
 
 // ==========================================
-// MEMORY-AWARE THROTTLING (Heap Pressure)
+// MEMORY-AWARE THROTTLING
 // ==========================================
-// Prevents OOM crashes by pausing ingestion when heap usage exceeds threshold
-const HEAP_PRESSURE_THRESHOLD = parseFloat(process.env.HEAP_PRESSURE_THRESHOLD) || 0.80; // 80% of max heap
-const HEAP_CRITICAL_THRESHOLD = parseFloat(process.env.HEAP_CRITICAL_THRESHOLD) || 0.90; // 90% = emergency
-const HEAP_CHECK_INTERVAL_MS = parseInt(process.env.HEAP_CHECK_INTERVAL_MS) || 5000; // Check every 5s minimum
+const HEAP_PRESSURE_THRESHOLD = parseFloat(process.env.HEAP_PRESSURE_THRESHOLD) || 0.80;
+const HEAP_CRITICAL_THRESHOLD = parseFloat(process.env.HEAP_CRITICAL_THRESHOLD) || 0.90;
+const HEAP_CHECK_INTERVAL_MS = parseInt(process.env.HEAP_CHECK_INTERVAL_MS) || 5000;
 
 let lastHeapCheck = 0;
 let heapPressureEvents = 0;
 
-/**
- * Get current heap usage as a fraction of max heap size
- */
 function getHeapUsage() {
   const { heapUsed } = process.memoryUsage();
   const { heap_size_limit } = v8.getHeapStatistics();
@@ -324,26 +285,16 @@ function getHeapUsage() {
   };
 }
 
-/**
- * Check if heap is under memory pressure
- */
 function checkMemoryPressure() {
   const now = Date.now();
-  // Throttle checks to avoid overhead
-  if (now - lastHeapCheck < HEAP_CHECK_INTERVAL_MS) {
-    return { pressure: false, critical: false };
-  }
+  if (now - lastHeapCheck < HEAP_CHECK_INTERVAL_MS) return { pressure: false, critical: false };
   lastHeapCheck = now;
-  
+
   const heap = getHeapUsage();
   const pressure = heap.ratio > HEAP_PRESSURE_THRESHOLD;
   const critical = heap.ratio > HEAP_CRITICAL_THRESHOLD;
-  
-  if (pressure) {
-    heapPressureEvents++;
-  }
-  
-  // Also check /tmp disk space in GCS mode
+  if (pressure) heapPressureEvents++;
+
   let diskPressure = false;
   if (isGCSMode()) {
     try {
@@ -352,72 +303,49 @@ function checkMemoryPressure() {
       const freeMB = Math.round(freeBytes / 1024 / 1024);
       const totalBytes = stats.blocks * stats.bsize;
       const usedPct = ((1 - freeBytes / totalBytes) * 100).toFixed(1);
-      
-      // Warn at 1GB free, critical at 500MB
       if (freeMB < 500) {
         diskPressure = true;
-        console.warn(`   💾 CRITICAL: /tmp only ${freeMB}MB free (${usedPct}% used) - GCS uploads may be backing up!`);
+        console.warn(`   💾 CRITICAL: /tmp only ${freeMB}MB free (${usedPct}% used)`);
       } else if (freeMB < 1024) {
         console.warn(`   💾 WARNING: /tmp only ${freeMB}MB free (${usedPct}% used)`);
       }
-    } catch {
-      // statfsSync not available on all platforms, ignore
-    }
+    } catch { /* statfsSync not available on all platforms */ }
   }
-  
+
   return { pressure: pressure || diskPressure, critical, heap, diskPressure };
 }
 
-/**
- * Wait for memory pressure to subside by draining queues
- * Returns when heap usage drops below threshold or timeout
- */
 async function waitForMemoryRelief(shardLabel = '') {
-  const maxWaitMs = 60000; // Max 60 seconds waiting
+  const maxWaitMs = 60000;
   const startWait = Date.now();
   let drainCycles = 0;
-  
+
   while (Date.now() - startWait < maxWaitMs) {
     const heap = getHeapUsage();
-    
-    // Check both heap AND disk
     let diskOk = true;
     if (isGCSMode()) {
       try {
         const stats = statfsSync('/tmp');
-        const freeMB = Math.round((stats.bfree * stats.bsize) / 1024 / 1024);
-        diskOk = freeMB >= 500;
+        diskOk = Math.round((stats.bfree * stats.bsize) / 1024 / 1024) >= 500;
       } catch { diskOk = true; }
     }
-    
+
     if (heap.ratio <= HEAP_PRESSURE_THRESHOLD * 0.9 && diskOk) {
-      // Below 90% of threshold = safe to continue
       if (drainCycles > 0) {
-        console.log(`   ✅ Memory pressure relieved: ${heap.usedMB}MB / ${heap.limitMB}MB (${(heap.ratio * 100).toFixed(1)}%)${shardLabel}`);
+        console.log(`   ✅ Memory pressure relieved: ${heap.usedMB}MB / ${heap.limitMB}MB${shardLabel}`);
       }
       return;
     }
-    
+
     drainCycles++;
-    console.log(`   ⚠️ Memory pressure (${heap.usedMB}MB / ${heap.limitMB}MB = ${(heap.ratio * 100).toFixed(1)}%) - draining queues (cycle ${drainCycles})...${shardLabel}`);
-    
-    // Flush and drain all pending work
+    console.log(`   ⚠️ Memory pressure (${heap.usedMB}MB / ${heap.limitMB}MB = ${(heap.ratio * 100).toFixed(1)}%) - draining (cycle ${drainCycles})...${shardLabel}`);
     await flushAll();
     await waitForWrites();
-    if (GCS_MODE) {
-      await drainUploads();
-    }
-    
-    // Give GC a chance to run
-    if (global.gc) {
-      global.gc();
-    }
-    
-    // Brief pause before re-checking
+    if (GCS_MODE) await drainUploads();
+    if (global.gc) global.gc();
     await new Promise(r => setTimeout(r, 2000));
   }
-  
-  // Timeout - log warning but continue (let it crash naturally if truly OOM)
+
   const heap = getHeapUsage();
   console.warn(`   ⚠️ Memory pressure timeout after ${maxWaitMs}ms - continuing at ${heap.usedMB}MB / ${heap.limitMB}MB${shardLabel}`);
 }
@@ -430,53 +358,45 @@ const START_MIGRATION = process.env.START_MIGRATION != null ? parseInt(process.e
 const END_MIGRATION = process.env.END_MIGRATION != null ? parseInt(process.env.END_MIGRATION) : null;
 
 function assertConfig(condition, message) {
-  if (!condition) {
-    throw new Error(`[config] ${message}`);
-  }
+  if (!condition) throw new Error(`[config] ${message}`);
 }
 
-// Basic config validation (fail fast)
 assertConfig(Number.isFinite(SHARD_TOTAL) && SHARD_TOTAL >= 1, `SHARD_TOTAL must be >= 1 (got ${process.env.SHARD_TOTAL})`);
 assertConfig(Number.isFinite(SHARD_INDEX) && SHARD_INDEX >= 0 && SHARD_INDEX < SHARD_TOTAL, `SHARD_INDEX must be between 0 and SHARD_TOTAL-1 (got ${process.env.SHARD_INDEX})`);
 assertConfig(Number.isFinite(BATCH_SIZE) && BATCH_SIZE >= 1 && BATCH_SIZE <= 1000, `BATCH_SIZE must be 1..1000 (got ${process.env.BATCH_SIZE})`);
 
 // ==========================================
-// AUTO-TUNING: PARALLEL FETCHES (Enhanced with Latency Tracking)
+// AUTO-TUNING: PARALLEL FETCHES
 // ==========================================
 const BASE_PARALLEL_FETCHES = parseInt(process.env.PARALLEL_FETCHES) || 8;
 const MIN_PARALLEL_FETCHES = parseInt(process.env.MIN_PARALLEL_FETCHES) || 2;
 const MAX_PARALLEL_FETCHES = parseInt(process.env.MAX_PARALLEL_FETCHES) || 24;
 
-let dynamicParallelFetches = Math.min(
-  Math.max(BASE_PARALLEL_FETCHES, MIN_PARALLEL_FETCHES),
-  MAX_PARALLEL_FETCHES
-);
+let dynamicParallelFetches = Math.min(Math.max(BASE_PARALLEL_FETCHES, MIN_PARALLEL_FETCHES), MAX_PARALLEL_FETCHES);
 
-assertConfig(Number.isFinite(BASE_PARALLEL_FETCHES) && BASE_PARALLEL_FETCHES >= 1, `PARALLEL_FETCHES must be >= 1 (got ${process.env.PARALLEL_FETCHES})`);
-assertConfig(Number.isFinite(MIN_PARALLEL_FETCHES) && MIN_PARALLEL_FETCHES >= 1, `MIN_PARALLEL_FETCHES must be >= 1 (got ${process.env.MIN_PARALLEL_FETCHES})`);
+assertConfig(Number.isFinite(BASE_PARALLEL_FETCHES) && BASE_PARALLEL_FETCHES >= 1, `PARALLEL_FETCHES must be >= 1`);
+assertConfig(Number.isFinite(MIN_PARALLEL_FETCHES) && MIN_PARALLEL_FETCHES >= 1, `MIN_PARALLEL_FETCHES must be >= 1`);
 assertConfig(Number.isFinite(MAX_PARALLEL_FETCHES) && MAX_PARALLEL_FETCHES >= MIN_PARALLEL_FETCHES, `MAX_PARALLEL_FETCHES must be >= MIN_PARALLEL_FETCHES`);
 
-// Latency thresholds (milliseconds)
 const LATENCY_LOW_MS = parseInt(process.env.LATENCY_LOW_MS) || 500;
 const LATENCY_HIGH_MS = parseInt(process.env.LATENCY_HIGH_MS) || 2000;
 const LATENCY_CRITICAL_MS = parseInt(process.env.LATENCY_CRITICAL_MS) || 5000;
+const FETCH_TUNE_WINDOW_MS = 15_000;
 
-const FETCH_TUNE_WINDOW_MS = 15_000; // Faster tuning window (was 30s)
 let fetchStats = {
   windowStart: Date.now(),
   successCount: 0,
   retry503Count: 0,
-  latencies: [],           // Rolling window of recent response times
+  latencies: [],
   avgLatency: 0,
   p95Latency: 0,
   consecutiveStableWindows: 0,
+  errorCount: 0,
 };
 
 // ==========================================
 // BATCHED DECODE WORKER POOL
 // ==========================================
-// Decode runs in worker threads to keep the main event loop free for HTTP I/O.
-// Batched messages (~250 txs per message) amortize structured clone overhead.
 const DECODE_BATCH_SIZE = parseInt(process.env.DECODE_BATCH_SIZE) || 250;
 const DECODE_WORKERS = parseInt(process.env.DECODE_WORKERS) || 4;
 
@@ -501,27 +421,15 @@ function getDecodePool() {
 }
 
 // ==========================================
-// HTTP CLIENT (uses MAX for socket pool)
+// HTTP CLIENT
 // ==========================================
 const client = axios.create({
   baseURL: activeScanUrl,
-  httpAgent: new HttpAgent({
-    keepAlive: true,
-    keepAliveMsecs: 60000,
-    maxSockets: MAX_PARALLEL_FETCHES * 4,
-  }),
-  httpsAgent: new HttpsAgent({
-    keepAlive: true,
-    keepAliveMsecs: 60000,
-    rejectUnauthorized: !INSECURE_TLS,
-    maxSockets: MAX_PARALLEL_FETCHES * 4,
-  }),
+  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 60000, maxSockets: MAX_PARALLEL_FETCHES * 4 }),
+  httpsAgent: new HttpsAgent({ keepAlive: true, keepAliveMsecs: 60000, rejectUnauthorized: !INSECURE_TLS, maxSockets: MAX_PARALLEL_FETCHES * 4 }),
   timeout: 180000,
 });
 
-/**
- * Sleep helper
- */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -530,42 +438,27 @@ const SCAN_ROTATE_COOLDOWN_MS = parseInt(process.env.SCAN_ROTATE_COOLDOWN_MS || 
 let lastScanRotationAt = 0;
 
 const TRANSIENT_NETWORK_CODES = new Set([
-  'ERR_BAD_RESPONSE',
-  'ECONNRESET',
-  'ETIMEDOUT',
-  'ECONNABORTED',
-  'EPIPE',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'EPROTO',
+  'ERR_BAD_RESPONSE', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED',
+  'EPIPE', 'ENOTFOUND', 'EAI_AGAIN', 'EPROTO',
 ]);
 
 function isTransientFetchError(error) {
   const status = error?.response?.status;
   const code = String(error?.code || '').toUpperCase();
   const message = String(error?.message || '');
-
-  if (Number.isFinite(status) && (status === 429 || (status >= 500 && status <= 599))) {
-    return true;
-  }
-
-  if (TRANSIENT_NETWORK_CODES.has(code)) {
-    return true;
-  }
-
+  if (Number.isFinite(status) && (status === 429 || (status >= 500 && status <= 599))) return true;
+  if (TRANSIENT_NETWORK_CODES.has(code)) return true;
   return /timeout|socket|hang up|ECONNRESET|ETIMEDOUT|ssl3_get_record|wrong version number/i.test(message);
 }
 
 function buildScanEndpointRotation() {
   const seen = new Set();
   const ordered = [];
-
   for (const url of BACKFILL_SCAN_ENDPOINTS) {
     if (!url || seen.has(url)) continue;
     seen.add(url);
     ordered.push(url);
   }
-
   return ordered;
 }
 
@@ -574,93 +467,54 @@ let scanEndpointRotation = buildScanEndpointRotation();
 let currentScanEndpointIndex = Math.max(0, scanEndpointRotation.indexOf(activeScanUrl));
 
 function rotateScanEndpoint(reason = '') {
-  if (scanEndpointRotation.length < 2) {
-    return false;
-  }
-
+  if (scanEndpointRotation.length < 2) return false;
   currentScanEndpointIndex = (currentScanEndpointIndex + 1) % scanEndpointRotation.length;
   activeScanUrl = scanEndpointRotation[currentScanEndpointIndex];
   client.defaults.baseURL = activeScanUrl;
-
-  const reasonText = reason ? ` (${reason})` : '';
-  console.warn(`   🔁 Rotating Scan endpoint -> ${activeScanUrl}${reasonText}`);
+  console.warn(`   🔁 Rotating Scan endpoint -> ${activeScanUrl}${reason ? ` (${reason})` : ''}`);
   return true;
 }
 
 function maybeRotateScanEndpoint(error, context = '') {
-  if (!isTransientFetchError(error)) {
-    return false;
-  }
-
+  if (!isTransientFetchError(error)) return false;
   const now = Date.now();
-  if (now - lastScanRotationAt < SCAN_ROTATE_COOLDOWN_MS) {
-    return false;
-  }
-
+  if (now - lastScanRotationAt < SCAN_ROTATE_COOLDOWN_MS) return false;
   lastScanRotationAt = now;
   const reason = `${context || 'fetch'}: ${error?.code || error?.response?.status || error?.message || 'transient error'}`;
   return rotateScanEndpoint(reason);
 }
 
-/**
- * Probe all configured Scan endpoints and keep only healthy ones in rotation.
- * This prevents repeated failover into dead endpoints during long backfills.
- */
 async function probeScanEndpoints() {
   if (!scanEndpointRotation.length) return;
-
   console.log(`\n🔎 Probing ${scanEndpointRotation.length} Scan endpoints (GET /v0/dso)...`);
 
   const probeResults = await Promise.allSettled(
     scanEndpointRotation.map(async (url) => {
       const started = Date.now();
       try {
-        const response = await client.get('/v0/dso', {
-          baseURL: url,
-          timeout: SCAN_PROBE_TIMEOUT_MS,
-          headers: { Accept: 'application/json' },
-        });
-
-        return {
-          url,
-          healthy: response.status >= 200 && response.status < 300,
-          status: response.status,
-          latencyMs: Date.now() - started,
-        };
+        const response = await client.get('/v0/dso', { baseURL: url, timeout: SCAN_PROBE_TIMEOUT_MS, headers: { Accept: 'application/json' } });
+        return { url, healthy: response.status >= 200 && response.status < 300, status: response.status, latencyMs: Date.now() - started };
       } catch (error) {
-        return {
-          url,
-          healthy: false,
-          status: error?.response?.status || null,
-          error: error?.code || error?.message || 'probe_failed',
-          latencyMs: Date.now() - started,
-        };
+        return { url, healthy: false, status: error?.response?.status || null, error: error?.code || error?.message || 'probe_failed', latencyMs: Date.now() - started };
       }
     })
   );
 
-  const results = probeResults
-    .filter((r) => r.status === 'fulfilled')
-    .map((r) => r.value);
-
-  const healthy = results
-    .filter((r) => r.healthy)
-    .sort((a, b) => a.latencyMs - b.latencyMs);
+  const results = probeResults.filter(r => r.status === 'fulfilled').map(r => r.value);
+  const healthy = results.filter(r => r.healthy).sort((a, b) => a.latencyMs - b.latencyMs);
 
   for (const r of results) {
     const icon = r.healthy ? '✅' : '❌';
-    const detail = r.healthy
-      ? `HTTP ${r.status} in ${r.latencyMs}ms`
-      : `${r.error || `HTTP ${r.status || 'n/a'}`} (${r.latencyMs}ms)`;
+    const detail = r.healthy ? `HTTP ${r.status} in ${r.latencyMs}ms` : `${r.error || `HTTP ${r.status || 'n/a'}`} (${r.latencyMs}ms)`;
     console.log(`   ${icon} ${r.url} — ${detail}`);
   }
 
   if (healthy.length === 0) {
-    console.warn('   ⚠️ No healthy Scan endpoints found in probe; keeping original rotation list.');
+    console.warn('   ⚠️ No healthy Scan endpoints found; keeping original rotation list.');
     return;
   }
 
-  scanEndpointRotation = healthy.map((r) => r.url);
+  scanEndpointRotation = healthy.map(r => r.url);
 
   if (!scanEndpointRotation.includes(activeScanUrl)) {
     const previous = activeScanUrl;
@@ -676,11 +530,8 @@ async function probeScanEndpoints() {
 }
 
 /**
- * Retry with exponential backoff + fetch stats tracking
- * 
- * CRITICAL FIX: This function now FAILS HARD on exhausted retries.
- * It will throw an error that MUST be handled by the caller.
- * No more silent continuation on network failures.
+ * Retry with exponential backoff + fetch stats tracking.
+ * CRITICAL: Throws on exhausted retries — caller must handle.
  */
 async function retryWithBackoff(fn, options = {}) {
   const {
@@ -692,100 +543,58 @@ async function retryWithBackoff(fn, options = {}) {
   } = options;
 
   let lastError;
-  
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const callStart = Date.now();
       const result = await fn();
       const latency = Date.now() - callStart;
-      
-      // Track latency (rolling window of last 100 requests)
       fetchStats.latencies.push(latency);
-      if (fetchStats.latencies.length > 100) {
-        fetchStats.latencies.shift();
-      }
-      
-      // ✅ Count successful API calls
+      if (fetchStats.latencies.length > 100) fetchStats.latencies.shift();
       fetchStats.successCount++;
       return result;
     } catch (error) {
       lastError = error;
       const status = error.response?.status;
-
-      // ❌ Count 503/429 as "rate-limit" signals for tuning
-      if (status === 503 || status === 429 || error.code === 'ERR_BAD_RESPONSE') {
-        fetchStats.retry503Count++;
-      }
-      
-      // CRITICAL FIX: Track error rate for auto-tuning safety
+      if (status === 503 || status === 429 || error.code === 'ERR_BAD_RESPONSE') fetchStats.retry503Count++;
       fetchStats.errorCount = (fetchStats.errorCount || 0) + 1;
-      
-      // Check if we should retry
-      const retryable = shouldRetry(error);
 
-      // On repeated transient errors, rotate to another Scan endpoint
-      if (retryable && attempt >= 1) {
-        maybeRotateScanEndpoint(error, context || 'backfill');
-      }
+      const retryable = shouldRetry(error);
+      if (retryable && attempt >= 1) maybeRotateScanEndpoint(error, context || 'backfill');
 
       if (attempt === maxRetries || !retryable) {
-        // CRITICAL: Log and throw - do not silently continue
         const contextStr = context ? `[${context}] ` : '';
-        console.error(
-          `❌ ${contextStr}FATAL: Fetch failed after ${attempt + 1} attempts. ` +
-          `Error: ${error.code || status || error.message}`
-        );
+        console.error(`❌ ${contextStr}FATAL: Fetch failed after ${attempt + 1} attempts. Error: ${error.code || status || error.message}`);
         throw error;
       }
 
       const exponentialDelay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
-      const jitter = Math.random() * exponentialDelay * 0.3;
-      const delay = exponentialDelay + jitter;
-      
-      console.log(
-        `   ⏳ Retry attempt ${attempt + 1}/${maxRetries} ` +
-        `after ${Math.round(delay)}ms (error: ${error.code || status || error.message})`
-      );
+      const delay = exponentialDelay + Math.random() * exponentialDelay * 0.3;
+      console.log(`   ⏳ Retry ${attempt + 1}/${maxRetries} after ${Math.round(delay)}ms (${error.code || status || error.message})`);
       await sleep(delay);
     }
   }
-  
-  // CRITICAL: This should never be reached, but if it is, fail hard
+
   throw lastError || new Error('Unknown fetch error');
 }
 
-/**
- * Reset fetch stats for new tuning window
- */
 function resetFetchStats(now) {
   fetchStats.windowStart = now;
   fetchStats.successCount = 0;
   fetchStats.retry503Count = 0;
-  fetchStats.errorCount = 0;  // CRITICAL FIX: Track errors for safety
+  fetchStats.errorCount = 0;
   fetchStats.latencies = [];
 }
 
-/**
- * Auto-tune parallel fetches based on error rate AND latency
- * 
- * CRITICAL FIX: Now error-aware - never tune up while error rate > 0
- */
 function maybeTuneParallelFetches(shardLabel = '') {
   const now = Date.now();
-  const elapsed = now - fetchStats.windowStart;
-  if (elapsed < FETCH_TUNE_WINDOW_MS) return;
+  if (now - fetchStats.windowStart < FETCH_TUNE_WINDOW_MS) return;
 
   const { successCount, retry503Count, latencies, errorCount = 0 } = fetchStats;
   const total = successCount + retry503Count + errorCount;
+  if (total === 0) { resetFetchStats(now); return; }
 
-  if (total === 0) {
-    resetFetchStats(now);
-    return;
-  }
-
-  // Calculate latency percentiles
-  let avgLatency = 0;
-  let p95Latency = 0;
+  let avgLatency = 0, p95Latency = 0;
   if (latencies.length > 0) {
     const sorted = [...latencies].sort((a, b) => a - b);
     avgLatency = sorted.reduce((a, b) => a + b, 0) / sorted.length;
@@ -794,43 +603,33 @@ function maybeTuneParallelFetches(shardLabel = '') {
     fetchStats.p95Latency = p95Latency;
   }
 
-  const errorRate = (retry503Count + errorCount) / total;
   let action = null;
+  const errorRate = (retry503Count + errorCount) / total;
 
-  // CRITICAL FIX: ANY errors = scale down immediately
-  // This prevents cascading failures during degraded API conditions
   if (errorCount > 0 || retry503Count > 0) {
     if (dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
       const reduction = errorCount > 2 ? 3 : (retry503Count >= 3 ? 2 : 1);
       dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - reduction);
-      console.log(`   🔧 Auto-tune${shardLabel}: ERRORS DETECTED (${errorCount} errors, ${retry503Count} 503s, ${(errorRate*100).toFixed(1)}% rate) → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      console.log(`   🔧 Auto-tune${shardLabel}: ERRORS (${errorCount} errors, ${retry503Count} 503s) → PARALLEL ${old} → ${dynamicParallelFetches}`);
       action = 'down';
       fetchStats.consecutiveStableWindows = 0;
     }
-  }
-  // RULE 2: Critical latency → scale down
-  else if (p95Latency > LATENCY_CRITICAL_MS || avgLatency > LATENCY_HIGH_MS) {
+  } else if (p95Latency > LATENCY_CRITICAL_MS || avgLatency > LATENCY_HIGH_MS) {
     if (dynamicParallelFetches > MIN_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
       dynamicParallelFetches = Math.max(MIN_PARALLEL_FETCHES, dynamicParallelFetches - 1);
       console.log(`   🔧 Auto-tune${shardLabel}: HIGH LATENCY (avg=${avgLatency.toFixed(0)}ms, p95=${p95Latency.toFixed(0)}ms) → PARALLEL ${old} → ${dynamicParallelFetches}`);
       action = 'down';
     }
-  }
-  // RULE 3: Low errors + low latency → scale up aggressively
-  // CRITICAL FIX: Only scale up if ZERO errors
-  else if (errorCount === 0 && retry503Count === 0 && successCount >= 15 && avgLatency < LATENCY_LOW_MS && avgLatency > 0) {
+  } else if (errorCount === 0 && retry503Count === 0 && successCount >= 15 && avgLatency < LATENCY_LOW_MS && avgLatency > 0) {
     if (dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
-      const increment = avgLatency < 300 ? 2 : 1;
-      dynamicParallelFetches = Math.min(MAX_PARALLEL_FETCHES, dynamicParallelFetches + increment);
-      console.log(`   🔧 Auto-tune${shardLabel}: FAST+STABLE (avg=${avgLatency.toFixed(0)}ms, ${successCount} ok) → PARALLEL ${old} → ${dynamicParallelFetches}`);
+      dynamicParallelFetches = Math.min(MAX_PARALLEL_FETCHES, dynamicParallelFetches + (avgLatency < 300 ? 2 : 1));
+      console.log(`   🔧 Auto-tune${shardLabel}: FAST+STABLE (avg=${avgLatency.toFixed(0)}ms) → PARALLEL ${old} → ${dynamicParallelFetches}`);
       action = 'up';
     }
-  }
-  // RULE 4: Stable with moderate latency → cautious scale up
-  else if (errorCount === 0 && retry503Count === 0 && successCount >= 20 && avgLatency < LATENCY_HIGH_MS) {
+  } else if (errorCount === 0 && retry503Count === 0 && successCount >= 20 && avgLatency < LATENCY_HIGH_MS) {
     fetchStats.consecutiveStableWindows++;
     if (fetchStats.consecutiveStableWindows >= 2 && dynamicParallelFetches < MAX_PARALLEL_FETCHES) {
       const old = dynamicParallelFetches;
@@ -841,74 +640,31 @@ function maybeTuneParallelFetches(shardLabel = '') {
     }
   }
 
-  // Reset window
   if (action !== 'up') fetchStats.consecutiveStableWindows = 0;
   resetFetchStats(now);
 }
 
 /**
- * Auto-tune decode workers based on queue depth
- */
-// maybeTuneDecodeWorkers removed — no longer using worker pool
-
-/**
- * Load cursor from file (shard-aware)
- * 
- * FIXED: Now delegates to loadCursorLegacy from atomic-cursor.js which uses
- * readCursorSafe() — this supports backup (.bak) recovery if the main cursor
- * file is corrupted, and handles empty/malformed files gracefully.
+ * Load cursor from file (shard-aware).
+ * Delegates to loadCursorLegacy which uses readCursorSafe for .bak recovery.
  */
 function loadCursor(migrationId, synchronizerId, shardIndex = null) {
   return loadCursorLegacy(migrationId, synchronizerId, shardIndex);
 }
 
 /**
- * Save cursor to file (shard-aware)
- */
-function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime, shardIndex = null) {
-  try {
-    if (!existsSync(CURSOR_DIR)) {
-      console.log(`   📁 Creating cursor directory: ${CURSOR_DIR}`);
-      mkdirSync(CURSOR_DIR, { recursive: true });
-    }
-    
-    const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
-    const cursorFile = join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
-    
-    const cursorData = {
-      ...cursor,
-      migration_id: migrationId,
-      synchronizer_id: synchronizerId,
-      shard_index: shardIndex,
-      shard_total: shardIndex !== null ? SHARD_TOTAL : null,
-      id: `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}`,
-      cursor_name: `migration-${migrationId}-${synchronizerId.substring(0, 20)}${shardSuffix}`,
-      min_time: minTime || cursor.min_time,
-      max_time: maxTime || cursor.max_time,
-      last_processed_round: cursor.last_processed_round || 0,
-    };
-    // Use atomic write to prevent cursor corruption on ENOSPC/crash
-    atomicWriteFile(cursorFile, cursorData);
-  } catch (err) {
-    console.error(`   [saveCursor] ❌ FAILED to save cursor: ${err.message}`);
-    console.error(`   [saveCursor] CURSOR_DIR: ${CURSOR_DIR}`);
-  }
-}
-
-/**
- * Sanitize string for filename
+ * Sanitize string for filename.
  */
 function sanitize(str) {
   return str.replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 50);
 }
 
-/**
- * Detect all available migrations via POST /v0/backfilling/migration-info
- * Iterates migration_id from 1 upward until 404 (not found)
- */
-async function detectMigrations() {
-  console.log("🔎 Detecting available migrations via /v0/backfilling/migration-info");
+// FIX #3: saveCursor() removed — it was dead code (never called) that duplicated
+// AtomicCursor with weaker safety guarantees. All cursor writes go through
+// atomicCursor.saveAtomic() / beginTransaction() / commit() / rollback().
 
+async function detectMigrations() {
+  console.log('🔎 Detecting available migrations via /v0/backfilling/migration-info');
   const MIGRATION_DETECT_RETRIES = 3;
   const migrations = [];
   let id = 0;
@@ -919,10 +675,7 @@ async function detectMigrations() {
 
     for (let attempt = 1; attempt <= MIGRATION_DETECT_RETRIES; attempt++) {
       try {
-        const res = await client.post("/v0/backfilling/migration-info", {
-          migration_id: id,
-        });
-
+        const res = await client.post('/v0/backfilling/migration-info', { migration_id: id });
         if (res.data?.record_time_range) {
           const ranges = res.data.record_time_range || [];
           const minTime = ranges[0]?.min || 'unknown';
@@ -932,58 +685,40 @@ async function detectMigrations() {
           succeeded = true;
           break;
         } else {
-          // Valid response but no data — treat as end
           confirmed404 = true;
           break;
         }
       } catch (err) {
         const status = err.response?.status;
-        if (status === 404) {
-          confirmed404 = true;
-          break;
-        }
-
-        // Transient error (503, 429, 5xx, timeout) — retry with backoff
-        const isTransient = [429, 500, 502, 503, 504].includes(status) ||
-          /timeout|ETIMEDOUT|ECONNRESET|socket hang up/i.test(err.message);
-
+        if (status === 404) { confirmed404 = true; break; }
+        const isTransient = [429, 500, 502, 503, 504].includes(status) || /timeout|ETIMEDOUT|ECONNRESET|socket hang up/i.test(err.message);
         if (isTransient && attempt < MIGRATION_DETECT_RETRIES) {
           const delay = 2000 * Math.pow(2, attempt - 1);
-          console.warn(`   ⚠️ Transient error probing migration_id=${id} (status=${status || 'network'}, attempt ${attempt}/${MIGRATION_DETECT_RETRIES}), retrying in ${delay}ms...`);
-          await new Promise(r => setTimeout(r, delay));
+          console.warn(`   ⚠️ Transient error probing migration_id=${id} (attempt ${attempt}/${MIGRATION_DETECT_RETRIES}), retrying in ${delay}ms...`);
+          await sleep(delay);
           continue;
         }
-
         console.error(`❌ Error probing migration_id=${id} after ${attempt} attempts:`, status, err.message);
-        confirmed404 = true; // Conservative: stop scanning but don't crash
+        confirmed404 = true;
         break;
       }
     }
 
     if (confirmed404) break;
-    if (succeeded) {
-      id++;
-    } else {
-      console.warn(`   ⚠️ Could not confirm migration_id=${id} after ${MIGRATION_DETECT_RETRIES} retries, stopping scan`);
-      break;
-    }
+    if (succeeded) { id++; }
+    else { console.warn(`   ⚠️ Could not confirm migration_id=${id}, stopping scan`); break; }
   }
 
-  console.log(`✅ Found migrations: ${migrations.join(", ")}`);
+  console.log(`✅ Found migrations: ${migrations.join(', ')}`);
   return migrations;
 }
 
-/**
- * Get migration info via POST /v0/backfilling/migration-info
- */
 async function getMigrationInfo(migrationId) {
   try {
-    const res = await client.post("/v0/backfilling/migration-info", {
-      migration_id: migrationId,
-    });
+    const res = await client.post('/v0/backfilling/migration-info', { migration_id: migrationId });
     return res.data;
   } catch (err) {
-    if (err.response && err.response.status === 404) {
+    if (err.response?.status === 404) {
       console.log(`ℹ️  No backfilling info for migration_id=${migrationId} (404)`);
       return null;
     }
@@ -991,270 +726,234 @@ async function getMigrationInfo(migrationId) {
   }
 }
 
-/**
- * Fetch backfill data before a timestamp (single request)
- */
 let fetchCount = 0;
 let firstCallLogged = false;
+
 async function fetchBackfillBefore(migrationId, synchronizerId, before, atOrAfter) {
-  const payload = {
-    migration_id: migrationId,
-    synchronizer_id: synchronizerId,
-    before,
-    count: BATCH_SIZE,
-  };
-  
-  if (atOrAfter) {
-    payload.at_or_after = atOrAfter;
-  }
-  
+  const payload = { migration_id: migrationId, synchronizer_id: synchronizerId, before, count: BATCH_SIZE };
+  if (atOrAfter) payload.at_or_after = atOrAfter;
+
   const thisCall = ++fetchCount;
   const startTime = Date.now();
-  
+
   return await retryWithBackoff(async () => {
     const response = await client.post('/v0/backfilling/updates-before', payload);
-    // Log only the first successful call
     if (!firstCallLogged) {
       firstCallLogged = true;
-      const elapsed = Date.now() - startTime;
-      console.log(`   ✅ API connected: first call returned ${response.data?.transactions?.length || 0} txs in ${elapsed}ms`);
+      console.log(`   ✅ API connected: first call returned ${response.data?.transactions?.length || 0} txs in ${Date.now() - startTime}ms`);
     }
     return response.data;
   });
 }
 
-/**
- * Get event time from transaction or reassignment
- */
 function getEventTime(txOrReassign) {
-  return (
-    txOrReassign.record_time ||
-    txOrReassign.event?.record_time ||
-    txOrReassign.effective_at
-  );
+  return txOrReassign.record_time || txOrReassign.event?.record_time || txOrReassign.effective_at;
 }
 
 /**
- * Process backfill items using BATCHED worker pool decode
- * 
- * Sends chunks of ~250 txs per Piscina message (not 1 per message).
- * This keeps decode OFF the main event loop (freeing it for HTTP I/O)
- * while amortizing structured clone overhead across many txs.
- * Falls back to main-thread decode if pool unavailable.
+ * Process backfill items using BATCHED worker pool decode.
+ *
+ * FIX #7: Worker batch results now have their errors[] array inspected and
+ * logged. Per-transaction decode failures no longer silently disappear.
  */
 async function processBackfillItems(transactions, migrationId) {
   const pool = getDecodePool();
-  
+
   if (!pool) {
-    // Fallback: main-thread decode
-    const updates = [];
-    const events = [];
+    const updates = [], events = [];
     for (const tx of transactions) {
       const r = decodeInMainThread(tx, migrationId);
       if (!r) continue;
       if (r.update) updates.push(r.update);
-      if (Array.isArray(r.events) && r.events.length > 0) {
-        events.push(...r.events);
-      }
+      if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
     }
     await Promise.all([bufferUpdates(updates), bufferEvents(events)]);
     return { updates: updates.length, events: events.length };
   }
 
-  // Split into batches and send to worker pool
   const batchPromises = [];
   for (let i = 0; i < transactions.length; i += DECODE_BATCH_SIZE) {
     const chunk = transactions.slice(i, i + DECODE_BATCH_SIZE);
     batchPromises.push(
       pool.run({ txs: chunk, migrationId }).catch(err => {
-        // Fallback: decode this chunk on main thread
         console.warn(`   ⚠️ Worker batch failed, main-thread fallback: ${err.message}`);
-        const updates = [];
-        const events = [];
+        const updates = [], events = [];
         for (const tx of chunk) {
           const r = decodeInMainThread(tx, migrationId);
           if (!r) continue;
           if (r.update) updates.push(r.update);
           if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
         }
-        return { updates, events };
+        return { updates, events, errors: [] };
       })
     );
   }
 
   const batchResults = await Promise.all(batchPromises);
 
-  // Merge all batch results
-  const allUpdates = [];
-  const allEvents = [];
+  const allUpdates = [], allEvents = [];
   for (const r of batchResults) {
     if (r.updates) allUpdates.push(...r.updates);
     if (r.events) allEvents.push(...r.events);
+    // FIX #7: Surface per-transaction decode errors from the worker
+    if (r.errors && r.errors.length > 0) {
+      for (const e of r.errors) {
+        console.error(`   [decode-worker] tx ${e.tx_id} failed: ${e.error}`);
+      }
+    }
   }
 
-  // Buffer concurrently
-  await Promise.all([
-    bufferUpdates(allUpdates),
-    bufferEvents(allEvents),
-  ]);
-
+  await Promise.all([bufferUpdates(allUpdates), bufferEvents(allEvents)]);
   return { updates: allUpdates.length, events: allEvents.length };
 }
 
 /**
- * Decode in main thread — primary decode path (no worker pool overhead)
- * Includes effective_at guard to prevent partition crashes from null timestamps.
+ * Decode a single transaction on the main thread.
+ *
+ * FIX #1: isReassignment now checks tx.reassignment (the actual Scan API
+ * wrapper field) instead of tx.event, which is unrelated and caused false
+ * positives.
+ *
+ * FIX #1: Transaction events are now traversed in preorder tree order via
+ * flattenEventsInTreeOrder instead of Object.entries order.
+ *
+ * FIX #1: event_id overwrites now warn on key/field mismatch rather than
+ * silently replacing without checking.
+ *
+ * FIX #2: Silent effective_at warn-and-skip guards removed. normalizeEvent
+ * throws on null effective_at with full context — trusting that contract
+ * here avoids stale defensive code that contradicts the upstream guarantee.
  */
 export function decodeInMainThread(tx, migrationId) {
-  const isReassignment = !!tx.event;
-  const update = normalizeUpdate(tx);
-  update.migration_id = migrationId;
+  // FIX #1: Use tx.reassignment — the actual Scan API wrapper field
+  const isReassignment = !!tx.reassignment;
 
+  const update = normalizeUpdate({ ...tx, migration_id: migrationId });
   const events = [];
   const txData = tx.transaction || tx.reassignment || tx;
 
   const updateInfo = {
-    record_time: txData.record_time,
-    effective_at: txData.effective_at,
+    record_time:    txData.record_time,
+    effective_at:   txData.effective_at,
     synchronizer_id: txData.synchronizer_id,
-    source: txData.source || null,
-    target: txData.target || null,
-    unassign_id: txData.unassign_id || null,
-    submitter: txData.submitter || null,
-    counter: txData.counter ?? null,
+    source:         txData.source || null,
+    target:         txData.target || null,
+    unassign_id:    txData.unassign_id || null,
+    submitter:      txData.submitter || null,
+    counter:        txData.counter ?? null,
   };
 
   if (isReassignment) {
-    const ce = tx.event?.created_event;
-    const ae = tx.event?.archived_event;
+    // FIX #1: Navigate the correct path — tx.reassignment.event.{created,archived}_event
+    const ce = tx.reassignment?.event?.created_event;
+    const ae = tx.reassignment?.event?.archived_event;
 
     if (ce) {
       const ev = normalizeEvent(ce, update.update_id, migrationId, tx, updateInfo);
       ev.event_type = 'reassign_create';
-      if (ev.effective_at) {
-        events.push(ev);
-      } else {
-        console.warn(`⚠️ [decode] Skipping reassign_create with no effective_at: update=${update.update_id}`);
-      }
+      // FIX #2: normalizeEvent throws on null effective_at — no warn-and-skip needed
+      events.push(ev);
     }
     if (ae) {
       const ev = normalizeEvent(ae, update.update_id, migrationId, tx, updateInfo);
       ev.event_type = 'reassign_archive';
-      if (ev.effective_at) {
-        events.push(ev);
-      } else {
-        console.warn(`⚠️ [decode] Skipping reassign_archive with no effective_at: update=${update.update_id}`);
-      }
+      events.push(ev);
     }
   } else {
     const eventsById = txData.events_by_id || tx.events_by_id || {};
-    for (const [eventId, rawEvent] of Object.entries(eventsById)) {
+    const rootEventIds = txData.root_event_ids || tx.root_event_ids || [];
+
+    // FIX #1: Use flattenEventsInTreeOrder for correct preorder traversal
+    // per Scan API docs (root_event_ids → child_event_ids).
+    const orderedEvents = flattenEventsInTreeOrder(eventsById, rootEventIds);
+
+    for (const rawEvent of orderedEvents) {
       const ev = normalizeEvent(rawEvent, update.update_id, migrationId, rawEvent, updateInfo);
-      ev.event_id = eventId;
-      if (ev.effective_at) {
-        events.push(ev);
-      } else {
-        console.warn(`⚠️ [decode] Skipping event ${eventId} with no effective_at: update=${update.update_id}`);
+
+      // FIX #1: Warn on event_id key/field mismatch instead of silently overwriting
+      const mapKeyId = rawEvent.event_id;
+      if (mapKeyId && ev.event_id && mapKeyId !== ev.event_id) {
+        console.warn(
+          `[decode-main] event_id mismatch for update=${update.update_id}: ` +
+          `eventsById key="${mapKeyId}" vs event.event_id="${ev.event_id}". ` +
+          `Using map key as authoritative.`
+        );
+        ev.event_id = mapKeyId;
+      } else if (mapKeyId && !ev.event_id) {
+        ev.event_id = mapKeyId;
       }
+
+      // FIX #2: No silent effective_at filter — normalizeEvent throws if null
+      events.push(ev);
     }
   }
 
   return { update, events };
 }
 
-/**
- * Fetch a single time slice with STREAMING processing
- * Instead of accumulating all transactions, process them immediately to avoid OOM.
- * Returns stats only, not the raw transactions.
- */
 async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex, processCallback) {
   const seenUpdateIds = new Set();
   let currentBefore = sliceBefore;
   const emptyHandler = new EmptyResponseHandler();
   let totalTxs = 0;
   let earliestTime = sliceBefore;
-  
-  // Pipeline: allow up to N process callbacks to run concurrently while fetching
+
   const MAX_INFLIGHT_PROCESS = parseInt(process.env.MAX_INFLIGHT_PROCESS || '8', 10);
   const inflightProcesses = [];
-  
+
   while (true) {
-    // Check if we've passed the lower bound of this slice
-    if (new Date(currentBefore).getTime() <= new Date(sliceAfter).getTime()) {
-      break;
-    }
-    
+    if (new Date(currentBefore).getTime() <= new Date(sliceAfter).getTime()) break;
+
     let response;
     try {
       response = await fetchBackfillBefore(migrationId, synchronizerId, currentBefore, sliceAfter);
     } catch (err) {
       throw err;
     }
-    
+
     const txs = response?.transactions || [];
-    
+
     if (txs.length === 0) {
       const { action, newBefore, consecutiveEmpty, stepMs } = emptyHandler.handleEmpty(currentBefore, sliceAfter);
-      if (action === 'done' || !newBefore) {
-        break;
-      }
-
-      // Keep logs accurate (step size may increase across gaps)
+      if (action === 'done' || !newBefore) break;
       if (consecutiveEmpty % 100 === 0) {
-        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses. Stepping back ${stepMs}ms at a time.`);
+        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses. Stepping back ${stepMs}ms.`);
       }
-
       currentBefore = newBefore;
       continue;
     }
-    
+
     emptyHandler.resetOnData();
-    
-    // Deduplicate within this slice
+
     const uniqueTxs = [];
     for (const tx of txs) {
       const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
       if (updateId) {
-        if (!seenUpdateIds.has(updateId)) {
-          seenUpdateIds.add(updateId);
-          uniqueTxs.push(tx);
-        }
+        if (!seenUpdateIds.has(updateId)) { seenUpdateIds.add(updateId); uniqueTxs.push(tx); }
       } else {
         uniqueTxs.push(tx);
       }
     }
-    
-    // PIPELINE: Process callback with backpressure — errors MUST propagate
-    // to prevent cursor advancement past unwritten data
+
     if (uniqueTxs.length > 0) {
-      // Wait for oldest inflight to complete if at capacity
-      if (inflightProcesses.length >= MAX_INFLIGHT_PROCESS) {
-        await inflightProcesses.shift();
-      }
-      const processPromise = processCallback(uniqueTxs);
-      inflightProcesses.push(processPromise);
+      if (inflightProcesses.length >= MAX_INFLIGHT_PROCESS) await inflightProcesses.shift();
+      inflightProcesses.push(processCallback(uniqueTxs));
       totalTxs += uniqueTxs.length;
     }
-    
-    // Track earliest time for cursor
+
     for (const tx of txs) {
       const t = getEventTime(tx);
       if (t && t < earliestTime) earliestTime = t;
     }
-    
-    // Find oldest timestamp for next page
+
     let oldestTime = null;
     for (const tx of txs) {
       const t = getEventTime(tx);
-      if (t && (!oldestTime || t < oldestTime)) {
-        oldestTime = t;
-      }
+      if (t && (!oldestTime || t < oldestTime)) oldestTime = t;
     }
-    
-    if (oldestTime && new Date(oldestTime).getTime() <= new Date(sliceAfter).getTime()) {
-      break;
-    }
-    
+
+    if (oldestTime && new Date(oldestTime).getTime() <= new Date(sliceAfter).getTime()) break;
+
     if (oldestTime) {
       const d = new Date(oldestTime);
       d.setMilliseconds(d.getMilliseconds() - 1);
@@ -1264,155 +963,79 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
       d.setMilliseconds(d.getMilliseconds() - 1);
       currentBefore = d.toISOString();
     }
-    
-    // Memory safety
-    // Memory safety: clear dedup set at 500K entries (~40MB)
-    // Raised from 50K to reduce duplicate risk within high-density time slices
-    if (seenUpdateIds.size > 500000) {
-      seenUpdateIds.clear();
-    }
+
+    if (seenUpdateIds.size > 500000) seenUpdateIds.clear();
   }
-  
-  // Wait for all remaining inflight processes to complete
-  if (inflightProcesses.length > 0) {
-    await Promise.all(inflightProcesses);
-  }
-  
+
+  if (inflightProcesses.length > 0) await Promise.all(inflightProcesses);
+
   return { sliceIndex, totalTxs, earliestTime };
 }
 
-/**
- * Parallel fetch with STREAMING processing
- * 
- * Divides the time range into N non-overlapping slices and fetches each in parallel.
- * Each slice STREAMS its transactions to processBackfillItems immediately to avoid OOM.
- * Returns aggregated stats instead of raw transactions.
- * 
- * CRITICAL FIX: Cursor advancement is now CONSERVATIVE.
- * - Tracks per-slice completion status and boundaries
- * - Cursor only advances to the OLDEST INCOMPLETE slice boundary
- * - Prevents data gaps if a newer slice fails after older slices complete
- */
 async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches, concurrency, cursorCallback = null) {
   const startMs = new Date(atOrAfter).getTime();
   const endMs = new Date(startBefore).getTime();
   const rangeMs = endMs - startMs;
 
-  // Don't parallelize tiny ranges
   if (rangeMs < 60000 * concurrency) {
     return sequentialFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches);
   }
 
-  // Divide into non-overlapping-ish time slices
   const sliceMs = rangeMs / concurrency;
-
   console.log(`   🔀 Parallel fetch: ${concurrency} slices of ${Math.round(sliceMs / 1000)}s each`);
 
-  // Shared stats across all slices
-  let totalUpdates = 0;
-  let totalEvents = 0;
+  let totalUpdates = 0, totalEvents = 0;
   let earliestTime = startBefore;
   let pageCount = 0;
   const streamStartTime = Date.now();
 
-  // Global dedup across slices to avoid duplicates at slice boundaries
   const globalSeenUpdateIds = new Set();
-  // IMPORTANT: This set can grow without bound on large ranges and eventually
-  // throw "Set maximum size exceeded". We cap it and clear opportunistically.
-  // Clearing is safe here because it only guards boundary duplicates; correctness
-  // is still ensured by cursor-based pagination.
+  // NOTE: globalSeenUpdateIds is cleared when it exceeds GLOBAL_DEDUP_MAX to
+  // bound memory. This is safe because cursor correctness is guaranteed by
+  // AtomicCursor — the cursor only advances after data is confirmed written,
+  // so a cleared dedup set can at most allow boundary duplicates which are
+  // handled by downstream dedup at query time.
+  // FIX #10: Comment updated to explicitly reference AtomicCursor guarantee.
   const GLOBAL_DEDUP_MAX = Number(process.env.GLOBAL_DEDUP_MAX || 250_000);
 
-  // =========================================================================
-  // CRITICAL FIX: Track per-slice completion for safe cursor advancement
-  // =========================================================================
-  // Slices are numbered 0 (newest) to N-1 (oldest).
-  // We can ONLY safely advance cursor to the boundary of a CONTIGUOUS block
-  // of completed slices starting from slice 0.
-  // 
-  // Example with 4 slices covering time 1000 → 0:
-  //   Slice 0: 1000-750 (newest)
-  //   Slice 1: 750-500
-  //   Slice 2: 500-250
-  //   Slice 3: 250-0 (oldest)
-  // 
-  // If slices 1, 2, 3 complete but slice 0 is still running:
-  //   safeCursorBoundary = 1000 (can't advance past incomplete slice 0)
-  // 
-  // If slices 0, 1 complete but slices 2, 3 still running:
-  //   safeCursorBoundary = 500 (boundary of completed slice 1)
-  // =========================================================================
-  const sliceBoundaries = []; // [{ sliceBefore, sliceAfter }] indexed by slice
-  const sliceCompleted = [];  // boolean[] indexed by slice
-  const sliceEarliestTime = []; // ISO string[] indexed by slice (actual data processed)
-  
-  // Pre-compute slice boundaries
+  const sliceBoundaries = [], sliceCompleted = [], sliceEarliestTime = [];
+
   for (let i = 0; i < concurrency; i++) {
     const sliceBefore = new Date(endMs - (i * sliceMs)).toISOString();
     const sliceAfter = new Date(endMs - ((i + 1) * sliceMs)).toISOString();
     sliceBoundaries.push({ sliceBefore, sliceAfter });
     sliceCompleted.push(false);
-    sliceEarliestTime.push(sliceBefore); // Initialize to slice start
+    sliceEarliestTime.push(sliceBefore);
   }
 
-  /**
-   * Calculate safe cursor boundary based on contiguous completed slices.
-   * Only advances cursor to the oldest boundary of a contiguous block
-   * of completed slices starting from slice 0 (newest).
-   */
   function getSafeCursorBoundary() {
-    // Find the first incomplete slice starting from 0
     let contiguousCompleteCount = 0;
     for (let i = 0; i < concurrency; i++) {
-      if (sliceCompleted[i]) {
-        contiguousCompleteCount++;
-      } else {
-        break; // Found first incomplete
-      }
+      if (sliceCompleted[i]) contiguousCompleteCount++;
+      else break;
     }
-    
-    if (contiguousCompleteCount === 0) {
-      // No slices complete yet - cursor stays at startBefore
-      return startBefore;
-    }
-    
-    // Safe boundary is the END (sliceAfter) of the last contiguously completed slice
-    // This is the oldest timestamp we can safely claim as processed
+    if (contiguousCompleteCount === 0) return startBefore;
     const lastCompleteIdx = contiguousCompleteCount - 1;
-    
-    // Use actual earliest processed time if available, else use slice boundary
-    const safeTime = sliceEarliestTime[lastCompleteIdx] || sliceBoundaries[lastCompleteIdx].sliceAfter;
-    
-    return safeTime;
+    return sliceEarliestTime[lastCompleteIdx] || sliceBoundaries[lastCompleteIdx].sliceAfter;
   }
 
-  // Process callback that handles transactions immediately with progress logging
   const processCallback = async (transactions, sliceIndex) => {
     const { updates, events } = await processBackfillItems(transactions, migrationId);
     totalUpdates += updates;
     totalEvents += events;
     pageCount++;
 
-    // Track earliest time from transactions for progress tracking
     for (const tx of transactions) {
       const t = getEventTime(tx);
       if (t && t < earliestTime) earliestTime = t;
-      // Also track per-slice earliest for safe cursor calculation
-      if (t && t < sliceEarliestTime[sliceIndex]) {
-        sliceEarliestTime[sliceIndex] = t;
-      }
+      if (t && t < sliceEarliestTime[sliceIndex]) sliceEarliestTime[sliceIndex] = t;
     }
 
-    // Log progress every 10 pages
     if (pageCount % 10 === 0) {
       const elapsed = (Date.now() - streamStartTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
       const stats = getBufferStats();
-      
-      // Build progress string with upload queue info if in GCS mode
       let progressLine = `   📥 M${migrationId} Page ${pageCount}: ${totalUpdates.toLocaleString()} upd @ ${throughput}/s | W: ${stats.queuedJobs || 0}/${stats.activeWorkers || 0}`;
-      
-      // Add upload queue stats if available
       if (stats.uploadQueuePending !== undefined || stats.uploadQueueActive !== undefined) {
         const pending = stats.uploadQueuePending || 0;
         const active = stats.uploadQueueActive || 0;
@@ -1420,220 +1043,160 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
         const pauseIndicator = stats.uploadQueuePaused ? ' ⏸️' : '';
         progressLine += ` | ☁️ ${pending}+${active} @ ${mbps}MB/s${pauseIndicator}`;
       }
-      
       console.log(progressLine);
 
-      // Save cursor every 100 pages for UI visibility
-      // CRITICAL: Use SAFE cursor boundary, not raw earliestTime
       if (cursorCallback && pageCount % 100 === 0) {
-        const safeBoundary = getSafeCursorBoundary();
-        cursorCallback(totalUpdates, totalEvents, safeBoundary);
+        cursorCallback(totalUpdates, totalEvents, getSafeCursorBoundary());
       }
     }
   };
 
-  // Helper to run a single slice with retries
   const SLICE_MAX_RETRIES = 3;
   const SALVAGE_MAX_RETRIES = 5;
+
   const runSliceWithRetry = async (sliceIndex, sliceBefore, sliceAfter, options = {}) => {
     const { maxRetries = SLICE_MAX_RETRIES, phase = 'parallel' } = options;
     let lastError;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        const result = await fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex, async (txs) => {
-          // Cross-slice dedup (cheap and safe)
-          const unique = [];
-          for (const tx of txs) {
-            const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
-            if (!updateId) {
+        const result = await fetchTimeSliceStreaming(
+          migrationId, synchronizerId, sliceBefore, sliceAfter, sliceIndex,
+          async (txs) => {
+            const unique = [];
+            for (const tx of txs) {
+              const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
+              if (!updateId) { unique.push(tx); continue; }
+              if (globalSeenUpdateIds.size >= GLOBAL_DEDUP_MAX) globalSeenUpdateIds.clear();
+              if (globalSeenUpdateIds.has(updateId)) continue;
+              globalSeenUpdateIds.add(updateId);
               unique.push(tx);
-              continue;
             }
-            if (globalSeenUpdateIds.size >= GLOBAL_DEDUP_MAX) {
-              // Keep memory bounded. This may allow some duplicates at slice boundaries
-              // after the clear, but downstream processing can handle occasional dups,
-              // and cursor advancement remains conservative.
-              globalSeenUpdateIds.clear();
-            }
-            if (globalSeenUpdateIds.has(updateId)) continue;
-            globalSeenUpdateIds.add(updateId);
-            unique.push(tx);
+            if (unique.length > 0) await processCallback(unique, sliceIndex);
           }
-          if (unique.length > 0) {
-            // Pass sliceIndex to processCallback for per-slice tracking
-            await processCallback(unique, sliceIndex);
-          }
-        });
-
-        // Mark slice as completed ONLY after all its data is processed
+        );
         sliceCompleted[sliceIndex] = true;
-
-        return result; // Success
+        return result;
       } catch (err) {
         lastError = err;
         if (attempt < maxRetries - 1) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 10000) + Math.random() * 1000;
           console.log(`   ⏳ Slice ${sliceIndex} failed (${phase}, attempt ${attempt + 1}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`);
-          await new Promise(r => setTimeout(r, delay));
+          await sleep(delay);
         }
       }
     }
 
-    // All retries exhausted - slice NOT marked complete
     console.error(`   ❌ Slice ${sliceIndex} failed after ${maxRetries} attempts (${phase}): ${lastError.message}`);
     return { sliceIndex, totalTxs: 0, earliestTime: sliceBefore, error: lastError };
   };
 
-  // Launch all slices in parallel with retry logic
-  const slicePromises = [];
-  for (let i = 0; i < concurrency; i++) {
-    const { sliceBefore, sliceAfter } = sliceBoundaries[i];
-    slicePromises.push(runSliceWithRetry(i, sliceBefore, sliceAfter));
-  }
+  const slicePromises = sliceBoundaries.map(({ sliceBefore, sliceAfter }, i) =>
+    runSliceWithRetry(i, sliceBefore, sliceAfter)
+  );
 
-  // Wait for all slices to complete
   let sliceResults = await Promise.all(slicePromises);
 
-  // Salvage pass: retry failed slices one-by-one to avoid aborting full batch
-  // because of a single flaky endpoint window.
   let failedSlices = sliceResults.filter(s => s.error);
   if (failedSlices.length > 0) {
     console.warn(`   🛟 Salvage mode: retrying ${failedSlices.length} failed slice(s) sequentially...`);
-
     for (const failed of failedSlices) {
       const idx = failed.sliceIndex;
       const { sliceBefore, sliceAfter } = sliceBoundaries[idx];
-      const salvaged = await runSliceWithRetry(idx, sliceBefore, sliceAfter, {
-        maxRetries: SALVAGE_MAX_RETRIES,
-        phase: 'salvage',
-      });
+      const salvaged = await runSliceWithRetry(idx, sliceBefore, sliceAfter, { maxRetries: SALVAGE_MAX_RETRIES, phase: 'salvage' });
       sliceResults[idx] = salvaged;
     }
-
     failedSlices = sliceResults.filter(s => s.error);
   }
 
-  // Find earliest time across all slices (for stats only)
   for (const slice of sliceResults) {
-    if (slice.earliestTime && slice.earliestTime < earliestTime) {
-      earliestTime = slice.earliestTime;
-    }
+    if (slice.earliestTime && slice.earliestTime < earliestTime) earliestTime = slice.earliestTime;
   }
 
   const totalTxs = sliceResults.reduce((sum, s) => sum + (s.totalTxs || 0), 0);
   const hasError = failedSlices.length > 0;
-
-  // Calculate final safe cursor boundary
   const safeCursorBoundary = getSafeCursorBoundary();
-  
-  // Log completion status for debugging
+
   const completedCount = sliceCompleted.filter(Boolean).length;
   if (completedCount < concurrency) {
     console.log(`   ⚠️ Only ${completedCount}/${concurrency} slices completed. Safe cursor: ${safeCursorBoundary}`);
   }
 
-  // Return stats-only result (transactions already processed via streaming)
   return {
-    results: totalTxs > 0 ? [{
-      transactions: [], // Already processed
-      processedUpdates: totalUpdates,
-      processedEvents: totalEvents,
-      before: safeCursorBoundary // Use SAFE boundary, not raw earliestTime
-    }] : [],
+    results: totalTxs > 0 ? [{ transactions: [], processedUpdates: totalUpdates, processedEvents: totalEvents, before: safeCursorBoundary }] : [],
     reachedEnd: !hasError,
-    earliestTime: safeCursorBoundary, // Use SAFE boundary for cursor advancement
+    earliestTime: safeCursorBoundary,
     totalUpdates,
     totalEvents,
-    // CRITICAL: Include failed slices for caller to handle
     failedSlices: failedSlices.map(s => ({
       sliceIndex: s.sliceIndex,
       error: s.error?.message || 'Unknown error',
       status: s.error?.response?.status || null,
       code: s.error?.code || null,
     })),
-    // Additional metadata for debugging
     sliceCompletionStatus: sliceCompleted.map((complete, i) => ({
-      sliceIndex: i,
-      complete,
-      boundary: sliceBoundaries[i],
-      earliestProcessed: sliceEarliestTime[i],
+      sliceIndex: i, complete, boundary: sliceBoundaries[i], earliestProcessed: sliceEarliestTime[i],
     })),
   };
 }
 
-/**
- * Sequential fallback for small ranges or when parallel fails
- */
 async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, atOrAfter, maxBatches) {
   const results = [];
   const seenUpdateIds = new Set();
   let currentBefore = startBefore;
   let batchesFetched = 0;
   const emptyHandler = new EmptyResponseHandler();
-  
+
   while (batchesFetched < maxBatches) {
     if (new Date(currentBefore).getTime() <= new Date(atOrAfter).getTime()) {
       return { results, reachedEnd: true };
     }
-    
+
     let response;
     try {
       response = await fetchBackfillBefore(migrationId, synchronizerId, currentBefore, atOrAfter);
     } catch (err) {
       throw err;
     }
-    
+
     const txs = response?.transactions || [];
     batchesFetched++;
-    
+
     if (txs.length === 0) {
       const { action, newBefore, consecutiveEmpty, stepMs } = emptyHandler.handleEmpty(currentBefore, atOrAfter);
-      if (action === 'done' || !newBefore) {
-        return { results, reachedEnd: true };
-      }
-
+      if (action === 'done' || !newBefore) return { results, reachedEnd: true };
       if (consecutiveEmpty % 100 === 0) {
-        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses in sequential mode. Stepping back ${stepMs}ms at a time.`);
+        console.log(`   ⚠️ ${consecutiveEmpty} consecutive empty responses. Stepping back ${stepMs}ms.`);
       }
-
       currentBefore = newBefore;
       continue;
     }
-    
+
     emptyHandler.resetOnData();
-    
+
     const uniqueTxs = [];
     for (const tx of txs) {
       const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
       if (updateId) {
-        if (!seenUpdateIds.has(updateId)) {
-          seenUpdateIds.add(updateId);
-          uniqueTxs.push(tx);
-        }
+        if (!seenUpdateIds.has(updateId)) { seenUpdateIds.add(updateId); uniqueTxs.push(tx); }
       } else {
         uniqueTxs.push(tx);
       }
     }
-    
-    if (uniqueTxs.length > 0) {
-      results.push({ transactions: uniqueTxs, before: currentBefore });
-    }
-    
+
+    if (uniqueTxs.length > 0) results.push({ transactions: uniqueTxs, before: currentBefore });
+
     let oldestTime = null;
     for (const tx of txs) {
       const t = getEventTime(tx);
-      if (t && (!oldestTime || t < oldestTime)) {
-        oldestTime = t;
-      }
+      if (t && (!oldestTime || t < oldestTime)) oldestTime = t;
     }
-    
+
     if (oldestTime && new Date(oldestTime).getTime() <= new Date(atOrAfter).getTime()) {
       return { results, reachedEnd: true };
     }
-    
+
     if (oldestTime) {
-      // CRITICAL: Subtract 1ms to avoid fetching the same record again
       const d = new Date(oldestTime);
       d.setMilliseconds(d.getMilliseconds() - 1);
       currentBefore = d.toISOString();
@@ -1642,78 +1205,51 @@ async function sequentialFetchBatch(migrationId, synchronizerId, startBefore, at
       d.setMilliseconds(d.getMilliseconds() - 1);
       currentBefore = d.toISOString();
     }
-    
-    if (seenUpdateIds.size > 100000) {
-      seenUpdateIds.clear();
-    }
+
+    if (seenUpdateIds.size > 100000) seenUpdateIds.clear();
   }
-  
+
   return { results, reachedEnd: false };
 }
 
 /**
- * Backfill a single synchronizer with parallel fetching (shard-aware)
- * Uses auto-tuning for parallel fetches and decode workers
- * 
- * CRITICAL FIX: Now uses AtomicCursor for crash-safe cursor management
+ * Backfill a single synchronizer with parallel fetching (shard-aware).
+ *
+ * FIX #4: beginTransaction/addPending/commit pattern removed from the main
+ * batch loop. Data is already confirmed buffered before the cursor save, so
+ * the correct primitive is saveAtomic — not a transaction that wraps nothing.
+ *
+ * FIX #5: The catch block now calls atomicCursor.rollback() before saveAtomic
+ * so a transaction left open by a mid-batch error doesn't cause saveAtomic to
+ * throw, which would mask the original error.
  */
 async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime, shardIndex = null) {
   const shardLabel = shardIndex !== null ? ` [shard ${shardIndex}/${SHARD_TOTAL}]` : '';
-  
-  // Structured log: synchronizer start
-  logSynchronizer('start', {
-    migrationId,
-    synchronizerId,
-    shardIndex,
-    minTime,
-    maxTime,
-    extra: {
-      parallel_fetches: dynamicParallelFetches,
-      decode: 'main-thread',
-    },
-  });
-  
+
+  logSynchronizer('start', { migrationId, synchronizerId, shardIndex, minTime, maxTime,
+    extra: { parallel_fetches: dynamicParallelFetches, decode: 'main-thread' } });
+
   console.log(`\n📍 Backfilling migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...${shardLabel}`);
   console.log(`   Range: ${minTime} to ${maxTime}`);
   console.log(`   Parallel fetches (auto-tuned): ${dynamicParallelFetches} (min=${MIN_PARALLEL_FETCHES}, max=${MAX_PARALLEL_FETCHES})`);
   console.log(`   Decode: main-thread (zero serialization overhead)`);
-  
-  // CRITICAL FIX: Use AtomicCursor for transactional cursor management
+
   const atomicCursor = new AtomicCursor(migrationId, synchronizerId, shardIndex);
-  
-  // Load existing cursor state
-  // NOTE: atomicCursor.load() returns this.confirmedState which uses camelCase keys
-  // (lastBefore, totalUpdates, totalEvents). Use those camelCase fields below.
   let cursorState = atomicCursor.load();
   let before = cursorState?.lastBefore || maxTime;
   const atOrAfter = minTime;
 
-  // CRITICAL: Check if cursor.lastBefore is already at or before minTime
-  // This means we've already processed everything.
-  if (cursorState && cursorState.lastBefore) {
+  if (cursorState?.lastBefore) {
     const lastBeforeMs = new Date(cursorState.lastBefore).getTime();
     const minTimeMs = new Date(minTime).getTime();
 
     if (lastBeforeMs <= minTimeMs) {
-      log('info', 'synchronizer_already_complete', {
-        migration: migrationId,
-        synchronizer: synchronizerId.substring(0, 30),
-        shard: shardIndex,
-        last_before: cursorState.lastBefore,
-        min_time: minTime,
-      });
-
+      logCursor('already_complete', { migrationId, synchronizerId, shardIndex, lastBefore: cursorState.lastBefore, minTime });
       console.log(`   ⚠️ Cursor last_before (${cursorState.lastBefore}) is at or before minTime (${minTime})`);
-      console.log(`   ⚠️ This synchronizer appears complete. Ensuring writer queues are drained before marking complete.`);
+      console.log(`   ⚠️ This synchronizer appears complete. Draining writer queues before marking complete.`);
 
-      // Flush any in-memory buffers and wait for pending writes.
-      try {
-        await flushAll();
-      } catch {}
-
-      try {
-        await waitForWrites();
-      } catch {}
+      try { await flushAll(); } catch {}
+      try { await waitForWrites(); } catch {}
 
       const finalStats = getBufferStats();
       const pendingWritesAccurate =
@@ -1723,47 +1259,22 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const bufferedRecords = Number((finalStats.updatesBuffered || 0) + (finalStats.eventsBuffered || 0));
       const hasPendingWork = pendingWritesAccurate > 0 || bufferedRecords > 0;
 
-      // Mark complete atomically
       if (!cursorState.complete || hasPendingWork) {
-        atomicCursor.saveAtomic({
-          complete: !hasPendingWork,
-          min_time: minTime,
-          max_time: maxTime,
-        });
-
-        logCursor('finalized', {
-          migrationId,
-          synchronizerId,
-          shardIndex,
-          lastBefore: cursorState.lastBefore,
-          totalUpdates: cursorState.totalUpdates || 0,
-          totalEvents: cursorState.totalEvents || 0,
-          complete: !hasPendingWork,
-          pendingWrites: pendingWritesAccurate,
-        });
-
+        atomicCursor.saveAtomic({ complete: !hasPendingWork, min_time: minTime, max_time: maxTime });
+        logCursor('finalized', { migrationId, synchronizerId, shardIndex, lastBefore: cursorState.lastBefore,
+          totalUpdates: cursorState.totalUpdates || 0, totalEvents: cursorState.totalEvents || 0,
+          complete: !hasPendingWork, pendingWrites: pendingWritesAccurate });
         if (hasPendingWork) {
-          console.log(`   ⏳ Writes still pending (pending_writes=${pendingWritesAccurate}, buffered_records=${bufferedRecords}). Cursor left in finalizing state.`);
+          console.log(`   ⏳ Writes still pending. Cursor left in finalizing state.`);
         }
       }
 
       return { updates: cursorState.totalUpdates || 0, events: cursorState.totalEvents || 0 };
     }
 
-    // Log cursor state for debugging
-    logCursor('resume', {
-      migrationId,
-      synchronizerId,
-      shardIndex,
-      lastBefore: cursorState.lastBefore,
-      totalUpdates: cursorState.totalUpdates || 0,
-      totalEvents: cursorState.totalEvents || 0,
-      complete: cursorState.complete || false,
-    });
-
-    console.log(
-      `   📍 Resuming from cursor: last_before=${cursorState.lastBefore}, updates=${cursorState.totalUpdates || 0}, complete=${cursorState.complete || false}`,
-    );
+    logCursor('resume', { migrationId, synchronizerId, shardIndex, lastBefore: cursorState.lastBefore,
+      totalUpdates: cursorState.totalUpdates || 0, totalEvents: cursorState.totalEvents || 0, complete: cursorState.complete || false });
+    console.log(`   📍 Resuming from cursor: last_before=${cursorState.lastBefore}, updates=${cursorState.totalUpdates || 0}`);
   }
 
   let totalUpdates = cursorState?.totalUpdates || 0;
@@ -1771,49 +1282,30 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
   let batchCount = 0;
   const startTime = Date.now();
   let lastMetricsLog = Date.now();
-  const METRICS_LOG_INTERVAL_MS = 60000; // Log metrics every minute
-  
-  // Save initial cursor only if this is a fresh start
+  const METRICS_LOG_INTERVAL_MS = 60000;
+
   if (!cursorState) {
-    atomicCursor.saveAtomic({
-      last_before: before,
-      total_updates: 0,
-      total_events: 0,
-      started_at: new Date().toISOString(),
-      min_time: minTime,
-      max_time: maxTime,
-    });
-    
-    logCursor('created', {
-      migrationId,
-      synchronizerId,
-      shardIndex,
-      lastBefore: before,
-      totalUpdates: 0,
-      totalEvents: 0,
-    });
+    atomicCursor.saveAtomic({ last_before: before, total_updates: 0, total_events: 0,
+      started_at: new Date().toISOString(), min_time: minTime, max_time: maxTime });
+    logCursor('created', { migrationId, synchronizerId, shardIndex, lastBefore: before, totalUpdates: 0, totalEvents: 0 });
   }
-  
-  // Transient error tracking for exponential backoff and cooldown mode
+
   let consecutiveTransientErrors = 0;
   let cooldownUntil = 0;
-  
+
   while (true) {
     const batchStartTime = Date.now();
-    
-    // MEMORY SAFETY: Check heap pressure before starting new batch
+
     const memCheck = checkMemoryPressure();
     if (memCheck.pressure) {
-      console.log(`   ⚠️ Heap pressure detected: ${memCheck.heap.usedMB}MB / ${memCheck.heap.limitMB}MB (${(memCheck.heap.ratio * 100).toFixed(1)}%)${shardLabel}`);
+      console.log(`   ⚠️ Heap pressure: ${memCheck.heap.usedMB}MB / ${memCheck.heap.limitMB}MB${shardLabel}`);
       await waitForMemoryRelief(shardLabel);
     }
-    
+
     try {
-      // Use current dynamic concurrency values
       const localParallel = dynamicParallelFetches;
       const cursorBeforeBatch = before;
-      
-      // Cursor callback for streaming progress updates (transactional)
+
       const cursorCallback = (streamUpdates, streamEvents, streamEarliest) => {
         atomicCursor.saveAtomic({
           last_before: streamEarliest || before,
@@ -1823,206 +1315,125 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
           max_time: maxTime,
         });
       };
-      
+
       const fetchResult = await parallelFetchBatch(
-        migrationId, synchronizerId, before, atOrAfter, 
-        localParallel * 2,  // maxBatches per cycle
-        localParallel,      // actual concurrency
-        cursorCallback      // pass cursor callback for streaming updates
+        migrationId, synchronizerId, before, atOrAfter,
+        localParallel * 2, localParallel, cursorCallback
       );
-      
+
       const { results, reachedEnd, earliestTime: resultEarliestTime, totalUpdates: batchUpdates, totalEvents: batchEvents, failedSlices } = fetchResult;
-      
-      // CRITICAL DATA INTEGRITY FIX: If any slice failed, throw immediately
-      // This prevents advancing the cursor past unfetched data ranges
+
       if (failedSlices && failedSlices.length > 0) {
         const sliceList = failedSlices.map(s => `slice ${s.sliceIndex}: ${s.error}`).join(', ');
-
-        // Treat slice failures as transient if they are predominantly retryable
-        // (e.g. 503 from upstream or network-level ERR_BAD_RESPONSE).
         const statuses = failedSlices.map(s => s.status).filter(Boolean);
-        const codes = failedSlices
-          .map(s => String(s.code || '').toUpperCase())
-          .filter(Boolean);
-
-        const has429 = statuses.includes(429);
-        const has5xx = statuses.some(s => s >= 500 && s <= 599);
-        const hasErrBadResponse = codes.includes('ERR_BAD_RESPONSE');
-        const hasNetworkCode = codes.some(c => TRANSIENT_NETWORK_CODES.has(c));
-        const isTransient = has429 || has5xx || hasErrBadResponse || hasNetworkCode;
-
+        const codes = failedSlices.map(s => String(s.code || '').toUpperCase()).filter(Boolean);
+        const isTransient = statuses.some(s => s === 429 || (s >= 500 && s <= 599)) ||
+          codes.some(c => TRANSIENT_NETWORK_CODES.has(c)) ||
+          codes.includes('ERR_BAD_RESPONSE');
         const e = new Error(`${failedSlices.length} slice(s) failed: ${sliceList}. Cursor NOT advanced to prevent data gaps.`);
         if (isTransient) {
-          // Mimic axios error shape so the catch block treats it as transient.
-          e.response = { status: has429 ? 429 : 503 };
-          e.code = hasErrBadResponse ? 'ERR_BAD_RESPONSE' : (codes[0] || undefined);
+          e.response = { status: statuses.includes(429) ? 429 : 503 };
+          e.code = codes.includes('ERR_BAD_RESPONSE') ? 'ERR_BAD_RESPONSE' : (codes[0] || undefined);
         }
         throw e;
       }
-      
+
       if (results.length === 0 && !batchUpdates) {
-        log('info', 'no_more_transactions', {
-          migration: migrationId,
-          synchronizer: synchronizerId.substring(0, 30),
-          shard: shardIndex,
-          batch: batchCount,
-        });
         console.log(`   ✅ No more transactions. Marking complete.${shardLabel}`);
         break;
       }
-      
-      // Streaming mode: transactions already processed, just use stats
+
       totalUpdates += batchUpdates || 0;
       totalEvents += batchEvents || 0;
       batchCount++;
-      
-      // Update cursor position from streaming result
-      const newEarliestTime = resultEarliestTime || (results[0]?.before);
+
+      const newEarliestTime = resultEarliestTime || results[0]?.before;
       if (newEarliestTime && newEarliestTime !== before) {
         const d = new Date(newEarliestTime);
         d.setMilliseconds(d.getMilliseconds() - 1);
         before = d.toISOString();
       } else {
-        // No new data found, small step back
         const d = new Date(before);
         d.setMilliseconds(d.getMilliseconds() - 1);
         before = d.toISOString();
       }
-      
-      // Calculate throughput
+
       const elapsed = (Date.now() - startTime) / 1000;
       const throughput = Math.round(totalUpdates / elapsed);
       const batchLatency = Date.now() - batchStartTime;
-      
-      // Get buffer stats
       const stats = getBufferStats();
-      const pendingWritesAccurate =
-        Number(stats.pendingWrites || 0) +
-        Number(stats.queuedWrites ?? stats.queuedJobs ?? 0) +
-        Number(stats.activeWrites ?? stats.activeWorkers ?? 0);
       const queuedJobs = Number(stats.queuedJobs ?? 0);
       const activeWorkers = Number(stats.activeWorkers ?? 0);
 
-      // CRITICAL FIX: Atomic cursor save AFTER data is confirmed buffered
-      // Use transaction pattern: begin -> addPending -> commit
-      if (!atomicCursor.inTransaction) {
-        atomicCursor.beginTransaction(batchUpdates, batchEvents, before);
-      } else {
-        atomicCursor.addPending(batchUpdates, batchEvents, before);
-      }
-      atomicCursor.commit();
-      
-      // SUCCESS: Reset transient error tracking
+      // FIX #4: Data is already confirmed buffered by processBackfillItems at
+      // this point — use saveAtomic directly. The beginTransaction/addPending/
+      // commit pattern was misleading because no I/O confirmation happened
+      // between begin and commit, making it semantically equivalent to saveAtomic
+      // but much harder to reason about.
+      atomicCursor.saveAtomic({
+        last_before: before,
+        total_updates: totalUpdates,
+        total_events: totalEvents,
+        min_time: minTime,
+        max_time: maxTime,
+      });
+
       consecutiveTransientErrors = 0;
-      
-      // Check if cooldown expired - allow auto-tuner to scale back up
       if (cooldownUntil && Date.now() > cooldownUntil) {
-        console.log(`   🔥 Cooldown expired, auto-tuner will scale up if API is healthy${shardLabel}`);
+        console.log(`   🔥 Cooldown expired, auto-tuner will scale back up${shardLabel}`);
         cooldownUntil = 0;
       }
-      
-      // Update time bounds
+
       atomicCursor.setTimeBounds(minTime, maxTime);
-      
-      // Structured batch log
-      logBatch({
-        migrationId,
-        synchronizerId,
-        shardIndex,
-        batchCount,
-        updates: batchUpdates || 0,
-        events: batchEvents || 0,
-        totalUpdates,
-        totalEvents,
-        cursorBefore: cursorBeforeBatch,
-        cursorAfter: before,
-        throughput,
-        latencyMs: batchLatency,
-        parallelFetches: dynamicParallelFetches,
-        queuedJobs,
-        activeWorkers,
-      });
-      
-      // Periodic metrics log (every minute)
+
+      logBatch({ migrationId, synchronizerId, shardIndex, batchCount,
+        updates: batchUpdates || 0, events: batchEvents || 0, totalUpdates, totalEvents,
+        cursorBefore: cursorBeforeBatch, cursorAfter: before, throughput,
+        latencyMs: batchLatency, parallelFetches: dynamicParallelFetches, queuedJobs, activeWorkers });
+
       if (Date.now() - lastMetricsLog >= METRICS_LOG_INTERVAL_MS) {
-        logMetrics({
-          migrationId,
-          shardIndex,
-          elapsedSeconds: elapsed,
-          totalUpdates,
-          totalEvents,
-          avgThroughput: throughput,
-          currentThroughput: Math.round((batchUpdates || 0) / (batchLatency / 1000)),
-          parallelFetches: dynamicParallelFetches,
-          avgLatencyMs: fetchStats.avgLatency,
-          p95LatencyMs: fetchStats.p95Latency,
-          errorCount: fetchStats.errorCount || 0,
-          retryCount: fetchStats.retry503Count,
-        });
+        logMetrics({ migrationId, shardIndex, elapsedSeconds: elapsed, totalUpdates, totalEvents,
+          avgThroughput: throughput, currentThroughput: Math.round((batchUpdates || 0) / (batchLatency / 1000)),
+          parallelFetches: dynamicParallelFetches, avgLatencyMs: fetchStats.avgLatency,
+          p95LatencyMs: fetchStats.p95Latency, errorCount: fetchStats.errorCount || 0, retryCount: fetchStats.retry503Count });
         lastMetricsLog = Date.now();
       }
-      
-      // Force flush periodically to prevent memory buildup
-      if (batchCount % FLUSH_EVERY_BATCHES === 0) {
-        await flushAll();
-      }
-      
-      // GCS CRASH SAFETY: Periodic checkpoint - drain upload queue and confirm GCS position
-      // This bounds the re-fetch window on VM crash to ~GCS_CHECKPOINT_INTERVAL batches
+
+      if (batchCount % FLUSH_EVERY_BATCHES === 0) await flushAll();
+
       if (GCS_MODE && batchCount % GCS_CHECKPOINT_INTERVAL === 0) {
         const checkpointStart = Date.now();
         console.log(`   ⏱️ GCS checkpoint: draining upload queue...${shardLabel}`);
-        
-        // Wait for all GCS uploads to complete
         await drainUploads();
-        
-        // Confirm GCS position in cursor
         atomicCursor.confirmGCS(before, totalUpdates, totalEvents);
-        
-        // Periodically backup cursor file to GCS for cross-VM recovery
         gcsCursorBackupCounter++;
         if (gcsCursorBackupCounter % GCS_CURSOR_BACKUP_INTERVAL === 0) {
-          backupCursorToGCS(atomicCursor.cursorPath);
+          // FIX #6: await the now-async backupCursorToGCS so errors surface
+          // and the event loop is not blocked during the gsutil copy.
+          await backupCursorToGCS(atomicCursor.cursorPath);
         }
-        
-        const checkpointMs = Date.now() - checkpointStart;
-        console.log(`   ✅ GCS checkpoint confirmed at ${before} (${checkpointMs}ms)${shardLabel}`);
+        console.log(`   ✅ GCS checkpoint confirmed at ${before} (${Date.now() - checkpointStart}ms)${shardLabel}`);
       }
-      
-      // Auto-tune after processing this wave
+
       maybeTuneParallelFetches(shardLabel);
-      
-      // Main progress line with current tuning values
+
       console.log(`   📦${shardLabel} Batch ${batchCount}: +${batchUpdates || 0} upd, +${batchEvents || 0} evt | Total: ${totalUpdates.toLocaleString()} @ ${throughput}/s | F:${dynamicParallelFetches} | Q: ${queuedJobs}/${activeWorkers}`);
-      
+
       if (reachedEnd || new Date(before).getTime() <= new Date(atOrAfter).getTime()) {
-        log('info', 'reached_lower_bound', {
-          migration: migrationId,
-          synchronizer: synchronizerId.substring(0, 30),
-          shard: shardIndex,
-          before,
-          at_or_after: atOrAfter,
-        });
         console.log(`   ✅ Reached lower bound. Complete.${shardLabel}`);
         break;
       }
-      
+
     } catch (err) {
       const status = err.response?.status;
       const msg = err.response?.data?.error || err.message;
       const errCode = err.code || '';
-      
-      logError('batch', err, {
-        migration: migrationId,
-        synchronizer: synchronizerId.substring(0, 30),
-        shard: shardIndex,
-        batch: batchCount,
-        cursor_before: before,
-      });
-      
-      console.error(`   ❌ Error at batch ${batchCount} (status ${status || "n/a"}, code=${errCode}): ${msg}${shardLabel}`);
-      
-      // Determine if this error is transient (should retry)
+
+      logError('batch', err, { migration: migrationId, synchronizer: synchronizerId.substring(0, 30),
+        shard: shardIndex, batch: batchCount, cursor_before: before });
+
+      console.error(`   ❌ Error at batch ${batchCount} (status ${status || 'n/a'}, code=${errCode}): ${msg}${shardLabel}`);
+
       const isHttpTransient = Number.isFinite(status) && (status === 429 || (status >= 500 && status <= 599));
       const normalizedCode = String(errCode).toUpperCase();
       const isCodeTransient = TRANSIENT_NETWORK_CODES.has(normalizedCode);
@@ -2031,158 +1442,98 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       const isGCSTransient = /timeout|timed out|connection reset|ECONNRESET|ETIMEDOUT|socket hang up|ssl3_get_record|wrong version number/i.test(msg + errCode);
       const isSliceTransient = /slice.*failed/i.test(msg) && (/\b(429|5\d\d)\b/.test(msg) || isCodeTransient);
       const isTransient = isHttpTransient || isCodeTransient || isDiskTransient || isWorkerTransient || isGCSTransient || isSliceTransient;
-      
+
       if (isTransient) {
         consecutiveTransientErrors++;
-        
-        // Log what type of transient error
         const errorType = isHttpTransient ? 'HTTP' : isCodeTransient ? 'NETWORK_CODE' : isDiskTransient ? 'DISK' : isWorkerTransient ? 'WORKER' : isGCSTransient ? 'NETWORK' : 'SLICE';
-        
-        // MAX CONSECUTIVE TRANSIENT ERROR CAP: Save cursor and exit cleanly
+
         const MAX_CONSECUTIVE_TRANSIENT_ERRORS = 50;
         if (consecutiveTransientErrors >= MAX_CONSECUTIVE_TRANSIENT_ERRORS) {
-          console.error(`   💀 ${MAX_CONSECUTIVE_TRANSIENT_ERRORS} consecutive transient errors reached — saving cursor and exiting to allow restart${shardLabel}`);
+          console.error(`   💀 ${MAX_CONSECUTIVE_TRANSIENT_ERRORS} consecutive transient errors — saving cursor and exiting${shardLabel}`);
+          // FIX #5: rollback() before saveAtomic() so a transaction left open
+          // by a mid-batch error doesn't cause saveAtomic to throw a second
+          // exception, which would mask the original error.
+          if (atomicCursor.inTransaction) atomicCursor.rollback();
           atomicCursor.saveAtomic({
-            last_before: before,
-            total_updates: totalUpdates,
-            total_events: totalEvents,
-            error: `MAX_TRANSIENT_ERRORS: ${errorType}: ${msg}`,
-            error_at: new Date().toISOString(),
-            min_time: minTime,
-            max_time: maxTime,
+            last_before: before, total_updates: totalUpdates, total_events: totalEvents,
+            error: `MAX_TRANSIENT_ERRORS: ${errorType}: ${msg}`, error_at: new Date().toISOString(),
+            min_time: minTime, max_time: maxTime,
           });
           process.exit(1);
         }
+
         console.log(`   🔍 Error classified as transient (${errorType})${shardLabel}`);
-        
-        // DISK PRESSURE: Drain GCS uploads to free /tmp space
+
         if (isDiskTransient && GCS_MODE) {
-          console.log(`   💾 Disk pressure detected - draining GCS upload queue to free /tmp space...${shardLabel}`);
-          try {
-            await flushAll();
-            await waitForWrites();
-            await drainUploads();
-            console.log(`   ✅ GCS drain complete, /tmp space should be freed${shardLabel}`);
-          } catch (drainErr) {
-            console.error(`   ⚠️ GCS drain failed: ${drainErr.message}${shardLabel}`);
-          }
+          console.log(`   💾 Disk pressure — draining GCS upload queue to free /tmp space...${shardLabel}`);
+          try { await flushAll(); await waitForWrites(); await drainUploads(); }
+          catch (drainErr) { console.error(`   ⚠️ GCS drain failed: ${drainErr.message}${shardLabel}`); }
         }
-        
-        // COOLDOWN MODE: After 3 consecutive transient errors, drop to minimal concurrency
+
         if (consecutiveTransientErrors >= 3 && dynamicParallelFetches > 1) {
           console.log(`   🧊 Cooldown mode: Dropping to 1 parallel fetch for 60s${shardLabel}`);
           dynamicParallelFetches = 1;
-          cooldownUntil = Date.now() + 60000; // 60 second cooldown
+          cooldownUntil = Date.now() + 60000;
         }
-        
-        // EXPONENTIAL BACKOFF: 5s, 10s, 20s, 40s, max 60s
-        // Disk errors get longer backoff to allow GCS uploads to clear space
+
         const baseDelay = isDiskTransient ? 10000 : 5000;
         const backoffDelay = Math.min(baseDelay * Math.pow(2, consecutiveTransientErrors - 1), 60000);
         console.log(`   ⏳ Transient error #${consecutiveTransientErrors} (${errorType}), backing off ${Math.round(backoffDelay / 1000)}s...${shardLabel}`);
-        
+
+        // FIX #5: rollback before saveAtomic in the normal transient-error path too
+        if (atomicCursor.inTransaction) atomicCursor.rollback();
         atomicCursor.saveAtomic({
-          last_before: before,
-          total_updates: totalUpdates,
-          total_events: totalEvents,
-          error: `${errorType}: ${msg}`,
-          error_at: new Date().toISOString(),
-          min_time: minTime,
-          max_time: maxTime,
+          last_before: before, total_updates: totalUpdates, total_events: totalEvents,
+          error: `${errorType}: ${msg}`, error_at: new Date().toISOString(),
+          min_time: minTime, max_time: maxTime,
         });
-        
+
         await sleep(backoffDelay);
         continue;
       }
-      
-      // CRITICAL: Non-transient error - log fatal and throw
-      console.error(`   💀 NON-TRANSIENT ERROR - process will exit. Error: ${msg}${shardLabel}`);
-      logFatal('batch', err, {
-        migration: migrationId,
-        synchronizer: synchronizerId.substring(0, 30),
-        shard: shardIndex,
-        batch: batchCount,
-        total_updates: totalUpdates,
-        total_events: totalEvents,
-      });
-      
+
+      console.error(`   💀 NON-TRANSIENT ERROR — process will exit. Error: ${msg}${shardLabel}`);
+      logFatal('batch', err, { migration: migrationId, synchronizer: synchronizerId.substring(0, 30),
+        shard: shardIndex, batch: batchCount, total_updates: totalUpdates, total_events: totalEvents });
       throw err;
     }
   }
-  
-  // Flush remaining data
+
   await flushAll();
-  
-  // CRITICAL: Wait for all writes to complete before marking as done
   console.log(`   ⏳ Waiting for all pending writes to complete...${shardLabel}`);
   await waitForWrites();
-  
-  // GCS CRASH SAFETY: Final drain before marking complete
+
   if (GCS_MODE) {
     console.log(`   ⏱️ Final GCS drain before marking complete...${shardLabel}`);
     await drainUploads();
   }
-  
-  // Get final write stats
+
   const finalStats = getBufferStats();
   console.log(`   ✅ All writes complete. Final queue: ${finalStats.queuedJobs || 0} pending, ${finalStats.activeWorkers || 0} active${shardLabel}`);
-  
+
   const totalTime = (Date.now() - startTime) / 1000;
-  
-  // CRITICAL FIX: Atomic cursor save - mark complete ONLY after all writes confirmed
-  // Also confirms GCS position so restart will be from GCS-confirmed point
+
   atomicCursor.saveAtomic({
-    last_before: before,
-    total_updates: totalUpdates,
-    total_events: totalEvents,
-    complete: true,
-    completed_at: new Date().toISOString(),
-    min_time: minTime,
-    max_time: maxTime,
+    last_before: before, total_updates: totalUpdates, total_events: totalEvents,
+    complete: true, completed_at: new Date().toISOString(), min_time: minTime, max_time: maxTime,
   });
-  
-  // Confirm GCS for the final position and backup cursor
+
   if (GCS_MODE) {
     atomicCursor.confirmGCS(before, totalUpdates, totalEvents);
-    backupCursorToGCS(atomicCursor.cursorPath);
+    // FIX #6: await async backup — non-blocking to event loop, errors surfaced
+    await backupCursorToGCS(atomicCursor.cursorPath);
     console.log(`   ✅ GCS cursor confirmed and backed up at final position${shardLabel}`);
   }
-  
-  // Structured log: synchronizer complete
-  logSynchronizer('complete', {
-    migrationId,
-    synchronizerId,
-    shardIndex,
-    minTime,
-    maxTime,
-    totalUpdates,
-    totalEvents,
-    elapsedSeconds: totalTime.toFixed(1),
-    extra: {
-      avg_throughput: Math.round(totalUpdates / totalTime),
-      batch_count: batchCount,
-    },
-  });
-  
-  logCursor('completed', {
-    migrationId,
-    synchronizerId,
-    shardIndex,
-    lastBefore: before,
-    totalUpdates,
-    totalEvents,
-    complete: true,
-  });
-  
+
+  logSynchronizer('complete', { migrationId, synchronizerId, shardIndex, minTime, maxTime,
+    totalUpdates, totalEvents, elapsedSeconds: totalTime.toFixed(1),
+    extra: { avg_throughput: Math.round(totalUpdates / totalTime), batch_count: batchCount } });
+  logCursor('completed', { migrationId, synchronizerId, shardIndex, lastBefore: before, totalUpdates, totalEvents, complete: true });
+
   console.log(`   ⏱️ Completed in ${totalTime.toFixed(1)}s (${Math.round(totalUpdates / totalTime)}/s avg)${shardLabel}`);
-  
   return { updates: totalUpdates, events: totalEvents };
 }
 
-/**
- * Calculate time slice for a shard
- * Divides the time range into equal parts using integer math to avoid floating point issues
- */
 function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
   const minMs = new Date(minTime).getTime();
   const maxMs = new Date(maxTime).getTime();
@@ -2192,13 +1543,8 @@ function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
     throw new Error(`[sharding] invalid time range: minTime=${minTime}, maxTime=${maxTime}`);
   }
 
-  // Use integer division to avoid floating point precision issues.
-  // Shards work backwards in time (maxTime to minTime)
-  // Shard 0 gets the most recent slice, shard N-1 gets the oldest.
   const shardMaxMsRaw = maxMs - Math.floor((shardIndex * rangeMs) / shardTotal);
   const shardMinMs = maxMs - Math.floor(((shardIndex + 1) * rangeMs) / shardTotal);
-
-  // Avoid boundary duplicates between adjacent shards by making the upper bound exclusive-ish.
   const shardMaxMs = shardIndex === 0 ? shardMaxMsRaw : Math.max(shardMinMs, shardMaxMsRaw - 1);
 
   return {
@@ -2207,137 +1553,78 @@ function calculateShardTimeRange(minTime, maxTime, shardIndex, shardTotal) {
   };
 }
 
-/**
- * Check if ALL migrations are fully complete (all cursors marked complete)
- */
 async function areAllMigrationsComplete() {
-  // Detect all available migrations
   const allMigrations = await detectMigrations();
-  
-  if (allMigrations.length === 0) {
-    return { complete: true, pendingMigrations: [] };
-  }
-  
+  if (allMigrations.length === 0) return { complete: true, pendingMigrations: [] };
+
   const pendingMigrations = [];
-  
   for (const migrationId of allMigrations) {
     const info = await getMigrationInfo(migrationId);
     if (!info) continue;
-    
     const ranges = info.record_time_range || [];
     for (const range of ranges) {
       const synchronizerId = range.synchronizer_id;
-      
-      // For sharded setups, check all shards
       if (SHARD_TOTAL > 1) {
         for (let shard = 0; shard < SHARD_TOTAL; shard++) {
           const cursor = loadCursor(migrationId, synchronizerId, shard);
-          if (!cursor?.complete) {
-            pendingMigrations.push({ migrationId, synchronizerId, shard });
-          }
+          if (!cursor?.complete) pendingMigrations.push({ migrationId, synchronizerId, shard });
         }
       } else {
         const cursor = loadCursor(migrationId, synchronizerId, null);
-        if (!cursor?.complete) {
-          pendingMigrations.push({ migrationId, synchronizerId, shard: null });
-        }
+        if (!cursor?.complete) pendingMigrations.push({ migrationId, synchronizerId, shard: null });
       }
     }
   }
-  
-  return {
-    complete: pendingMigrations.length === 0,
-    pendingMigrations,
-    totalMigrations: allMigrations.length,
-  };
+
+  return { complete: pendingMigrations.length === 0, pendingMigrations, totalMigrations: allMigrations.length };
 }
 
-/**
- * Main backfill function (shard-aware)
- */
 async function runBackfill() {
   const isSharded = SHARD_TOTAL > 1;
   const shardLabel = isSharded ? ` [SHARD ${SHARD_INDEX}/${SHARD_TOTAL}]` : '';
 
-  // Pre-flight: probe Scan endpoints so failover rotation starts from known healthy nodes.
-  try {
-    await probeScanEndpoints();
-  } catch (err) {
-    console.warn(`⚠️ Endpoint probe failed, continuing with static rotation: ${err.message}`);
-  }
+  try { await probeScanEndpoints(); }
+  catch (err) { console.warn(`⚠️ Endpoint probe failed, continuing: ${err.message}`); }
 
-  console.log("\n" + "=".repeat(80));
+  console.log('\n' + '='.repeat(80));
   console.log(`🚀 Starting Canton ledger backfill (Auto-Tuning Mode)${shardLabel}`);
-  console.log("   SCAN_URL (active):", activeScanUrl);
-  console.log("   SCAN failover endpoints:", scanEndpointRotation.length);
-  console.log("   BATCH_SIZE:", BATCH_SIZE);
-  console.log("   INSECURE_TLS:", INSECURE_TLS ? 'ENABLED (unsafe)' : 'disabled');
-  console.log("=".repeat(80));
-  
-  // ─────────────────────────────────────────────────────────────
-  // GCS / DISK MODE CONFIGURATION
-  // ─────────────────────────────────────────────────────────────
+  console.log('   SCAN_URL (active):', activeScanUrl);
+  console.log('   SCAN failover endpoints:', scanEndpointRotation.length);
+  console.log('   BATCH_SIZE:', BATCH_SIZE);
+  console.log('   INSECURE_TLS:', INSECURE_TLS ? 'ENABLED (unsafe)' : 'disabled');
+  console.log('='.repeat(80));
+
   try {
-    // Initialize parquet writer with current env vars (after dotenv loaded)
-    if (USE_PARQUET) {
-      parquetWriter.initParquetWriter();
-    }
-    
+    if (USE_PARQUET) parquetWriter.initParquetWriter();
     if (GCS_MODE) {
-      // GCS mode requires bucket
       validateGCSBucket(true);
-      console.log("\n🔍 Running GCS preflight checks...");
+      console.log('\n🔍 Running GCS preflight checks...');
       runPreflightChecks({ quick: false, throwOnFail: true });
-      console.log("\n☁️  GCS Mode ENABLED:");
-      console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
-      console.log("   Local scratch: /tmp/ledger_raw");
-      console.log("   Files are uploaded to GCS immediately after creation");
+      console.log(`\n☁️  GCS Mode ENABLED: gs://${process.env.GCS_BUCKET}/`);
     } else {
       console.log(`\n📂 Disk Mode: Writing to ${BASE_DATA_DIR}`);
-      if (process.env.GCS_BUCKET) {
-        console.log(`   GCS bucket configured: gs://${process.env.GCS_BUCKET}/`);
-        console.log("   Uploads disabled (GCS_ENABLED=false) - writing to local disk only");
-      } else {
-        console.log("   GCS not configured - writing to local disk only");
-      }
     }
   } catch (err) {
     logFatal('gcs_preflight_failed', err);
     throw err;
   }
-  
-  console.log("\n⚙️  Auto-Tuning Configuration:");
-  console.log(`   Parallel Fetches: ${dynamicParallelFetches} (range: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
-  console.log(`   Decode: main-thread (no worker pool overhead)`);
-  console.log(`   Tune Window: ${FETCH_TUNE_WINDOW_MS/1000}s | Latency thresholds: ${LATENCY_LOW_MS}ms / ${LATENCY_HIGH_MS}ms / ${LATENCY_CRITICAL_MS}ms`);
-  console.log(`   FLUSH_EVERY_BATCHES: ${FLUSH_EVERY_BATCHES}`);
-  if (isSharded) {
-    console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL} (0-indexed)`);
-  }
-  if (TARGET_MIGRATION != null) {
-    console.log(`   TARGET_MIGRATION: ${TARGET_MIGRATION} only`);
-  } else if (START_MIGRATION != null || END_MIGRATION != null) {
-    console.log(`   MIGRATION RANGE: ${START_MIGRATION ?? 0} → ${END_MIGRATION ?? '∞'}`);
-  }
-  console.log("   Processing: Migrations sequentially (0 → 1 → 2 → 3...) ");
-  console.log("   CURSOR_DIR:", CURSOR_DIR);
-  console.log("=".repeat(80));
 
-  // Ensure cursor directory exists
+  console.log('\n⚙️  Auto-Tuning Configuration:');
+  console.log(`   Parallel Fetches: ${dynamicParallelFetches} (range: ${MIN_PARALLEL_FETCHES}-${MAX_PARALLEL_FETCHES})`);
+  console.log(`   Tune Window: ${FETCH_TUNE_WINDOW_MS / 1000}s | Latency: ${LATENCY_LOW_MS}ms / ${LATENCY_HIGH_MS}ms / ${LATENCY_CRITICAL_MS}ms`);
+  console.log(`   FLUSH_EVERY_BATCHES: ${FLUSH_EVERY_BATCHES}`);
+  if (isSharded) console.log(`   SHARDING: Shard ${SHARD_INDEX} of ${SHARD_TOTAL}`);
+  if (TARGET_MIGRATION != null) console.log(`   TARGET_MIGRATION: ${TARGET_MIGRATION} only`);
+  else if (START_MIGRATION != null || END_MIGRATION != null) console.log(`   MIGRATION RANGE: ${START_MIGRATION ?? 0} → ${END_MIGRATION ?? '∞'}`);
+  console.log('   CURSOR_DIR:', CURSOR_DIR);
+  console.log('='.repeat(80));
+
   mkdirSync(CURSOR_DIR, { recursive: true });
 
-  // ─────────────────────────────────────────────────────────────
-  // GCS CURSOR RESTORE: Pull cursors from GCS if missing locally
-  // ─────────────────────────────────────────────────────────────
-  if (GCS_MODE) {
-    restoreCursorsFromGCS();
-  }
+  if (GCS_MODE) await restoreCursorsFromGCS();
 
-  let grandTotalUpdates = 0;
-  let grandTotalEvents = 0;
+  let grandTotalUpdates = 0, grandTotalEvents = 0;
   const grandStartTime = Date.now();
-
-  // If new migrations appear mid-run, loop and pick them up.
   const processedMigrations = new Set();
   const MAX_MIGRATION_RESCAN_ROUNDS = 10;
 
@@ -2345,85 +1632,50 @@ async function runBackfill() {
     console.log(`\n🔄 Migration scan round ${round + 1}/${MAX_MIGRATION_RESCAN_ROUNDS}...`);
     let migrations = await detectMigrations();
 
-    // Filter to target migration(s) if specified
     if (TARGET_MIGRATION != null) {
       migrations = migrations.filter(id => id === TARGET_MIGRATION);
-      if (!migrations.length) {
-        console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`);
-        return { success: false, allMigrationsComplete: false };
-      }
+      if (!migrations.length) { console.log(`⚠️ Target migration ${TARGET_MIGRATION} not found. Exiting.`); return { success: false, allMigrationsComplete: false }; }
     } else if (START_MIGRATION != null || END_MIGRATION != null) {
-      const lo = START_MIGRATION ?? 0;
-      const hi = END_MIGRATION ?? Infinity;
+      const lo = START_MIGRATION ?? 0, hi = END_MIGRATION ?? Infinity;
       migrations = migrations.filter(id => id >= lo && id <= hi);
-      if (!migrations.length) {
-        console.log(`⚠️ No migrations found in range ${lo}–${hi}. Exiting.`);
-        return { success: false, allMigrationsComplete: false };
-      }
+      if (!migrations.length) { console.log(`⚠️ No migrations in range ${lo}–${hi}. Exiting.`); return { success: false, allMigrationsComplete: false }; }
     }
 
-    // Only process migrations we haven't processed yet
     const pending = migrations.filter(id => !processedMigrations.has(id));
-    console.log(`   Detected migrations: [${migrations.join(', ')}] | Already processed: [${[...processedMigrations].join(', ')}] | Pending: [${pending.join(', ')}]`);
-    if (pending.length === 0) {
-      console.log(`   ✅ No pending migrations in round ${round + 1}. All detected migrations processed.`);
-      break;
-    }
+    console.log(`   Detected: [${migrations.join(', ')}] | Already processed: [${[...processedMigrations].join(', ')}] | Pending: [${pending.join(', ')}]`);
+    if (pending.length === 0) { console.log(`   ✅ No pending migrations in round ${round + 1}.`); break; }
 
     for (const migrationId of pending) {
       processedMigrations.add(migrationId);
-
-      console.log(`\n${"─".repeat(80)}`);
-      console.log(`📘 Migration ${migrationId}: fetching backfilling metadata${shardLabel}`);
-      console.log(`${"─".repeat(80)}`);
+      console.log(`\n${'─'.repeat(80)}\n📘 Migration ${migrationId}: fetching metadata${shardLabel}\n${'─'.repeat(80)}`);
 
       const info = await getMigrationInfo(migrationId);
-
-      if (!info) {
-        console.log("   ℹ️  No backfilling info; skipping this migration.");
-        continue;
-      }
+      if (!info) { console.log('   ℹ️  No backfilling info; skipping.'); continue; }
 
       const ranges = info.record_time_range || [];
-
-      if (!ranges.length) {
-        console.log("   ℹ️  No synchronizer ranges; skipping.");
-        continue;
-      }
-
+      if (!ranges.length) { console.log('   ℹ️  No synchronizer ranges; skipping.'); continue; }
       console.log(`   Found ${ranges.length} synchronizer ranges for migration ${migrationId}`);
 
       for (const range of ranges) {
         const synchronizerId = range.synchronizer_id;
-        let minTime = range.min;
-        let maxTime = range.max;
+        let minTime = range.min, maxTime = range.max;
 
-        const minMs = new Date(minTime).getTime();
-        const maxMs = new Date(maxTime).getTime();
+        const minMs = new Date(minTime).getTime(), maxMs = new Date(maxTime).getTime();
         if (!Number.isFinite(minMs) || !Number.isFinite(maxMs) || minMs >= maxMs) {
           throw new Error(`[range] Invalid time bounds for migration ${migrationId}: min=${minTime} max=${maxTime}`);
         }
 
-        // Apply sharding if enabled
         if (isSharded) {
           const shardRange = calculateShardTimeRange(minTime, maxTime, SHARD_INDEX, SHARD_TOTAL);
           minTime = shardRange.minTime;
           maxTime = shardRange.maxTime;
-          console.log(`   🔀 Shard ${SHARD_INDEX}: time slice ${minTime} to ${maxTime}`);
+          console.log(`   🔀 Shard ${SHARD_INDEX}: ${minTime} to ${maxTime}`);
         }
 
-        // Check if already complete (shard-aware)
         const cursor = loadCursor(migrationId, synchronizerId, isSharded ? SHARD_INDEX : null);
-        if (cursor?.complete) {
-          console.log(`   ⏭️ Skipping ${synchronizerId.substring(0, 30)}... (already complete)${shardLabel}`);
-          continue;
-        }
+        if (cursor?.complete) { console.log(`   ⏭️ Skipping (already complete)${shardLabel}`); continue; }
 
-        console.log(`   🔧 Processing migration ${migrationId}, synchronizer ${synchronizerId.substring(0, 30)}...`);
-        const { updates, events } = await backfillSynchronizer(
-          migrationId, synchronizerId, minTime, maxTime,
-          isSharded ? SHARD_INDEX : null,
-        );
+        const { updates, events } = await backfillSynchronizer(migrationId, synchronizerId, minTime, maxTime, isSharded ? SHARD_INDEX : null);
         grandTotalUpdates += updates;
         grandTotalEvents += events;
       }
@@ -2434,95 +1686,50 @@ async function runBackfill() {
 
   const grandTotalTime = ((Date.now() - grandStartTime) / 1000).toFixed(1);
 
-  console.log(`\n${"═".repeat(80)}`);
-  console.log(`🎉 Backfill complete!`);
-  console.log(`   Total updates: ${grandTotalUpdates.toLocaleString()}`);
-  console.log(`   Total events: ${grandTotalEvents.toLocaleString()}`);
-  console.log(`   Total time: ${grandTotalTime}s`);
-  console.log(`   Average throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s`);
-  console.log(`${"═".repeat(80)}\n`);
-  
-  // Structured run summary
-  logSummary({
-    success: true,
-    totalUpdates: grandTotalUpdates,
-    totalEvents: grandTotalEvents,
-    totalTimeSeconds: parseFloat(grandTotalTime),
-    avgThroughput: Math.round(grandTotalUpdates / parseFloat(grandTotalTime)),
-    migrationsProcessed: processedMigrations.size,
-    allComplete: false, // Will be updated below
-    pendingCount: 0,
-  });
+  console.log(`\n${'═'.repeat(80)}\n🎉 Backfill complete!\n   Total updates: ${grandTotalUpdates.toLocaleString()}\n   Total events: ${grandTotalEvents.toLocaleString()}\n   Total time: ${grandTotalTime}s\n   Avg throughput: ${Math.round(grandTotalUpdates / parseFloat(grandTotalTime))}/s\n${'═'.repeat(80)}\n`);
 
-  // Check if ALL migrations are complete
+  logSummary({ success: true, totalUpdates: grandTotalUpdates, totalEvents: grandTotalEvents,
+    totalTimeSeconds: parseFloat(grandTotalTime), avgThroughput: Math.round(grandTotalUpdates / parseFloat(grandTotalTime)),
+    migrationsProcessed: processedMigrations.size, allComplete: false, pendingCount: 0 });
+
   const completionStatus = await areAllMigrationsComplete();
-
   if (!completionStatus.complete) {
-    console.log(`\n⚠️ Not all migrations are complete yet:`);
     const pendingByMigration = {};
     for (const p of completionStatus.pendingMigrations) {
       if (!pendingByMigration[p.migrationId]) pendingByMigration[p.migrationId] = [];
       pendingByMigration[p.migrationId].push(p);
     }
+    console.log(`\n⚠️ Not all migrations complete:`);
     for (const [mig, items] of Object.entries(pendingByMigration)) {
       console.log(`   • Migration ${mig}: ${items.length} cursor(s) pending`);
     }
-    console.log(`\n   Live updates will NOT start until all migrations are backfilled.`);
   }
 
-  return {
-    success: true,
-    totalUpdates: grandTotalUpdates,
-    totalEvents: grandTotalEvents,
-    allMigrationsComplete: completionStatus.complete,
-    pendingMigrations: completionStatus.pendingMigrations,
-  };
+  return { success: true, totalUpdates: grandTotalUpdates, totalEvents: grandTotalEvents,
+    allMigrationsComplete: completionStatus.complete, pendingMigrations: completionStatus.pendingMigrations };
 }
 
-/**
- * Start live updates ingestion after backfill completes
- */
 async function startLiveUpdates() {
   const { spawn } = await import('child_process');
   const liveUpdatesScript = join(__dirname, 'fetch-updates.js');
-  
-  console.log(`\n${"═".repeat(80)}`);
-  console.log(`🔄 Starting live updates ingestion...`);
-  console.log(`   Script: ${liveUpdatesScript}`);
-  console.log(`${"═".repeat(80)}\n`);
-  
-  // Spawn the live updates process, inheriting stdio so logs are visible
-  const child = spawn('node', [liveUpdatesScript], {
-    stdio: 'inherit',
-    cwd: __dirname,
-    env: process.env
-  });
-  
-  child.on('error', (err) => {
-    console.error('❌ Failed to start live updates:', err.message);
-    process.exit(1);
-  });
-  
-  child.on('exit', (code) => {
-    console.log(`Live updates process exited with code ${code}`);
-    process.exit(code || 0);
-  });
+  console.log(`\n${'═'.repeat(80)}\n🔄 Starting live updates ingestion...\n   Script: ${liveUpdatesScript}\n${'═'.repeat(80)}\n`);
+
+  const child = spawn('node', [liveUpdatesScript], { stdio: 'inherit', cwd: __dirname, env: process.env });
+  child.on('error', (err) => { console.error('❌ Failed to start live updates:', err.message); process.exit(1); });
+  child.on('exit', (code) => { console.log(`Live updates process exited with code ${code}`); process.exit(code || 0); });
 }
 
-// Graceful shutdown handler
+// ==========================================
+// GRACEFUL SHUTDOWN
+// ==========================================
 let isShuttingDown = false;
 
 async function gracefulShutdown(signal) {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  
   console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`);
-  
   try {
-    console.log('   Flushing pending writes...');
-    await flushAll();
-    await waitForWrites();
-    await shutdown();
+    await flushAll(); await waitForWrites(); await shutdown();
     if (decodePool) await decodePool.destroy();
     console.log('✅ Graceful shutdown complete');
     process.exit(0);
@@ -2532,11 +1739,9 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Handle multiple termination signals
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// DIAGNOSTIC: Log exactly why the process is exiting
 let exitReason = 'unknown';
 process.on('exit', (code) => {
   console.log(`\n🚪 Process exiting with code ${code} (reason: ${exitReason})`);
@@ -2544,67 +1749,78 @@ process.on('exit', (code) => {
   console.log(`   Heap at exit: ${heap.usedMB}MB / ${heap.limitMB}MB (${(heap.ratio * 100).toFixed(1)}%)`);
 });
 
-// Catch uncaught exceptions to prevent exit code null
 process.on('uncaughtException', async (err) => {
   exitReason = `uncaughtException: ${err.message}`;
-  console.error('\n💥 Uncaught exception:', err.message);
-  console.error(err.stack);
-  
-  try {
-    await flushAll();
-    await waitForWrites();
-    await shutdown();
-  } catch (shutdownErr) {
-    console.error('Error during emergency shutdown:', shutdownErr.message);
-  }
-  
+  console.error('\n💥 Uncaught exception:', err.message, err.stack);
+  try { await flushAll(); await waitForWrites(); await shutdown(); } catch {}
   process.exit(1);
 });
 
-// Handle unhandled promise rejections — log but do NOT re-throw.
-// Re-throwing triggers uncaughtException which kills the process.
-// The specific subsystem that created the promise should handle its own errors.
+/**
+ * FIX #9: Unhandled rejections are no longer silently swallowed forever.
+ *
+ * A counter tracks consecutive unhandled rejections. After a threshold is
+ * exceeded within a short window the process exits — this catches real bugs
+ * (a broken async chain that never surfaces otherwise) while still tolerating
+ * occasional isolated rejections from third-party libraries.
+ *
+ * Resetting the counter after the window prevents a single noisy library from
+ * triggering an exit during an otherwise healthy run.
+ */
+let unhandledRejectionCount = 0;
+let unhandledRejectionWindowStart = Date.now();
+const UNHANDLED_REJECTION_THRESHOLD = 5;   // max before exit
+const UNHANDLED_REJECTION_WINDOW_MS = 10_000; // within this window
+
 process.on('unhandledRejection', (reason, promise) => {
   exitReason = `unhandledRejection: ${reason?.message || reason}`;
   console.error('\n💥 Unhandled rejection at:', promise);
   console.error('Reason:', reason);
-  console.error('⚠️ Continuing execution — subsystem should handle its own errors');
+
+  const now = Date.now();
+  if (now - unhandledRejectionWindowStart > UNHANDLED_REJECTION_WINDOW_MS) {
+    // Reset window — isolated rejections are tolerated
+    unhandledRejectionCount = 0;
+    unhandledRejectionWindowStart = now;
+  }
+
+  unhandledRejectionCount++;
+  console.error(`   Unhandled rejection count: ${unhandledRejectionCount}/${UNHANDLED_REJECTION_THRESHOLD} in ${UNHANDLED_REJECTION_WINDOW_MS / 1000}s window`);
+
+  if (unhandledRejectionCount >= UNHANDLED_REJECTION_THRESHOLD) {
+    console.error(`   ❌ Threshold reached — exiting to prevent silent data loss`);
+    process.exit(1);
+  }
+
+  console.warn(`   ⚠️ Below threshold — continuing. Subsystems should handle their own rejections.`);
 });
 
-// Run backfill, then start live updates ONLY if all migrations are complete
+// ==========================================
+// ENTRY POINT
+// ==========================================
 runBackfill()
   .then(async (result) => {
     console.log(`\n📋 Exit decision: success=${result?.success}, allMigrationsComplete=${result?.allMigrationsComplete}`);
     if (result?.pendingMigrations?.length) {
       console.log(`   Pending: ${result.pendingMigrations.map(p => `M${p.migrationId}${p.shard !== null ? `/S${p.shard}` : ''}`).join(', ')}`);
     }
-    
+
     if (result?.success && result?.allMigrationsComplete) {
       exitReason = 'all_migrations_complete → starting live updates';
-      // Small delay to ensure all file handles are released
       await new Promise(resolve => setTimeout(resolve, 1000));
       await startLiveUpdates();
     } else if (result?.success && !result?.allMigrationsComplete) {
       exitReason = 'migrations_remaining';
-      console.log(`\n${"═".repeat(80)}`);
-      console.log(`⏸️ Backfill complete for processed migrations, but other migrations remain.`);
-      console.log(`   Live updates will start once ALL migrations are backfilled.`);
-      if (TARGET_MIGRATION != null) {
-        console.log(`   TARGET_MIGRATION=${TARGET_MIGRATION} was set. Unset it to process all migrations.`);
-      } else if (START_MIGRATION != null || END_MIGRATION != null) {
-        console.log(`   MIGRATION RANGE ${START_MIGRATION ?? 0}–${END_MIGRATION ?? '∞'} was set. Unset to process all.`);
-      }
-      console.log(`${"═".repeat(80)}\n`);
+      console.log(`\n${'═'.repeat(80)}\n⏸️ Backfill complete for processed migrations, but others remain.\n${'═'.repeat(80)}\n`);
+      if (TARGET_MIGRATION != null) console.log(`   TARGET_MIGRATION=${TARGET_MIGRATION} was set. Unset to process all.`);
+      else if (START_MIGRATION != null || END_MIGRATION != null) console.log(`   MIGRATION RANGE set. Unset to process all.`);
       process.exit(0);
     }
   })
   .catch(async err => {
     exitReason = `fatal_error: ${err.message}`;
-    console.error('\n❌ FATAL:', err.message);
-    console.error(err.stack);
-    await flushAll();
-    await waitForWrites();
-    await shutdown();
+    console.error('\n❌ FATAL:', err.message, err.stack);
+    await flushAll(); await waitForWrites(); await shutdown();
     if (decodePool) await decodePool.destroy();
     process.exit(1);
   });
