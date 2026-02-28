@@ -1,568 +1,298 @@
-#!/usr/bin/env node
 /**
- * ACS Snapshot Fetcher
- * 
- * Fetches current Active Contract Set from Canton Scan API
- * and writes directly to Parquet files (default) or JSONL with --keep-raw.
- * 
- * Usage:
- *   node fetch-acs.js            # Write to Parquet (default)
- *   node fetch-acs.js --keep-raw # Also write to .jsonl files
- *   node fetch-acs.js --local    # Force local disk mode (ignore GCS_BUCKET)
+ * Protobuf Encoding for Ledger Records
+ *
+ * Provides binary encoding for events and updates using Protocol Buffers.
+ * Much more efficient than JSON for large batches.
  */
 
-import dotenv from 'dotenv';
-dotenv.config();
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import protobuf from 'protobufjs';
+import Long from 'long'; // bundled with protobufjs
 
-import axios from 'axios';
-import { Agent as HttpAgent } from 'http';
-import { Agent as HttpsAgent } from 'https';
-import BigNumber from 'bignumber.js';
-import { normalizeACSContract, isTemplate, parseTemplateId, validateTemplates, validateContractFields, detectTemplateFormat, ACSValidationError } from './acs-schema.js';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Parse command line arguments
-const args = process.argv.slice(2);
-const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
-const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
-const LOCAL_MODE = args.includes('--local') || args.includes('--local-disk');
-const STRICT_MODE = args.includes('--strict'); // Halt on schema validation errors
-const USE_PARQUET = !RAW_ONLY;
-const USE_JSONL = KEEP_RAW || RAW_ONLY;
+const schemaPath = path.join(__dirname, 'schema', 'ledger.proto');
 
-// If --local flag is set, force local disk mode by setting GCS_ENABLED=false
-if (LOCAL_MODE) {
-  process.env.GCS_ENABLED = 'false';
+// FIX #8: Validate schema path at module load time so a missing file surfaces
+// immediately on import rather than lazily during the first encode operation
+// (which could be deep inside a batch, making the error hard to trace).
+if (!fs.existsSync(schemaPath)) {
+  throw new Error(
+    `proto-encode: schema file not found at "${schemaPath}". ` +
+    `Check your build output and ensure ledger.proto is included.`
+  );
 }
 
-// Use Parquet writer by default, JSONL writer only if --keep-raw or --raw-only
-import * as parquetWriter from './write-acs-parquet.js';
-import * as jsonlWriter from './write-acs-jsonl.js';
-
-// Unified writer functions
-function setSnapshotTime(time, migrationId = null) {
-  if (USE_PARQUET) {
-    parquetWriter.setSnapshotTime(time, migrationId);
-  }
-  if (USE_JSONL) {
-    jsonlWriter.setSnapshotTime(time, migrationId);
-  }
-}
-
-async function bufferContracts(contracts) {
-  if (USE_JSONL) {
-    await jsonlWriter.bufferContracts(contracts);
-  }
-  if (USE_PARQUET) {
-    return parquetWriter.bufferContracts(contracts);
-  }
-}
-
-async function flushAll() {
-  const results = [];
-  if (USE_JSONL) {
-    const jsonlResults = await jsonlWriter.flushAll();
-    results.push(...jsonlResults);
-  }
-  if (USE_PARQUET) {
-    const parquetResults = await parquetWriter.flushAll();
-    results.push(...parquetResults);
-  }
-  return results;
-}
-
-function getBufferStats() {
-  const stats = USE_PARQUET ? parquetWriter.getBufferStats() : { contracts: 0, maxRowsPerFile: 15000 };
-  if (USE_JSONL) {
-    stats.jsonlContracts = jsonlWriter.getBufferStats().contracts;
-  }
-  return stats;
-}
-
-function clearBuffers() {
-  if (USE_PARQUET) {
-    parquetWriter.clearBuffers();
-  }
-  if (USE_JSONL) {
-    jsonlWriter.clearBuffers();
-  }
-}
-
-async function writeCompletionMarker(time, migrationId, stats) {
-  if (USE_JSONL) {
-    await jsonlWriter.writeCompletionMarker(time, migrationId, stats);
-  }
-  if (USE_PARQUET) {
-    return parquetWriter.writeCompletionMarker(time, migrationId, stats);
-  }
-}
-
-function isSnapshotComplete(time, migrationId) {
-  if (USE_PARQUET) {
-    return parquetWriter.isSnapshotComplete(time, migrationId);
-  }
-  return jsonlWriter.isSnapshotComplete(time, migrationId);
-}
-
-function cleanupOldSnapshots(migrationId) {
-  if (KEEP_RAW) {
-    jsonlWriter.cleanupOldSnapshots(migrationId);
-  }
-  return parquetWriter.cleanupOldSnapshots(migrationId);
-}
-
-// TLS config (secure by default)
-// Set INSECURE_TLS=1 only in controlled environments with self-signed certs.
-const INSECURE_TLS = ['1', 'true', 'yes'].includes(String(process.env.INSECURE_TLS || '').toLowerCase());
-if (INSECURE_TLS) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
-
-// Configuration
-const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
-const PAGE_SIZE = parseInt(process.env.PAGE_SIZE) || 500;
-// Skip migrations that already have complete snapshots (set to false to force re-fetch all)
-const SKIP_COMPLETE = process.env.SKIP_COMPLETE !== 'false';
-// Only fetch the latest migration by default (set FETCH_ALL=true to fetch all)
-const FETCH_ALL = process.env.FETCH_ALL === 'true';
-
-// Axios client with keepalive
-const client = axios.create({
-  baseURL: SCAN_URL,
-  httpAgent: new HttpAgent({ keepAlive: true, keepAliveMsecs: 30000 }),
-  httpsAgent: new HttpsAgent({
-    keepAlive: true,
-    keepAliveMsecs: 30000,
-    rejectUnauthorized: !INSECURE_TLS,
-  }),
-  timeout: 120000,
-});
+let rootPromise = null;
 
 /**
- * Sleep helper
+ * Load and cache the protobuf root.
+ *
+ * FIX #1: If protobuf.load() rejects (missing file, parse error), the cached
+ * promise is cleared so the next call retries rather than re-throwing the same
+ * stale rejection forever.
  */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Retry with exponential backoff
- */
-async function retryWithBackoff(fn, maxRetries = 5) {
-  let lastError;
-  
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      
-      const retryable = ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'].includes(error.code) ||
-        [429, 500, 502, 503, 504].includes(error.response?.status);
-      
-      if (attempt === maxRetries || !retryable) throw error;
-      
-      const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
-      console.log(`   ⏳ Retry ${attempt + 1}/${maxRetries} in ${delay}ms...`);
-      await sleep(delay);
-    }
-  }
-  
-  throw lastError;
-}
-
-/**
- * Detect all valid migrations
- */
-async function detectMigrations() {
-  console.log('🔎 Detecting migrations...');
-  console.log(`   API base URL: ${SCAN_URL}`);
-  const migrations = [];
-  let id = 0;
-  
-  while (true) {
-    const endpoint = '/v0/state/acs/snapshot-timestamp';
-    const params = { before: new Date().toISOString(), migration_id: id };
-    console.log(`   🌐 [migration ${id}] GET ${endpoint} with params:`, JSON.stringify(params));
-    const t0 = Date.now();
-    
-    try {
-      const res = await client.get(endpoint, { params });
-      const latency = Date.now() - t0;
-      console.log(`   ✅ [migration ${id}] Response in ${latency}ms, status=${res.status}`);
-      
-      if (res.data?.record_time) {
-        migrations.push(id);
-        console.log(`   Found migration ${id} with record_time: ${res.data.record_time}`);
-        id++;
-      } else {
-        console.log(`   Migration ${id} returned no record_time, stopping detection`);
-        break;
-      }
-    } catch (err) {
-      const latency = Date.now() - t0;
-      console.log(`   ❌ [migration ${id}] Failed after ${latency}ms: ${err.code || err.message}`);
-      if (err.response) {
-        console.log(`      HTTP ${err.response.status}: ${JSON.stringify(err.response.data).substring(0, 200)}`);
-      }
-      break;
-    }
-  }
-  
-  if (migrations.length === 0) {
-    throw new Error('No valid migrations found. Check SCAN_URL and network connectivity.');
-  }
-  console.log(`📘 Found migrations: [${migrations.join(', ')}]`);
-  return migrations;
-}
-
-/**
- * Get snapshot timestamp for a migration
- */
-async function getSnapshotTimestamp(migrationId) {
-  const res = await client.get('/v0/state/acs/snapshot-timestamp', {
-    params: { before: new Date().toISOString(), migration_id: migrationId },
-  });
-  return res.data.record_time;
-}
-
-/**
- * Fetch ACS page
- */
-async function fetchACSPage(migrationId, recordTime, after = null) {
-  return await retryWithBackoff(async () => {
-    const payload = {
-      migration_id: migrationId,
-      record_time: recordTime,
-      page_size: PAGE_SIZE,
-      daml_value_encoding: 'compact_json',
-    };
-    
-    if (after) payload.after = after;
-    
-    const res = await client.post('/v0/state/acs', payload);
-    return res.data;
-  });
-}
-
-/**
- * Run ACS snapshot for a single migration
- */
-async function runMigrationSnapshot(migrationId) {
-  console.log(`\n📍 Starting ACS snapshot for migration ${migrationId}`);
-  
-  const recordTime = await getSnapshotTimestamp(migrationId);
-  console.log(`   Record time: ${recordTime}`);
-  
-  // Use current time for partitioning to ensure unique snapshot folders per run
-  // recordTime is the ledger state time which may be the same across multiple runs
-  const snapshotRunTime = new Date();
-  console.log(`   Snapshot run time: ${snapshotRunTime.toISOString()}`);
-  
-  setSnapshotTime(snapshotRunTime, migrationId);
-  
-  // Stats
-  let totalContracts = 0;
-  let page = 0;
-  let after = null;
-  const seen = new Set();
-  
-  // Totals by template type
-  let amuletTotal = new BigNumber(0);
-  let lockedTotal = new BigNumber(0);
-  const templateCounts = {};
-  
-  // Field validation tracking
-  const fieldIssues = {
-    criticalMissing: {},  // field -> count
-    importantMissing: {}, // field -> count
-    contractsWithCritical: 0,
-    contractsWithImportant: 0,
-  };
-  
-  while (true) {
-    page++;
-    console.log(`   📄 Fetching page ${page}...`);
-    
-    const data = await fetchACSPage(migrationId, recordTime, after);
-    const events = data.created_events || [];
-    
-    if (!events.length) {
-      console.log(`   ✅ No more events - finished migration ${migrationId}`);
-      break;
-    }
-    
-    const contracts = [];
-    
-    for (const event of events) {
-      const id = event.contract_id || event.event_id;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      
-      // Normalize for storage (strict mode throws on missing critical fields)
-      const contract = normalizeACSContract(event, migrationId, recordTime, recordTime, { 
-        strict: STRICT_MODE, 
-        warnOnly: false 
-      });
-      contracts.push(contract);
-      
-      // Validate contract fields
-      const { missingCritical, missingImportant } = validateContractFields(contract);
-      if (missingCritical.length > 0) {
-        fieldIssues.contractsWithCritical++;
-        for (const field of missingCritical) {
-          fieldIssues.criticalMissing[field] = (fieldIssues.criticalMissing[field] || 0) + 1;
-        }
-      }
-      if (missingImportant.length > 0) {
-        fieldIssues.contractsWithImportant++;
-        for (const field of missingImportant) {
-          fieldIssues.importantMissing[field] = (fieldIssues.importantMissing[field] || 0) + 1;
-        }
-      }
-      
-      // Count by template
-      const templateId = event.template_id || 'unknown';
-      templateCounts[templateId] = (templateCounts[templateId] || 0) + 1;
-      
-      // Calculate totals for Amulet/LockedAmulet
-      if (isTemplate(event, 'Splice.Amulet', 'Amulet')) {
-        const amt = new BigNumber(event.create_arguments?.amount?.initialAmount ?? '0');
-        amuletTotal = amuletTotal.plus(amt);
-      } else if (isTemplate(event, 'Splice.Amulet', 'LockedAmulet')) {
-        const amt = new BigNumber(event.create_arguments?.amulet?.amount?.initialAmount ?? '0');
-        lockedTotal = lockedTotal.plus(amt);
-      }
-    }
-    
-    await bufferContracts(contracts);
-    totalContracts += contracts.length;
-    
-    const stats = getBufferStats();
-    console.log(`   📦 Processed ${contracts.length} contracts (total: ${totalContracts}, buffer: ${stats.contracts})`);
-    
-    // Get cursor for next page - use next_page_token from API response
-    after = data.next_page_token;
-    
-    if (after === undefined || after === null) break;
-  }
-  
-  // Flush remaining
-  await flushAll();
-  
-  // Validate templates against expected registry
-  const validation = validateTemplates(templateCounts);
-  
-  // Print validation report
-  console.log(`\n   📋 Template Validation Report:`);
-  console.log(`   ├─ Found: ${validation.found.length} expected templates`);
-  console.log(`   ├─ Missing: ${validation.missing.length} templates (${validation.missing.filter(t => t.required).length} required)`);
-  console.log(`   ├─ Unexpected: ${validation.unexpected.length} templates`);
-  console.log(`   └─ Format variations: ${JSON.stringify(validation.formatVariations)}`);
-  
-  // Print field validation report
-  console.log(`\n   🔍 Field Validation Report:`);
-  const criticalFields = Object.entries(fieldIssues.criticalMissing);
-  const importantFields = Object.entries(fieldIssues.importantMissing);
-  
-  if (criticalFields.length === 0 && importantFields.length === 0) {
-    console.log(`   ✅ All fields populated correctly`);
-  } else {
-    if (criticalFields.length > 0) {
-      console.log(`   ❌ CRITICAL MISSING (${fieldIssues.contractsWithCritical} contracts):`);
-      for (const [field, count] of criticalFields) {
-        console.log(`      - ${field}: ${count} contracts`);
-      }
-    }
-    if (importantFields.length > 0) {
-      console.log(`   ⚠️  Important missing (${fieldIssues.contractsWithImportant} contracts):`);
-      for (const [field, count] of importantFields) {
-        console.log(`      - ${field}: ${count} contracts`);
-      }
-    }
-  }
-  
-  // Print warnings
-  if (validation.warnings.length > 0) {
-    console.log(`\n   ⚠️  VALIDATION WARNINGS:`);
-    for (const warning of validation.warnings) {
-      console.log(`      ${warning}`);
-    }
-  }
-  
-  // Log unexpected templates (may be new templates we should add to registry)
-  if (validation.unexpected.length > 0) {
-    console.log(`\n   🔍 Unexpected templates (consider adding to registry):`);
-    for (const t of validation.unexpected.slice(0, 10)) {
-      console.log(`      - ${t.key} (${t.count} contracts, formats: ${t.formats.join(', ')})`);
-    }
-    if (validation.unexpected.length > 10) {
-      console.log(`      ... and ${validation.unexpected.length - 10} more`);
-    }
-  }
-  
-  // Write completion marker to indicate this snapshot is complete
-  const stats = {
-    totalContracts,
-    amuletTotal: amuletTotal.toString(),
-    lockedTotal: lockedTotal.toString(),
-    circulatingTotal: amuletTotal.plus(lockedTotal).toString(),
-    templateCount: Object.keys(templateCounts).length,
-    validation: {
-      foundCount: validation.found.length,
-      missingCount: validation.missing.length,
-      unexpectedCount: validation.unexpected.length,
-      warnings: validation.warnings,
-    },
-    fieldValidation: {
-      criticalMissing: fieldIssues.criticalMissing,
-      importantMissing: fieldIssues.importantMissing,
-      contractsWithCriticalIssues: fieldIssues.contractsWithCritical,
-      contractsWithImportantIssues: fieldIssues.contractsWithImportant,
-    },
-  };
-  await writeCompletionMarker(snapshotRunTime, migrationId, stats);
-  
-  // Clean up old snapshots AFTER the new one is complete
-  // This ensures there's always valid data available during the snapshot process
-  console.log(`\n   🗑️ Cleaning up old snapshots for migration ${migrationId}...`);
-  const cleanupResult = cleanupOldSnapshots(migrationId);
-  if (cleanupResult.deleted > 0) {
-    console.log(`   ✅ Deleted ${cleanupResult.deleted} old snapshot(s), keeping ${cleanupResult.kept}`);
-  }
-  
-  return {
-    migrationId,
-    recordTime,
-    totalContracts,
-    amuletTotal: amuletTotal.toString(),
-    lockedTotal: lockedTotal.toString(),
-    circulatingTotal: amuletTotal.plus(lockedTotal).toString(),
-    templateCounts,
-    validation,
-    fieldIssues,
-  };
-}
-
-/**
- * Main function
- */
-async function runACSSnapshot() {
-  console.log('🚀 Starting ACS Snapshot (Parquet mode)\n');
-  console.log(`⚙️  Configuration:`);
-  console.log(`   - Scan URL: ${SCAN_URL}`);
-  console.log(`   - Page Size: ${PAGE_SIZE}`);
-  console.log(`   - Skip Complete: ${SKIP_COMPLETE}`);
-  console.log(`   - Fetch All Migrations: ${FETCH_ALL}`);
-  console.log(`   - DATA_DIR env: ${process.env.DATA_DIR || '(not set)'}`);
-  console.log(`   - GCS_BUCKET env: ${process.env.GCS_BUCKET || '(not set)'}`);
-  console.log('');
-  
-  console.log('🔄 Calling detectMigrations()...');
-  let migrations;
-  try {
-    migrations = await detectMigrations();
-    console.log(`✅ detectMigrations() returned: [${migrations.join(', ')}]`);
-  } catch (err) {
-    console.error(`❌ detectMigrations() failed: ${err.message}`);
-    console.error(err.stack);
-    throw err;
-  }
-  
-  const results = [];
-  
-  // Determine which migrations to process
-  let migrationsToProcess;
-  if (FETCH_ALL) {
-    migrationsToProcess = migrations;
-    console.log(`📋 Processing all migrations: [${migrationsToProcess.join(', ')}]`);
-  } else {
-    // Only process the latest migration
-    migrationsToProcess = [Math.max(...migrations)];
-    console.log(`📋 Processing only latest migration: [${migrationsToProcess[0]}]`);
-  }
-  
-  for (const migrationId of migrationsToProcess) {
-    // Check if we should skip this migration
-    if (SKIP_COMPLETE) {
-      // We need to check with a dummy timestamp - the isSnapshotComplete checks filesystem
-      // For now, we'll run regardless since each run creates a new snapshot_time
-      // The optimization here is just skipping older migrations entirely
-    }
-    
-    clearBuffers();
-    try {
-      const result = await runMigrationSnapshot(migrationId);
-      results.push(result);
-    } catch (err) {
-      console.error(`❌ runMigrationSnapshot(${migrationId}) failed: ${err.message}`);
-      console.error(err.stack);
+async function getRoot() {
+  if (!rootPromise) {
+    rootPromise = protobuf.load(schemaPath).catch(err => {
+      // FIX #1: Clear so the next call to getRoot() attempts a fresh load
+      rootPromise = null;
       throw err;
-    }
+    });
   }
-  
-  // Print summary
-  console.log('\n' + '='.repeat(80));
-  console.log('📊 ACS SNAPSHOT SUMMARY');
-  console.log('='.repeat(80));
-  
-  for (const r of results) {
-    console.log(`\nMigration ${r.migrationId}:`);
-    console.log(`   - Record Time: ${r.recordTime}`);
-    console.log(`   - Total Contracts: ${r.totalContracts.toLocaleString()}`);
-    console.log(`   - Amulet Total: ${r.amuletTotal}`);
-    console.log(`   - Locked Total: ${r.lockedTotal}`);
-    console.log(`   - Circulating: ${r.circulatingTotal}`);
-    
-    if (r.validation) {
-      console.log(`   - Templates Found: ${r.validation.found.length}`);
-      console.log(`   - Templates Missing: ${r.validation.missing.length}`);
-      if (r.validation.warnings.length > 0) {
-        console.log(`   - Warnings: ${r.validation.warnings.length}`);
-      }
-    }
-    
-    if (r.fieldIssues) {
-      const criticalCount = r.fieldIssues.contractsWithCritical;
-      const importantCount = r.fieldIssues.contractsWithImportant;
-      if (criticalCount > 0) {
-        console.log(`   - ❌ Critical field issues: ${criticalCount} contracts`);
-      }
-      if (importantCount > 0) {
-        console.log(`   - ⚠️  Important field issues: ${importantCount} contracts`);
-      }
-    }
-  }
-  
-  // Print overall validation summary
-  const allWarnings = results.flatMap(r => r.validation?.warnings || []);
-  if (allWarnings.length > 0) {
-    console.log('\n⚠️  VALIDATION WARNINGS SUMMARY:');
-    for (const w of [...new Set(allWarnings)]) {
-      console.log(`   ${w}`);
-    }
-  }
-  
-  // Check for critical field issues
-  const hasCriticalIssues = results.some(r => r.fieldIssues?.contractsWithCritical > 0);
-  
-  console.log('\n' + '='.repeat(80));
-  if (hasCriticalIssues) {
-    console.log('⚠️  ACS Snapshot Complete (with critical field issues)');
-  } else {
-    console.log('✅ ACS Snapshot Complete');
-  }
-  console.log('='.repeat(80));
+  return rootPromise;
 }
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down...');
-  await flushAll();
-  process.exit(0);
-});
+/**
+ * Look up a protobuf type by name, throwing a descriptive error on failure.
+ *
+ * FIX #6: protobufjs lookupType() throws a generic TypeError when a type is
+ * not found. Wrapping it here adds the schema path and type name to the error
+ * so schema drift (renamed/removed types) is immediately actionable.
+ *
+ * @param {protobuf.Root} root
+ * @param {string} typeName - Fully-qualified type name, e.g. 'ledger.Event'
+ * @returns {protobuf.Type}
+ */
+function safelyLookupType(root, typeName) {
+  try {
+    return root.lookupType(typeName);
+  } catch (err) {
+    throw new Error(
+      `proto-encode: type "${typeName}" not found in schema "${schemaPath}". ` +
+      `If the .proto file was recently updated, check for renamed or removed types. ` +
+      `Original error: ${err.message}`
+    );
+  }
+}
 
-// Run
-runACSSnapshot().catch(err => {
-  console.error('❌ Fatal error:', err);
-  process.exit(1);
-});
+export async function getEncoders() {
+  const root = await getRoot();
+  // FIX #6: Use safelyLookupType so missing types produce actionable errors
+  const Event       = safelyLookupType(root, 'ledger.Event');
+  const Update      = safelyLookupType(root, 'ledger.Update');
+  const EventBatch  = safelyLookupType(root, 'ledger.EventBatch');
+  const UpdateBatch = safelyLookupType(root, 'ledger.UpdateBatch');
+
+  return { Event, Update, EventBatch, UpdateBatch };
+}
+
+/**
+ * Map a raw event object to protobuf-compatible format.
+ * NOTE: protobufjs uses camelCase field names internally.
+ *
+ * IMPORTANT per Scan API docs:
+ * - event_id should be original API value (format: <update_id>:<event_index>)
+ * - child_event_ids is critical for tree traversal
+ * - Many fields are optional (signatories only on created, etc.)
+ */
+export function mapEvent(r) {
+  // Accept both snake_case (API/normalizer) and camelCase (internal)
+  const effectiveAt = r.effective_at ?? r.effectiveAt;
+  const recordedAt  = r.recorded_at  ?? r.recordedAt  ?? r.timestamp;
+  const createdAtTs = r.created_at_ts ?? r.createdAtTs;
+
+  const eventType = r.type ?? r.event_type ?? r.eventType;
+  const eventTypeOriginal =
+    r.type_original ?? r.event_type_original ?? r.typeOriginal ?? r.eventTypeOriginal ?? eventType;
+
+  const contractId =
+    r.contract_id             ??
+    r.contractId              ??
+    r.created?.contract_id   ??
+    r.created?.contractId    ??
+    r.exercised?.contract_id ??
+    r.exercised?.contractId  ??
+    r.reassignment?.contract_id ??
+    r.reassignment?.contractId  ??
+    '';
+
+  const childEventIds = r.child_event_ids ?? r.childEventIds;
+
+  // FIX #2: rawJson and rawEvent are resolved from their own distinct source
+  // fields only — no cross-referencing between the two output fields.
+  // Previously rawJson fell back to r.raw_event and rawEvent fell back to
+  // r.rawJson, silently aliasing them. Downstream consumers now always get the
+  // field they asked for or an empty string, never a silent substitute.
+  const rawJson  = r.rawJson   || r.raw_json  || (r.raw ? safeStringify(r.raw) : '');
+  const rawEvent = r.raw_event || (r.raw ? safeStringify(r.raw) : '');
+
+  return {
+    id:               String(r.id ?? r.event_id ?? r.eventId ?? ''),
+    updateId:         String(r.update_id ?? r.updateId ?? ''),
+    type:             String(eventType ?? ''),
+    typeOriginal:     String(eventTypeOriginal ?? ''),
+    synchronizer:     String(r.synchronizer ?? r.synchronizer_id ?? r.synchronizerId ?? ''),
+    effectiveAt:      safeTimestamp(effectiveAt),
+    recordedAt:       safeTimestamp(recordedAt),
+    createdAtTs:      safeTimestamp(createdAtTs),
+    contractId:       String(contractId ?? ''),
+    template:         String(r.template ?? r.template_id ?? r.templateId ?? ''),
+    packageName:      String(r.package_name ?? r.packageName ?? ''),
+    migrationId:      safeInt64(r.migration_id ?? r.migrationId),
+    // Optional arrays — may be null/undefined for certain event types
+    signatories:      safeStringArray(r.signatories),
+    observers:        safeStringArray(r.observers),
+    actingParties:    safeStringArray(r.acting_parties ?? r.actingParties),
+    witnessParties:   safeStringArray(r.witness_parties ?? r.witnessParties),
+    payloadJson:      r.payloadJson || r.payload_json || (r.payload ? safeStringify(r.payload) : ''),
+    // Created event specific fields
+    contractKeyJson:  r.contractKeyJson || r.contract_key_json || (r.contract_key ? safeStringify(r.contract_key) : ''),
+    // Exercised event specific fields
+    choice:           String(r.choice ?? ''),
+    // FIX #5: Boolean(string) coerces "false" → true. Use explicit comparison
+    // to handle values arriving as strings from CSV/parquet sources.
+    consuming:        r.consuming === true || r.consuming === 1 || r.consuming === 'true',
+    interfaceId:      String(r.interface_id ?? r.interfaceId ?? ''),
+    childEventIds:    safeStringArray(childEventIds),
+    exerciseResultJson: r.exerciseResultJson || r.exercise_result_json || (r.exercise_result ? safeStringify(r.exercise_result) : ''),
+    // Reassignment event specific fields
+    sourceSynchronizer: String(r.source_synchronizer ?? r.sourceSynchronizer ?? ''),
+    targetSynchronizer: String(r.target_synchronizer ?? r.targetSynchronizer ?? ''),
+    unassignId:       String(r.unassign_id ?? r.unassignId ?? ''),
+    submitter:        String(r.submitter ?? ''),
+    reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
+    // FIX #2: rawJson and rawEvent resolved independently (see above)
+    rawJson,
+    rawEvent,
+    // Deprecated
+    party:            String(r.party ?? ''),
+  };
+}
+
+/**
+ * Map a raw update object to protobuf-compatible format.
+ * NOTE: protobufjs uses camelCase field names internally.
+ */
+export function mapUpdate(r) {
+  const effectiveAt = r.effective_at ?? r.effectiveAt;
+  const recordedAt  = r.recorded_at  ?? r.recordedAt  ?? r.timestamp;
+  const recordTime  = r.record_time  ?? r.recordTime;
+
+  // FIX #7: Warn when the deep update_data fallback is used for rootEventIds.
+  // This indicates the caller's normalization step did not extract root_event_ids
+  // to the top level, which should be fixed upstream rather than silently patched.
+  let rootEventIds = r.root_event_ids ?? r.rootEventIds;
+  if (rootEventIds == null) {
+    const deepValue = r.update_data?.root_event_ids ?? r.update_data?.rootEventIds;
+    if (deepValue != null) {
+      console.warn(
+        `[proto-encode] mapUpdate: root_event_ids missing at top level for update ` +
+        `"${r.update_id ?? r.updateId ?? 'UNKNOWN'}" — falling back to update_data.root_event_ids. ` +
+        `Fix the upstream normalizer to extract root_event_ids to the top level.`
+      );
+      rootEventIds = deepValue;
+    }
+  }
+
+  return {
+    id:               String(r.id ?? r.update_id ?? r.updateId ?? ''),
+    type:             String(r.type ?? r.update_type ?? r.updateType ?? ''),
+    synchronizer:     String(r.synchronizer ?? r.synchronizer_id ?? r.synchronizerId ?? ''),
+    effectiveAt:      safeTimestamp(effectiveAt),
+    recordedAt:       safeTimestamp(recordedAt),
+    recordTime:       safeTimestamp(recordTime),
+    commandId:        String(r.command_id ?? r.commandId ?? ''),
+    workflowId:       String(r.workflow_id ?? r.workflowId ?? ''),
+    kind:             String(r.kind ?? ''),
+    migrationId:      safeInt64(r.migration_id ?? r.migrationId),
+    offset:           safeInt64(r.offset),
+    rootEventIds:     safeStringArray(rootEventIds),
+    eventCount:       parseInt(r.event_count ?? r.eventCount) || 0,
+    // Reassignment-specific update fields
+    sourceSynchronizer: String(r.source_synchronizer ?? r.sourceSynchronizer ?? ''),
+    targetSynchronizer: String(r.target_synchronizer ?? r.targetSynchronizer ?? ''),
+    unassignId:       String(r.unassign_id ?? r.unassignId ?? ''),
+    submitter:        String(r.submitter ?? ''),
+    reassignmentCounter: safeInt64(r.reassignment_counter ?? r.reassignmentCounter),
+    // Tracing
+    traceContextJson: r.traceContextJson || r.trace_context_json || (r.trace_context ? safeStringify(r.trace_context) : ''),
+    updateDataJson:   r.updateDataJson || r.update_data_json   || (r.update_data  ? safeStringify(r.update_data)  : ''),
+  };
+}
+
+/**
+ * Safely convert a value to a protobuf timestamp (milliseconds since epoch).
+ *
+ * FIX #3: Invalid or missing timestamps previously returned 0 silently,
+ * storing them as Unix epoch (1970-01-01). Downstream date-range queries
+ * would then silently include these records in 1970 results. We now log a
+ * warning on invalid values so the caller can investigate the source data.
+ * 0 remains the stored value since protobuf int64 cannot represent null,
+ * but the warning makes the situation visible.
+ *
+ * @param {*} value
+ * @returns {number} Milliseconds since epoch, or 0 if missing/invalid
+ */
+function safeTimestamp(value) {
+  if (value === null || value === undefined || value === '' || value === 0) return 0;
+  if (typeof value === 'number') {
+    if (isNaN(value)) {
+      console.warn(`[proto-encode] safeTimestamp: NaN number — storing as 0`);
+      return 0;
+    }
+    return value;
+  }
+  try {
+    const ts = new Date(value).getTime();
+    if (isNaN(ts)) {
+      console.warn(`[proto-encode] safeTimestamp: invalid timestamp "${value}" — storing as 0 (epoch). Check source data.`);
+      return 0;
+    }
+    return ts;
+  } catch {
+    console.warn(`[proto-encode] safeTimestamp: threw on value "${value}" — storing as 0`);
+    return 0;
+  }
+}
+
+/**
+ * Safely convert a value to a protobuf int64.
+ *
+ * FIX #4: JavaScript parseInt() returns a float64, which can only safely
+ * represent integers up to Number.MAX_SAFE_INTEGER (2^53 - 1). Protobuf
+ * int64 supports values up to 2^63 - 1. Fields like reassignment_counter
+ * and offset could exceed the safe integer range, producing silently wrong
+ * values. We now use Long.fromValue() (bundled with protobufjs) which
+ * handles arbitrarily large int64 values correctly.
+ *
+ * @param {*} value
+ * @returns {Long} protobufjs Long, or Long.ZERO if missing/invalid
+ */
+function safeInt64(value) {
+  if (value === null || value === undefined) return Long.ZERO;
+  try {
+    return Long.fromValue(value);
+  } catch {
+    console.warn(`[proto-encode] safeInt64: cannot convert "${value}" to int64 — storing as 0`);
+    return Long.ZERO;
+  }
+}
+
+/**
+ * Safely convert a value to a string array.
+ *
+ * @param {*} arr
+ * @returns {string[]}
+ */
+function safeStringArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(String);
+}
+
+/**
+ * Safely JSON-stringify an object.
+ *
+ * @param {*} obj
+ * @returns {string} JSON string, or '' if serialization fails
+ */
+function safeStringify(obj) {
+  try {
+    return typeof obj === 'string' ? obj : JSON.stringify(obj);
+  } catch {
+    return '';
+  }
+}
