@@ -120,14 +120,36 @@ import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter  from './write-binary.js';
 
 // ─── Unified writer helpers ────────────────────────────────────────────────
+// FIX #15 (audit fix #7): Run binary and parquet writes independently.
+// Previously a binary write error would prevent the parquet write from running.
+// Now both writes proceed via Promise.allSettled; errors from either are
+// collected and re-thrown after both have had a chance to complete.
 async function bufferUpdates(updates) {
-  if (USE_BINARY)  await binaryWriter.bufferUpdates(updates);
-  if (USE_PARQUET) return parquetWriter.bufferUpdates(updates);
+  const tasks = [];
+  if (USE_BINARY)  tasks.push(binaryWriter.bufferUpdates(updates));
+  if (USE_PARQUET) tasks.push(parquetWriter.bufferUpdates(updates));
+  if (tasks.length === 0) return;
+  const results = await Promise.allSettled(tasks);
+  const errors = results.filter(r => r.status === 'rejected');
+  if (errors.length > 0) {
+    console.error(`[bufferUpdates] ${errors.length} writer(s) failed:`);
+    for (const e of errors) console.error(`  ${e.reason?.message || e.reason}`);
+    throw errors[0].reason;
+  }
 }
 
 async function bufferEvents(events) {
-  if (USE_BINARY)  await binaryWriter.bufferEvents(events);
-  if (USE_PARQUET) return parquetWriter.bufferEvents(events);
+  const tasks = [];
+  if (USE_BINARY)  tasks.push(binaryWriter.bufferEvents(events));
+  if (USE_PARQUET) tasks.push(parquetWriter.bufferEvents(events));
+  if (tasks.length === 0) return;
+  const results = await Promise.allSettled(tasks);
+  const errors = results.filter(r => r.status === 'rejected');
+  if (errors.length > 0) {
+    console.error(`[bufferEvents] ${errors.length} writer(s) failed:`);
+    for (const e of errors) console.error(`  ${e.reason?.message || e.reason}`);
+    throw errors[0].reason;
+  }
 }
 
 async function flushAll() {
@@ -779,10 +801,25 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       apiLatencyMs: fetchLatencyMs,
     });
 
+    // FIX #13 (audit fix #2): Use max(record_time) across all transactions,
+    // not just the last array element. If the API returns transactions ordered
+    // by offset rather than record_time, the last element may not have the
+    // highest record_time — causing the cursor to undershoot or overshoot.
+    let maxRecordTime = null;
+    let maxMigrationId = null;
+    for (const tx of transactions) {
+      if (tx.record_time && (!maxRecordTime || tx.record_time > maxRecordTime)) {
+        maxRecordTime = tx.record_time;
+      }
+      if (tx.migration_id !== undefined) {
+        maxMigrationId = tx.migration_id;
+      }
+    }
+
     return {
       items:           transactions,
-      lastMigrationId: transactions.length > 0 ? transactions[transactions.length - 1].migration_id : null,
-      lastRecordTime:  transactions.length > 0 ? transactions[transactions.length - 1].record_time  : null,
+      lastMigrationId: maxMigrationId,
+      lastRecordTime:  maxRecordTime,
     };
   } catch (err) {
     if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
@@ -1193,7 +1230,32 @@ async function runIngestion() {
       }
 
       const processResult = await withTimeout(processUpdates(data.items), 60_000, 'processUpdates');
-      const { updates, events } = processResult;
+      const { updates, events, errors: batchErrors } = processResult;
+
+      // FIX #14 (audit fix #1): If any transactions failed to decode, do NOT
+      // advance the cursor past them. Log a fatal-level warning and halt the
+      // batch so the operator can investigate. Partial results are still written
+      // but the cursor stays at the pre-batch position.
+      if (batchErrors > 0) {
+        log('error', 'cursor_hold_on_errors', {
+          errorCount: batchErrors,
+          totalInBatch: data.items.length,
+          cursor: afterRecordTime,
+          migration: afterMigrationId,
+        });
+        console.error(
+          `🔴 ${batchErrors} transaction(s) failed to decode. ` +
+          `Cursor NOT advanced to prevent data loss. ` +
+          `Fix the malformed transactions or skip them explicitly.`
+        );
+        // Still count the successful ones
+        totalUpdates += updates;
+        totalEvents  += events;
+        // Do NOT advance cursor — re-fetch will include the failed txs
+        await sleep(10000, 'decode_error_hold');
+        continue;
+      }
+
       totalUpdates += updates;
       totalEvents  += events;
 
