@@ -203,7 +203,7 @@ describe('Live Updates Ingestion', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'update1', 4);
+      const result = normalizeEvent(event, 'update1', 4, event, { effective_at: '2025-01-20T10:30:11.903Z' });
       
       expect(result.event_type).toBe('exercised');
       expect(result.event_type_original).toBe('exercised_event');
@@ -370,7 +370,7 @@ describe('Live Updates Ingestion', () => {
         custom_event_field: 'preserved_in_raw',
       };
 
-      const result = normalizeEvent(event, 'update1', 4, event);
+      const result = normalizeEvent(event, 'update1', 4, event, { effective_at: '2025-01-20T10:00:00Z' });
       
       expect(result.raw_event).toContain('custom_event_field');
       expect(result.raw_event).toContain('preserved_in_raw');
@@ -438,7 +438,7 @@ describe('Live Updates Ingestion', () => {
 
       const update = normalizeUpdate(raw);
       const events = flattenEventsInTreeOrder(raw.events_by_id, raw.root_event_ids);
-      const normalizedEvent = normalizeEvent(events[0], raw.update_id, raw.migration_id);
+      const normalizedEvent = normalizeEvent(events[0], raw.update_id, raw.migration_id, events[0], { effective_at: '2025-01-20T10:00:00Z' });
       
       expect(update.migration_id).toBe(4);
       expect(normalizedEvent.migration_id).toBe(4);
