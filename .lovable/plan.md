@@ -1,115 +1,64 @@
 
 
-## Performance Upgrade Plan — No Additional Sharding
+## Plan: Update Tests to Reflect Data Integrity Fixes
 
-### Bottleneck Analysis
+### Problem
+The 10 data integrity fixes changed behavior in `fetch-updates.js`, `fetch-backfill.js`, and `write-parquet.js`, but 2 existing test files contain outdated code replicas and assertions that no longer match the source. Additionally, no tests verify the new fix behaviors.
 
-After reading the full pipeline (`fetch-backfill.js`, `write-parquet.js`, `parquet-worker.js`, `gcs-upload-queue.js`, `gcs-upload.js`), there are **four high-impact bottlenecks** that can be eliminated:
+### Files to modify
 
-```text
-Current Pipeline (per batch of 1000 txs):
+#### 1. `scripts/ingest/test/decode-main-thread.test.js` — Full replica rewrite
 
-  API fetch → decode → JSON.stringify each record
-    → write temp .jsonl file to disk
-      → DuckDB: new Database(':memory:') + connect()
-        → DuckDB: read_json_auto(tempfile) → COPY TO .parquet
-          → DuckDB: re-read .parquet for validation (COUNT, DESCRIBE, sample)
-            → close DB + close conn
-              → spawn gsutil child process → upload → delete local
-```
+The replicated `decodeInMainThread` function (lines 20-75) uses old, buggy patterns that were fixed in the source:
 
-Each of these steps has unnecessary overhead that compounds across millions of files.
+| Line | Old (replica) | New (must match source) |
+|------|--------------|------------------------|
+| 21 | `!!tx.event` | `!!tx.reassignment` |
+| 22 | `normalizeUpdate(tx)` then `update.migration_id = migrationId` | `normalizeUpdate({...tx, migration_id: migrationId})` |
+| 40 | `tx.event?.created_event` | `tx.reassignment?.event?.created_event` |
+| 46-50 | `if (ev.effective_at) { push } else { warn }` | Remove guard — `normalizeEvent` throws |
+| 63 | `Object.entries(eventsById)` | `flattenEventsInTreeOrder(eventsById, rootEventIds)` |
+| 65 | `ev.event_id = eventId` (silent) | Add mismatch warning logic |
+| 66-69 | `if (ev.effective_at) { push } else { warn }` | Remove guard |
 
----
+Test fixture updates needed:
+- Reassignment tests (lines 178-231) use `tx.event` structure — must change to `tx.reassignment.event` structure
+- The "should include reassign events" test (line 202) puts created_event under `tx.event` — must move to `tx.reassignment.event.created_event`
 
-### Change 1: Replace `gsutil` CLI with `@google-cloud/storage` SDK
+#### 2. `scripts/ingest/test/recommendations-fixes.test.js` — Add structural assertions for new fixes
 
-**File:** `scripts/ingest/gcs-upload-queue.js`
+Add new describe blocks verifying each new fix exists in the source:
 
-**Problem:** Every upload spawns a `gsutil` child process. At 48 concurrent uploads, that's 48 OS processes with their own Python runtimes, each doing TLS handshake independently. Process spawn overhead is ~50-100ms per file.
+- **Fix #13** (audit fix #2): `fetch-updates.js` uses `Math.max` pattern for `maxRecordTime` instead of `transactions[last].record_time`
+- **Fix #14** (audit fix #1): `fetch-updates.js` checks `batchErrors > 0` and holds cursor (`cursor_hold_on_errors`)
+- **Fix #15** (audit fix #7): Both `fetch-updates.js` and `fetch-backfill.js` use `Promise.allSettled` in `bufferUpdates`/`bufferEvents`
+- **Fix #16** (audit fix #3): `fetch-backfill.js` `processBackfillItems` no-pool path has per-tx try/catch
+- **Fix #17** (audit fix #4): `fetch-backfill.js` pool fallback `.catch` handler has per-tx try/catch
+- **Fix #18** (audit fix #5): `fetch-backfill.js` `seenUpdateIds` uses LRU eviction (keeps newest 250k) instead of `.clear()`
+- **Fix #19** (audit fix #8): `fetch-backfill.js` `fetchTimeSliceStreaming` uses `Promise.allSettled` for `inflightProcesses`
+- **Fix #20** (audit fix #10): `fetch-backfill.js` finalization flush catches re-throw instead of `catch {}`
 
-**Fix:** Replace `gsutilUpload()` with the `@google-cloud/storage` Node.js SDK. This gives:
-- Connection pooling and HTTP/2 multiplexing (one TLS session, many uploads)
-- No process spawn overhead
-- Streaming upload support (pipe file directly)
-- Native resumable uploads for large files
+Each assertion reads the source file and checks for the presence/absence of specific patterns.
 
-**Expected speedup:** 3-5x on GCS upload throughput.
+#### 3. New file: `scripts/ingest/test/data-integrity-fixes.test.js`
 
-**Implementation:**
-- Install `@google-cloud/storage`
-- Replace `gsutilUpload()` function with SDK-based `streamUpload()`
-- Keep the same queue/backpressure/retry architecture
-- Remove `computeLocalMD5` / `getGCSObjectMD5` (SDK handles integrity via CRC32C automatically)
+Behavioral tests for fixes that can be tested without importing the full modules:
 
----
+- **LRU eviction logic**: Verify that when a Set exceeds 500k entries, it retains the newest 250k (not a full clear)
+- **`Promise.allSettled` per-partition requeue**: Verify that only failed partition records are re-queued (not all records)
+- **Cursor hold on errors**: Verify the `processUpdates` return shape includes `errors` count
+- **`max(record_time)` cursor**: Verify that given out-of-order transactions, the highest record_time is selected
 
-### Change 2: Reuse DuckDB connections in persistent workers
+### Implementation order
 
-**File:** `scripts/ingest/parquet-worker.js`
+1. Rewrite `decode-main-thread.test.js` replica + update fixtures
+2. Add new structural assertions to `recommendations-fixes.test.js`
+3. Create `data-integrity-fixes.test.js` with behavioral tests
 
-**Problem:** Every Parquet file write does `new duckdb.Database(':memory:')` + `db.connect()` + `conn.close()` + `db.close()`. DuckDB initialization is expensive (~20-50ms per instance). At 50K files per migration, that's 15-40 minutes of pure DuckDB init overhead.
+### Technical details
 
-**Fix:** Create the DuckDB instance once when the persistent worker starts, reuse it across all jobs. Just run the COPY query on each message.
-
-**Expected speedup:** 2x on Parquet write throughput.
-
-**Implementation:**
-- Move `duckdb.Database(':memory:')` and `db.connect()` to module-level initialization (runs once per worker thread)
-- Remove `conn.close()` / `db.close()` from `processJob()`
-- Add cleanup only in the worker exit handler
-
----
-
-### Change 3: Make post-write validation sampling-based
-
-**File:** `scripts/ingest/parquet-worker.js`
-
-**Problem:** Every single Parquet file is re-read after writing for validation (COUNT, DESCRIBE, sample queries). This doubles the I/O per file and adds 3 DuckDB queries per write.
-
-**Fix:** Validate only every Nth file (e.g., every 20th). The pipeline has been stable — full validation on every file is unnecessary overhead.
-
-**Expected speedup:** ~30% on Parquet write latency.
-
-**Implementation:**
-- Add a `PARQUET_VALIDATION_SAMPLE_RATE` env var (default: 20 = validate 1 in 20 files)
-- Track a counter in the persistent worker, only run validation queries when `counter % sampleRate === 0`
-- Still validate the first 5 files on startup for early error detection
-
----
-
-### Change 4: Increase `MAX_ROWS_PER_FILE` floor and reduce file count
-
-**File:** `scripts/ingest/write-parquet.js`, `.env`
-
-**Problem:** With `MIN_ROWS_PER_FILE=5000`, the pipeline produces many small files. Each file incurs: DuckDB init, JSONL write, Parquet write, validation, GCS upload, GCS delete. Fewer, larger files amortize all this overhead.
-
-**Fix:** Raise `MIN_ROWS_PER_FILE` to 25,000 and `MAX_ROWS_PER_FILE` to 100,000. This reduces total file count by ~5x, cutting per-file overhead proportionally.
-
-**Expected speedup:** 2-3x overall (fewer files = fewer DuckDB inits, fewer GCS uploads, fewer disk operations).
-
-**Implementation:**
-- Update `.env`: `MIN_ROWS_PER_FILE=25000`, `MAX_ROWS_PER_FILE=100000`
-- Verify `PARQUET_ROW_GROUP=100000` is set for efficient read performance
-
----
-
-### Combined Expected Impact
-
-```text
-Current:  ~500 updates/sec sustained
-After:    ~3000-5000 updates/sec sustained (6-10x improvement)
-```
-
-The changes are independent and can be implemented incrementally:
-1. Change 4 (env vars only) — immediate, zero risk
-2. Change 2 (reuse DuckDB) — small code change, high impact
-3. Change 3 (sampling validation) — small code change, moderate impact
-4. Change 1 (GCS SDK) — largest change, highest impact on upload-bound runs
-
-### Technical Notes
-
-- Change 1 requires `npm install @google-cloud/storage` in `scripts/ingest/`
-- Change 2 requires testing that DuckDB in-memory state doesn't leak across jobs (it shouldn't since each COPY reads from a fresh temp file)
-- All changes are backward-compatible — no cursor format changes, no GCS path changes
+All three test files use the same patterns already established in the codebase:
+- **Structural tests**: Read source with `fs.readFileSync` and assert on string patterns (same as existing `recommendations-fixes.test.js`)
+- **Behavioral tests**: Replicate isolated logic and test directly (same as existing `decode-main-thread.test.js`)
+- No new dependencies needed
 
