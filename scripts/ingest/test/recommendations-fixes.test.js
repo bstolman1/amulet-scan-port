@@ -190,12 +190,14 @@ describe('#5-6 - Atomic cursor writes', () => {
     expect(saveFn).not.toContain('fs.writeFileSync(LIVE_CURSOR_FILE');
   });
 
-  it('bulletproof-backfill IntegrityCursor uses atomicWriteFile', () => {
+  it('bulletproof-backfill IntegrityCursor delegates to AtomicCursor', () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), 'scripts/ingest/bulletproof-backfill.js'),
       'utf8'
     );
-    expect(source).toContain('atomicWriteFile(this.cursorPath');
+    // IntegrityCursor now delegates to AtomicCursor instead of calling atomicWriteFile directly
+    expect(source).toContain('new AtomicCursor(');
+    expect(source).toContain('this._cursor.');
     expect(source).not.toContain('writeFileSync(this.cursorPath');
   });
 
