@@ -6,10 +6,21 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { mkdirSync, rmSync } from 'fs';
 
 process.env.SCAN_URL = 'http://localhost:0';
 process.env.BATCH_SIZE = '10';
 process.env.GCS_ENABLED = 'false';
+
+const TEST_DIR = join(tmpdir(), `e2e-smoke-test-${Date.now()}`);
+const CURSOR_DIR = join(TEST_DIR, 'cursors');
+
+vi.mock('../path-utils.js', () => ({
+  getBaseDataDir: () => TEST_DIR,
+  getCursorDir: () => CURSOR_DIR,
+}));
 
 describe('E2E Smoke: ingestion data path', () => {
   let server;
@@ -40,6 +51,7 @@ describe('E2E Smoke: ingestion data path', () => {
   };
 
   beforeEach(async () => {
+    mkdirSync(CURSOR_DIR, { recursive: true });
     requestLog = [];
     server = http.createServer((req, res) => {
       requestLog.push({ method: req.method, url: req.url });
@@ -70,6 +82,7 @@ describe('E2E Smoke: ingestion data path', () => {
       await new Promise(resolve => server.close(resolve));
       server = null;
     }
+    try { rmSync(TEST_DIR, { recursive: true, force: true }); } catch {}
   });
 
   it('normalizeUpdate maps API response to schema correctly', async () => {

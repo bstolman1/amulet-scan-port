@@ -68,7 +68,7 @@ describe('Path Utilities', () => {
     it('should export platform constants', () => {
       expect(typeof isWindows).toBe('boolean');
       expect(WIN_DEFAULT).toBe('C:\\ledger_raw');
-      expect(LINUX_DEFAULT).toBe('/home/ben/ledger_data');
+      expect(LINUX_DEFAULT).toBe('/var/lib/ledger_raw');
       expect(TMP_DIR).toBe('/tmp/ledger_raw');
     });
   });

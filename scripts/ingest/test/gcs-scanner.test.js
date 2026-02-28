@@ -8,6 +8,11 @@
  * - Timestamp extraction from Parquet filenames
  * - Best-result selection across multiple prefixes
  * - Edge cases: empty buckets, missing partitions, gsutil failures
+ *
+ * UPDATED: All scanner functions are now async (FIX #1 in gcs-scanner.js).
+ * - exec mocks return Promises (mockResolvedValue / mockRejectedValue)
+ * - All test functions are async with await
+ * - Fallback timestamps use end-of-day-minus-5-min (FIX #3)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -22,10 +27,14 @@ import {
 } from '../gcs-scanner.js';
 import { getPartitionPath } from '../data-schema.js';
 
+// Helper: compute the end-of-day-minus-5-min fallback for a given date string
+function expectedFallback(dateStr) {
+  const d = new Date(`${dateStr}T23:59:59.999Z`);
+  d.setMinutes(d.getMinutes() - 5);
+  return d.toISOString();
+}
+
 // ─── Path Contract Tests ─────────────────────────────────────────────
-// These are the MOST important tests: they ensure the scanner checks
-// every path that getPartitionPath() can produce. If getPartitionPath
-// ever adds a new source or type, these tests will catch it.
 
 describe('GCS Scanner - Path Contract with getPartitionPath', () => {
   const BUCKET = 'test-bucket';
@@ -33,7 +42,6 @@ describe('GCS Scanner - Path Contract with getPartitionPath', () => {
   it('should produce prefixes for every valid source×type combination', () => {
     const prefixes = getGCSScanPrefixes(BUCKET);
     
-    // getPartitionPath has 2 sources × 2 types = 4 combinations
     expect(prefixes).toHaveLength(4);
     expect(prefixes).toContain(`gs://${BUCKET}/raw/updates/updates/`);
     expect(prefixes).toContain(`gs://${BUCKET}/raw/updates/events/`);
@@ -44,7 +52,6 @@ describe('GCS Scanner - Path Contract with getPartitionPath', () => {
   it('should cover every getPartitionPath output prefix', () => {
     const prefixes = getGCSScanPrefixes(BUCKET);
     
-    // Generate all possible getPartitionPath outputs
     const sources = ['backfill', 'updates'];
     const types = ['updates', 'events'];
     const testTimestamp = '2026-01-15T10:00:00Z';
@@ -52,7 +59,6 @@ describe('GCS Scanner - Path Contract with getPartitionPath', () => {
     for (const source of sources) {
       for (const type of types) {
         const partPath = getPartitionPath(testTimestamp, 4, type, source);
-        // partPath = "updates/events/migration=4/year=2026/month=1/day=15"
         const expectedPrefix = `raw/${partPath.split('/migration=')[0]}/`;
         
         const matchingPrefix = prefixes.find(p => p.includes(expectedPrefix));
@@ -64,7 +70,6 @@ describe('GCS Scanner - Path Contract with getPartitionPath', () => {
   it('should match the exact directory structure getPartitionPath creates', () => {
     const prefixes = getGCSScanPrefixes(BUCKET);
     
-    // Test with multiple timestamps and migrations
     const testCases = [
       { ts: '2025-06-15T12:00:00Z', mig: 2, type: 'updates', source: 'backfill' },
       { ts: '2026-01-27T23:59:59Z', mig: 4, type: 'updates', source: 'updates' },
@@ -74,8 +79,6 @@ describe('GCS Scanner - Path Contract with getPartitionPath', () => {
     
     for (const tc of testCases) {
       const partPath = getPartitionPath(tc.ts, tc.mig, tc.type, tc.source);
-      // The full GCS path would be: gs://bucket/raw/{partPath}/file.parquet
-      // Our prefix should cover raw/{source}/{type}/
       const fullGCSPath = `gs://${BUCKET}/raw/${partPath}/data.parquet`;
       
       const coveredByPrefix = prefixes.some(prefix => fullGCSPath.startsWith(prefix));
@@ -104,7 +107,6 @@ describe('GCS Scanner - parseMigrationDirs', () => {
     const result = parseMigrationDirs(output);
     
     expect(result).toHaveLength(4);
-    // Should be sorted descending
     expect(result[0].id).toBe(4);
     expect(result[1].id).toBe(3);
     expect(result[2].id).toBe(2);
@@ -142,7 +144,7 @@ describe('GCS Scanner - parsePartitionValues', () => {
     
     const result = parsePartitionValues(output, 'year');
     expect(result).toHaveLength(2);
-    expect(result[0].val).toBe(2026); // Descending
+    expect(result[0].val).toBe(2026);
     expect(result[1].val).toBe(2025);
   });
 
@@ -180,71 +182,69 @@ describe('GCS Scanner - parsePartitionValues', () => {
   });
 });
 
-// ─── Timestamp Extraction ────────────────────────────────────────────
+// ─── Timestamp Extraction (now async) ────────────────────────────────
 
 describe('GCS Scanner - extractTimestampFromGCSFiles', () => {
-  it('should extract timestamp from Parquet filename', () => {
-    const exec = vi.fn().mockReturnValue(
+  it('should extract timestamp from Parquet filename', async () => {
+    const exec = vi.fn().mockResolvedValue(
       'gs://bucket/.../day=3/updates_2026-02-03T14-30-45.123456Z.parquet\n' +
       'gs://bucket/.../day=3/updates_2026-02-03T10-15-00.000000Z.parquet'
     );
     
-    const result = extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-02-03', exec);
+    const result = await extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-02-03', exec);
     
-    // Should pick the latest (sorted reverse), and convert dashes to colons
     expect(result).toBe('2026-02-03T14:30:45.123456Z');
   });
 
-  it('should fall back to end-of-day when no parquet files exist', () => {
-    const exec = vi.fn().mockReturnValue('');
+  it('should fall back to end-of-day-minus-5-min when no parquet files exist', async () => {
+    const exec = vi.fn().mockResolvedValue('');
     
-    const result = extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-02-03', exec);
-    expect(result).toBe('2026-02-03T23:59:59.999999Z');
+    const result = await extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-02-03', exec);
+    expect(result).toBe(expectedFallback('2026-02-03'));
   });
 
-  it('should fall back to end-of-day when filenames have no timestamps', () => {
-    const exec = vi.fn().mockReturnValue(
+  it('should fall back to end-of-day-minus-5-min when filenames have no timestamps', async () => {
+    const exec = vi.fn().mockResolvedValue(
       'gs://bucket/.../day=3/data-chunk-001.parquet\n' +
       'gs://bucket/.../day=3/data-chunk-002.parquet'
     );
     
-    const result = extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-01-27', exec);
-    expect(result).toBe('2026-01-27T23:59:59.999999Z');
+    const result = await extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-01-27', exec);
+    expect(result).toBe(expectedFallback('2026-01-27'));
   });
 
-  it('should fall back to end-of-day when gsutil fails', () => {
-    const exec = vi.fn().mockImplementation(() => { throw new Error('No URLs matched'); });
+  it('should fall back to end-of-day-minus-5-min when gsutil fails', async () => {
+    const exec = vi.fn().mockRejectedValue(new Error('No URLs matched'));
     
-    const result = extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-01-27', exec);
-    expect(result).toBe('2026-01-27T23:59:59.999999Z');
+    const result = await extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-01-27', exec);
+    expect(result).toBe(expectedFallback('2026-01-27'));
   });
 
-  it('should ignore non-parquet files', () => {
-    const exec = vi.fn().mockReturnValue(
+  it('should ignore non-parquet files', async () => {
+    const exec = vi.fn().mockResolvedValue(
       'gs://bucket/.../day=3/updates_2026-02-03T14-30-45.123456Z.parquet\n' +
       'gs://bucket/.../day=3/_SUCCESS\n' +
       'gs://bucket/.../day=3/updates_2026-02-03T16-00-00.000000Z.json'
     );
     
-    const result = extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-02-03', exec);
-    // Only .parquet files considered
+    const result = await extractTimestampFromGCSFiles('gs://bucket/.../day=3/', '2026-02-03', exec);
     expect(result).toBe('2026-02-03T14:30:45.123456Z');
   });
 });
 
-// ─── scanGCSDatePartitions ───────────────────────────────────────────
+// ─── scanGCSDatePartitions (now async) ───────────────────────────────
 
 describe('GCS Scanner - scanGCSDatePartitions', () => {
-  it('should walk year/month/day and return latest partition', () => {
+  it('should walk year/month/day and return latest partition', async () => {
     const exec = vi.fn()
-      .mockReturnValueOnce('gs://b/migration=4/year=2025/\ngs://b/migration=4/year=2026/')          // years
-      .mockReturnValueOnce('gs://b/.../year=2026/month=1/\ngs://b/.../year=2026/month=2/')           // months for 2026
-      .mockReturnValueOnce('gs://b/.../month=2/day=1/\ngs://b/.../month=2/day=3/')                   // days for month=2
-      .mockReturnValueOnce(                                                                           // files in day=3
+      .mockResolvedValueOnce('gs://b/migration=4/year=2025/\ngs://b/migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=1/\ngs://b/.../year=2026/month=2/')
+      .mockResolvedValueOnce('gs://b/.../month=2/day=1/\ngs://b/.../month=2/day=3/')
+      .mockResolvedValueOnce(
         'gs://b/.../day=3/updates_2026-02-03T14-30-00.000000Z.parquet'
       );
     
-    const result = scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
+    const result = await scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
     
     expect(result).not.toBeNull();
     expect(result.migrationId).toBe(4);
@@ -254,146 +254,101 @@ describe('GCS Scanner - scanGCSDatePartitions', () => {
     expect(result.source).toContain('day=3');
   });
 
-  it('should return null for empty migration path', () => {
-    const exec = vi.fn().mockReturnValue('');
+  it('should return null for empty migration path', async () => {
+    const exec = vi.fn().mockResolvedValue('');
     
-    const result = scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
+    const result = await scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
     expect(result).toBeNull();
   });
 
-  it('should skip empty month/day directories', () => {
+  it('should skip empty month/day directories', async () => {
     const exec = vi.fn()
-      .mockReturnValueOnce('gs://b/migration=4/year=2026/')                                          // years
-      .mockReturnValueOnce('gs://b/.../year=2026/month=1/')                                           // months for 2026
-      .mockReturnValueOnce('');                                                                        // no days in month=1
+      .mockResolvedValueOnce('gs://b/migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=1/')
+      .mockResolvedValueOnce('');
     
-    const result = scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
+    const result = await scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
     expect(result).toBeNull();
   });
 
-  it('should return null when gsutil throws', () => {
-    const exec = vi.fn().mockImplementation(() => { throw new Error('timeout'); });
+  it('should return null when gsutil throws', async () => {
+    const exec = vi.fn().mockRejectedValue(new Error('timeout'));
     
-    const result = scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
+    const result = await scanGCSDatePartitions('gs://b/migration=4/', 4, exec);
     expect(result).toBeNull();
   });
 });
 
-// ─── scanGCSHivePartition ────────────────────────────────────────────
+// ─── scanGCSHivePartition (now async) ────────────────────────────────
 
 describe('GCS Scanner - scanGCSHivePartition', () => {
-  it('should find latest migration and scan its date partitions', () => {
+  it('should find latest migration and scan its date partitions', async () => {
     const exec = vi.fn()
-      // First call: list migrations
-      .mockReturnValueOnce(
+      .mockResolvedValueOnce(
         'gs://b/raw/updates/updates/migration=3/\n' +
         'gs://b/raw/updates/updates/migration=4/'
       )
-      // Second call: list years for migration=4
-      .mockReturnValueOnce('gs://b/.../migration=4/year=2026/')
-      // Third call: list months
-      .mockReturnValueOnce('gs://b/.../year=2026/month=1/')
-      // Fourth call: list days
-      .mockReturnValueOnce('gs://b/.../month=1/day=27/')
-      // Fifth call: list files in day
-      .mockReturnValueOnce('gs://b/.../day=27/updates_2026-01-27T23-59-59.999999Z.parquet');
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=1/')
+      .mockResolvedValueOnce('gs://b/.../month=1/day=27/')
+      .mockResolvedValueOnce('gs://b/.../day=27/updates_2026-01-27T23-59-59.999999Z.parquet');
     
-    const result = scanGCSHivePartition('gs://b/raw/updates/updates/', exec);
+    const result = await scanGCSHivePartition('gs://b/raw/updates/updates/', exec);
     
     expect(result).not.toBeNull();
     expect(result.migrationId).toBe(4);
     expect(result.timestamp).toBe('2026-01-27T23:59:59.999999Z');
   });
 
-  it('should return null when no migrations exist', () => {
-    const exec = vi.fn().mockReturnValue('');
+  it('should return null when no migrations exist', async () => {
+    const exec = vi.fn().mockResolvedValue('');
     
-    const result = scanGCSHivePartition('gs://b/raw/updates/updates/', exec);
+    const result = await scanGCSHivePartition('gs://b/raw/updates/updates/', exec);
     expect(result).toBeNull();
   });
 
-  it('should return null when gsutil ls fails (prefix doesnt exist)', () => {
-    const exec = vi.fn().mockImplementation(() => {
-      throw new Error('CommandException: One or more URLs matched no objects');
-    });
+  it('should return null when gsutil ls fails (prefix doesnt exist)', async () => {
+    const exec = vi.fn().mockRejectedValue(
+      new Error('CommandException: One or more URLs matched no objects')
+    );
     
-    const result = scanGCSHivePartition('gs://b/raw/updates/events/', exec);
+    const result = await scanGCSHivePartition('gs://b/raw/updates/events/', exec);
     expect(result).toBeNull();
   });
 });
 
-// ─── findLatestFromGCS (Integration-style) ───────────────────────────
+// ─── findLatestFromGCS (now async) ───────────────────────────────────
 
 describe('GCS Scanner - findLatestFromGCS', () => {
-  it('should scan all 4 prefixes and return the best result', () => {
-    const callLog = [];
-    
-    const exec = vi.fn().mockImplementation((cmd) => {
-      callLog.push(cmd);
-      
-      // raw/updates/updates/ → has migration=4 data up to Feb 3
-      if (cmd.includes('raw/updates/updates/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/updates/updates/migration=4/';
-      }
-      if (cmd.includes('migration=4/"') && cmd.includes('raw/updates/updates')) {
-        return 'gs://b/.../migration=4/year=2026/';
-      }
-      
-      // raw/updates/events/ → has migration=4 data up to Feb 3
-      if (cmd.includes('raw/updates/events/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/updates/events/migration=4/';
-      }
-      if (cmd.includes('migration=4/"') && cmd.includes('raw/updates/events')) {
-        return 'gs://b/.../migration=4/year=2026/';
-      }
-      
-      // raw/backfill/updates/ → has migration=4 data up to Jan 27
-      if (cmd.includes('raw/backfill/updates/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/backfill/updates/migration=4/';
-      }
-      if (cmd.includes('migration=4/"') && cmd.includes('raw/backfill/updates')) {
-        return 'gs://b/.../migration=4/year=2026/';
-      }
-      
-      // raw/backfill/events/ → empty
-      if (cmd.includes('raw/backfill/events/"')) {
-        return '';
-      }
-      
-      // Year listing → month
-      if (cmd.includes('year=2026/"')) {
-        // For updates/updates and updates/events → Feb
-        if (callLog.some(c => c.includes('raw/updates/'))) {
-          return 'gs://b/.../year=2026/month=2/';
-        }
-        // For backfill → Jan
-        return 'gs://b/.../year=2026/month=1/';
-      }
-      
-      // Month=2 → day=3
-      if (cmd.includes('month=2/"')) {
-        return 'gs://b/.../month=2/day=3/';
-      }
-      // Month=1 → day=27
-      if (cmd.includes('month=1/"')) {
-        return 'gs://b/.../month=1/day=27/';
-      }
-      
-      // Day files
-      if (cmd.includes('day=3/"')) {
-        return 'gs://b/.../day=3/updates_2026-02-03T14-30-00.000000Z.parquet';
-      }
-      if (cmd.includes('day=27/"')) {
-        return 'gs://b/.../day=27/updates_2026-01-27T23-59-59.999999Z.parquet';
-      }
-      
-      return '';
-    });
+  it('should scan all 4 prefixes and return the best result', async () => {
+    // Use mockResolvedValueOnce for exact call ordering.
+    // Prefix order from getGCSScanPrefixes: updates/updates, updates/events, backfill/updates, backfill/events
+    const exec = vi.fn()
+      // Prefix 1: raw/updates/updates/ — migration=4, Feb 3
+      .mockResolvedValueOnce('gs://b/raw/updates/updates/migration=4/')           // ls prefix
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')                 // ls migration
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=2/')                     // ls year
+      .mockResolvedValueOnce('gs://b/.../month=2/day=3/')                         // ls month
+      .mockResolvedValueOnce('gs://b/.../day=3/updates_2026-02-03T14-30-00.000000Z.parquet') // ls day
+      // Prefix 2: raw/updates/events/ — migration=4, Feb 3 (same)
+      .mockResolvedValueOnce('gs://b/raw/updates/events/migration=4/')
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=2/')
+      .mockResolvedValueOnce('gs://b/.../month=2/day=3/')
+      .mockResolvedValueOnce('gs://b/.../day=3/updates_2026-02-03T14-30-00.000000Z.parquet')
+      // Prefix 3: raw/backfill/updates/ — migration=4, Jan 27
+      .mockResolvedValueOnce('gs://b/raw/backfill/updates/migration=4/')
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=1/')
+      .mockResolvedValueOnce('gs://b/.../month=1/day=27/')
+      .mockResolvedValueOnce('gs://b/.../day=27/updates_2026-01-27T23-59-59.999999Z.parquet')
+      // Prefix 4: raw/backfill/events/ — empty
+      .mockResolvedValueOnce('');
     
     const logEntries = [];
     const logFn = (level, msg, data) => logEntries.push({ level, msg, data });
     
-    const result = findLatestFromGCS({ bucket: 'b', execFn: exec, logFn: logFn });
+    const result = await findLatestFromGCS({ bucket: 'b', execFn: exec, logFn: logFn });
     
     expect(result).not.toBeNull();
     // Feb 3 should win over Jan 27
@@ -401,96 +356,64 @@ describe('GCS Scanner - findLatestFromGCS', () => {
     expect(result.migrationId).toBe(4);
   });
 
-  it('should return null when no bucket is configured', () => {
-    const result = findLatestFromGCS({ bucket: null });
+  it('should return null when no bucket is configured', async () => {
+    const result = await findLatestFromGCS({ bucket: null });
     expect(result).toBeNull();
   });
 
-  it('should handle all prefixes failing gracefully', () => {
-    const exec = vi.fn().mockImplementation(() => {
-      throw new Error('Network unreachable');
-    });
+  it('should handle all prefixes failing gracefully', async () => {
+    const exec = vi.fn().mockRejectedValue(new Error('Network unreachable'));
     
-    const result = findLatestFromGCS({ bucket: 'b', execFn: exec });
+    const result = await findLatestFromGCS({ bucket: 'b', execFn: exec });
     expect(result).toBeNull();
   });
 
-  it('should prefer higher migration over more recent date', () => {
-    const exec = vi.fn().mockImplementation((cmd) => {
-      // updates/updates has migration=5, Jan 1
-      if (cmd.includes('raw/updates/updates/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/updates/updates/migration=5/';
-      }
-      if (cmd.includes('migration=5/"')) {
-        return 'gs://b/.../migration=5/year=2026/';
-      }
-      
-      // backfill/updates has migration=4, Feb 28
-      if (cmd.includes('raw/backfill/updates/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/backfill/updates/migration=4/';
-      }
-      if (cmd.includes('migration=4/"')) {
-        return 'gs://b/.../migration=4/year=2026/';
-      }
-      
-      // Other prefixes empty
-      if (cmd.includes('raw/updates/events/"') || cmd.includes('raw/backfill/events/"')) {
-        return '';
-      }
-      
-      // Year → month branching
-      if (cmd.includes('year=2026/"')) {
-        // Check if we're in migration=5 context (Jan) or migration=4 (Feb)
-        return 'gs://b/.../year=2026/month=1/\ngs://b/.../year=2026/month=2/';
-      }
-      if (cmd.includes('month=2/"')) return 'gs://b/.../month=2/day=28/';
-      if (cmd.includes('month=1/"')) return 'gs://b/.../month=1/day=1/';
-      if (cmd.includes('day=28/"')) return 'gs://b/.../day=28/u_2026-02-28T12-00-00.000000Z.parquet';
-      if (cmd.includes('day=1/"')) return 'gs://b/.../day=1/u_2026-01-01T00-00-01.000000Z.parquet';
-      
-      return '';
-    });
+  it('should prefer higher migration over more recent date', async () => {
+    const exec = vi.fn()
+      // Prefix 1: raw/updates/updates/ — migration=5, Jan 1
+      .mockResolvedValueOnce('gs://b/raw/updates/updates/migration=5/')
+      .mockResolvedValueOnce('gs://b/.../migration=5/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=1/')
+      .mockResolvedValueOnce('gs://b/.../month=1/day=1/')
+      .mockResolvedValueOnce('gs://b/.../day=1/u_2026-01-01T00-00-01.000000Z.parquet')
+      // Prefix 2: raw/updates/events/ — empty
+      .mockResolvedValueOnce('')
+      // Prefix 3: raw/backfill/updates/ — migration=4, Feb 28
+      .mockResolvedValueOnce('gs://b/raw/backfill/updates/migration=4/')
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=2/')
+      .mockResolvedValueOnce('gs://b/.../month=2/day=28/')
+      .mockResolvedValueOnce('gs://b/.../day=28/u_2026-02-28T12-00-00.000000Z.parquet')
+      // Prefix 4: raw/backfill/events/ — empty
+      .mockResolvedValueOnce('');
     
-    const result = findLatestFromGCS({ bucket: 'b', execFn: exec });
+    const result = await findLatestFromGCS({ bucket: 'b', execFn: exec });
     
     expect(result).not.toBeNull();
     // Migration 5 should win even though migration 4 has a later date
     expect(result.migrationId).toBe(5);
   });
 
-  it('should pick later timestamp when migration IDs are equal', () => {
-    const exec = vi.fn().mockImplementation((cmd) => {
-      // Both prefixes have migration=4 but different dates
-      if (cmd.includes('raw/updates/updates/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/updates/updates/migration=4/';
-      }
-      if (cmd.includes('raw/backfill/updates/"') && !cmd.includes('migration=')) {
-        return 'gs://b/raw/backfill/updates/migration=4/';
-      }
-      if (cmd.includes('raw/updates/events/"') || cmd.includes('raw/backfill/events/"')) {
-        return '';
-      }
-      
-      if (cmd.includes('migration=4/"')) {
-        return 'gs://b/.../migration=4/year=2026/';
-      }
-      if (cmd.includes('year=2026/"')) {
-        return 'gs://b/.../year=2026/month=2/';
-      }
-      if (cmd.includes('month=2/"')) {
-        return 'gs://b/.../month=2/day=3/\ngs://b/.../month=2/day=5/';
-      }
-      if (cmd.includes('day=5/"')) {
-        return 'gs://b/.../day=5/u_2026-02-05T10-00-00.000000Z.parquet';
-      }
-      if (cmd.includes('day=3/"')) {
-        return 'gs://b/.../day=3/u_2026-02-03T14-30-00.000000Z.parquet';
-      }
-      
-      return '';
-    });
+  it('should pick later timestamp when migration IDs are equal', async () => {
+    const exec = vi.fn()
+      // Prefix 1: raw/updates/updates/ — migration=4, Feb 5
+      .mockResolvedValueOnce('gs://b/raw/updates/updates/migration=4/')
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=2/')
+      .mockResolvedValueOnce('gs://b/.../month=2/day=3/\ngs://b/.../month=2/day=5/')
+      .mockResolvedValueOnce('gs://b/.../day=5/u_2026-02-05T10-00-00.000000Z.parquet')
+      // Prefix 2: raw/updates/events/ — empty
+      .mockResolvedValueOnce('')
+      // Prefix 3: raw/backfill/updates/ — migration=4, Feb 3
+      .mockResolvedValueOnce('gs://b/raw/backfill/updates/migration=4/')
+      .mockResolvedValueOnce('gs://b/.../migration=4/year=2026/')
+      .mockResolvedValueOnce('gs://b/.../year=2026/month=2/')
+      .mockResolvedValueOnce('gs://b/.../month=2/day=3/')
+      .mockResolvedValueOnce('gs://b/.../day=3/u_2026-02-03T14-30-00.000000Z.parquet')
+      // Prefix 4: raw/backfill/events/ — empty
+      .mockResolvedValueOnce('');
     
-    const result = findLatestFromGCS({ bucket: 'b', execFn: exec });
+    const result = await findLatestFromGCS({ bucket: 'b', execFn: exec });
     
     expect(result).not.toBeNull();
     // Feb 5 should beat Feb 3 at same migration
@@ -505,8 +428,6 @@ describe('GCS Scanner - Regression tests', () => {
   it('REGRESSION: must scan raw/updates/updates/ not raw/updates/ (the original bug)', () => {
     const prefixes = getGCSScanPrefixes('my-bucket');
     
-    // The bug was scanning gs://bucket/raw/updates/ which would find
-    // migration= dirs at the wrong level. Must scan the nested path.
     expect(prefixes).not.toContain('gs://my-bucket/raw/updates/');
     expect(prefixes).toContain('gs://my-bucket/raw/updates/updates/');
   });
