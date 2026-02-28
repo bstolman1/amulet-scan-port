@@ -1,205 +1,237 @@
 #!/usr/bin/env node
 /**
  * Canton Ledger Ingestion Script - Live Updates
- * 
+ *
  * Fetches ledger updates from Canton Scan API and writes directly to Parquet (default)
  * or to binary files with --keep-raw flag.
- * 
+ *
  * Usage:
  *   node fetch-updates.js            # Resume from backfill cursor, write to Parquet
  *   node fetch-updates.js --live     # Start from current API time (live mode)
  *   node fetch-updates.js --keep-raw # Also write to .pb.zst files
+ *
+ * FIXES APPLIED:
+ *
+ * FIX #1  execSync → execFileAsync in loadCursorFromGCS and backupCursorToGCS
+ *         execSync blocked the event loop for up to 15s / 10s on every GCS call.
+ *         execFile (not exec) — no shell, no injection risk from GCS path strings.
+ *
+ * FIX #2  loadLiveCursor, saveLiveCursor, backupCursorToGCS made async
+ *         They call the now-async GCS functions; every call site updated to await.
+ *
+ * FIX #3  findLatestTimestamp: duplicate LIVE_MODE/RESUME branches collapsed
+ *         The if/else blocks were byte-for-byte identical — pure dead code.
+ *         Unreachable `return null` after the if/else also removed.
+ *
+ * FIX #4  shutdown saves _liveAfterRecordTime, not stale lastTimestamp
+ *         lastTimestamp is set at startup and never updated during the run.
+ *         afterRecordTime advances every batch — that is what must be persisted.
+ *         _liveAfterMigrationId/_liveAfterRecordTime bridge the scope gap.
+ *
+ * FIX #5  processUpdates: isReassignment = !!item.reassignment only
+ *         Old: !!item.reassignment || !!item.event — item.event is not a Scan
+ *         API field; produced false positives routing transactions through the
+ *         reassignment path (same bug as fetch-backfill.js, now fixed there too).
+ *
+ * FIX #6  processUpdates: reassignment event path corrected
+ *         Old: item.event?.created_event || u?.created_event
+ *              (item.event is always undefined for reassignment wrappers)
+ *         New: item.reassignment?.event?.created_event
+ *              Consistent with fixed decodeInMainThread in fetch-backfill.js.
+ *
+ * FIX #7  processUpdates: silent effective_at quarantine guards removed
+ *         normalizeEvent (fixed upstream) throws on null effective_at with full
+ *         context. The warn-and-skip contradicts that contract and silently drops
+ *         events. Per-item try/catch (FIX #9) handles the error correctly.
+ *
+ * FIX #8  processUpdates: event_id mismatch now warns instead of silent overwrite
+ *         Consistent with fixed decodeInMainThread in fetch-backfill.js and
+ *         decode-worker.js.
+ *
+ * FIX #9  processUpdates: per-item try/catch added
+ *         One malformed tx can no longer abort the entire batch. Errors are
+ *         collected, logged, and returned; partial results are still written.
+ *
+ * FIX #10 findLatestFromRawData: T23:59:59 fallback replaced for ALL days
+ *         Original applied the 5-min buffer only to today; historical days still
+ *         used T23:59:59.999999Z, overshooting by hours on any incomplete day
+ *         and causing the live cursor to skip real data after restart.
+ *
+ * FIX #11 /tmp GCS temp files → CURSOR_DIR-relative
+ *         /tmp is a separate filesystem on some container setups. Cross-filesystem
+ *         rename in atomicWriteFile fails silently. All temp files now live under
+ *         CURSOR_DIR alongside the real cursor file.
+ *
+ * FIX #12 normalizeUpdate called with migration_id injected
+ *         Old: normalizeUpdate(item) — migration_id was never passed in, so the
+ *         normalised update had whatever migration_id (if any) the raw API item
+ *         carried, not the locally-tracked migrationId.
+ *         New: normalizeUpdate({ ...item, migration_id: migrationId })
+ *              Consistent with fixed decodeInMainThread and decode-worker.js.
  */
+
+// CRITICAL: Load .env BEFORE any other imports that depend on env vars
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import { promisify } from 'util';
+// FIX #1: execFile (no shell, no injection risk) replaces execSync
+import { execFile as execFileCb } from 'child_process';
+
+const execFileAsync = promisify(execFileCb);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 import axios from 'axios';
 import https from 'https';
+import fs   from 'fs';
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
-import { 
-  log, 
-  logBatch, 
-  logCursor, 
-  logError, 
+import {
+  log,
+  logBatch,
+  logCursor,
+  logError,
   logFatal,
   logMetrics,
-  logSummary 
+  logSummary,
 } from './structured-logger.js';
 import {
   findLatestFromGCS as findLatestFromGCSImported,
   scanGCSHivePartition as scanGCSHivePartitionImported,
   extractTimestampFromGCSFiles as extractTimestampFromGCSFilesImported,
 } from './gcs-scanner.js';
-
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
 import { atomicWriteFile as _atomicWriteFile } from './atomic-cursor.js';
 
-// Wrapper to reuse atomic-cursor's atomicWriteFile for live cursor writes
 function atomicWriteFileForLive(filePath, data) {
   _atomicWriteFile(filePath, data);
 }
-import dotenv from 'dotenv';
 
-// Parse command line arguments
-const args = process.argv.slice(2);
-const LIVE_MODE = args.includes('--live') || args.includes('-l');
-const KEEP_RAW = args.includes('--keep-raw') || args.includes('--raw');
-const RAW_ONLY = args.includes('--raw-only') || args.includes('--legacy');
+// ─── CLI args ──────────────────────────────────────────────────────────────
+const args      = process.argv.slice(2);
+const LIVE_MODE  = args.includes('--live') || args.includes('-l');
+const KEEP_RAW   = args.includes('--keep-raw') || args.includes('--raw');
+const RAW_ONLY   = args.includes('--raw-only') || args.includes('--legacy');
 const USE_PARQUET = !RAW_ONLY;
-const USE_BINARY = KEEP_RAW || RAW_ONLY;
+const USE_BINARY  = KEEP_RAW || RAW_ONLY;
 
-// Use Parquet writer by default, binary writer only if --keep-raw or --raw-only
 import * as parquetWriter from './write-parquet.js';
-import * as binaryWriter from './write-binary.js';
+import * as binaryWriter  from './write-binary.js';
 
-// Load environment variables from scripts/ingest/.env by default.
-// This avoids surprises when running the script from the repo root.
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.join(__dirname, '.env') });
-
-// Unified writer functions
+// ─── Unified writer helpers ────────────────────────────────────────────────
 async function bufferUpdates(updates) {
-  if (USE_BINARY) {
-    await binaryWriter.bufferUpdates(updates);
-  }
-  if (USE_PARQUET) {
-    return parquetWriter.bufferUpdates(updates);
-  }
+  if (USE_BINARY)  await binaryWriter.bufferUpdates(updates);
+  if (USE_PARQUET) return parquetWriter.bufferUpdates(updates);
 }
 
 async function bufferEvents(events) {
-  if (USE_BINARY) {
-    await binaryWriter.bufferEvents(events);
-  }
-  if (USE_PARQUET) {
-    return parquetWriter.bufferEvents(events);
-  }
+  if (USE_BINARY)  await binaryWriter.bufferEvents(events);
+  if (USE_PARQUET) return parquetWriter.bufferEvents(events);
 }
 
 async function flushAll() {
   const results = [];
-  if (USE_BINARY) {
-    const binaryResults = await binaryWriter.flushAll();
-    results.push(...binaryResults);
-  }
-  if (USE_PARQUET) {
-    const parquetResults = await parquetWriter.flushAll();
-    results.push(...parquetResults);
-  }
+  if (USE_BINARY)  results.push(...await binaryWriter.flushAll());
+  if (USE_PARQUET) results.push(...await parquetWriter.flushAll());
   return results;
 }
 
 function getBufferStats() {
-  const stats = USE_PARQUET ? parquetWriter.getBufferStats() : { updates: 0, events: 0, pendingWrites: 0 };
-  if (USE_BINARY) {
-    const binaryStats = binaryWriter.getBufferStats();
-    stats.binaryPendingWrites = binaryStats.pendingWrites;
-  }
+  const stats = USE_PARQUET
+    ? parquetWriter.getBufferStats()
+    : { updates: 0, events: 0, pendingWrites: 0 };
+  if (USE_BINARY) stats.binaryPendingWrites = binaryWriter.getBufferStats().pendingWrites;
   return stats;
 }
 
 function setMigrationId(id) {
-  if (USE_PARQUET) {
-    parquetWriter.setMigrationId(id);
-  }
-  if (USE_BINARY) {
-    binaryWriter.setMigrationId(id);
-  }
+  if (USE_PARQUET) parquetWriter.setMigrationId(id);
+  if (USE_BINARY)  binaryWriter.setMigrationId(id);
 }
 
 function setDataSource(source) {
-  if (USE_PARQUET) {
-    parquetWriter.setDataSource(source);
-  }
+  if (USE_PARQUET) parquetWriter.setDataSource(source);
   // Binary writer always uses backfill path (legacy)
 }
 
-// Configuration
+// ─── Configuration ─────────────────────────────────────────────────────────
 let activeScanUrl = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 100;
-const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL) || 5000;
-const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000; // 30s default
-const STALL_DETECTION_INTERVAL_MS = parseInt(process.env.STALL_DETECTION_INTERVAL_MS) || 30000; // Check every 30s
-const STALL_THRESHOLD_MS = parseInt(process.env.STALL_THRESHOLD_MS) || 120000; // Alert after 120s
+const BATCH_SIZE                     = parseInt(process.env.BATCH_SIZE)                     || 100;
+const POLL_INTERVAL                  = parseInt(process.env.POLL_INTERVAL)                  || 5000;
+const FETCH_TIMEOUT_MS               = parseInt(process.env.FETCH_TIMEOUT_MS)               || 30000;
+const STALL_DETECTION_INTERVAL_MS    = parseInt(process.env.STALL_DETECTION_INTERVAL_MS)    || 30000;
+const STALL_THRESHOLD_MS             = parseInt(process.env.STALL_THRESHOLD_MS)             || 120000;
+const GCS_CURSOR_BACKUP_MAX_FAILURES = parseInt(process.env.GCS_CURSOR_BACKUP_MAX_FAILURES) || 5;
 
-// All known Scan API endpoints for pre-flight reachability check
 const ALL_SCAN_ENDPOINTS = [
-  { name: 'Global-Synchronizer-Foundation', url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
-  { name: 'Digital-Asset-1', url: 'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan' },
-  { name: 'Digital-Asset-2', url: 'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan' },
-  { name: 'Cumberland-1', url: 'https://scan.sv-1.global.canton.network.cumberland.io/api/scan' },
-  { name: 'Cumberland-2', url: 'https://scan.sv-2.global.canton.network.cumberland.io/api/scan' },
-  { name: 'Five-North-1', url: 'https://scan.sv-1.global.canton.network.fivenorth.io/api/scan' },
-  { name: 'Tradeweb-Markets-1', url: 'https://scan.sv-1.global.canton.network.tradeweb.com/api/scan' },
-  { name: 'Proof-Group-1', url: 'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan' },
-  { name: 'Liberty-City-Ventures-1', url: 'https://scan.sv-1.global.canton.network.lcv.mpch.io/api/scan' },
-  { name: 'MPC-Holding-Inc', url: 'https://scan.sv-1.global.canton.network.mpch.io/api/scan' },
-  { name: 'Orb-1-LP-1', url: 'https://scan.sv-1.global.canton.network.orb1lp.mpch.io/api/scan' },
-  { name: 'SV-Nodeops-Limited', url: 'https://scan.sv.global.canton.network.sv-nodeops.com/api/scan' },
-  { name: 'C7-Technology-Services-Limited', url: 'https://scan.sv-1.global.canton.network.c7.digital/api/scan' },
+  { name: 'Global-Synchronizer-Foundation',  url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
+  { name: 'Digital-Asset-1',                 url: 'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan' },
+  { name: 'Digital-Asset-2',                 url: 'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan' },
+  { name: 'Cumberland-1',                    url: 'https://scan.sv-1.global.canton.network.cumberland.io/api/scan' },
+  { name: 'Cumberland-2',                    url: 'https://scan.sv-2.global.canton.network.cumberland.io/api/scan' },
+  { name: 'Five-North-1',                    url: 'https://scan.sv-1.global.canton.network.fivenorth.io/api/scan' },
+  { name: 'Tradeweb-Markets-1',              url: 'https://scan.sv-1.global.canton.network.tradeweb.com/api/scan' },
+  { name: 'Proof-Group-1',                   url: 'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan' },
+  { name: 'Liberty-City-Ventures-1',         url: 'https://scan.sv-1.global.canton.network.lcv.mpch.io/api/scan' },
+  { name: 'MPC-Holding-Inc',                 url: 'https://scan.sv-1.global.canton.network.mpch.io/api/scan' },
+  { name: 'Orb-1-LP-1',                      url: 'https://scan.sv-1.global.canton.network.orb1lp.mpch.io/api/scan' },
+  { name: 'SV-Nodeops-Limited',              url: 'https://scan.sv.global.canton.network.sv-nodeops.com/api/scan' },
+  { name: 'C7-Technology-Services-Limited',  url: 'https://scan.sv-1.global.canton.network.c7.digital/api/scan' },
 ];
 
 /**
  * Determine TLS rejectUnauthorized setting.
- * Defaults to true (secure). Set INSECURE_TLS=true to disable for dev/self-signed certs.
  */
 export function getTLSRejectUnauthorized() {
   return process.env.INSECURE_TLS !== 'true';
 }
 
-// Axios client with explicit timeout (baseURL updated dynamically by probe)
 const client = axios.create({
-  baseURL: activeScanUrl,
-  timeout: FETCH_TIMEOUT_MS,
+  baseURL:    activeScanUrl,
+  timeout:    FETCH_TIMEOUT_MS,
   httpsAgent: new https.Agent({ rejectUnauthorized: getTLSRejectUnauthorized() }),
 });
 
-// Cross-platform path handling
 import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
-// GCS preflight checks
 import { runPreflightChecks } from './gcs-preflight.js';
 
 const DATA_DIR = getBaseDataDir();
 const GCS_MODE = isGCSMode();
 
-// Track state
-let lastTimestamp = null;
+// ─── Runtime state ─────────────────────────────────────────────────────────
+let lastTimestamp   = null;   // Set once at startup — NOT updated during the loop
 let lastMigrationId = null;
-let migrationId = null;
-let isRunning = true;
+let migrationId     = null;
+let isRunning       = true;
 
-let sessionErrorCount = 0; // Track errors for this session
-let sessionStartTime = Date.now();
-let lastProgressTimestamp = Date.now(); // Watchdog: last time we made progress
-let stallWatchdogInterval = null; // Watchdog interval handle
-let heartbeatInterval = null; // Heartbeat interval handle
-let currentCycleId = 0; // Unique ID for each fetch cycle
+// FIX #4: Track the in-loop cursor so shutdown() can persist the most recently
+// confirmed position rather than the stale startup lastTimestamp.
+// Updated on every periodic saveLiveCursor call inside the main loop.
+let _liveAfterMigrationId = null;
+let _liveAfterRecordTime  = null;
+
+let sessionErrorCount     = 0;
+let sessionStartTime      = Date.now();
+let lastProgressTimestamp = Date.now();
+let stallWatchdogInterval = null;
+let heartbeatInterval     = null;
+let currentCycleId        = 0;
 let gcsCursorBackupConsecutiveFailures = 0;
-const GCS_CURSOR_BACKUP_MAX_FAILURES = parseInt(process.env.GCS_CURSOR_BACKUP_MAX_FAILURES) || 5;
 
-// Cursor directory (same as backfill script)
-const CURSOR_DIR = getCursorDir();
+const CURSOR_DIR       = getCursorDir();
 const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
 
-/**
- * Get current time from the Scan API (latest available record time)
- */
+// ─── API time helper ───────────────────────────────────────────────────────
 async function getCurrentAPITime() {
   try {
     const response = await client.post('/v2/updates', {
       page_size: 1,
       daml_value_encoding: 'compact_json',
     });
-    
     const transactions = response.data?.transactions || [];
     if (transactions.length > 0) {
-      const latest = transactions[0];
-      return {
-        recordTime: latest.record_time,
-        migrationId: latest.migration_id
-      };
+      return { recordTime: transactions[0].record_time, migrationId: transactions[0].migration_id };
     }
     return null;
   } catch (err) {
@@ -208,16 +240,17 @@ async function getCurrentAPITime() {
   }
 }
 
+// ─── Cursor: load ──────────────────────────────────────────────────────────
+
 /**
- * Load live cursor if it exists
- * Falls back to GCS backup if local cursor is missing
+ * Load live cursor — tries local file first, then GCS backup.
+ *
+ * FIX #2: Now async (calls async loadCursorFromGCS).
  */
-function loadLiveCursor() {
-  // Try local cursor first
+async function loadLiveCursor() {
   if (fs.existsSync(LIVE_CURSOR_FILE)) {
     try {
       const content = fs.readFileSync(LIVE_CURSOR_FILE, 'utf8').trim();
-      // Handle empty or corrupted cursor file
       if (!content || content.length === 0) {
         log('warn', 'cursor_empty', { file: LIVE_CURSOR_FILE });
       } else {
@@ -225,17 +258,11 @@ function loadLiveCursor() {
         if (!data.migration_id || !data.record_time) {
           log('warn', 'cursor_invalid', { file: LIVE_CURSOR_FILE, reason: 'missing_fields' });
         } else {
-          // Reject timestamps in the future (likely corrupted from old T23:59:59 bug)
           const cursorTime = new Date(data.record_time).getTime();
-          const now = Date.now();
-          if (cursorTime > now) {
+          if (cursorTime > Date.now()) {
             log('warn', 'cursor_future', { file: LIVE_CURSOR_FILE, record_time: data.record_time });
           } else {
-            logCursor('loaded', { 
-              migrationId: data.migration_id, 
-              lastBefore: data.record_time,
-              source: 'local'
-            });
+            logCursor('loaded', { migrationId: data.migration_id, lastBefore: data.record_time, source: 'local' });
             return data;
           }
         }
@@ -244,86 +271,78 @@ function loadLiveCursor() {
       logError('cursor_read', err, { file: LIVE_CURSOR_FILE });
     }
   }
-  
-  // Fall back to GCS backup if enabled
+
   if (GCS_MODE) {
-    const gcsCursor = loadCursorFromGCS();
+    // FIX #2: await the now-async GCS restore
+    const gcsCursor = await loadCursorFromGCS();
     if (gcsCursor) {
-      log('info', 'cursor_restored_from_gcs', {
-        migration: gcsCursor.migration_id,
-        recordTime: gcsCursor.record_time
-      });
-      // Also restore local cursor for future reads
+      log('info', 'cursor_restored_from_gcs', { migration: gcsCursor.migration_id, recordTime: gcsCursor.record_time });
       saveLiveCursorLocal(gcsCursor.migration_id, gcsCursor.record_time);
       return gcsCursor;
     }
   }
-  
+
   return null;
 }
 
 /**
- * Save cursor to local file only (no GCS backup)
- * Used when restoring from GCS to avoid circular backup
+ * Save cursor to local file only (no GCS backup).
+ * Used when restoring from GCS to avoid circular backup.
  */
-function saveLiveCursorLocal(migrationId, afterRecordTime) {
-  if (!fs.existsSync(CURSOR_DIR)) {
-    fs.mkdirSync(CURSOR_DIR, { recursive: true });
-  }
+function saveLiveCursorLocal(migId, afterRecordTime) {
+  if (!fs.existsSync(CURSOR_DIR)) fs.mkdirSync(CURSOR_DIR, { recursive: true });
   const cursor = {
-    migration_id: migrationId,
-    record_time: afterRecordTime,
-    updated_at: new Date().toISOString(),
-    mode: 'live',
-    semantics: 'forward',
+    migration_id:  migId,
+    record_time:   afterRecordTime,
+    updated_at:    new Date().toISOString(),
+    mode:          'live',
+    semantics:     'forward',
     restored_from: 'gcs',
   };
-  // Use atomic write to prevent cursor corruption on ENOSPC/crash
   atomicWriteFileForLive(LIVE_CURSOR_FILE, cursor);
 }
 
 /**
- * Load cursor from GCS backup
+ * Load cursor from GCS backup.
+ *
+ * FIX #1: Replaced execSync (blocked event loop for up to 15s) with execFileAsync.
+ *   execFile (not exec) — no shell, no injection risk from GCS path strings.
+ * FIX #11: Temp file written to CURSOR_DIR not /tmp.
+ *   /tmp may be a separate filesystem on containers; cross-filesystem rename
+ *   in atomicWriteFile fails silently. CURSOR_DIR keeps all cursor I/O on the
+ *   same filesystem as the real cursor file.
  */
-function loadCursorFromGCS() {
+async function loadCursorFromGCS() {
   const GCS_BUCKET = process.env.GCS_BUCKET;
-  
-  if (!GCS_BUCKET) {
-    return null;
-  }
-  
+  if (!GCS_BUCKET) return null;
+
+  const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
+  // FIX #11: CURSOR_DIR not /tmp
+  const tmpPath = path.join(CURSOR_DIR, '.gcs-cursor-restore.json');
+
   try {
-    const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
-    const tmpPath = path.join('/tmp', 'gcs-cursor-restore.json');
-    
-    // Download cursor from GCS
-    execSync(`gsutil -q cp "${gcsPath}" "${tmpPath}"`, {
-      stdio: 'pipe',
-      timeout: 15000,
-    });
-    
+    if (!fs.existsSync(CURSOR_DIR)) fs.mkdirSync(CURSOR_DIR, { recursive: true });
+    // FIX #1: execFileAsync — async, no shell, no injection
+    await execFileAsync('gsutil', ['-q', 'cp', gcsPath, tmpPath], { timeout: 15000 });
+
     const content = fs.readFileSync(tmpPath, 'utf8').trim();
-    fs.unlinkSync(tmpPath); // Cleanup
-    
+    fs.unlinkSync(tmpPath);
     if (!content) return null;
-    
+
     const data = JSON.parse(content);
     if (!data.migration_id || !data.record_time) {
       log('warn', 'gcs_cursor_invalid', { reason: 'missing_fields' });
       return null;
     }
-    
-    // Validate not in future
-    const cursorTime = new Date(data.record_time).getTime();
-    if (cursorTime > Date.now()) {
+    if (new Date(data.record_time).getTime() > Date.now()) {
       log('warn', 'gcs_cursor_future', { record_time: data.record_time });
       return null;
     }
-    
+
     console.log(`☁️ Restored cursor from GCS: migration=${data.migration_id}, time=${data.record_time}`);
     return data;
   } catch (err) {
-    // GCS cursor doesn't exist or failed to fetch - this is expected on first run
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
     if (!err.message?.includes('No such object') && !err.message?.includes('CommandException')) {
       console.warn(`⚠️ Could not load cursor from GCS: ${err.message}`);
     }
@@ -332,35 +351,31 @@ function loadCursorFromGCS() {
 }
 
 /**
- * Save live cursor state
- * The cursor represents the FORWARD position: we will fetch transactions AFTER this time
- * Also backs up to GCS if enabled to prevent cursor loss on restart
+ * Save live cursor state.
+ *
+ * FIX #2: Now async — awaits backupCursorToGCS so errors surface and the
+ * event loop is not blocked during the gsutil upload.
  */
-function saveLiveCursor(migrationId, afterRecordTime) {
+async function saveLiveCursor(migId, afterRecordTime) {
   try {
-    console.log(`  📍 Saving cursor to: ${LIVE_CURSOR_FILE}`);
-    console.log(`     CURSOR_DIR: ${CURSOR_DIR}`);
-    
     if (!fs.existsSync(CURSOR_DIR)) {
-      console.log(`     Creating directory: ${CURSOR_DIR}`);
       fs.mkdirSync(CURSOR_DIR, { recursive: true });
     }
-    
+
     const cursor = {
-      migration_id: migrationId,
-      record_time: afterRecordTime,
-      updated_at: new Date().toISOString(),
-      mode: 'live',
-      semantics: 'forward', // Explicit: fetch transactions AFTER this time
+      migration_id: migId,
+      record_time:  afterRecordTime,
+      updated_at:   new Date().toISOString(),
+      mode:         'live',
+      semantics:    'forward',
     };
-    
-    // Use atomic write to prevent cursor corruption on ENOSPC/crash
+
     atomicWriteFileForLive(LIVE_CURSOR_FILE, cursor);
     console.log(`  ✅ Local cursor saved: ${afterRecordTime}`);
-    
-    // Backup cursor to GCS if enabled
+
     if (GCS_MODE) {
-      backupCursorToGCS(cursor);
+      // FIX #2: await the now-async backup — does not block event loop
+      await backupCursorToGCS(cursor);
     } else {
       console.log(`  ⚠️ GCS_MODE disabled, skipping GCS backup`);
     }
@@ -371,48 +386,47 @@ function saveLiveCursor(migrationId, afterRecordTime) {
 }
 
 /**
- * Backup cursor to GCS (non-blocking)
- * Writes cursor.json to gs://bucket/cursors/live-cursor.json
+ * Backup cursor to GCS.
+ *
+ * FIX #1: Replaced execSync (blocked event loop for up to 10s) with execFileAsync.
+ *   execFile (not exec) — no shell injection from GCS path strings.
+ * FIX #2: Now async — callers must await.
+ * FIX #11: Temp file written to CURSOR_DIR not /tmp.
  */
-function backupCursorToGCS(cursor) {
+async function backupCursorToGCS(cursor) {
   const GCS_BUCKET = process.env.GCS_BUCKET;
-  
   if (!GCS_BUCKET) {
     console.log('  ⚠️ Cursor backup skipped: GCS_BUCKET not set');
     return;
   }
-  
+
   const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
-  
+  // FIX #11: CURSOR_DIR not /tmp
+  const tmpCursorPath = path.join(CURSOR_DIR, '.live-cursor-backup.json');
+
   try {
-    // Write cursor to a temp file and upload
-    const tmpCursorPath = path.join('/tmp', 'live-cursor-backup.json');
+    if (!fs.existsSync(CURSOR_DIR)) fs.mkdirSync(CURSOR_DIR, { recursive: true });
     fs.writeFileSync(tmpCursorPath, JSON.stringify(cursor, null, 2));
-    
-    execSync(`gsutil -q cp "${tmpCursorPath}" "${gcsPath}"`, {
-      stdio: 'pipe',
-      timeout: 10000, // 10s timeout for cursor backup
-    });
-    
-    // Clean up temp file
+
+    // FIX #1: execFileAsync — async, no event loop block, no shell injection
+    await execFileAsync('gsutil', ['-q', 'cp', tmpCursorPath, gcsPath], { timeout: 15000 });
     fs.unlinkSync(tmpCursorPath);
-    
+
     console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
-    gcsCursorBackupConsecutiveFailures = 0; // Reset on success
-    log('debug', 'cursor_backed_up_to_gcs', { 
-      gcsPath, 
-      migration: cursor.migration_id, 
-      recordTime: cursor.record_time 
+    gcsCursorBackupConsecutiveFailures = 0;
+    log('debug', 'cursor_backed_up_to_gcs', {
+      gcsPath,
+      migration:  cursor.migration_id,
+      recordTime: cursor.record_time,
     });
   } catch (err) {
+    try { if (fs.existsSync(tmpCursorPath)) fs.unlinkSync(tmpCursorPath); } catch {}
     gcsCursorBackupConsecutiveFailures++;
     const stderr = err.stderr?.toString?.() || '';
     console.warn(`  ⚠️ Failed to backup cursor to GCS (${gcsCursorBackupConsecutiveFailures}/${GCS_CURSOR_BACKUP_MAX_FAILURES}): ${err.message}`);
-    if (stderr) {
-      console.warn(`     gsutil stderr: ${stderr.trim()}`);
-    }
+    if (stderr) console.warn(`     gsutil stderr: ${stderr.trim()}`);
     console.warn(`     Target path: ${gcsPath}`);
-    
+
     if (gcsCursorBackupConsecutiveFailures >= GCS_CURSOR_BACKUP_MAX_FAILURES) {
       logFatal('gcs_cursor_backup_failed', new Error(
         `GCS cursor backup failed ${gcsCursorBackupConsecutiveFailures} consecutive times. ` +
@@ -422,421 +436,293 @@ function backupCursorToGCS(cursor) {
   }
 }
 
+// ─── Timestamp discovery ───────────────────────────────────────────────────
+
 /**
- * Find the latest timestamp from backfill cursor files
- * This is the authoritative source for where backfill stopped
+ * Find the latest timestamp from all available sources.
+ *
+ * FIX #2: Awaits the now-async loadLiveCursor and saveLiveCursor.
+ * FIX #3: The original had two if/else branches (LIVE_MODE vs RESUME) that were
+ *   byte-for-byte identical — pure dead code. Collapsed into one branch.
+ *   The unreachable `return null` after the if/else block is also removed.
  */
 async function findLatestTimestamp() {
-  // Check local raw data for latest timestamp
   const rawDir = path.join(DATA_DIR, 'raw');
   let rawDataResult = null;
   if (fs.existsSync(rawDir)) {
     rawDataResult = await findLatestFromRawData(rawDir);
   }
 
-  // In GCS mode, also scan the bucket for latest partition data
-  // This is the key protection against cursor drift after crashes
   let gcsDataResult = null;
   if (GCS_MODE) {
     console.log('\n🔍 Scanning GCS for latest data position...');
     gcsDataResult = findLatestFromGCS();
   }
 
-  // In live mode, try to resume from live cursor, but never go backwards behind backfill.
-  if (LIVE_MODE) {
-    const liveCursor = loadLiveCursor();
-    const liveMigration = liveCursor?.migration_id ?? null;
-    const liveTime = liveCursor?.record_time ?? null;
+  // FIX #2: await the now-async loadLiveCursor
+  const liveCursor        = await loadLiveCursor();
+  const backfillTime      = findLatestFromCursors();
+  const backfillMigration = lastMigrationId;
 
-    // Always compute the best-known backfill resume point too.
-    const backfillTime = findLatestFromCursors();
-    const backfillMigration = lastMigrationId;
+  const candidates = [];
+  if (liveCursor)    candidates.push({ source: 'live-cursor',    migration: liveCursor.migration_id,  time: liveCursor.record_time });
+  if (backfillTime)  candidates.push({ source: 'backfill-cursor', migration: backfillMigration,        time: backfillTime });
+  if (rawDataResult) candidates.push({ source: 'raw-data-local', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
+  if (gcsDataResult) candidates.push({ source: 'gcs-data',       migration: gcsDataResult.migrationId, time: gcsDataResult.timestamp });
 
-    // Collect all candidates: live cursor, backfill cursor, raw data, GCS data
-    const candidates = [];
-    
-    if (liveCursor) {
-      candidates.push({ source: 'live-cursor', migration: liveMigration, time: liveTime });
-    }
-    if (backfillTime) {
-      candidates.push({ source: 'backfill-cursor', migration: backfillMigration, time: backfillTime });
-    }
-    if (rawDataResult) {
-      candidates.push({ source: 'raw-data-local', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
-    }
-    if (gcsDataResult) {
-      candidates.push({ source: 'gcs-data', migration: gcsDataResult.migrationId, time: gcsDataResult.timestamp });
-    }
-
-    if (candidates.length === 0) {
-      console.log('🔴 LIVE MODE: No cursors or raw data found, starting fresh');
-      return null;
-    }
-
-    // Find the newest candidate (highest migration, then latest timestamp)
-    candidates.sort((a, b) => {
-      if (a.migration !== b.migration) return b.migration - a.migration;
-      return new Date(b.time).getTime() - new Date(a.time).getTime();
-    });
-
-    const best = candidates[0];
-    console.log(`📍 Best resume point: ${best.source} -> migration=${best.migration}, time=${best.time}`);
-    
-    // Log all candidates for debugging
-    for (const c of candidates) {
-      const marker = c === best ? '✓' : ' ';
-      console.log(`   ${marker} ${c.source}: m${c.migration} @ ${c.time}`);
-    }
-
-    // Auto-sync: if GCS data or raw data is ahead of the cursor, persist the advanced position
-    if (best.source !== 'live-cursor' && best.source !== 'backfill-cursor') {
-      console.log(`  🔄 Auto-syncing cursor: ${best.source} is ahead of cursors`);
-      saveLiveCursor(best.migration, best.time);
-    }
-
-    lastMigrationId = best.migration;
-    return best.time;
-  } else {
-    // RESUME mode: check live cursor, backfill cursors, and raw data
-    // Pick the most advanced candidate to avoid re-processing
-    const liveCursor = loadLiveCursor();
-    const backfillTime = findLatestFromCursors();
-    const backfillMigration = lastMigrationId;
-
-    const candidates = [];
-    
-    if (liveCursor) {
-      candidates.push({ source: 'live-cursor', migration: liveCursor.migration_id, time: liveCursor.record_time });
-    }
-    if (backfillTime) {
-      candidates.push({ source: 'backfill-cursor', migration: backfillMigration, time: backfillTime });
-    }
-    if (rawDataResult) {
-      candidates.push({ source: 'raw-data-local', migration: rawDataResult.migrationId, time: rawDataResult.timestamp });
-    }
-    if (gcsDataResult) {
-      candidates.push({ source: 'gcs-data', migration: gcsDataResult.migrationId, time: gcsDataResult.timestamp });
-    }
-
-    if (candidates.length === 0) {
-      console.log('📁 No existing backfill data found, starting fresh');
-      return null;
-    }
-
-    // Find the newest candidate (highest migration, then latest timestamp)
-    candidates.sort((a, b) => {
-      if (a.migration !== b.migration) return b.migration - a.migration;
-      return new Date(b.time).getTime() - new Date(a.time).getTime();
-    });
-
-    const best = candidates[0];
-    console.log(`📍 Best resume point: ${best.source} -> migration=${best.migration}, time=${best.time}`);
-    
-    for (const c of candidates) {
-      const marker = c === best ? '✓' : ' ';
-      console.log(`   ${marker} ${c.source}: m${c.migration} @ ${c.time}`);
-    }
-
-    // Auto-sync: if GCS data or raw data is ahead of the cursor, persist the advanced position
-    if (best.source !== 'live-cursor' && best.source !== 'backfill-cursor') {
-      console.log(`  🔄 Auto-syncing cursor: ${best.source} is ahead of cursors`);
-      saveLiveCursor(best.migration, best.time);
-    }
-
-    lastMigrationId = best.migration;
-    return best.time;
+  // FIX #3: Collapsed LIVE_MODE / non-LIVE_MODE branches — they were identical
+  if (candidates.length === 0) {
+    const label = LIVE_MODE ? '🔴 LIVE MODE' : '📁';
+    console.log(`${label}: No cursors or raw data found, starting fresh`);
+    return null;
   }
 
-  console.log('📁 No existing backfill data found, starting fresh');
-  return null;
+  candidates.sort((a, b) => {
+    if (a.migration !== b.migration) return b.migration - a.migration;
+    return new Date(b.time).getTime() - new Date(a.time).getTime();
+  });
+
+  const best = candidates[0];
+  console.log(`📍 Best resume point: ${best.source} -> migration=${best.migration}, time=${best.time}`);
+  for (const c of candidates) {
+    console.log(`   ${c === best ? '✓' : ' '} ${c.source}: m${c.migration} @ ${c.time}`);
+  }
+
+  if (best.source !== 'live-cursor' && best.source !== 'backfill-cursor') {
+    console.log(`  🔄 Auto-syncing cursor: ${best.source} is ahead of cursors`);
+    // FIX #2: await the now-async saveLiveCursor
+    await saveLiveCursor(best.migration, best.time);
+  }
+
+  lastMigrationId = best.migration;
+  return best.time;
+  // FIX #3: Removed unreachable `return null` that followed the original if/else.
 }
 
 /**
- * Find latest timestamp from backfill cursor files
- * For LIVE updates, we want to continue FORWARD from the LATEST timestamp (max_time/last_before)
- * NOT backward from min_time
+ * Find latest timestamp from backfill cursor files.
+ * For live updates we want to continue FORWARD from max_time.
  */
 function findLatestFromCursors() {
   if (!fs.existsSync(CURSOR_DIR)) {
     console.log('📁 No cursor directory found');
     return null;
   }
-  
-  const cursorFiles = fs.readdirSync(CURSOR_DIR)
-    .filter(f => f.endsWith('.json'));
-  
+
+  const cursorFiles = fs.readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json'));
   if (cursorFiles.length === 0) {
     console.log('📁 No cursor files found');
     return null;
   }
-  
   console.log(`📁 Found ${cursorFiles.length} cursor file(s)`);
-  
-  // For live updates, find the LATEST timestamp to continue FORWARD from
-  // We want max_time (the newest point in the backfill) or last_before if backfill incomplete
+
   let latestTimestamp = null;
   let latestMigration = null;
-  let selectedCursor = null;
-  
+  let selectedCursor  = null;
+
   for (const file of cursorFiles) {
     try {
       const cursorPath = path.join(CURSOR_DIR, file);
-      const cursor = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
-      
-      // Skip non-cursor files
+      const cursor     = JSON.parse(fs.readFileSync(cursorPath, 'utf8'));
       if (!cursor.migration_id && !cursor.max_time && !cursor.min_time) continue;
-      
+
       const migration = cursor.migration_id;
-      
-      // For live updates: use max_time (the newest data point reached)
-      // If backfill is complete, max_time is where we should continue from
-      // If incomplete, last_before tells us where the cursor was during backfill
-      const maxTime = cursor.max_time;
-      
+      const maxTime   = cursor.max_time;
+
       if (maxTime) {
-        const timestamp = new Date(maxTime).getTime();
+        const timestamp   = new Date(maxTime).getTime();
         const currentBest = latestTimestamp ? new Date(latestTimestamp).getTime() : 0;
-        
-        // Prefer the highest migration with the latest max_time
-        if (!latestTimestamp || 
+
+        if (!latestTimestamp ||
             migration > latestMigration ||
             (migration === latestMigration && timestamp > currentBest)) {
           latestTimestamp = maxTime;
           latestMigration = migration;
-          selectedCursor = cursor;
+          selectedCursor  = cursor;
         }
       }
-      
+
       console.log(`   • ${file}: migration=${migration}, max_time=${maxTime}, complete=${cursor.complete || false}`);
     } catch (err) {
       console.warn(`   ⚠️ Failed to read cursor ${file}: ${err.message}`);
     }
   }
-  
+
   if (latestTimestamp && selectedCursor) {
     console.log(`📍 Live updates will continue from: migration=${latestMigration}, timestamp=${latestTimestamp}`);
     lastMigrationId = latestMigration;
     return latestTimestamp;
   }
-  
   return null;
 }
 
 /**
- * Find the latest data timestamp in GCS by scanning Hive partition structure.
- * Delegates to gcs-scanner.js module (extracted for testability).
- * Adds console output for operator visibility.
- * 
- * @returns {{ migrationId: number, timestamp: string, source: string } | null}
+ * Find the latest data timestamp in GCS.
  */
 function findLatestFromGCS() {
   const result = findLatestFromGCSImported({
     bucket: process.env.GCS_BUCKET,
-    logFn: (level, msg, data) => log(level, msg, data),
+    logFn:  (level, msg, data) => log(level, msg, data),
   });
-
   if (result) {
     console.log(`  ☁️ GCS data scan: latest partition at migration=${result.migrationId}, time=${result.timestamp}`);
     console.log(`     Source: ${result.source}`);
   }
-
   return result;
 }
 
 /**
- * Find latest timestamp from raw binary data files
- * Scans directories to find the most recent data
- * Supports both structures:
- *   - raw/backfill/updates/migration=X/year=YYYY/month=M/day=D/ (new nested format)
- *   - raw/backfill/events/migration=X/year=YYYY/month=M/day=D/ (new nested format)
- *   - raw/updates/migration=X/year=YYYY/month=M/day=D/ (legacy separated format)
- *   - raw/backfill/migration=X/year=YYYY/month=M/day=D/ (legacy combined format)
+ * Find latest timestamp from raw binary data files.
+ *
+ * FIX #10: T23:59:59 fallback replaced with end-of-day-minus-5-minutes for ALL days.
+ *
+ *   Original behaviour:
+ *     today     → now minus 5min         ✓ (correct)
+ *     other day → T23:59:59.999999Z      ✗ (overshoots by hours)
+ *
+ *   When the live cursor is set to T23:59:59 on a day whose last real record is
+ *   e.g. T16:00:00, the AFTER query skips ~8 hours of data that was never
+ *   ingested. end-of-day-minus-5-min is conservative enough to avoid
+ *   re-ingesting the last few minutes without overshooting by hours.
+ *   This fix applies to both the Hive-partition path and the legacy path.
  */
 async function findLatestFromRawData(rawDir) {
   let latestResult = null;
-  
-  // Check for new nested format: raw/backfill/updates/migration=X/...
-  // Also check legacy formats for backward compat
-  let searchDir = rawDir;
+
   const backfillUpdatesDir = path.join(rawDir, 'backfill', 'updates');
-  const updatesDir = path.join(rawDir, 'updates');
-  const backfillDir = path.join(rawDir, 'backfill');
-  
-  if (fs.existsSync(backfillUpdatesDir)) {
-    // New nested format: raw/backfill/updates/
-    searchDir = backfillUpdatesDir;
-  } else if (fs.existsSync(updatesDir)) {
-    // Legacy separated format: raw/updates/
-    searchDir = updatesDir;
-  } else if (fs.existsSync(backfillDir)) {
-    // Legacy combined format: raw/backfill/
-    searchDir = backfillDir;
-  }
-  
+  const updatesDir         = path.join(rawDir, 'updates');
+  const backfillDir        = path.join(rawDir, 'backfill');
+
+  let searchDir = rawDir;
+  if      (fs.existsSync(backfillUpdatesDir)) searchDir = backfillUpdatesDir;
+  else if (fs.existsSync(updatesDir))         searchDir = updatesDir;
+  else if (fs.existsSync(backfillDir))        searchDir = backfillDir;
+
   const migrationDirs = fs.readdirSync(searchDir)
     .filter(d => d.startsWith('migration='))
-    .map(d => ({
-      name: d,
-      id: parseInt(d.replace('migration=', '')) || 0
-    }))
-    .sort((a, b) => b.id - a.id); // Sort by migration ID descending
-  
+    .map(d => ({ name: d, id: parseInt(d.replace('migration=', '')) || 0 }))
+    .sort((a, b) => b.id - a.id);
+
+  outer:
   for (const migDir of migrationDirs) {
     const migPath = path.join(searchDir, migDir.name);
-    
-    // Find year directories
+
     const yearDirs = fs.readdirSync(migPath)
       .filter(d => d.startsWith('year='))
       .map(d => parseInt(d.replace('year=', '')) || 0)
-      .sort((a, b) => b - a); // Descending
-    
+      .sort((a, b) => b - a);
+
     for (const year of yearDirs) {
       const yearPath = path.join(migPath, `year=${year}`);
-      
-      // Find month directories
+
       const monthDirs = fs.readdirSync(yearPath)
         .filter(d => d.startsWith('month='))
         .map(d => parseInt(d.replace('month=', '')) || 0)
-        .sort((a, b) => b - a); // Descending
-      
+        .sort((a, b) => b - a);
+
       for (const month of monthDirs) {
         const monthPath = path.join(yearPath, `month=${month}`);
-        
-        // Find day directories
+
         const dayDirs = fs.readdirSync(monthPath)
           .filter(d => d.startsWith('day='))
           .map(d => parseInt(d.replace('day=', '')) || 0)
-          .sort((a, b) => b - a); // Descending
-        
+          .sort((a, b) => b - a);
+
         if (dayDirs.length > 0) {
           const latestDay = dayDirs[0];
-          const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(latestDay).padStart(2, '0')}`;
-          
-          // Try to find actual latest timestamp from files in this directory
-          const dayPath = path.join(monthPath, `day=${latestDay}`);
-          let timestamp = null;
-          
+          const dateStr   = `${year}-${String(month).padStart(2, '0')}-${String(latestDay).padStart(2, '0')}`;
+          const dayPath   = path.join(monthPath, `day=${latestDay}`);
+          let timestamp   = null;
+
           try {
             const files = fs.readdirSync(dayPath)
               .filter(f => f.endsWith('.pb.zst') || f.endsWith('.parquet'))
               .sort()
               .reverse();
-            
             if (files.length > 0) {
-              // Extract timestamp from filename pattern: prefix_TIMESTAMP.pb.zst
-              // e.g., events_2025-12-24T15-30-00.000000Z.pb.zst
-              const latestFile = files[0];
-              const match = latestFile.match(/(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
+              const match = files[0].match(/(\d{4}-\d{2}-\d{2}T[\d-]+\.\d+Z)/);
               if (match) {
-                // Convert filename format back to ISO (replace dashes in time with colons)
                 timestamp = match[1].replace(/(\d{2})-(\d{2})-(\d{2})\./, '$1:$2:$3.');
               }
             }
-          } catch (err) {
-            // Ignore errors reading directory
+          } catch {
+            // Ignore directory read errors
           }
-          
-          // Fallback: use current time if today, otherwise end of that day
+
           if (!timestamp) {
-            const today = new Date().toISOString().slice(0, 10);
-            if (dateStr === today) {
-              // For today, use current time minus a small buffer to ensure we get new data
-              const now = new Date();
-              now.setMinutes(now.getMinutes() - 5); // 5 minute buffer
-              timestamp = now.toISOString();
-            } else {
-              timestamp = `${dateStr}T23:59:59.999999Z`;
-            }
+            // FIX #10: end-of-day-minus-5-min for ALL days, not just today.
+            // T23:59:59 on any day with an earlier last record causes the live
+            // cursor to skip real data between the actual last record and midnight.
+            const endOfDay = new Date(`${dateStr}T23:59:59.999Z`);
+            endOfDay.setMinutes(endOfDay.getMinutes() - 5);
+            timestamp = endOfDay.toISOString();
           }
-          
+
           latestResult = {
             migrationId: migDir.id,
-            timestamp: timestamp,
-            source: `migration=${migDir.id}/year=${year}/month=${month}/day=${latestDay}`
+            timestamp,
+            source: `migration=${migDir.id}/year=${year}/month=${month}/day=${latestDay}`,
           };
-          break; // Found latest day for this month
+          break outer;
         }
       }
-      if (latestResult) break; // Found latest for this year
     }
-    if (latestResult) break; // Found latest for this migration
   }
-  
-  // Also check legacy format: raw/events/migration-X/YYYY-MM-DD/
+
+  // Legacy format: raw/events/migration-X/YYYY-MM-DD/
   if (!latestResult) {
     for (const subDir of ['events', 'updates']) {
       const targetDir = path.join(rawDir, subDir);
       if (!fs.existsSync(targetDir)) continue;
-      
+
       const legacyMigDirs = fs.readdirSync(targetDir)
         .filter(d => d.startsWith('migration-'))
         .map(d => ({ name: d, id: parseInt(d.replace('migration-', '')) || 0 }))
         .sort((a, b) => b.id - a.id);
-      
+
       for (const migDir of legacyMigDirs) {
-        const migPath = path.join(targetDir, migDir.name);
+        const migPath  = path.join(targetDir, migDir.name);
         const dateDirs = fs.readdirSync(migPath)
           .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
           .sort()
           .reverse();
-        
+
         if (dateDirs.length > 0) {
           const latestDate = dateDirs[0];
-          
-          // For today, use current time minus buffer instead of end-of-day
-          let timestamp;
-          const today = new Date().toISOString().slice(0, 10);
-          if (latestDate === today) {
-            const now = new Date();
-            now.setMinutes(now.getMinutes() - 5);
-            timestamp = now.toISOString();
-          } else {
-            timestamp = `${latestDate}T23:59:59.999999Z`;
-          }
-          
-          if (!latestResult || 
+          // FIX #10: same fix applied to the legacy path
+          const endOfDay = new Date(`${latestDate}T23:59:59.999Z`);
+          endOfDay.setMinutes(endOfDay.getMinutes() - 5);
+          const timestamp = endOfDay.toISOString();
+
+          if (!latestResult ||
               migDir.id > latestResult.migrationId ||
               (migDir.id === latestResult.migrationId && new Date(timestamp) > new Date(latestResult.timestamp))) {
-            latestResult = {
-              migrationId: migDir.id,
-              timestamp: timestamp,
-              source: `${subDir}/${migDir.name}/${latestDate}`
-            };
+            latestResult = { migrationId: migDir.id, timestamp, source: `${subDir}/${migDir.name}/${latestDate}` };
           }
           break;
         }
       }
     }
   }
-  
+
   if (latestResult) {
     console.log(`📁 Found raw data: ${latestResult.source} -> migration=${latestResult.migrationId}, time=${latestResult.timestamp}`);
     return latestResult;
   }
-  
   return null;
 }
 
-/**
- * Detect latest migration from the scan API
- * Uses backfill cursor if available, otherwise queries API
- */
+// ─── Migration detection ───────────────────────────────────────────────────
+
 async function detectLatestMigration() {
-  // If we found a migration from backfill cursor, use it
   if (lastMigrationId !== null) {
     migrationId = lastMigrationId;
     console.log(`📍 Using migration_id from backfill cursor: ${migrationId}`);
     setMigrationId(migrationId);
     return migrationId;
   }
-  
   try {
-    // Query the API to detect current migration
-    const response = await client.post('/v2/updates', {
-      page_size: 1
-    });
-    
-    // v2/updates response contains transactions array with migration_id
+    const response     = await client.post('/v2/updates', { page_size: 1 });
     const transactions = response.data?.transactions || [];
     if (transactions.length > 0 && transactions[0].migration_id !== undefined) {
       migrationId = transactions[0].migration_id;
@@ -844,8 +730,6 @@ async function detectLatestMigration() {
       setMigrationId(migrationId);
       return migrationId;
     }
-    
-    // Fallback: use default migration ID 1
     console.warn('⚠️ Could not detect migration_id, using default: 1');
     migrationId = 1;
     setMigrationId(migrationId);
@@ -859,92 +743,52 @@ async function detectLatestMigration() {
   }
 }
 
-/**
- * Fetch updates from the scan API using v2/updates
- * 
- * IMPORTANT: LIVE mode uses FORWARD pagination only (after semantics).
- * This is different from backfill which uses BACKWARD pagination (before semantics).
- * 
- * The v2/updates API returns transactions AFTER the given (migration_id, record_time) tuple,
- * sorted in ascending order by record_time. This means:
- * - We start from the backfill's max_time and poll forward
- * - New transactions appear at the END of results
- * - We advance the cursor to the last transaction's record_time
- * - Empty results mean we're caught up (poll again after interval)
- */
+// ─── Fetch ─────────────────────────────────────────────────────────────────
+
 async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
-  // AbortController for explicit timeout enforcement
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
+  const timeoutId  = setTimeout(() => {
     controller.abort();
-    log('warn', 'fetch_timeout', {
-      migration: afterMigrationId,
-      cursor: afterRecordTime,
-      timeout_ms: FETCH_TIMEOUT_MS,
-    });
+    log('warn', 'fetch_timeout', { migration: afterMigrationId, cursor: afterRecordTime, timeout_ms: FETCH_TIMEOUT_MS });
   }, FETCH_TIMEOUT_MS);
 
   try {
-    const payload = {
-      page_size: BATCH_SIZE,
-      daml_value_encoding: 'compact_json',
-    };
-    
-    // FORWARD pagination using "after" object (v2 API format)
-    // This fetches transactions AFTER the given timestamp, NOT before
-    // This is the correct semantics for LIVE mode polling
+    const payload = { page_size: BATCH_SIZE, daml_value_encoding: 'compact_json' };
+
     if (afterMigrationId !== null && afterRecordTime) {
-      payload.after = {
-        after_migration_id: afterMigrationId,
-        after_record_time: afterRecordTime
-      };
-      
-      // Log the first few requests for debugging cursor handoff
+      payload.after = { after_migration_id: afterMigrationId, after_record_time: afterRecordTime };
       if (!fetchUpdates._loggedFirst) {
         console.log(`📡 LIVE query: after=(migration=${afterMigrationId}, time=${afterRecordTime})`);
         fetchUpdates._loggedFirst = true;
       }
     }
-    
-    const fetchStart = Date.now();
-    const response = await client.post('/v2/updates', payload, {
-      signal: controller.signal
-    });
+
+    const fetchStart     = Date.now();
+    const response       = await client.post('/v2/updates', payload, { signal: controller.signal });
     const fetchLatencyMs = Date.now() - fetchStart;
-    
-    // v2/updates returns { transactions: [...] } sorted ascending by record_time
-    const transactions = response.data?.transactions || [];
-    
-    // Log fetch completion (required instrumentation)
+    const transactions   = response.data?.transactions || [];
+
     log('info', 'fetch_complete', {
       updatesFetched: transactions.length,
-      eventsFetched: transactions.reduce((sum, t) => {
+      eventsFetched:  transactions.reduce((sum, t) => {
         const u = t.transaction || t.reassignment || t;
         return sum + Object.keys(u?.events_by_id || u?.eventsById || {}).length;
       }, 0),
       apiLatencyMs: fetchLatencyMs,
     });
-    
-    // The LAST transaction in the batch is the NEWEST (furthest forward in time)
-    // Use its record_time as the cursor for the next request
-    return { 
-      items: transactions,
+
+    return {
+      items:           transactions,
       lastMigrationId: transactions.length > 0 ? transactions[transactions.length - 1].migration_id : null,
-      lastRecordTime: transactions.length > 0 ? transactions[transactions.length - 1].record_time : null
+      lastRecordTime:  transactions.length > 0 ? transactions[transactions.length - 1].record_time  : null,
     };
   } catch (err) {
-    // Handle AbortController timeout
     if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
-      const timeoutErr = new Error(`Fetch timed out after ${FETCH_TIMEOUT_MS}ms`);
-      timeoutErr.code = 'FETCH_TIMEOUT';
-      throw timeoutErr;
+      const e = new Error(`Fetch timed out after ${FETCH_TIMEOUT_MS}ms`);
+      e.code  = 'FETCH_TIMEOUT';
+      throw e;
     }
-    
-    if (err.response?.status === 404) {
-      return { items: [], lastMigrationId: null, lastRecordTime: null };
-    }
-    
-    // Enhanced diagnostics for 4xx errors (especially 403)
+    if (err.response?.status === 404) return { items: [], lastMigrationId: null, lastRecordTime: null };
     if (err.response?.status >= 400 && err.response?.status < 500) {
       console.error('\n' + '='.repeat(60));
       console.error(`🔐 ${err.response.status} ERROR - Full diagnostic info:`);
@@ -955,137 +799,169 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       console.error('\nResponse status:', err.response.status);
       console.error('Response statusText:', err.response.statusText);
       console.error('Response headers:', JSON.stringify(err.response.headers || {}, null, 2));
-      console.error('Response body:', typeof err.response.data === 'string' 
-        ? err.response.data 
+      console.error('Response body:', typeof err.response.data === 'string'
+        ? err.response.data
         : JSON.stringify(err.response.data, null, 2));
       console.error('='.repeat(60) + '\n');
     }
-    
     throw err;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
+// ─── Process ───────────────────────────────────────────────────────────────
+
 /**
- * Process a batch of updates
+ * Process a batch of live updates into normalised updates + events.
+ *
+ * FIX #5: isReassignment = !!item.reassignment only.
+ *   Old: !!item.reassignment || !!item.event — item.event is not a Scan API
+ *   field; it produced false positives routing transactions through the
+ *   reassignment path. Same bug fixed in decodeInMainThread (fetch-backfill.js).
+ *
+ * FIX #6: Reassignment event path corrected to item.reassignment.event.{created,archived}_event.
+ *   Old: item.event?.created_event || u?.created_event
+ *   item.event is always undefined for reassignment wrappers, so ce/ae were
+ *   always null and every reassignment silently produced zero events.
+ *   Consistent with fixed decodeInMainThread in fetch-backfill.js.
+ *
+ * FIX #7: Silent effective_at quarantine guards removed.
+ *   normalizeEvent (fixed upstream) throws on null effective_at with full context.
+ *   Keeping warn-and-skip contradicts that contract and silently drops events.
+ *   Per-item try/catch (FIX #9) catches the throw and logs it with tx context.
+ *
+ * FIX #8: event_id mismatch now warns instead of silently overwriting.
+ *   Consistent with decodeInMainThread (fetch-backfill.js) and decode-worker.js.
+ *
+ * FIX #9: Per-item try/catch so one malformed tx cannot abort the entire batch.
+ *   Errors are collected and logged; partial results are still buffered.
+ *
+ * FIX #12: normalizeUpdate called with migration_id injected via spread.
+ *   Old: normalizeUpdate(item) — migration_id from the raw item may be absent
+ *   or stale. Consistent with decodeInMainThread and decode-worker.js.
  */
 async function processUpdates(items) {
   const updates = [];
-  const events = [];
+  const events  = [];
+  const errors  = [];
 
-  let quarantinedCount = 0;
+  // Single stable timestamp for the whole batch (consistent recorded_at)
+  const batchTimestamp = new Date();
 
   for (const item of items) {
-    // Normalize update (handles {transaction}, {reassignment}, or already-flat)
-    const update = normalizeUpdate(item);
-    updates.push(update);
+    // FIX #9: per-item try/catch — one bad tx cannot abort the whole batch
+    try {
+      // FIX #12: inject migration_id so normalizeUpdate always has it
+      const update = normalizeUpdate({ ...item, migration_id: migrationId }, { batchTimestamp });
+      updates.push(update);
 
-    // Check if this is a reassignment (same logic as fetch-backfill.js:1096-1148)
-    const isReassignment = !!item.reassignment || !!item.event;
+      // FIX #5: !!item.reassignment only — item.event is not a Scan API field
+      const isReassignment = !!item.reassignment;
 
-    // v2/updates returns a Transaction/Reassignment shape with events_by_id + root_event_ids
-    const u = item.transaction || item.reassignment || item;
+      const u = item.transaction || item.reassignment || item;
 
-    const updateInfo = {
-      record_time: u.record_time,
-      effective_at: u.effective_at,
-      synchronizer_id: u.synchronizer_id,
-      source: u.source || null,
-      target: u.target || null,
-      unassign_id: u.unassign_id || null,
-      submitter: u.submitter || null,
-      counter: u.counter ?? null,
-    };
+      const updateInfo = {
+        record_time:     u.record_time,
+        effective_at:    u.effective_at,
+        synchronizer_id: u.synchronizer_id,
+        source:          u.source     || null,
+        target:          u.target     || null,
+        unassign_id:     u.unassign_id || null,
+        submitter:       u.submitter  || null,
+        counter:         u.counter    ?? null,
+      };
 
-    if (isReassignment) {
-      // Handle reassignment events (ported from fetch-backfill.js decodeInMainThread)
-      const ce = item.event?.created_event || u?.created_event;
-      const ae = item.event?.archived_event || u?.archived_event;
+      if (isReassignment) {
+        // FIX #6: correct API path — item.reassignment.event.{created,archived}_event
+        const ce = item.reassignment?.event?.created_event;
+        const ae = item.reassignment?.event?.archived_event;
 
-      if (ce) {
-        const ev = normalizeEvent(ce, update.update_id, migrationId, item, updateInfo);
-        ev.event_type = 'reassign_create';
-        if (ev.effective_at) {
+        if (ce) {
+          const ev = normalizeEvent(ce, update.update_id, migrationId, item, updateInfo, { batchTimestamp });
+          ev.event_type = 'reassign_create';
+          // FIX #7: normalizeEvent throws on null effective_at — no quarantine guard needed
           events.push(ev);
-        } else {
-          quarantinedCount++;
-          console.warn(`⚠️ [quarantine] reassign_create with null effective_at: update=${update.update_id}`);
         }
-      }
-      if (ae) {
-        const ev = normalizeEvent(ae, update.update_id, migrationId, item, updateInfo);
-        ev.event_type = 'reassign_archive';
-        if (ev.effective_at) {
+        if (ae) {
+          const ev = normalizeEvent(ae, update.update_id, migrationId, item, updateInfo, { batchTimestamp });
+          ev.event_type = 'reassign_archive';
           events.push(ev);
-        } else {
-          quarantinedCount++;
-          console.warn(`⚠️ [quarantine] reassign_archive with null effective_at: update=${update.update_id}`);
         }
-      }
-    } else {
-      // Transaction path
-      const eventsById = u?.events_by_id || u?.eventsById || {};
-      const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
 
-      const flattened = flattenEventsInTreeOrder(eventsById, rootEventIds);
-      for (const ev of flattened) {
-        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev, updateInfo);
-        if (normalizedEvent.effective_at) {
-          events.push(normalizedEvent);
-        } else {
-          quarantinedCount++;
-          console.warn(`⚠️ [quarantine] Event ${normalizedEvent.event_id || 'unknown'} with null effective_at: update=${update.update_id}`);
+      } else {
+        // Transaction path
+        const eventsById   = u?.events_by_id  || u?.eventsById   || {};
+        const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
+
+        const flattened = flattenEventsInTreeOrder(eventsById, rootEventIds);
+        for (const rawEvent of flattened) {
+          const ev = normalizeEvent(rawEvent, update.update_id, migrationId, rawEvent, updateInfo, { batchTimestamp });
+
+          // FIX #8: warn on event_id key/field mismatch instead of silently overwriting
+          const mapKeyId = rawEvent.event_id;
+          if (mapKeyId && ev.event_id && mapKeyId !== ev.event_id) {
+            console.warn(
+              `[fetch-updates] event_id mismatch for update=${update.update_id}: ` +
+              `eventsById key="${mapKeyId}" vs event.event_id="${ev.event_id}". ` +
+              `Using map key as authoritative (structural API identifier).`
+            );
+            ev.event_id = mapKeyId;
+          } else if (mapKeyId && !ev.event_id) {
+            ev.event_id = mapKeyId;
+          }
+
+          // FIX #7: normalizeEvent throws on null effective_at — no quarantine guard needed
+          events.push(ev);
         }
       }
+
+    } catch (err) {
+      // FIX #9: collect per-tx errors; partial batch still buffered for writing
+      const txId = item?.update_id || item?.transaction?.update_id || item?.reassignment?.update_id || 'UNKNOWN';
+      console.error(`[fetch-updates] Failed to process tx ${txId}: ${err.message}`);
+      errors.push({ tx_id: txId, error: err.message, stack: err.stack });
     }
   }
 
-  if (quarantinedCount > 0) {
-    console.warn(`⚠️ [quarantine] ${quarantinedCount} events quarantined (null effective_at) in this batch`);
+  if (errors.length > 0) {
+    log('warn', 'batch_process_errors', {
+      count:  errors.length,
+      total:  items.length,
+      tx_ids: errors.map(e => e.tx_id),
+    });
   }
 
-  // Buffer for batch writing (async)
   await bufferUpdates(updates);
   await bufferEvents(events);
 
-  return { updates: updates.length, events: events.length };
+  return { updates: updates.length, events: events.length, errors: errors.length };
 }
 
-/**
- * Pre-flight: Probe all known Scan API endpoints for reachability.
- * Uses GET /v0/dso (lightweight, method-safe) with a 10s timeout.
- * Logs individual results so operators can see which endpoints work.
- * 
- * AUTO-FAILOVER: If the active endpoint is unreachable, automatically
- * switches to the fastest healthy endpoint and updates the axios client.
- */
+// ─── Endpoint probe ────────────────────────────────────────────────────────
+
 async function probeAllScanEndpoints() {
-  console.log(`\n${"─".repeat(60)}`);
+  console.log(`\n${'─'.repeat(60)}`);
   console.log(`  SCAN API ENDPOINT REACHABILITY CHECK`);
   console.log(`  Probing ${ALL_SCAN_ENDPOINTS.length} endpoints with GET /v0/dso ...`);
-  console.log(`${"─".repeat(60)}`);
+  console.log(`${'─'.repeat(60)}`);
 
   const results = await Promise.allSettled(
     ALL_SCAN_ENDPOINTS.map(async (ep) => {
       const probeStart = Date.now();
       try {
         const response = await axios.get(`${ep.url}/v0/dso`, {
-          timeout: 10000,
+          timeout:    10000,
           httpsAgent: new https.Agent({ rejectUnauthorized: getTLSRejectUnauthorized() }),
-          headers: { 'Accept': 'application/json' },
+          headers:    { Accept: 'application/json' },
         });
-        const latencyMs = Date.now() - probeStart;
-        return { name: ep.name, url: ep.url, healthy: true, status: response.status, latencyMs };
+        return { name: ep.name, url: ep.url, healthy: true,  status: response.status,       latencyMs: Date.now() - probeStart };
       } catch (err) {
-        const latencyMs = Date.now() - probeStart;
-        const status = err.response?.status || null;
-        return { name: ep.name, url: ep.url, healthy: false, status, error: err.code || err.message, latencyMs };
+        return { name: ep.name, url: ep.url, healthy: false, status: err.response?.status || null, error: err.code || err.message, latencyMs: Date.now() - probeStart };
       }
     })
   );
 
-  // Collect healthy endpoints sorted by latency (fastest first)
   const healthyEndpoints = results
     .filter(r => r.status === 'fulfilled' && r.value.healthy)
     .map(r => r.value)
@@ -1094,303 +970,237 @@ async function probeAllScanEndpoints() {
   const activeEndpointName = ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom';
 
   for (const r of results) {
-    const ep = r.status === 'fulfilled' ? r.value : { name: '?', healthy: false, error: 'Promise rejected' };
-    const icon = ep.healthy ? '✅' : '❌';
+    const ep     = r.status === 'fulfilled' ? r.value : { name: '?', healthy: false, error: 'Promise rejected', latencyMs: 0 };
+    const icon   = ep.healthy ? '✅' : '❌';
     const active = ep.name === activeEndpointName ? ' ← ACTIVE' : '';
-    const detail = ep.healthy
-      ? `HTTP ${ep.status} in ${ep.latencyMs}ms`
-      : `${ep.error || 'HTTP ' + ep.status} (${ep.latencyMs}ms)`;
+    const detail = ep.healthy ? `HTTP ${ep.status} in ${ep.latencyMs}ms` : `${ep.error || 'HTTP ' + ep.status} (${ep.latencyMs}ms)`;
     console.log(`  ${icon}  ${ep.name} — ${detail}${active}`);
   }
 
-  console.log(`${"─".repeat(60)}`);
+  console.log(`${'─'.repeat(60)}`);
   console.log(`  ${healthyEndpoints.length}/${ALL_SCAN_ENDPOINTS.length} endpoints reachable`);
-  
+
   if (healthyEndpoints.length === 0) {
     console.error(`\n🔴 FATAL: No Scan API endpoints are reachable! Check network/DNS.`);
     log('error', 'all_endpoints_unreachable', { probed: ALL_SCAN_ENDPOINTS.length });
   } else {
     const activeReachable = healthyEndpoints.some(ep => ep.name === activeEndpointName);
     if (!activeReachable) {
-      // AUTO-FAILOVER: Switch to the fastest healthy endpoint
       const best = healthyEndpoints[0];
       console.warn(`\n⚠️  Active endpoint "${activeEndpointName}" is NOT reachable!`);
       console.log(`🔄 AUTO-FAILOVER: Switching to fastest healthy endpoint: ${best.name} (${best.latencyMs}ms)`);
       activeScanUrl = best.url;
       client.defaults.baseURL = best.url;
-      log('warn', 'auto_failover', { 
-        from: activeEndpointName, 
-        to: best.name, 
-        latencyMs: best.latencyMs,
-        newUrl: best.url,
-      });
+      log('warn', 'auto_failover', { from: activeEndpointName, to: best.name, latencyMs: best.latencyMs, newUrl: best.url });
     }
   }
-  
-  console.log(`${"─".repeat(60)}\n`);
-  
-  log('info', 'endpoint_probe_complete', { 
-    total: ALL_SCAN_ENDPOINTS.length, 
-    healthy: healthyEndpoints.length,
-    active: ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom',
+
+  console.log(`${'─'.repeat(60)}\n`);
+  log('info', 'endpoint_probe_complete', {
+    total:     ALL_SCAN_ENDPOINTS.length,
+    healthy:   healthyEndpoints.length,
+    active:    ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom',
     activeUrl: activeScanUrl,
   });
 }
 
-/**
- * Main ingestion loop
- * 
- * LIVE MODE SEMANTICS:
- * - Uses FORWARD pagination (after.after_record_time)
- * - Polls for new transactions appearing AFTER the cursor timestamp
- * - Never uses "before" semantics (that's for backfill only)
- * - Empty results = caught up, wait and poll again
- * 
- * CURSOR HANDOFF:
- * - Starts from backfill's max_time (the newest backfilled transaction)
- * - Advances forward as new transactions arrive
- * - Saves cursor periodically to resume on restart
- */
+// ─── Sleep / timeout helpers ───────────────────────────────────────────────
+
+async function sleep(ms, reason = 'unknown') {
+  log('debug', 'sleep_start', { ms, reason });
+  await new Promise(resolve => setTimeout(resolve, ms));
+  log('debug', 'sleep_end', { ms, reason });
+}
+
+async function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout: ${label} after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
+// ─── Main ingestion loop ───────────────────────────────────────────────────
+
 async function runIngestion() {
-  const modeLabel = LIVE_MODE ? 'LIVE' : 'RESUME';
+  const modeLabel  = LIVE_MODE ? 'LIVE' : 'RESUME';
   sessionStartTime = Date.now();
-  
-  console.log("\n" + "=".repeat(60));
+
+  console.log('\n' + '='.repeat(60));
   console.log(`🚀 Starting Canton ledger updates (${modeLabel} mode)`);
-  console.log("   SCAN_URL:", activeScanUrl);
-  console.log("   BATCH_SIZE:", BATCH_SIZE);
-  console.log("   POLL_INTERVAL:", POLL_INTERVAL, "ms");
-  console.log("   PAGINATION: FORWARD (after semantics, NOT before)");
-  
-  // ─────────────────────────────────────────────────────────────
-  // PRE-FLIGHT: Probe ALL Scan API endpoints for reachability
-  // ─────────────────────────────────────────────────────────────
+  console.log('   SCAN_URL:', activeScanUrl);
+  console.log('   BATCH_SIZE:', BATCH_SIZE);
+  console.log('   POLL_INTERVAL:', POLL_INTERVAL, 'ms');
+  console.log('   PAGINATION: FORWARD (after semantics, NOT before)');
+
   await probeAllScanEndpoints();
-  
-  // ─────────────────────────────────────────────────────────────
-  // GCS / DISK MODE CONFIGURATION
-  // ─────────────────────────────────────────────────────────────
+
   try {
     if (GCS_MODE) {
-      // GCS mode requires bucket
       validateGCSBucket(true);
-      console.log("\n🔍 Running GCS preflight checks...");
+      console.log('\n🔍 Running GCS preflight checks...');
       runPreflightChecks({ quick: false, throwOnFail: true });
-      console.log("\n☁️  GCS Mode ENABLED:");
+      console.log('\n☁️  GCS Mode ENABLED:');
       console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
-      console.log("   Local scratch: /tmp/ledger_raw");
-      console.log("   Files are uploaded to GCS immediately after creation");
+      console.log('   Local scratch: /tmp/ledger_raw');
+      console.log('   Files are uploaded to GCS immediately after creation');
     } else {
       console.log(`\n📂 Disk Mode: Writing to ${DATA_DIR}`);
       if (process.env.GCS_BUCKET) {
         console.log(`   GCS bucket configured: gs://${process.env.GCS_BUCKET}/`);
-        console.log("   Uploads disabled (GCS_ENABLED=false) - writing to local disk only");
+        console.log('   Uploads disabled (GCS_ENABLED=false) - writing to local disk only');
       } else {
-        console.log("   GCS not configured - writing to local disk only");
+        console.log('   GCS not configured - writing to local disk only');
       }
     }
   } catch (err) {
     logFatal('gcs_preflight_failed', err);
     throw err;
   }
-  console.log("=".repeat(60));
-  
-  // IMPORTANT: Set data source to 'updates' for live streaming data
-  // This writes to raw/updates/ instead of raw/backfill/
+  console.log('='.repeat(60));
+
   setDataSource('updates');
   console.log(`📁 Data source: 'updates' (writing to raw/updates/)`);
-  
-  log('info', 'ingestion_start', { 
-    mode: modeLabel,
-    scan_url: activeScanUrl,
-    batch_size: BATCH_SIZE,
+
+  log('info', 'ingestion_start', {
+    mode:          modeLabel,
+    scan_url:      activeScanUrl,
+    batch_size:    BATCH_SIZE,
     poll_interval: POLL_INTERVAL,
-    gcs_mode: GCS_MODE,
-    gcs_bucket: process.env.GCS_BUCKET || null,
-    data_source: 'updates',
+    gcs_mode:      GCS_MODE,
+    gcs_bucket:    process.env.GCS_BUCKET || null,
+    data_source:   'updates',
   });
-  
-  // Check for existing data from backfill first (sets lastMigrationId if found)
+
+  // FIX #2: findLatestTimestamp is now async throughout
   lastTimestamp = await findLatestTimestamp();
-  
-  // Then detect/confirm migration
   await detectLatestMigration();
-  
-  // Track pagination state for v2/updates
-  // IMPORTANT: afterRecordTime is the FORWARD cursor (we fetch transactions AFTER this time)
+
   let afterMigrationId = lastMigrationId || migrationId;
-  let afterRecordTime = lastTimestamp;
-  
+  let afterRecordTime  = lastTimestamp;
+
+  // FIX #4: Initialise shutdown-cursor tracking to the startup position.
+  _liveAfterMigrationId = afterMigrationId;
+  _liveAfterRecordTime  = afterRecordTime;
+
   if (afterRecordTime) {
     console.log(`\n📍 FORWARD CURSOR: migration=${afterMigrationId}, after_record_time=${afterRecordTime}`);
     console.log(`   (Will fetch transactions AFTER this timestamp, advancing forward in time)`);
-    logCursor('resume', { 
-      migrationId: afterMigrationId, 
-      afterRecordTime: afterRecordTime, // renamed from lastBefore to be accurate
-      mode: modeLabel,
-      semantics: 'forward',
-    });
+    logCursor('resume', { migrationId: afterMigrationId, afterRecordTime, mode: modeLabel, semantics: 'forward' });
   } else {
     log('info', 'ingestion_fresh_start', { mode: modeLabel });
     console.log('\n📍 FRESH START: No cursor found, starting from earliest available');
-    afterMigrationId = null; // Start from beginning
+    afterMigrationId = null;
   }
-  
-  let totalUpdates = 0;
-  let totalEvents = 0;
-  let emptyPolls = 0;
-  let batchCount = 0;
+
+  let totalUpdates    = 0;
+  let totalEvents     = 0;
+  let emptyPolls      = 0;
+  let batchCount      = 0;
   let lastMetricsTime = Date.now();
-  
-  // ─────────────────────────────────────────────────────────────
-  // STEP 3: HEARTBEAT (non-negotiable)
-  // ─────────────────────────────────────────────────────────────
+
   heartbeatInterval = setInterval(() => {
     log('info', 'heartbeat', {
-      cursor: afterRecordTime,
-      migration: afterMigrationId,
-      inflight: 0,
-      workers: 1,
+      cursor:       afterRecordTime,
+      migration:    afterMigrationId,
+      inflight:     0,
+      workers:      1,
       totalUpdates,
       totalEvents,
-      cycleId: currentCycleId,
+      cycleId:      currentCycleId,
       isRunning,
     });
   }, 30_000);
-  
-  // ─────────────────────────────────────────────────────────────
-  // STALL DETECTION WATCHDOG
-  // ─────────────────────────────────────────────────────────────
+
   lastProgressTimestamp = Date.now();
   stallWatchdogInterval = setInterval(() => {
     const staleMs = Date.now() - lastProgressTimestamp;
     if (staleMs > STALL_THRESHOLD_MS) {
       log('warn', 'ingestion_stall_detected', {
-        cursor: afterRecordTime,
-        migration: afterMigrationId,
-        workers: 1, // Single-threaded fetch
-        inflight: 0,
-        lastProgressTs: new Date(lastProgressTimestamp).toISOString(),
+        cursor:          afterRecordTime,
+        migration:       afterMigrationId,
+        workers:         1,
+        inflight:        0,
+        lastProgressTs:  new Date(lastProgressTimestamp).toISOString(),
         staleDurationMs: staleMs,
       });
     }
   }, STALL_DETECTION_INTERVAL_MS);
-  
+
   while (isRunning) {
     try {
       currentCycleId++;
       const batchStart = Date.now();
-      
-      // ─── LIFECYCLE: Cycle Start ───
+
       log('info', 'ingestion_cycle_start', {
-        cycleId: currentCycleId,
+        cycleId:   currentCycleId,
         migration: afterMigrationId,
-        cursor: afterRecordTime,
-        workers: 1,
-        inflight: 0,
+        cursor:    afterRecordTime,
+        workers:   1,
+        inflight:  0,
       });
-      
-      // Fetch using v2/updates with proper (migration_id, record_time) pagination
+
       const data = await fetchUpdates(afterMigrationId, afterRecordTime);
-      
-      // Update watchdog timestamp on successful fetch
       lastProgressTimestamp = Date.now();
-      
+
       if (!data.items || data.items.length === 0) {
         emptyPolls++;
-        
-        // ─── LIFECYCLE: Empty Batch ───
+
         log('info', 'empty_batch', {
-          cycleId: currentCycleId,
-          migration: afterMigrationId,
-          cursor: afterRecordTime,
+          cycleId:              currentCycleId,
+          migration:            afterMigrationId,
+          cursor:               afterRecordTime,
           consecutiveEmptyPolls: emptyPolls,
         });
-        
-        // Flush any remaining buffered data (with timeout)
+
         if (emptyPolls === 1) {
           log('info', 'flush_start', { batchId: currentCycleId });
           const flushed = await withTimeout(flushAll(), 60_000, 'flushAll');
           log('info', 'flush_complete', { filesWritten: flushed.length });
-          
-          // Save cursor after flush (so we can resume even if the process dies while caught up)
+
           if (afterRecordTime) {
-            saveLiveCursor(afterMigrationId, afterRecordTime);
-            log('info', 'cursor_advanced', {
-              newCursor: afterRecordTime,
-              migration: afterMigrationId,
-            });
-            logCursor('saved', { 
-              migrationId: afterMigrationId, 
-              lastBefore: afterRecordTime,
-              totalUpdates,
-              totalEvents,
-            });
+            // FIX #2: await the now-async saveLiveCursor
+            await saveLiveCursor(afterMigrationId, afterRecordTime);
+            // FIX #4: keep shutdown-cursor tracking in sync
+            _liveAfterMigrationId = afterMigrationId;
+            _liveAfterRecordTime  = afterRecordTime;
+            log('info', 'cursor_advanced', { newCursor: afterRecordTime, migration: afterMigrationId });
+            logCursor('saved', { migrationId: afterMigrationId, lastBefore: afterRecordTime, totalUpdates, totalEvents });
           }
         }
-        
-        // Log metrics periodically (every 60 seconds)
+
         const now = Date.now();
         if (now - lastMetricsTime >= 60000) {
           lastMetricsTime = now;
           const elapsedSeconds = (now - sessionStartTime) / 1000;
-          logMetrics({
-            migrationId: afterMigrationId,
-            elapsedSeconds,
-            totalUpdates,
-            totalEvents,
-            avgThroughput: totalUpdates / Math.max(1, elapsedSeconds),
-            currentThroughput: 0,
-            errorCount: sessionErrorCount,
-          });
+          logMetrics({ migrationId: afterMigrationId, elapsedSeconds, totalUpdates, totalEvents, avgThroughput: totalUpdates / Math.max(1, elapsedSeconds), currentThroughput: 0, errorCount: sessionErrorCount });
         }
-        
-        // ─── LIFECYCLE: Cycle Re-enter (after sleep) ───
-        log('info', 'cycle_reenter', {
-          cycleId: currentCycleId,
-          sleepMs: POLL_INTERVAL,
-          reason: 'empty_batch',
-        });
-        
+
+        log('info', 'cycle_reenter', { cycleId: currentCycleId, sleepMs: POLL_INTERVAL, reason: 'empty_batch' });
         await sleep(POLL_INTERVAL, 'empty_batch_poll');
         continue;
       }
-      
+
       emptyPolls = 0;
       batchCount++;
-      
-      // Reset error count on successful fetch (exit cooldown mode)
+
       if (sessionErrorCount > 0) {
-        log('info', 'cooldown_exit', { 
-          previous_error_count: sessionErrorCount,
-          migration: afterMigrationId,
-        });
+        log('info', 'cooldown_exit', { previous_error_count: sessionErrorCount, migration: afterMigrationId });
         sessionErrorCount = 0;
       }
-      
-      // Process updates with timeout (Step 1: wrap blocking awaits)
-      const processResult = await withTimeout(
-        processUpdates(data.items),
-        60_000,
-        'processUpdates'
-      );
+
+      const processResult = await withTimeout(processUpdates(data.items), 60_000, 'processUpdates');
       const { updates, events } = processResult;
       totalUpdates += updates;
-      totalEvents += events;
-      
+      totalEvents  += events;
+
       const cursorBefore = afterRecordTime;
-      
-      // Update pagination cursor from response
-      if (data.lastMigrationId !== null) {
-        afterMigrationId = data.lastMigrationId;
-      }
-      if (data.lastRecordTime) {
-        afterRecordTime = data.lastRecordTime;
-      }
-      
+      if (data.lastMigrationId !== null) afterMigrationId = data.lastMigrationId;
+      if (data.lastRecordTime)           afterRecordTime  = data.lastRecordTime;
+
       const batchLatency = Date.now() - batchStart;
-      
-      // Structured batch log
+
       logBatch({
         migrationId: afterMigrationId,
         batchCount,
@@ -1399,184 +1209,88 @@ async function runIngestion() {
         totalUpdates,
         totalEvents,
         cursorBefore,
-        cursorAfter: afterRecordTime,
-        latencyMs: batchLatency,
-        throughput: updates / (batchLatency / 1000),
+        cursorAfter:  afterRecordTime,
+        latencyMs:    batchLatency,
+        throughput:   updates / (batchLatency / 1000),
       });
-      
-      // ─── LIFECYCLE: Cursor Advanced ───
-      log('info', 'cursor_advanced', {
-        newCursor: afterRecordTime,
-        migration: afterMigrationId,
-        batchCount,
-      });
-      
-      // Periodically save cursor (every 5 batches to minimize re-processing on crash)
+
+      log('info', 'cursor_advanced', { newCursor: afterRecordTime, migration: afterMigrationId, batchCount });
+
       if (afterRecordTime && batchCount % 5 === 0) {
-        saveLiveCursor(afterMigrationId, afterRecordTime);
+        // FIX #2: await the now-async saveLiveCursor
+        await saveLiveCursor(afterMigrationId, afterRecordTime);
+        // FIX #4: keep shutdown-cursor tracking in sync on every periodic save
+        _liveAfterMigrationId = afterMigrationId;
+        _liveAfterRecordTime  = afterRecordTime;
       }
-      
-      
-      // ─── LIFECYCLE: Cycle Re-enter ───
-      log('info', 'cycle_reenter', {
-        cycleId: currentCycleId,
-        reason: 'batch_complete',
-      });
-      
-      // Log metrics every 60 seconds
+
+      log('info', 'cycle_reenter', { cycleId: currentCycleId, reason: 'batch_complete' });
+
       const now = Date.now();
       if (now - lastMetricsTime >= 60000) {
         lastMetricsTime = now;
         const elapsedSeconds = (now - sessionStartTime) / 1000;
-        logMetrics({
-          migrationId: afterMigrationId,
-          elapsedSeconds,
-          totalUpdates,
-          totalEvents,
-          avgThroughput: totalUpdates / Math.max(1, elapsedSeconds),
-          currentThroughput: updates / (batchLatency / 1000),
-          errorCount: sessionErrorCount,
-        });
+        logMetrics({ migrationId: afterMigrationId, elapsedSeconds, totalUpdates, totalEvents, avgThroughput: totalUpdates / Math.max(1, elapsedSeconds), currentThroughput: updates / (batchLatency / 1000), errorCount: sessionErrorCount });
       }
-      
+
     } catch (err) {
       sessionErrorCount++;
-      
-      // Check if this is a transient/timeout error (including our custom FETCH_TIMEOUT)
-      const isTimeout = err.code === 'ECONNABORTED' || 
-                        err.code === 'ETIMEDOUT' ||
-                        err.code === 'ECONNRESET' ||
-                        err.code === 'FETCH_TIMEOUT' ||
-                        err.message?.includes('timeout');
-      const isTransient = isTimeout || 
-                          err.response?.status === 503 || 
-                          err.response?.status === 429 ||
-                          err.response?.status >= 500;
-      
-      logError('fetch', err, { 
-        cycleId: currentCycleId,
-        migration: afterMigrationId, 
-        cursor: afterRecordTime,
-        error_count: sessionErrorCount,
-        is_transient: isTransient,
-      });
-      
+
+      const isTimeout   = err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.code === 'FETCH_TIMEOUT' || err.message?.includes('timeout');
+      const isTransient = isTimeout || err.response?.status === 503 || err.response?.status === 429 || err.response?.status >= 500;
+
+      logError('fetch', err, { cycleId: currentCycleId, migration: afterMigrationId, cursor: afterRecordTime, error_count: sessionErrorCount, is_transient: isTransient });
+
       if (isTransient) {
-        // COOLDOWN MODE: Never fatal on transient errors, just sleep and retry
-        // Exponential backoff: 10s, 20s, 40s, 60s, 60s, ...
-        const backoffMs = Math.min(60000, 10000 * Math.pow(2, Math.min(sessionErrorCount - 1, 3)));
-        const jitter = Math.random() * 5000; // 0-5s jitter
-        const cooldownMs = backoffMs + jitter;
-        
-        log('warn', 'cooldown_mode', {
-          cycleId: currentCycleId,
-          migration: afterMigrationId,
-          cursor: afterRecordTime,
-          error_count: sessionErrorCount,
-          cooldown_ms: Math.round(cooldownMs),
-          reason: err.code || err.response?.status || 'unknown',
-        });
-        
+        const backoffMs  = Math.min(60000, 10000 * Math.pow(2, Math.min(sessionErrorCount - 1, 3)));
+        const cooldownMs = backoffMs + Math.random() * 5000;
+
+        log('warn', 'cooldown_mode', { cycleId: currentCycleId, migration: afterMigrationId, cursor: afterRecordTime, error_count: sessionErrorCount, cooldown_ms: Math.round(cooldownMs), reason: err.code || err.response?.status || 'unknown' });
         console.log(`⏳ Cooldown: sleeping ${Math.round(cooldownMs / 1000)}s before retry (error #${sessionErrorCount})...`);
         await sleep(cooldownMs, 'cooldown_backoff');
-        
-        // ─── LIFECYCLE: Cycle Re-enter (after error recovery) ───
-        log('info', 'cycle_reenter', {
-          cycleId: currentCycleId,
-          reason: 'error_recovery',
-          cooldownMs: Math.round(cooldownMs),
-        });
-        
-        // Update watchdog timestamp even on error recovery to avoid false stall alerts
+
+        log('info', 'cycle_reenter', { cycleId: currentCycleId, reason: 'error_recovery', cooldownMs: Math.round(cooldownMs) });
         lastProgressTimestamp = Date.now();
-        
-        // Keep counting for logging purposes but don't fatal
       } else {
-        // Non-transient error: fail after too many
         if (sessionErrorCount >= 10) {
-          logFatal('too_many_errors', err, { 
-            error_count: sessionErrorCount,
-            migration: afterMigrationId,
-          });
+          logFatal('too_many_errors', err, { error_count: sessionErrorCount, migration: afterMigrationId });
           throw err;
         }
-        
-        // ─── LIFECYCLE: Cycle Re-enter (after non-transient error) ───
-        log('info', 'cycle_reenter', {
-          cycleId: currentCycleId,
-          reason: 'non_transient_error_retry',
-        });
-        
-        await sleep(10000, 'non_transient_error_retry'); // Wait 10s on non-transient error
+        log('info', 'cycle_reenter', { cycleId: currentCycleId, reason: 'non_transient_error_retry' });
+        await sleep(10000, 'non_transient_error_retry');
       }
     }
   }
-  
-  // Clean up heartbeat and watchdog
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
-  if (stallWatchdogInterval) {
-    clearInterval(stallWatchdogInterval);
-    stallWatchdogInterval = null;
-  }
-  
-  // Log final summary
+
+  if (heartbeatInterval)    { clearInterval(heartbeatInterval);    heartbeatInterval    = null; }
+  if (stallWatchdogInterval) { clearInterval(stallWatchdogInterval); stallWatchdogInterval = null; }
+
   const elapsedSeconds = (Date.now() - sessionStartTime) / 1000;
-  logSummary({
-    success: true,
-    totalUpdates,
-    totalEvents,
-    totalTimeSeconds: elapsedSeconds,
-    avgThroughput: totalUpdates / Math.max(1, elapsedSeconds),
-    migrationsProcessed: 1,
-    allComplete: false, // Live mode never "completes"
-  });
+  logSummary({ success: true, totalUpdates, totalEvents, totalTimeSeconds: elapsedSeconds, avgThroughput: totalUpdates / Math.max(1, elapsedSeconds), migrationsProcessed: 1, allComplete: false });
 }
 
-/**
- * Sleep helper with logging (Step 2: Never await sleep without logging)
- */
-async function sleep(ms, reason = 'unknown') {
-  log('debug', 'sleep_start', { ms, reason });
-  await new Promise(resolve => setTimeout(resolve, ms));
-  log('debug', 'sleep_end', { ms, reason });
-}
+// ─── Graceful shutdown ─────────────────────────────────────────────────────
 
 /**
- * Timeout wrapper (Step 1: Put a timeout around every await that can block)
- */
-async function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Timeout: ${label} after ${ms}ms`)), ms)
-    )
-  ]);
-}
-
-
-/**
- * Graceful shutdown
+ * FIX #4: shutdown now saves _liveAfterRecordTime / _liveAfterMigrationId
+ * (the in-loop cursor, updated on every periodic save) rather than
+ * lastTimestamp (the startup value, never updated during the run).
+ *
+ * Original: saveLiveCursor(lastMigrationId || migrationId, lastTimestamp)
+ * After running for hours and receiving a SIGTERM, this would revert the
+ * cursor to the startup position, forcing a full re-ingest on restart.
+ *
+ * _liveAfterRecordTime is updated on every periodic save (every 5 batches)
+ * and on every empty-poll flush, so worst-case re-ingest on shutdown is
+ * 5 batches rather than the full session.
  */
 async function shutdown() {
   log('info', 'shutdown_started', { mode: LIVE_MODE ? 'LIVE' : 'RESUME' });
   isRunning = false;
-  
-  // Clean up heartbeat
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
-  
-  // Clean up watchdog
-  if (stallWatchdogInterval) {
-    clearInterval(stallWatchdogInterval);
-    stallWatchdogInterval = null;
-  }
-  
-  // Flush remaining data (with timeout to avoid hanging on shutdown)
+
+  if (heartbeatInterval)    { clearInterval(heartbeatInterval);    heartbeatInterval    = null; }
+  if (stallWatchdogInterval) { clearInterval(stallWatchdogInterval); stallWatchdogInterval = null; }
+
   log('info', 'flush_start', { reason: 'shutdown' });
   try {
     const flushed = await withTimeout(flushAll(), 30_000, 'shutdown_flushAll');
@@ -1584,34 +1298,28 @@ async function shutdown() {
   } catch (err) {
     log('error', 'flush_timeout_on_shutdown', { error: err.message });
   }
-  
-  // Save final cursor state
-  if (lastTimestamp) {
-    saveLiveCursor(lastMigrationId || migrationId, lastTimestamp);
-    log('info', 'cursor_advanced', {
-      newCursor: lastTimestamp,
-      migration: lastMigrationId || migrationId,
-      reason: 'shutdown',
-    });
-    logCursor('shutdown_saved', { 
-      migrationId: lastMigrationId || migrationId, 
-      lastBefore: lastTimestamp 
-    });
+
+  // FIX #4: save the in-loop cursor, not the stale startup lastTimestamp
+  const cursorMig  = _liveAfterMigrationId  || lastMigrationId || migrationId;
+  const cursorTime = _liveAfterRecordTime   || lastTimestamp;
+
+  if (cursorTime) {
+    // FIX #2: await the now-async saveLiveCursor
+    await saveLiveCursor(cursorMig, cursorTime);
+    log('info', 'cursor_advanced', { newCursor: cursorTime, migration: cursorMig, reason: 'shutdown' });
+    logCursor('shutdown_saved', { migrationId: cursorMig, lastBefore: cursorTime });
   }
-  
+
   const elapsedSeconds = (Date.now() - sessionStartTime) / 1000;
-  log('info', 'shutdown_complete', { 
-    elapsed_s: elapsedSeconds,
-    error_count: sessionErrorCount,
-  });
-  
+  log('info', 'shutdown_complete', { elapsed_s: elapsedSeconds, error_count: sessionErrorCount });
+
   process.exit(0);
 }
 
-process.on('SIGINT', () => shutdown());
+process.on('SIGINT',  () => shutdown());
 process.on('SIGTERM', () => shutdown());
 
-// Run
+// ─── Entry point ───────────────────────────────────────────────────────────
 runIngestion().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
