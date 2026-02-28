@@ -107,7 +107,7 @@ describe('Backfill Pipeline Integration', () => {
         update.update_id,
         MOCK_BACKFILL_EXERCISE.migration_id,
         exercised,
-        { synchronizer_id: update.synchronizer_id }
+        { synchronizer_id: update.synchronizer_id, effective_at: update.effective_at, record_time: update.record_time }
       );
       
       expect(normalized.event_type).toBe('exercised');
@@ -140,7 +140,7 @@ describe('Backfill Pipeline Integration', () => {
         update.update_id,
         MOCK_BACKFILL_EXERCISE.migration_id,
         archived,
-        {}
+        { effective_at: update.effective_at, record_time: update.record_time }
       );
       expect(normalizedArchived.event_type).toBe('archived');
       expect(normalizedArchived.contract_id).toBe('00abc123::amulet-contract-1');
@@ -152,7 +152,7 @@ describe('Backfill Pipeline Integration', () => {
         update.update_id,
         MOCK_BACKFILL_EXERCISE.migration_id,
         created,
-        {}
+        { effective_at: update.effective_at, record_time: update.record_time }
       );
       expect(normalizedCreated.event_type).toBe('created');
       expect(normalizedCreated.contract_id).toBe('00abc123::amulet-contract-2');
@@ -217,7 +217,7 @@ describe('Backfill Pipeline Integration', () => {
               normalizedUpdate.update_id,
               normalizedUpdate.migration_id,
               event,
-              { synchronizer_id: normalizedUpdate.synchronizer_id }
+              { synchronizer_id: normalizedUpdate.synchronizer_id, effective_at: update.effective_at, record_time: update.record_time }
             );
             events.push(normalizedEvent);
           }
@@ -256,7 +256,7 @@ describe('Backfill Pipeline Integration', () => {
         if (update.events_by_id) {
           const flatEvents = flattenEventsInTreeOrder(update.events_by_id, update.root_event_ids || []);
           for (const event of flatEvents) {
-            const normalizedEvent = normalizeEvent(event, normalizedUpdate.update_id, normalizedUpdate.migration_id, event, {});
+            const normalizedEvent = normalizeEvent(event, normalizedUpdate.update_id, normalizedUpdate.migration_id, event, { effective_at: update.effective_at, record_time: update.record_time });
             eventUpdateRefs.add(normalizedEvent.update_id);
           }
         }
@@ -305,18 +305,12 @@ describe('Backfill Pipeline Integration', () => {
         .toThrow('Unknown update_type');
     });
     
-    it('should warn but not throw in warnOnly mode', () => {
+    it('should throw SchemaValidationError in strict mode (warnOnly removed)', () => {
       const invalidUpdate = { update_id: 'invalid-001', unknown_field: true };
-      const consoleSpy = { warn: [] };
-      const originalWarn = console.warn;
-      console.warn = (msg) => consoleSpy.warn.push(msg);
       
-      const result = normalizeUpdate(invalidUpdate, { strict: true, warnOnly: true });
-      
-      console.warn = originalWarn;
-      
-      expect(result.update_type).toBe('unknown');
-      expect(consoleSpy.warn.length).toBeGreaterThan(0);
+      // Claude Code removed warnOnly — strict=true always throws
+      expect(() => normalizeUpdate(invalidUpdate, { strict: true }))
+        .toThrow('Unknown update_type');
     });
     
     it('should handle events with missing event_id gracefully', () => {
@@ -324,6 +318,7 @@ describe('Backfill Pipeline Integration', () => {
         created_event: {
           contract_id: 'test-contract',
           template_id: 'test:Template',
+          created_at: '2024-01-01T00:00:00Z',
         },
       };
       
@@ -331,7 +326,7 @@ describe('Backfill Pipeline Integration', () => {
       const originalWarn = console.warn;
       console.warn = (msg) => consoleSpy.warn.push(msg);
       
-      const normalized = normalizeEvent(eventMissingId, 'upd-test', 0, eventMissingId, {});
+      const normalized = normalizeEvent(eventMissingId, 'upd-test', 0, eventMissingId, { record_time: '2024-01-01T00:00:00Z' });
       
       console.warn = originalWarn;
       
@@ -369,10 +364,11 @@ describe('Backfill Pipeline Integration', () => {
           observers: ['party2'],
           witness_parties: ['witness1', 'witness2'],
           create_arguments: { test: true },
+          created_at: '2024-01-01T00:00:00Z',
         },
       };
       
-      const normalized = normalizeEvent(eventWithWitness, 'upd-test', 0, eventWithWitness, {});
+      const normalized = normalizeEvent(eventWithWitness, 'upd-test', 0, eventWithWitness, { record_time: '2024-01-01T00:00:00Z' });
       const rawEvent = JSON.parse(normalized.raw_event);
       
       expect(rawEvent.created_event.witness_parties).toEqual(['witness1', 'witness2']);

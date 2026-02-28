@@ -53,19 +53,16 @@ describe('AtomicCursor.saveAtomic()', () => {
     expect(state.maxTime).toBe('2024-12-10T00:00:00Z');
   });
 
-  it('should commit pending transaction before saving', () => {
+  it('should throw if transaction is open (must commit/rollback first)', () => {
     const cursor = new AtomicCursor(0, 'sync-pending-save');
     cursor.beginTransaction(10, 20, '2024-01-15T10:00:00Z');
 
-    // saveAtomic should commit the transaction first, then apply new state
-    cursor.saveAtomic({
+    // saveAtomic now throws if transaction is open
+    expect(() => cursor.saveAtomic({
       last_before: '2024-01-15T09:00:00Z',
       total_updates: 100,
       total_events: 500,
-    });
-
-    expect(cursor.inTransaction).toBe(false);
-    expect(cursor.confirmedState.totalUpdates).toBe(100);
+    })).toThrow('saveAtomic() called while a transaction is open');
   });
 
   it('should mark complete via saveAtomic', () => {

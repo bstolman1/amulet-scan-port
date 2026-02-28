@@ -277,7 +277,7 @@ describe('Field Coverage Audit', () => {
         },
       };
       
-      const result = normalizeEvent(input, 'upd-1', 0, input);
+      const result = normalizeEvent(input, 'upd-1', 0, input, { record_time: '2024-01-01T00:00:00Z' });
       
       // Verify raw_event contains complete original event
       const rawParsed = JSON.parse(result.raw_event);
@@ -334,7 +334,7 @@ describe('Field Coverage Audit', () => {
         complex_unknown: { arr: [1, 2], obj: { x: 'y' } },
       };
       
-      const result = normalizeEvent(eventWithUnknownFields, 'u1', 0, eventWithUnknownFields);
+      const result = normalizeEvent(eventWithUnknownFields, 'u1', 0, eventWithUnknownFields, { record_time: '2024-01-01T00:00:00Z' });
       const raw = JSON.parse(result.raw_event);
       
       expect(raw.future_event_field).toBe('future');

@@ -107,9 +107,7 @@ describe('decodeInMainThread', () => {
       expect(result.events[0].event_id).toBe('evt-1');
     });
 
-    it('should drop events with no effective_at', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
+    it('should throw for events with no effective_at (strict validation)', () => {
       const tx = {
         transaction: {
           update_id: 'upd-no-ts',
@@ -130,15 +128,8 @@ describe('decodeInMainThread', () => {
         migration_id: 0,
       };
 
-      const result = decodeInMainThread(tx, 0);
-
-      expect(result.update).toBeDefined();
-      expect(result.events).toHaveLength(0);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Skipping event evt-bad with no effective_at')
-      );
-
-      warnSpy.mockRestore();
+      // normalizeEvent now throws when effective_at cannot be determined
+      expect(() => decodeInMainThread(tx, 0)).toThrow('could not determine effective_at');
     });
 
     it('should keep valid events and drop invalid ones in same tx', () => {
@@ -185,9 +176,7 @@ describe('decodeInMainThread', () => {
   });
 
   describe('reassignment effective_at guard', () => {
-    it('should drop reassign_create with no effective_at', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
+    it('should throw for reassign_create with no effective_at (strict validation)', () => {
       const tx = {
         reassignment: {
           update_id: 'upd-reassign-no-ts',
@@ -206,15 +195,8 @@ describe('decodeInMainThread', () => {
         migration_id: 0,
       };
 
-      const result = decodeInMainThread(tx, 0);
-
-      expect(result.update).toBeDefined();
-      expect(result.events).toHaveLength(0);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Skipping reassign_create with no effective_at')
-      );
-
-      warnSpy.mockRestore();
+      // normalizeEvent now throws when effective_at cannot be determined
+      expect(() => decodeInMainThread(tx, 0)).toThrow('could not determine effective_at');
     });
 
     it('should include reassign events with valid effective_at', () => {

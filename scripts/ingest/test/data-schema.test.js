@@ -126,15 +126,15 @@ describe('normalizeUpdate', () => {
       expect(result.update_type).toBe('unknown');
     });
 
-    it('should warn but not throw with warnOnly=true', () => {
+    it('should throw in strict mode (warnOnly removed)', () => {
       const raw = {
         update_id: 'mystery',
         migration_id: 0,
       };
 
-      // Should not throw
-      const result = normalizeUpdate(raw, { strict: true, warnOnly: true });
-      expect(result.update_type).toBe('unknown');
+      // Claude Code removed warnOnly — strict=true always throws
+      expect(() => normalizeUpdate(raw, { strict: true }))
+        .toThrow('Unknown update_type');
     });
   });
 
@@ -269,7 +269,7 @@ describe('normalizeEvent', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'test', 0);
+      const result = normalizeEvent(event, 'test', 0, null, { record_time: '2024-01-01T00:00:00Z' });
       
       expect(result.event_type).toBe('created');
       expect(result.event_type_original).toBe('created_event');
@@ -285,6 +285,7 @@ describe('normalizeEvent', () => {
         template_id: 'pkg:Module:Template',
         create_arguments: { field: 'value' },
         signatories: ['party1'],
+        created_at: '2024-01-01T00:00:00Z',
       };
 
       const result = normalizeEvent(event, 'test', 0);
@@ -308,7 +309,7 @@ describe('normalizeEvent', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'test', 0);
+      const result = normalizeEvent(event, 'test', 0, null, { effective_at: '2024-01-01T00:00:00Z' });
       
       expect(result.event_type).toBe('exercised');
       expect(result.event_type_original).toBe('exercised_event');
@@ -329,7 +330,7 @@ describe('normalizeEvent', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'test', 0);
+      const result = normalizeEvent(event, 'test', 0, null, { record_time: '2024-01-01T00:00:00Z' });
       
       expect(result.payload).toContain('DSO');
       expect(JSON.parse(result.payload).record.fields).toHaveLength(1);
@@ -345,7 +346,7 @@ describe('normalizeEvent', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'test', 0);
+      const result = normalizeEvent(event, 'test', 0, null, { effective_at: '2024-01-01T00:00:00Z' });
       
       expect(result.payload).toContain('1000');
       expect(JSON.parse(result.payload).amount).toBe(1000);
@@ -407,7 +408,7 @@ describe('normalizeEvent', () => {
         custom_field: 'important_data',
       };
 
-      const result = normalizeEvent(event, 'test', 0, event);
+      const result = normalizeEvent(event, 'test', 0, event, { record_time: '2024-01-01T00:00:00Z' });
       
       expect(result.raw_event).toContain('important_data');
       expect(typeof result.raw_event).toBe('string');
@@ -453,7 +454,7 @@ describe('normalizeEvent', () => {
         counter: 0,  // Should not be treated as falsy
       };
 
-      const result = normalizeEvent(event, 'reassign', 0, event, updateInfo);
+      const result = normalizeEvent(event, 'reassign', 0, event, { ...updateInfo, record_time: '2024-01-01T00:00:00Z' });
       
       expect(result.reassignment_counter).toBe(0);
     });
@@ -473,7 +474,7 @@ describe('normalizeEvent', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'test', 0);
+      const result = normalizeEvent(event, 'test', 0, null, { effective_at: '2024-01-01T00:00:00Z' });
       
       expect(result.choice).toBe('DsoRules_ExecuteConfirmedAction');
       expect(result.interface_id).toBe('pkg:Interface:DsoRulesInterface');
@@ -492,7 +493,7 @@ describe('normalizeEvent', () => {
         },
       };
 
-      const result = normalizeEvent(event, 'test', 0);
+      const result = normalizeEvent(event, 'test', 0, null, { record_time: '2024-01-01T00:00:00Z' });
       
       expect(result.witness_parties).toEqual(['party1', 'party2', 'party3']);
     });
@@ -623,12 +624,11 @@ describe('getPartitionPath', () => {
       expect(result).toBe('updates/events/migration=4/year=2024/month=10/day=7');
     });
 
-    it('should fall back to backfill for invalid source values', () => {
+    it('should throw for invalid source values', () => {
       const timestamp = new Date('2024-10-07T11:30:12Z');
       
-      const result = getPartitionPath(timestamp, 0, 'updates', 'invalid');
-      
-      expect(result).toMatch(/^backfill\//);
+      expect(() => getPartitionPath(timestamp, 0, 'updates', 'invalid'))
+        .toThrow('invalid source "invalid"');
     });
 
     it('should isolate backfill and updates data by folder', () => {

@@ -17,16 +17,16 @@ import path from 'path';
 // then by creating isolated function replicas that mirror the actual code.
 // This avoids importing the entire fetch-backfill.js (which has heavy side effects).
 
-describe('backupCursorToGCS (structural verification)', () => {
+describe('backupCursorToGCS (structural verification - async)', () => {
   let source;
 
   beforeEach(() => {
     source = fs.readFileSync('scripts/ingest/fetch-backfill.js', 'utf8');
   });
 
-  it('calls execSync with gsutil cp for the cursor file', () => {
-    // The backup function must shell out to gsutil cp
-    expect(source).toContain('execSync(`gsutil -q cp "${cursorPath}" "${gcsPath}"`');
+  it('calls execFileAsync with gsutil cp for the cursor file', () => {
+    // Claude Code switched from execSync to execFileAsync
+    expect(source).toContain("await execFileAsync('gsutil', ['-q', 'cp', cursorPath, gcsPath]");
   });
 
   it('derives GCS path from GCS_BUCKET env and cursor filename', () => {
@@ -47,12 +47,12 @@ describe('backupCursorToGCS (structural verification)', () => {
     expect(backupFn).toContain("if (!GCS_BUCKET) return");
   });
 
-  it('has a 10s timeout on the gsutil call', () => {
+  it('has a 15s timeout on the gsutil call', () => {
     const backupFn = source.substring(
       source.indexOf('function backupCursorToGCS'),
       source.indexOf('function restoreCursorsFromGCS')
     );
-    expect(backupFn).toContain('timeout: 10000');
+    expect(backupFn).toContain('timeout: 15000');
   });
 
   it('logs warning on failure without crashing', () => {
