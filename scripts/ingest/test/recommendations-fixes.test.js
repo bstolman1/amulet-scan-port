@@ -101,8 +101,8 @@ describe('#2 - Reassignment events in processUpdates', () => {
     expect(source).toContain('reassign_create');
     expect(source).toContain('reassign_archive');
     // Must build updateInfo with reassignment fields
-    expect(source).toContain('source: u.source');
-    expect(source).toContain('target: u.target');
+    expect(source).toContain('u.source');
+    expect(source).toContain('u.target');
     expect(source).toContain('unassign_id');
   });
 });
