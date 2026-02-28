@@ -267,17 +267,15 @@ describe('Atomic Cursor Coverage', () => {
       expect(cursor.confirmedState.totalUpdates).toBe(100);
     });
     
-    it('should auto-commit pending transaction', () => {
+    it('should throw if transaction is open', () => {
       const cursor = new AtomicCursor(0, 'test-save-commit');
       
       cursor.beginTransaction(50, 200, '2024-01-15T09:00:00Z');
       
-      cursor.saveAtomic({
+      expect(() => cursor.saveAtomic({
         last_before: '2024-01-15T10:00:00Z',
         total_updates: 100,
-      });
-      
-      expect(cursor.inTransaction).toBe(false);
+      })).toThrow('saveAtomic() called while a transaction is open');
     });
     
     it('should update time bounds', () => {

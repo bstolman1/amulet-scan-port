@@ -214,6 +214,7 @@ describe('AtomicCursor', () => {
       
       cursor.beginTransaction(100, 500, '2024-01-15T10:00:00Z');
       cursor.commit();
+      cursor.confirmGCS(); // Must sync GCS before marking complete
       cursor.markComplete();
       
       expect(cursor.confirmedState.complete).toBe(true);

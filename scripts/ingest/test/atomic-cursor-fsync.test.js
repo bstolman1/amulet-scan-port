@@ -55,17 +55,18 @@ describe('atomicWriteFile with fsync', () => {
     atomicWriteFile = mod.atomicWriteFile;
   });
 
-  it('calls fsync before rename to ensure durability', () => {
+  it('calls fsync before rename to ensure durability (with parent dir fsync)', () => {
     const callOrder = [];
     mockWriteFileSync.mockImplementation(() => callOrder.push('write'));
-    mockOpenSync.mockImplementation(() => { callOrder.push('open'); return 42; });
+    mockOpenSync.mockImplementation((path) => { callOrder.push(path.endsWith('.tmp') ? 'open' : 'open-dir'); return 42; });
     mockFsyncSync.mockImplementation(() => callOrder.push('fsync'));
     mockCloseSync.mockImplementation(() => callOrder.push('close'));
     mockRenameSync.mockImplementation(() => callOrder.push('rename'));
 
     atomicWriteFile('/tmp/cursor.json', { test: true });
 
-    expect(callOrder).toEqual(['write', 'open', 'fsync', 'close', 'rename']);
+    // New order: write tmp, fsync tmp, rename, fsync parent dir
+    expect(callOrder).toEqual(['write', 'open', 'fsync', 'close', 'rename', 'open-dir', 'fsync', 'close']);
   });
 
   it('writes to .tmp path, then renames to final path', () => {
@@ -87,9 +88,7 @@ describe('atomicWriteFile with fsync', () => {
     expect(mockUnlinkSync).toHaveBeenCalledWith('/tmp/cursor.json.tmp');
   });
 
-  it('backs up existing valid cursor before overwriting', () => {
-    // First call: dir check (false), second: existing file check (true), etc.
-    let callCount = 0;
+  it('backs up existing valid cursor before overwriting via atomic temp+rename', () => {
     mockExistsSync.mockImplementation((p) => {
       if (typeof p === 'string' && p.endsWith('.tmp')) return false;
       if (typeof p === 'string' && p.endsWith('.json')) return true;
@@ -100,11 +99,12 @@ describe('atomicWriteFile with fsync', () => {
 
     atomicWriteFile('/tmp/cursor.json', { new: 'data' });
 
-    // Should have written backup
+    // Backup is now written atomically via temp+rename (.bak.tmp → .bak)
     expect(mockWriteFileSync).toHaveBeenCalledWith(
-      '/tmp/cursor.json.bak',
+      '/tmp/cursor.json.bak.tmp',
       '{"valid": true}',
       expect.objectContaining({ encoding: 'utf8' })
     );
+    expect(mockRenameSync).toHaveBeenCalledWith('/tmp/cursor.json.bak.tmp', '/tmp/cursor.json.bak');
   });
 });
