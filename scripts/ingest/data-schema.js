@@ -1,16 +1,21 @@
 /**
  * Parquet Schema Definitions for Canton Ledger Data
- * 
+ *
  * These schemas define the structure of parquet files for:
  * - ledger_updates: Transaction/reassignment updates
  * - ledger_events: Individual contract events (created, archived, etc.)
- * 
+ *
  * IMPORTANT: Per Scan API documentation:
  * - record_time is the primary ordering key (monotonic within migration+synchronizer)
  * - event_id format is "<update_id>:<event_index>" - DO NOT synthesize
  * - Events form a tree structure via root_event_ids and child_event_ids
  * - Unknown fields should be preserved, not rejected
- * 
+ *
+ * NOTE: Schema objects (LEDGER_UPDATES_SCHEMA, LEDGER_EVENTS_SCHEMA) map field
+ * names to type label strings for documentation and tooling reference only.
+ * They are NOT enforced at runtime — do not write validators that trust these
+ * strings as authoritative contracts.
+ *
  * @see https://docs.dev.sync.global
  */
 
@@ -24,7 +29,7 @@ export const LEDGER_UPDATES_SCHEMA = {
   offset: 'INT64',
   record_time: 'TIMESTAMP',    // PRIMARY ordering key per API docs
   effective_at: 'TIMESTAMP',   // When ledger action takes effect
-  recorded_at: 'TIMESTAMP',    // When we recorded this update
+  recorded_at: 'TIMESTAMP',    // When we recorded this batch (set by caller, not per-record)
   timestamp: 'TIMESTAMP',
   kind: 'STRING',              // For reassignments: 'assign' or 'unassign'
   root_event_ids: 'LIST<STRING>',  // Root event IDs for tree traversal
@@ -47,11 +52,11 @@ export const LEDGER_EVENTS_SCHEMA = {
   event_type_original: 'STRING', // Original API type: 'created_event', 'archived_event', etc.
   contract_id: 'STRING',
   template_id: 'STRING',
-  package_name: 'STRING',      // Also provided by API - don't rely solely on extraction
+  package_name: 'STRING',      // API-provided preferred; fallback may be a package hash (see extractPackageName)
   migration_id: 'INT64',
   synchronizer_id: 'STRING',
   effective_at: 'TIMESTAMP',
-  recorded_at: 'TIMESTAMP',
+  recorded_at: 'TIMESTAMP',    // Set by caller at batch start — not per-record new Date()
   timestamp: 'TIMESTAMP',
   created_at_ts: 'TIMESTAMP',
   signatories: 'LIST<STRING>',     // Optional - only for created events
@@ -147,31 +152,36 @@ export class SchemaValidationError extends Error {
 
 /**
  * Normalize a ledger update for parquet storage
- * 
+ *
  * IMPORTANT: record_time is the canonical ordering key per API docs.
  * It is monotonically increasing within a given migration_id + synchronizer_id.
- * 
- * @param {object} raw - Raw update from Scan API
- * @param {object} options - Validation options
- * @param {boolean} options.strict - If true (default), throws on unknown update_type
- * @param {boolean} options.warnOnly - If true, logs warning instead of throwing
+ *
+ * @param {object} raw            - Raw update from Scan API
+ * @param {object} options        - Validation options
+ * @param {boolean} options.strict   - If true (default), throws on unknown update_type.
+ *                                     If false, logs a warning and continues — never silently swallows.
+ * @param {Date|null} options.batchTimestamp - Shared timestamp for recorded_at/timestamp across
+ *                                     all records in this batch. Pass once at batch start to prevent
+ *                                     drift. Defaults to new Date() if omitted (single-record use).
  * @returns {object} Normalized update object
  * @throws {SchemaValidationError} If update_type is 'unknown' and strict mode enabled
  */
 export function normalizeUpdate(raw, options = {}) {
-  const { strict = true, warnOnly = false } = options;
-  
+  // FIX #1: Removed the `warnOnly` option — its interaction with `strict` created
+  // a silent-swallow path when both were false. Now: strict=true throws, strict=false
+  // always warns. There is no silent path.
+  const { strict = true, batchTimestamp = null } = options;
+
+  // FIX #7: Use caller-supplied batchTimestamp so all records in a batch share
+  // the same recorded_at/timestamp value, making it a meaningful batch marker.
+  const recordedAt = batchTimestamp instanceof Date ? batchTimestamp : new Date();
+
   const update = raw.transaction || raw.reassignment || raw;
   const isReassignment = !!raw.reassignment;
-  
-  // Detect if this is a transaction when no wrapper exists
-  // Transactions have events_by_id, reassignments don't
   const isTransaction = !!raw.transaction || (!isReassignment && !!update.events_by_id);
-  
-  // Determine update type
   const updateType = isTransaction ? 'transaction' : isReassignment ? 'reassignment' : 'unknown';
-  
-  // Validate update_type - catch schema mismatches early
+
+  // FIX #1: Always warn when not strict — no silent swallow
   if (updateType === 'unknown') {
     const updateId = update.update_id || raw.update_id || 'NO_ID';
     const context = {
@@ -181,84 +191,74 @@ export function normalizeUpdate(raw, options = {}) {
       has_events_by_id: !!update.events_by_id,
       top_level_keys: Object.keys(raw).slice(0, 10),
     };
-    
-    const message = `Unknown update_type detected for update ${updateId}. ` +
+
+    const message =
+      `Unknown update_type detected for update ${updateId}. ` +
       `This indicates a schema mismatch - the update is neither a transaction (no events_by_id) ` +
       `nor a reassignment (no reassignment wrapper). Keys: [${context.top_level_keys.join(', ')}]`;
-    
-    if (strict && !warnOnly) {
+
+    if (strict) {
       throw new SchemaValidationError(message, context);
-    } else if (warnOnly) {
-      console.warn(`[SCHEMA WARNING] ${message}`);
     }
+    // FIX #1: Always warn — never silently swallow unknown updates
+    console.warn(`[SCHEMA WARNING] ${message}`);
   }
-  
-  // Extract root event IDs - CRITICAL for tree traversal
+
   const rootEventIds = update.root_event_ids || [];
-  
-  // Count events - handle both object and array formats
   const eventsById = update.events_by_id || {};
   const eventCount = Object.keys(eventsById).length;
-  
-  // Reassignment-specific fields (all optional)
+
   const sourceSynchronizer = update.source || null;
   const targetSynchronizer = update.target || null;
   const unassignId = update.unassign_id || null;
   const submitter = update.submitter || null;
   const reassignmentCounter = update.counter ?? null;
-  
+
   return {
     update_id: update.update_id || raw.update_id,
     update_type: updateType,
     migration_id: raw.migration_id != null ? parseInt(raw.migration_id) : null,
     synchronizer_id: update.synchronizer_id || null,
-    // These fields are optional per API docs
     workflow_id: update.workflow_id || null,
     command_id: update.command_id || null,
     offset: (() => { const o = parseInt(update.offset); return isNaN(o) ? null : o; })(),
-    // record_time is PRIMARY ordering key
     record_time: update.record_time ? new Date(update.record_time) : null,
     effective_at: update.effective_at ? new Date(update.effective_at) : null,
-    recorded_at: new Date(), // When we recorded this update
-    timestamp: new Date(),
+    // FIX #7: Use shared batch timestamp — not a per-record new Date()
+    recorded_at: recordedAt,
+    timestamp: recordedAt,
     kind: update.kind || null,
     root_event_ids: rootEventIds,
     event_count: eventCount,
-    // Reassignment fields at update level
     source_synchronizer: sourceSynchronizer,
     target_synchronizer: targetSynchronizer,
     unassign_id: unassignId,
     submitter: submitter,
     reassignment_counter: reassignmentCounter,
-    // Tracing (optional)
     trace_context: update.trace_context ? JSON.stringify(update.trace_context) : null,
-    // CRITICAL: Full original data for future-proofing
     update_data: JSON.stringify(update),
   };
 }
 
 /**
- * Determine original event type name from event structure
- * Returns the API's original type name (with _event suffix)
+ * Determine original event type name from event structure.
+ * Returns the API's original type name (with _event suffix).
  */
 function determineOriginalEventType(event) {
   if (event.created_event) return 'created_event';
   if (event.archived_event) return 'archived_event';
   if (event.exercised_event) return 'exercised_event';
-  // For reassignment events, the type comes from update context
-  // The API doesn't wrap these in *_event objects
   return event.event_type || null;
 }
 
 /**
- * Determine normalized event type for internal use
- * Maps API types to shorter internal names
+ * Determine normalized event type for internal use.
+ * Maps API types to shorter internal names.
  */
 function determineNormalizedEventType(event) {
   if (event.created_event) return 'created';
   if (event.archived_event) return 'archived';
   if (event.exercised_event) return 'exercised';
-  // Handle direct event_type strings from API
   const originalType = event.event_type || '';
   if (originalType.includes('created')) return 'created';
   if (originalType.includes('archived')) return 'archived';
@@ -267,121 +267,165 @@ function determineNormalizedEventType(event) {
 }
 
 /**
+ * Parse and normalize a timestamp string to a UTC Date.
+ *
+ * Scan API can sometimes return timestamps without a timezone suffix.
+ * When absent, we treat the value as UTC to avoid local-timezone shifts.
+ *
+ * @param {string|number|Date|null} v
+ * @returns {Date|null}
+ */
+function asUtcDate(v) {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  if (typeof v === 'number') return new Date(v);
+  if (typeof v === 'string') {
+    const normalized = v.includes('T') ? v : v.replace(' ', 'T');
+    const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized);
+    const result = new Date(hasTz ? normalized : `${normalized}Z`);
+    if (isNaN(result.getTime())) {
+      console.warn(`[data-schema] asUtcDate: invalid timestamp "${v}"`);
+      return null;
+    }
+    return result;
+  }
+  return new Date(v);
+}
+
+/**
  * Normalize a ledger event for parquet storage
- * 
+ *
  * IMPORTANT per Scan API docs:
- * - event_id format is "<update_id>:<event_index>" - preserve original, don't synthesize
+ * - event_id format is "<update_id>:<event_index>" — preserve original, don't synthesize
  * - Events form a tree via root_event_ids and child_event_ids
  * - Many fields are optional (signatories only on created, acting_parties only on exercised)
- * 
- * @param {object} event - Event object from Scan API
- * @param {string} updateId - Parent update's ID
- * @param {number} migrationId - Migration ID from backfill context
- * @param {object} rawEvent - Original raw event for preservation
- * @param {object} updateInfo - Parent update info (for synchronizer, timestamps)
+ *
+ * @param {object}      event          - Event object from Scan API
+ * @param {string}      updateId       - Parent update's ID
+ * @param {number}      migrationId    - Migration ID from backfill context
+ * @param {object|null} rawEvent       - Original raw event for preservation
+ * @param {object|null} updateInfo     - Parent update info (synchronizer, timestamps)
+ * @param {object}      options
+ * @param {Date|null}   options.batchTimestamp - Shared timestamp for recorded_at/timestamp.
+ *                                     Pass once at batch start to prevent per-record drift.
  * @returns {object} Normalized event object
+ * @throws {Error} If effective_at cannot be determined (required for partitioning)
  */
-export function normalizeEvent(event, updateId, migrationId, rawEvent = null, updateInfo = null) {
-  // Unwrap nested event structure if present
+export function normalizeEvent(event, updateId, migrationId, rawEvent = null, updateInfo = null, options = {}) {
+  // FIX #7: Use caller-supplied batchTimestamp so all records in a batch share
+  // the same recorded_at/timestamp value.
+  const { batchTimestamp = null } = options;
+  const recordedAt = batchTimestamp instanceof Date ? batchTimestamp : new Date();
+
   const createdEvent = event.created_event;
   const archivedEvent = event.archived_event;
   const exercisedEvent = event.exercised_event;
   const innerEvent = createdEvent || archivedEvent || exercisedEvent || event;
-  
-  // Template ID - check all possible sources
-  const templateId = innerEvent.template_id || 
-    event.template_id ||
-    null;
-  
-  // Contract ID - check all possible sources
-  const contractId = innerEvent.contract_id ||
-    event.contract_id ||
-    null;
-  
-  // Payload - depends on event type
-  const payload = createdEvent?.create_arguments ||
+
+  const templateId = innerEvent.template_id || event.template_id || null;
+  const contractId = innerEvent.contract_id || event.contract_id || null;
+
+  const payload =
+    createdEvent?.create_arguments ||
     exercisedEvent?.choice_argument ||
     event.create_arguments ||
     event.choice_argument ||
     event.payload ||
     null;
-  
-  // Package name - prefer API-provided value, fall back to extraction
-  const packageName = innerEvent.package_name || 
+
+  // FIX #4: Log a warning when falling back to package hash extraction so callers
+  // know the value may be a hash rather than a human-readable name.
+  const packageName =
+    innerEvent.package_name ||
     event.package_name ||
-    extractPackageName(templateId);
-  
-  // Event types - preserve both original and normalized
+    extractPackageName(templateId, /* warnOnFallback */ true);
+
   const eventTypeOriginal = determineOriginalEventType(event);
   const eventType = determineNormalizedEventType(event);
-  
-  // Event ID - CRITICAL: Use original API value only
-  // Per API docs, format is "<update_id>:<event_index>"
-  // DO NOT synthesize - if missing, leave as null and log warning
+
   const eventId = event.event_id || innerEvent.event_id || null;
   if (!eventId && contractId) {
     console.warn(`Event missing event_id: update=${updateId}, contract=${contractId}`);
   }
-  
-  // Timestamps - prefer created_at for created events, fall back to update's record_time
-  // IMPORTANT: Scan API can sometimes return timestamps without timezone suffix.
-  // If missing, treat as UTC to avoid local timezone shifts (e.g., appearing ~5h behind).
-  const asUtcDate = (v) => {
-    if (!v) return null;
-    if (v instanceof Date) return v;
-    if (typeof v === 'number') return new Date(v);
-    if (typeof v === 'string') {
-      // Normalize space-separated timestamps to ISO 8601 'T' separator
-      // e.g. "2025-01-15 12:00:00" → "2025-01-15T12:00:00"
-      const normalized = v.includes('T') ? v : v.replace(' ', 'T');
-      const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized);
-      const result = new Date(hasTz ? normalized : `${normalized}Z`);
-      if (isNaN(result.getTime())) {
-        console.warn(`[data-schema] asUtcDate: invalid timestamp "${v}"`);
-        return null;
-      }
-      return result;
-    }
-    return new Date(v);
-  };
 
+  // FIX #2: effective_at priority is now event-type-aware.
+  //
+  // For 'created' events: created_at is the correct timestamp (when the contract
+  // came into existence), so prefer it first.
+  //
+  // For 'archived' and 'exercised' events: created_at refers to the *contract's*
+  // creation time, which is wrong for effective_at of the event itself. Prefer
+  // the update's effective_at or record_time instead.
+  //
+  // This prevents archived/exercised events from being partitioned into the
+  // wrong (contract-creation-date) folder.
   const createdAt = innerEvent.created_at || event.created_at;
-  const effectiveAt = createdAt
-    ? asUtcDate(createdAt)
-    : (updateInfo?.record_time ? asUtcDate(updateInfo.record_time) : null);
-  
-  // Synchronizer from update context
+
+  let effectiveAt;
+  if (eventType === 'created' && createdAt) {
+    effectiveAt = asUtcDate(createdAt);
+  } else {
+    // For all non-created events: use the update's effective_at or record_time.
+    // Fall back to created_at only as a last resort (with a warning).
+    const updateEffectiveAt = updateInfo?.effective_at || updateInfo?.record_time;
+    if (updateEffectiveAt) {
+      effectiveAt = asUtcDate(updateEffectiveAt);
+    } else if (createdAt) {
+      console.warn(
+        `[data-schema] normalizeEvent: using created_at as effective_at for ` +
+        `${eventType} event (update=${updateId}, contract=${contractId}) — ` +
+        `updateInfo.effective_at and updateInfo.record_time were both absent. ` +
+        `This may produce incorrect partition placement.`
+      );
+      effectiveAt = asUtcDate(createdAt);
+    } else {
+      effectiveAt = null;
+    }
+  }
+
+  // FIX #3: Validate effective_at here at normalization time so the error is
+  // reported with full event context (updateId, contractId, eventType) rather
+  // than as a cryptic partition failure later in groupByPartition.
+  if (!effectiveAt) {
+    throw new Error(
+      `normalizeEvent: could not determine effective_at for event ` +
+      `(update=${updateId}, contract=${contractId}, type=${eventType}). ` +
+      `Provide updateInfo.effective_at or updateInfo.record_time.`
+    );
+  }
+
   const synchronizer = updateInfo?.synchronizer_id || null;
-  
-  // Created event specific fields (optional for other event types)
+
   const signatories = createdEvent?.signatories || event.signatories || null;
   const observers = createdEvent?.observers || event.observers || null;
-  // witness_parties can be at multiple locations in the API response
-  const witnessParties = createdEvent?.witness_parties || 
-    innerEvent?.witness_parties || 
-    event.witness_parties || 
+  const witnessParties =
+    createdEvent?.witness_parties ||
+    innerEvent?.witness_parties ||
+    event.witness_parties ||
     null;
-  const contractKey = createdEvent?.contract_key || innerEvent?.contract_key || event.contract_key || null;
-  
-  // Exercised event specific fields (optional for other event types)
-  const actingParties = exercisedEvent?.acting_parties || innerEvent?.acting_parties || event.acting_parties || null;
-  // CRITICAL: choice field must be extracted for governance analysis
-  const choice = exercisedEvent?.choice || innerEvent?.choice || event.choice || null;
-  const consuming = exercisedEvent?.consuming ?? innerEvent?.consuming ?? event.consuming ?? null;
-  // interface_id for interface-based exercises
-  const interfaceId = exercisedEvent?.interface_id || innerEvent?.interface_id || event.interface_id || null;
-  // CRITICAL: child_event_ids for tree traversal
-  const childEventIds = exercisedEvent?.child_event_ids || innerEvent?.child_event_ids || event.child_event_ids || null;
-  const exerciseResult = exercisedEvent?.exercise_result || innerEvent?.exercise_result || event.exercise_result || null;
-  
-  // Reassignment-specific fields - PRIORITY: updateInfo (from reassignment wrapper) over event
-  // For reassignment events, the fields are on the reassignment wrapper, not the inner created/archived event
+  const contractKey =
+    createdEvent?.contract_key || innerEvent?.contract_key || event.contract_key || null;
+
+  const actingParties =
+    exercisedEvent?.acting_parties || innerEvent?.acting_parties || event.acting_parties || null;
+  const choice =
+    exercisedEvent?.choice || innerEvent?.choice || event.choice || null;
+  const consuming =
+    exercisedEvent?.consuming ?? innerEvent?.consuming ?? event.consuming ?? null;
+  const interfaceId =
+    exercisedEvent?.interface_id || innerEvent?.interface_id || event.interface_id || null;
+  const childEventIds =
+    exercisedEvent?.child_event_ids || innerEvent?.child_event_ids || event.child_event_ids || null;
+  const exerciseResult =
+    exercisedEvent?.exercise_result || innerEvent?.exercise_result || event.exercise_result || null;
+
+  // Reassignment fields — PRIORITY: updateInfo (from reassignment wrapper) over event
   const sourceSynchronizer = updateInfo?.source || event.source || null;
   const targetSynchronizer = updateInfo?.target || event.target || null;
   const unassignId = updateInfo?.unassign_id || event.unassign_id || null;
   const submitter = updateInfo?.submitter || event.submitter || null;
   const reassignmentCounter = updateInfo?.counter ?? event.counter ?? null;
-  
+
   return {
     event_id: eventId,
     update_id: updateId,
@@ -393,68 +437,66 @@ export function normalizeEvent(event, updateId, migrationId, rawEvent = null, up
     migration_id: migrationId != null ? parseInt(migrationId) : null,
     synchronizer_id: synchronizer,
     effective_at: effectiveAt,
-    recorded_at: new Date(),
-    timestamp: new Date(),
-    created_at_ts: effectiveAt,
-    // Optional arrays - use null if not present (don't default to empty array)
-    signatories: signatories,
-    observers: observers,
+    // FIX #7: Use shared batch timestamp — not per-record new Date()
+    recorded_at: recordedAt,
+    timestamp: recordedAt,
+    created_at_ts: eventType === 'created' ? effectiveAt : (createdAt ? asUtcDate(createdAt) : null),
+    signatories,
+    observers,
     acting_parties: actingParties,
     witness_parties: witnessParties,
     payload: payload ? JSON.stringify(payload) : null,
     contract_key: contractKey ? JSON.stringify(contractKey) : null,
-    choice: choice,
-    consuming: consuming,
+    choice,
+    consuming,
     interface_id: interfaceId,
     child_event_ids: childEventIds,
     exercise_result: exerciseResult ? JSON.stringify(exerciseResult) : null,
-    // Reassignment fields
     source_synchronizer: sourceSynchronizer,
     target_synchronizer: targetSynchronizer,
     unassign_id: unassignId,
-    submitter: submitter,
+    submitter,
     reassignment_counter: reassignmentCounter,
-    // CRITICAL: Store complete original event for recovery (stringified for DuckDB/Parquet compatibility)
     raw_event: JSON.stringify(rawEvent || event),
   };
 }
 
 /**
- * Extract package name from template ID
- * Note: API also provides package_name directly on events - prefer that when available
+ * Extract package name from template ID.
+ *
+ * Canton template IDs have the format: `packageHash:ModuleName:EntityName`.
+ * Splitting on ':' and taking parts[0] returns the package *hash*, not a
+ * human-readable name. The API provides `package_name` directly on events —
+ * always prefer that value. This function is a last-resort fallback only.
+ *
+ * FIX #4: Added warnOnFallback parameter so callers are alerted when the
+ * hash-based fallback is used and the value may not be human-readable.
+ *
+ * @param {string|null} templateId
+ * @param {boolean} warnOnFallback - If true, logs a warning when extraction is used
+ * @returns {string|null} Package hash (not name) or null
  */
-function extractPackageName(templateId) {
+function extractPackageName(templateId, warnOnFallback = false) {
   if (!templateId) return null;
   const parts = templateId.split(':');
-  return parts.length > 1 ? parts[0] : null;
+  if (parts.length <= 1) return null;
+  const hash = parts[0];
+  if (warnOnFallback) {
+    console.warn(
+      `[data-schema] extractPackageName: package_name absent from API response for ` +
+      `template "${templateId}" — falling back to package hash "${hash}". ` +
+      `This value is a hash, not a human-readable name.`
+    );
+  }
+  return hash;
 }
 
 /**
- * Get partition path for a timestamp and optional migration ID
- * 
- * Uses migration_id in path because record_time can overlap across migrations
- * (per API docs, record_time is only monotonic within a migration+synchronizer)
- * 
- * IMPORTANT: Partition values are numeric (not zero-padded strings) to ensure
- * BigQuery/DuckDB infer them as INT64 rather than STRING/BYTE_ARRAY.
- * 
- * Structure: raw/{source}/{type}/migration=X/year=YYYY/month=M/day=D/
- * 
- * Sources:
- * - 'backfill': Historical data from backfill process (finite, ends when caught up)
- * - 'updates': Live streaming data from v2/updates API (ongoing, never "done")
- * 
- * @param {Date|string|number} timestamp - Timestamp for partitioning
- * @param {number|null} migrationId - Migration ID (defaults to 0)
- * @param {string} type - Data type: 'updates' or 'events' (defaults to 'updates' for backward compat)
- * @param {string} source - Data source: 'backfill' or 'updates' (defaults to 'backfill')
- */
-/**
  * Extract UTC year/month/day from an effective_at timestamp.
- * 
+ *
  * effective_at is the ONLY acceptable partitioning timestamp — no fallbacks.
  * Throws if the value is missing or not a valid date.
- * 
+ *
  * @param {string} effectiveAt - ISO 8601 timestamp (must be valid)
  * @returns {{ year: number, month: number, day: number }}
  */
@@ -467,15 +509,15 @@ export function getUtcPartition(effectiveAt) {
     throw new Error(`getUtcPartition: invalid timestamp "${effectiveAt}"`);
   }
   const year = d.getUTCFullYear();
-  const month = d.getUTCMonth() + 1;  // 1-12, no padding for INT64 inference
-  const day = d.getUTCDate();          // 1-31, no padding for INT64 inference
+  const month = d.getUTCMonth() + 1;
+  const day = d.getUTCDate();
 
-  // Safety guard: reject impossible values (catches corrupt timestamps)
-  // Configurable via PARTITION_YEAR_MIN / PARTITION_YEAR_MAX environment variables
   const yearMin = parseInt(process.env.PARTITION_YEAR_MIN) || 2020;
   const yearMax = parseInt(process.env.PARTITION_YEAR_MAX) || 2035;
   if (year < yearMin || year > yearMax) {
-    throw new Error(`getUtcPartition: year ${year} out of range [${yearMin}-${yearMax}] from "${effectiveAt}" — likely microsecond timestamp`);
+    throw new Error(
+      `getUtcPartition: year ${year} out of range [${yearMin}-${yearMax}] from "${effectiveAt}" — likely microsecond timestamp`
+    );
   }
   if (month < 1 || month > 12) {
     throw new Error(`getUtcPartition: month ${month} out of range [1-12] from "${effectiveAt}"`);
@@ -487,94 +529,144 @@ export function getUtcPartition(effectiveAt) {
   return { year, month, day };
 }
 
+/**
+ * Get partition path for a timestamp and optional migration ID.
+ *
+ * Uses migration_id in path because record_time can overlap across migrations.
+ * Partition values are numeric (not zero-padded) for INT64 inference in BigQuery/DuckDB.
+ *
+ * Structure: {source}/{type}/migration=X/year=YYYY/month=M/day=D
+ *
+ * FIX #5: Invalid `source` values now throw instead of silently redirecting to
+ * 'backfill', which previously caused data intended for the 'updates' partition
+ * to land in 'backfill' with no error or warning.
+ *
+ * @param {Date|string|number} timestamp
+ * @param {number|null} migrationId - Defaults to 0 if not provided
+ * @param {string} type   - 'updates' or 'events'
+ * @param {string} source - 'backfill' or 'updates'
+ */
 export function getPartitionPath(timestamp, migrationId = null, type = 'updates', source = 'backfill') {
   const { year, month, day } = getUtcPartition(timestamp);
-  
-  // Always include migration_id in path (default to 0 if not provided)
   const mig = migrationId ?? 0;
-  
-  // Validate source parameter
+
+  // FIX #5: Throw on invalid source rather than silently redirecting to 'backfill'
   const validSources = ['backfill', 'updates'];
-  const normalizedSource = validSources.includes(source) ? source : 'backfill';
-  
-  // Structure: {source}/{type}/migration=X/year=YYYY/month=M/day=D
-  return `${normalizedSource}/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
+  if (!validSources.includes(source)) {
+    throw new Error(
+      `getPartitionPath: invalid source "${source}". Must be one of: ${validSources.join(', ')}. ` +
+      `Refusing to silently redirect — data would land in the wrong partition.`
+    );
+  }
+
+  const validTypes = ['updates', 'events'];
+  if (!validTypes.includes(type)) {
+    throw new Error(
+      `getPartitionPath: invalid type "${type}". Must be one of: ${validTypes.join(', ')}.`
+    );
+  }
+
+  return `${source}/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}`;
 }
 
 /**
  * Group records by their individual effective_at partition path.
- * 
- * Each record is routed to its own correct UTC-based partition,
- * preventing cross-midnight buffers from landing in the wrong folder.
- * 
- * @param {object[]} records - Array of normalized records (must have effective_at)
- * @param {string} type - 'updates' or 'events'
- * @param {string} source - 'backfill' or 'updates'
+ *
+ * Each record is routed to its own correct UTC-based partition, preventing
+ * cross-midnight buffers from landing in the wrong folder.
+ *
+ * FIX #3: Missing effective_at is caught here with a clear error message.
+ * It should never reach this point because normalizeEvent now validates and
+ * throws earlier with richer context — but this provides a second safety net.
+ *
+ * @param {object[]} records    - Array of normalized records (must have effective_at)
+ * @param {string}   type       - 'updates' or 'events'
+ * @param {string}   source     - 'backfill' or 'updates'
  * @param {number|null} migrationId - Migration ID override (falls back to record.migration_id)
  * @returns {Object.<string, object[]>} Map of partition path → records
  */
 export function groupByPartition(records, type = 'updates', source = 'backfill', migrationId = null) {
   const groups = {};
-  
+
   for (const record of records) {
     const effectiveAt = record.effective_at;
+    // FIX #3: Clearer error at groupByPartition level as a second safety net.
+    // Primary validation should have already thrown in normalizeEvent.
     if (!effectiveAt) {
       throw new Error(
         `groupByPartition: record ${record.update_id || record.event_id || 'unknown'} ` +
-        `has no effective_at — cannot partition`
+        `has no effective_at — cannot partition. This should have been caught in normalizeEvent.`
       );
     }
     const mig = migrationId ?? record.migration_id ?? 0;
     const partition = getPartitionPath(effectiveAt, mig, type, source);
-    
+
     if (!groups[partition]) {
       groups[partition] = [];
     }
     groups[partition].push(record);
   }
-  
+
   return groups;
 }
 
 /**
- * Flatten events from events_by_id maintaining tree order
- * 
+ * Flatten events from events_by_id maintaining tree order.
+ *
  * Per API docs, events should be traversed in preorder using root_event_ids
  * and child_event_ids. This function flattens while preserving order.
- * 
- * @param {object} eventsById - events_by_id object from update
+ *
+ * FIX #6: After traversal, any events in eventsById that were not reachable
+ * from rootEventIds are logged as orphans. They are appended to the result
+ * so no data is silently dropped, but the warning lets operators investigate
+ * whether the API response has a structural problem.
+ *
+ * @param {object}   eventsById   - events_by_id object from update
  * @param {string[]} rootEventIds - root_event_ids array
- * @returns {object[]} Flattened array of events in tree order
+ * @returns {object[]} Flattened array of events in tree order (orphans appended)
  */
 export function flattenEventsInTreeOrder(eventsById, rootEventIds) {
   if (!eventsById || !rootEventIds) return [];
-  
+
   const result = [];
   const visited = new Set();
-  
+
   function traverse(eventId) {
     if (visited.has(eventId)) return;
     visited.add(eventId);
-    
+
     const event = eventsById[eventId];
     if (!event) return;
-    
-    // Add event to result with its ID
+
     result.push({ ...event, event_id: eventId });
-    
-    // Traverse children in order
-    const childIds = event.child_event_ids || 
-      event.exercised_event?.child_event_ids || 
+
+    const childIds =
+      event.child_event_ids ||
+      event.exercised_event?.child_event_ids ||
       [];
     for (const childId of childIds) {
       traverse(childId);
     }
   }
-  
-  // Start from root events
+
   for (const rootId of rootEventIds) {
     traverse(rootId);
   }
-  
+
+  // FIX #6: Detect and warn about events not reachable from rootEventIds.
+  // Append them so no data is silently dropped.
+  const orphans = Object.keys(eventsById).filter(id => !visited.has(id));
+  if (orphans.length > 0) {
+    console.warn(
+      `flattenEventsInTreeOrder: ${orphans.length} orphaned event(s) not reachable ` +
+      `from root_event_ids — appending to result. IDs: [${orphans.slice(0, 10).join(', ')}` +
+      `${orphans.length > 10 ? `, ...+${orphans.length - 10} more` : ''}]. ` +
+      `This may indicate a malformed API response.`
+    );
+    for (const id of orphans) {
+      result.push({ ...eventsById[id], event_id: id });
+    }
+  }
+
   return result;
 }
