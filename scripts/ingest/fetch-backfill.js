@@ -71,7 +71,7 @@ import {
 } from './fetch-result.js';
 
 // CRITICAL FIX #2: Import atomic cursor operations
-import { AtomicCursor, loadCursorLegacy, isCursorComplete } from './atomic-cursor.js';
+import { AtomicCursor, atomicWriteFile, loadCursorLegacy, isCursorComplete } from './atomic-cursor.js';
 
 // Structured JSON logging for long run debugging
 import {
@@ -208,6 +208,8 @@ import { drainUploads, getUploadQueue } from './gcs-upload-queue.js';
 // GCS cursor backup interval (every N checkpoints)
 const GCS_CURSOR_BACKUP_INTERVAL = parseInt(process.env.GCS_CURSOR_BACKUP_INTERVAL) || 3;
 let gcsCursorBackupCounter = 0;
+let gcsCursorBackupConsecutiveFailures = 0;
+const GCS_CURSOR_BACKUP_MAX_FAILURES = parseInt(process.env.GCS_CURSOR_BACKUP_MAX_FAILURES) || 5;
 
 /**
  * Backup cursor to GCS (non-blocking)
@@ -225,11 +227,20 @@ function backupCursorToGCS(cursorPath) {
       stdio: 'pipe',
       timeout: 10000,
     });
+    gcsCursorBackupConsecutiveFailures = 0; // Reset on success
     console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
   } catch (err) {
+    gcsCursorBackupConsecutiveFailures++;
     const stderr = err.stderr?.toString?.() || '';
-    console.warn(`  ⚠️ Failed to backup cursor to GCS: ${err.message}`);
+    console.warn(`  ⚠️ Failed to backup cursor to GCS (${gcsCursorBackupConsecutiveFailures}/${GCS_CURSOR_BACKUP_MAX_FAILURES}): ${err.message}`);
     if (stderr) console.warn(`     gsutil stderr: ${stderr.trim()}`);
+    
+    if (gcsCursorBackupConsecutiveFailures >= GCS_CURSOR_BACKUP_MAX_FAILURES) {
+      const fatalMsg = `🔴 FATAL: GCS cursor backup failed ${gcsCursorBackupConsecutiveFailures} consecutive times. ` +
+        `Cursor progress is NOT being persisted to cloud — risk of major data re-processing on crash.`;
+      console.error(fatalMsg);
+      throw new Error(fatalMsg);
+    }
   }
 }
 
@@ -876,7 +887,8 @@ function saveCursor(migrationId, synchronizerId, cursor, minTime, maxTime, shard
       max_time: maxTime || cursor.max_time,
       last_processed_round: cursor.last_processed_round || 0,
     };
-    writeFileSync(cursorFile, JSON.stringify(cursorData, null, 2));
+    // Use atomic write to prevent cursor corruption on ENOSPC/crash
+    atomicWriteFile(cursorFile, cursorData);
   } catch (err) {
     console.error(`   [saveCursor] ❌ FAILED to save cursor: ${err.message}`);
     console.error(`   [saveCursor] CURSOR_DIR: ${CURSOR_DIR}`);
