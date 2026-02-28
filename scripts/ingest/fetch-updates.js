@@ -456,7 +456,8 @@ async function findLatestTimestamp() {
   let gcsDataResult = null;
   if (GCS_MODE) {
     console.log('\n🔍 Scanning GCS for latest data position...');
-    gcsDataResult = findLatestFromGCS();
+    // FIX #7: findLatestFromGCS is now async (gcs-scanner.js FIX #1) — must await
+    gcsDataResult = await findLatestFromGCS();
   }
 
   // FIX #2: await the now-async loadLiveCursor
@@ -558,9 +559,10 @@ function findLatestFromCursors() {
 
 /**
  * Find the latest data timestamp in GCS.
+ * FIX #7: Now async — findLatestFromGCSImported (gcs-scanner.js) is async after FIX #1.
  */
-function findLatestFromGCS() {
-  const result = findLatestFromGCSImported({
+async function findLatestFromGCS() {
+  const result = await findLatestFromGCSImported({
     bucket: process.env.GCS_BUCKET,
     logFn:  (level, msg, data) => log(level, msg, data),
   });
