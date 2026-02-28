@@ -176,12 +176,9 @@ describe('GCS cursor backup integration in checkpoint flow', () => {
   });
 
   it('only restores cursors in GCS mode', () => {
-    // Find the restoreCursorsFromGCS call and verify GCS_MODE guard nearby
-    const restoreIdx = source.indexOf('restoreCursorsFromGCS()');
-    expect(restoreIdx).toBeGreaterThan(-1);
-    // Look at the ~1000 chars before the call for the GCS_MODE guard
-    const guardBlock = source.substring(Math.max(0, restoreIdx - 1000), restoreIdx + 30);
-    expect(guardBlock).toContain('GCS_MODE');
+    // The guarded call site is "if (GCS_MODE) await restoreCursorsFromGCS()"
+    // which is distinct from the function definition. Search for the call site.
+    expect(source).toContain('if (GCS_MODE) await restoreCursorsFromGCS()');
   });
 });
 
