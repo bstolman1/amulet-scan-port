@@ -112,10 +112,9 @@ describe('Hive Partition Paths', () => {
       expect(updatesPath).not.toBe(eventsPath);
     });
     
-    it('should fallback to backfill for invalid source', () => {
-      const path = getPartitionPath('2025-01-20T10:30:00Z', 4, 'updates', 'invalid_source');
-      
-      expect(path).toMatch(/^backfill\//);
+    it('should throw for invalid source', () => {
+      expect(() => getPartitionPath('2025-01-20T10:30:00Z', 4, 'updates', 'invalid_source'))
+        .toThrow('invalid source');
     });
   });
   

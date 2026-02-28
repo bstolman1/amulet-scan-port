@@ -60,24 +60,30 @@ describe('#11 - getUtcPartition configurable year range', () => {
 // #1 - Quarantine null effective_at (structural verification)
 // ─────────────────────────────────────────────────────────────
 describe('#1 - Quarantine null effective_at events', () => {
-  it('fetch-backfill decodeInMainThread skips events with null effective_at', async () => {
+  it('fetch-backfill decodeInMainThread relies on normalizeEvent to throw on null effective_at', async () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), 'scripts/ingest/fetch-backfill.js'),
       'utf8'
     );
-    // The decodeInMainThread function should check ev.effective_at before pushing
-    expect(source).toContain('if (ev.effective_at)');
-    expect(source).toContain('Skipping');
+    // Claude Code removed the warn-and-skip guard; normalizeEvent now throws on null effective_at
+    // Verify decodeInMainThread calls normalizeEvent which enforces the guard
+    expect(source).toContain('normalizeEvent(');
+    // Verify the data-schema enforces the guard
+    const schemaSource = fs.readFileSync(
+      path.join(process.cwd(), 'scripts/ingest/data-schema.js'),
+      'utf8'
+    );
+    expect(schemaSource).toContain('could not determine effective_at');
   });
 
-  it('fetch-updates processUpdates quarantines events with null effective_at', async () => {
+  it('fetch-updates processUpdates relies on normalizeEvent to throw on null effective_at', async () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), 'scripts/ingest/fetch-updates.js'),
       'utf8'
     );
-    expect(source).toContain('[quarantine]');
-    expect(source).toContain('quarantinedCount');
-    expect(source).toContain('null effective_at');
+    // Claude Code removed the quarantine guard; normalizeEvent now throws on null effective_at
+    expect(source).toContain('normalizeEvent');
+    expect(source).toContain('quarantine guard');
   });
 });
 
@@ -141,16 +147,14 @@ describe('#3 - deleteOnFailure defaults to false in sync upload', () => {
 // #5-6 - Atomic cursor writes
 // ─────────────────────────────────────────────────────────────
 describe('#5-6 - Atomic cursor writes', () => {
-  it('fetch-backfill saveCursor uses atomicWriteFile', () => {
+  it('fetch-backfill uses AtomicCursor for all cursor writes', () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), 'scripts/ingest/fetch-backfill.js'),
       'utf8'
     );
-    // saveCursor should use atomicWriteFile, not writeFileSync
-    const saveCursorStart = source.indexOf('function saveCursor(');
-    const saveCursorFn = source.substring(saveCursorStart, saveCursorStart + 1200);
-    expect(saveCursorFn).toContain('atomicWriteFile(');
-    expect(saveCursorFn).not.toContain('writeFileSync(cursorFile');
+    // saveCursor was removed — all writes go through AtomicCursor.saveAtomic()
+    expect(source).toContain('atomicCursor.saveAtomic(');
+    expect(source).not.toContain('function saveCursor(');
   });
 
   it('fetch-backfill imports atomicWriteFile', () => {
@@ -167,7 +171,9 @@ describe('#5-6 - Atomic cursor writes', () => {
       path.join(process.cwd(), 'scripts/ingest/fetch-updates.js'),
       'utf8'
     );
-    const start = source.indexOf('function saveLiveCursor(migrationId, afterRecordTime)');
+    const start = source.indexOf('function saveLiveCursor(migId, afterRecordTime)') !== -1
+      ? source.indexOf('function saveLiveCursor(migId, afterRecordTime)')
+      : source.indexOf('function saveLiveCursor(migrationId, afterRecordTime)');
     const saveFn = source.substring(start, start + 1000);
     expect(saveFn).toContain('atomicWriteFileForLive');
     expect(saveFn).not.toContain('fs.writeFileSync(LIVE_CURSOR_FILE');

@@ -137,36 +137,36 @@ describe('GCS cursor backup integration in checkpoint flow', () => {
   });
 
   it('calls backupCursorToGCS during periodic GCS checkpoints', () => {
-    // Find the checkpoint block
+    // The checkpoint block is within the GCS_CHECKPOINT_INTERVAL guard
     const checkpointBlock = source.substring(
-      source.indexOf('GCS CRASH SAFETY: Periodic checkpoint'),
-      source.indexOf('Auto-tune after processing')
+      source.indexOf('GCS_CHECKPOINT_INTERVAL'),
+      source.indexOf('maybeTuneParallelFetches')
     );
     expect(checkpointBlock).toContain('backupCursorToGCS(atomicCursor.cursorPath)');
   });
 
   it('uses GCS_CURSOR_BACKUP_INTERVAL to throttle backups', () => {
     const checkpointBlock = source.substring(
-      source.indexOf('GCS CRASH SAFETY: Periodic checkpoint'),
-      source.indexOf('Auto-tune after processing')
+      source.indexOf('GCS_CHECKPOINT_INTERVAL'),
+      source.indexOf('maybeTuneParallelFetches')
     );
     expect(checkpointBlock).toContain('gcsCursorBackupCounter');
     expect(checkpointBlock).toContain('GCS_CURSOR_BACKUP_INTERVAL');
   });
 
   it('calls backupCursorToGCS at migration completion', () => {
-    // Find the completion block
+    // Find the completion block — after confirmGCS at final position
     const completionBlock = source.substring(
-      source.indexOf('Confirm GCS for the final position'),
-      source.indexOf('Structured log: synchronizer complete')
+      source.indexOf('confirmGCS(before, totalUpdates, totalEvents)'),
+      source.indexOf('logSynchronizer')
     );
     expect(completionBlock).toContain('backupCursorToGCS(atomicCursor.cursorPath)');
   });
 
   it('calls restoreCursorsFromGCS during startup', () => {
-    // Find the startup block
+    // Find the startup block — mkdirSync(CURSOR_DIR) precedes restoreCursorsFromGCS
     const startupBlock = source.substring(
-      source.indexOf('Ensure cursor directory exists'),
+      source.indexOf('mkdirSync(CURSOR_DIR'),
       source.indexOf('grandTotalUpdates')
     );
     expect(startupBlock).toContain('restoreCursorsFromGCS()');
@@ -174,7 +174,7 @@ describe('GCS cursor backup integration in checkpoint flow', () => {
 
   it('only restores cursors in GCS mode', () => {
     const startupBlock = source.substring(
-      source.indexOf('Ensure cursor directory exists'),
+      source.indexOf('mkdirSync(CURSOR_DIR'),
       source.indexOf('grandTotalUpdates')
     );
     // Must be guarded by GCS_MODE check

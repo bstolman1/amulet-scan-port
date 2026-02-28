@@ -153,7 +153,7 @@ describe('Pipeline Integrity', () => {
         },
       };
       
-      const normalized = normalizeEvent(eventWithoutTz, 'upd-test', 0, eventWithoutTz, {});
+      const normalized = normalizeEvent(eventWithoutTz, 'upd-test', 0, eventWithoutTz, { effective_at: '2024-06-15T10:30:00' });
       
       // Should be treated as UTC and not shifted to local time
       expect(normalized.effective_at).toBeInstanceOf(Date);
@@ -211,7 +211,8 @@ describe('Pipeline Integrity', () => {
         const events = flattenEventsInTreeOrder(update.events_by_id, update.root_event_ids || []);
         
         for (const event of events) {
-          const normalized = normalizeEvent(event, raw.update_id, raw.migration_id, event, {});
+          const updateInfo = { effective_at: update.effective_at || update.record_time, record_time: update.record_time };
+          const normalized = normalizeEvent(event, raw.update_id, raw.migration_id, event, updateInfo);
           
           expect(normalized.raw_event).not.toBeNull();
           expect(normalized.raw_event).not.toBe('');
@@ -243,7 +244,8 @@ describe('Pipeline Integrity', () => {
         
         const events = flattenEventsInTreeOrder(update.events_by_id, update.root_event_ids || []);
         for (const event of events) {
-          const normalized = normalizeEvent(event, raw.update_id, raw.migration_id, event, {});
+          const updateInfo = { effective_at: update.effective_at || update.record_time, record_time: update.record_time };
+          const normalized = normalizeEvent(event, raw.update_id, raw.migration_id, event, updateInfo);
           if (normalized.event_id) {
             ids.push(normalized.event_id);
           }
