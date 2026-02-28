@@ -89,14 +89,34 @@ import {
 } from './structured-logger.js';
 
 // Unified writer functions
+// FIX #15 (audit fix #7): Run binary and parquet writes independently.
+// Previously a binary write error would prevent the parquet write from running.
 async function bufferUpdates(updates) {
-  if (USE_BINARY) await binaryWriter.bufferUpdates(updates);
-  if (USE_PARQUET) return parquetWriter.bufferUpdates(updates);
+  const tasks = [];
+  if (USE_BINARY)  tasks.push(binaryWriter.bufferUpdates(updates));
+  if (USE_PARQUET) tasks.push(parquetWriter.bufferUpdates(updates));
+  if (tasks.length === 0) return;
+  const results = await Promise.allSettled(tasks);
+  const errors = results.filter(r => r.status === 'rejected');
+  if (errors.length > 0) {
+    console.error(`[bufferUpdates] ${errors.length} writer(s) failed:`);
+    for (const e of errors) console.error(`  ${e.reason?.message || e.reason}`);
+    throw errors[0].reason;
+  }
 }
 
 async function bufferEvents(events) {
-  if (USE_BINARY) await binaryWriter.bufferEvents(events);
-  if (USE_PARQUET) return parquetWriter.bufferEvents(events);
+  const tasks = [];
+  if (USE_BINARY)  tasks.push(binaryWriter.bufferEvents(events));
+  if (USE_PARQUET) tasks.push(parquetWriter.bufferEvents(events));
+  if (tasks.length === 0) return;
+  const results = await Promise.allSettled(tasks);
+  const errors = results.filter(r => r.status === 'rejected');
+  if (errors.length > 0) {
+    console.error(`[bufferEvents] ${errors.length} writer(s) failed:`);
+    for (const e of errors) console.error(`  ${e.reason?.message || e.reason}`);
+    throw errors[0].reason;
+  }
 }
 
 async function flushAll() {
@@ -759,32 +779,52 @@ function getEventTime(txOrReassign) {
 async function processBackfillItems(transactions, migrationId) {
   const pool = getDecodePool();
 
+  // FIX #16 (audit fix #3): Per-tx try/catch in the no-pool path.
+  // Previously, a single malformed tx would throw and kill the entire batch.
+  // This now matches the decode-worker's per-tx error semantics.
   if (!pool) {
-    const updates = [], events = [];
+    const updates = [], events = [], errors = [];
     for (const tx of transactions) {
-      const r = decodeInMainThread(tx, migrationId);
-      if (!r) continue;
-      if (r.update) updates.push(r.update);
-      if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
+      try {
+        const r = decodeInMainThread(tx, migrationId);
+        if (!r) continue;
+        if (r.update) updates.push(r.update);
+        if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
+      } catch (err) {
+        const txId = tx?.update_id || tx?.transaction?.update_id || tx?.reassignment?.update_id || 'UNKNOWN';
+        console.error(`[decode-main] Failed to decode tx ${txId}: ${err.message}`);
+        errors.push({ tx_id: txId, error: err.message });
+      }
+    }
+    if (errors.length > 0) {
+      log('warn', 'batch_decode_errors_no_pool', { count: errors.length, total: transactions.length });
     }
     await Promise.all([bufferUpdates(updates), bufferEvents(events)]);
-    return { updates: updates.length, events: events.length };
+    return { updates: updates.length, events: events.length, errors: errors.length };
   }
 
   const batchPromises = [];
   for (let i = 0; i < transactions.length; i += DECODE_BATCH_SIZE) {
     const chunk = transactions.slice(i, i + DECODE_BATCH_SIZE);
     batchPromises.push(
+      // FIX #17 (audit fix #4): Pool fallback now has per-tx try/catch and
+      // collects real errors instead of returning errors: [].
       pool.run({ txs: chunk, migrationId }).catch(err => {
         console.warn(`   ⚠️ Worker batch failed, main-thread fallback: ${err.message}`);
-        const updates = [], events = [];
+        const updates = [], events = [], errors = [];
         for (const tx of chunk) {
-          const r = decodeInMainThread(tx, migrationId);
-          if (!r) continue;
-          if (r.update) updates.push(r.update);
-          if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
+          try {
+            const r = decodeInMainThread(tx, migrationId);
+            if (!r) continue;
+            if (r.update) updates.push(r.update);
+            if (Array.isArray(r.events) && r.events.length > 0) events.push(...r.events);
+          } catch (fallbackErr) {
+            const txId = tx?.update_id || tx?.transaction?.update_id || tx?.reassignment?.update_id || 'UNKNOWN';
+            console.error(`[decode-fallback] tx ${txId} failed: ${fallbackErr.message}`);
+            errors.push({ tx_id: txId, error: fallbackErr.message });
+          }
         }
-        return { updates, events, errors: [] };
+        return { updates, events, errors };
       })
     );
   }
@@ -964,10 +1004,32 @@ async function fetchTimeSliceStreaming(migrationId, synchronizerId, sliceBefore,
       currentBefore = d.toISOString();
     }
 
-    if (seenUpdateIds.size > 500000) seenUpdateIds.clear();
+    // FIX #18 (audit fix #5): LRU-style eviction instead of full clear.
+    // Clearing the entire set allows re-processing of recently-seen IDs,
+    // causing duplicate Parquet records. Evicting the oldest half preserves
+    // recent entries that are most likely to appear again.
+    if (seenUpdateIds.size > 500000) {
+      const entries = [...seenUpdateIds];
+      seenUpdateIds.clear();
+      // Keep the most recent 250k entries
+      for (let i = entries.length - 250000; i < entries.length; i++) {
+        seenUpdateIds.add(entries[i]);
+      }
+    }
   }
 
-  if (inflightProcesses.length > 0) await Promise.all(inflightProcesses);
+  // FIX #19 (audit fix #8): Use Promise.allSettled to catch rejections that
+  // occurred between shift() awaits, then re-throw the first error. This
+  // prevents unhandled rejection crashes in Node 15+.
+  if (inflightProcesses.length > 0) {
+    const settled = await Promise.allSettled(inflightProcesses);
+    const failed = settled.filter(r => r.status === 'rejected');
+    if (failed.length > 0) {
+      console.error(`[fetchTimeSliceStreaming] ${failed.length} inflight process(es) failed`);
+      for (const f of failed) console.error(`  ${f.reason?.message || f.reason}`);
+      throw failed[0].reason;
+    }
+  }
 
   return { sliceIndex, totalTxs, earliestTime };
 }
@@ -1067,7 +1129,15 @@ async function parallelFetchBatch(migrationId, synchronizerId, startBefore, atOr
             for (const tx of txs) {
               const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
               if (!updateId) { unique.push(tx); continue; }
-              if (globalSeenUpdateIds.size >= GLOBAL_DEDUP_MAX) globalSeenUpdateIds.clear();
+              // FIX #18 (audit fix #5): LRU-style eviction instead of full clear
+              if (globalSeenUpdateIds.size >= GLOBAL_DEDUP_MAX) {
+                const entries = [...globalSeenUpdateIds];
+                globalSeenUpdateIds.clear();
+                const keepFrom = Math.max(0, entries.length - Math.floor(GLOBAL_DEDUP_MAX / 2));
+                for (let i = keepFrom; i < entries.length; i++) {
+                  globalSeenUpdateIds.add(entries[i]);
+                }
+              }
               if (globalSeenUpdateIds.has(updateId)) continue;
               globalSeenUpdateIds.add(updateId);
               unique.push(tx);
@@ -1248,8 +1318,19 @@ async function backfillSynchronizer(migrationId, synchronizerId, minTime, maxTim
       console.log(`   ⚠️ Cursor last_before (${cursorState.lastBefore}) is at or before minTime (${minTime})`);
       console.log(`   ⚠️ This synchronizer appears complete. Draining writer queues before marking complete.`);
 
-      try { await flushAll(); } catch {}
-      try { await waitForWrites(); } catch {}
+      // FIX #20 (audit fix #10): Silent flush catches replaced with error logging
+      // and abort. If writes fail here, data in the buffer is lost and the
+      // synchronizer must NOT be marked complete.
+      try { await flushAll(); } catch (flushErr) {
+        console.error(`[backfillSynchronizer] flushAll failed during finalization: ${flushErr.message}`);
+        log('error', 'finalize_flush_failed', { migrationId, synchronizerId, error: flushErr.message });
+        throw flushErr;
+      }
+      try { await waitForWrites(); } catch (writeErr) {
+        console.error(`[backfillSynchronizer] waitForWrites failed during finalization: ${writeErr.message}`);
+        log('error', 'finalize_writes_failed', { migrationId, synchronizerId, error: writeErr.message });
+        throw writeErr;
+      }
 
       const finalStats = getBufferStats();
       const pendingWritesAccurate =
