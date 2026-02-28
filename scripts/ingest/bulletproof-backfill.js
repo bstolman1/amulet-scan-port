@@ -12,8 +12,8 @@
  * This module exports hardened versions of the fetch functions.
  */
 
-import { existsSync, readFileSync, mkdirSync, readdirSync } from 'fs';
-import { atomicWriteFile } from './atomic-cursor.js';
+import { existsSync, readFileSync, mkdirSync, readdirSync, writeFileSync } from 'fs';
+import { AtomicCursor, atomicWriteFile, getCursorPath } from './atomic-cursor.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -33,42 +33,48 @@ const STEP_BACK_MS = 1; // Only step back 1ms on empty - NEVER more
 const VERIFY_INTERVAL = 100; // Verify counts every N batches
 
 /**
- * Integrity-checked cursor operations
+ * Integrity-checked cursor operations.
+ *
+ * FIX #1: This class no longer reimplements cursor management from scratch.
+ * It is now a thin wrapper around AtomicCursor, which provides proper
+ * transaction semantics (beginTransaction / commit / rollback), crash-safe
+ * atomic writes, backup recovery, and GCS checkpointing.
+ *
+ * The public API (load, recordPending, confirmWrite, markComplete) is
+ * preserved for backward compatibility with existing call sites.
  */
 export class IntegrityCursor {
   constructor(migrationId, synchronizerId, shardIndex = null) {
     this.migrationId = migrationId;
     this.synchronizerId = synchronizerId;
     this.shardIndex = shardIndex;
-    this.cursorPath = this._getCursorPath();
+
+    // Delegate all state management to AtomicCursor
+    this._cursor = new AtomicCursor(migrationId, synchronizerId, shardIndex);
+
+    // Pending tracking (mirrored from AtomicCursor.pendingState for external reads)
     this.pendingUpdates = 0;
     this.pendingEvents = 0;
-    this.confirmedUpdates = 0;
-    this.confirmedEvents = 0;
-    this.lastConfirmedBefore = null;
-    this.writeBuffer = [];
   }
 
-  _getCursorPath() {
-    const shardSuffix = this.shardIndex !== null ? `-shard${this.shardIndex}` : '';
-    const sanitized = this.synchronizerId.replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 50);
-    return join(CURSOR_DIR, `cursor-${this.migrationId}-${sanitized}${shardSuffix}.json`);
-  }
+  // Convenience accessors that mirror the old public fields
+  get confirmedUpdates() { return this._cursor.confirmedState.totalUpdates; }
+  get confirmedEvents()  { return this._cursor.confirmedState.totalEvents; }
+  get lastConfirmedBefore() { return this._cursor.confirmedState.lastBefore; }
+  get cursorPath() { return this._cursor.cursorPath; }
 
+  /**
+   * Load cursor from disk.
+   * FIX #4: Delegates to AtomicCursor.load() which uses readCursorSafe —
+   * corrupted main files fall back to the .bak file automatically.
+   */
   load() {
-    if (existsSync(this.cursorPath)) {
-      const data = JSON.parse(readFileSync(this.cursorPath, 'utf8'));
-      this.confirmedUpdates = data.confirmed_updates || data.total_updates || 0;
-      this.confirmedEvents = data.confirmed_events || data.total_events || 0;
-      this.lastConfirmedBefore = data.last_confirmed_before || data.last_before || null;
-      return data;
-    }
-    return null;
+    return this._cursor.load();
   }
 
   /**
-   * Record pending data (not yet written to disk)
-   * DO NOT advance cursor position yet
+   * Record pending data (not yet written to disk).
+   * DO NOT advance cursor position yet.
    */
   recordPending(updates, events) {
     this.pendingUpdates += updates;
@@ -76,105 +82,84 @@ export class IntegrityCursor {
   }
 
   /**
-   * Confirm data has been written to disk
-   * NOW it's safe to advance cursor position
+   * Confirm data has been written to disk.
+   * NOW it's safe to advance cursor position.
+   *
+   * FIX #1: Uses AtomicCursor transaction pattern so the cursor only
+   * advances after data is confirmed durable — not just in-memory.
    */
   confirmWrite(writtenUpdates, writtenEvents, beforeTimestamp) {
-    this.confirmedUpdates += writtenUpdates;
-    this.confirmedEvents += writtenEvents;
-    this.lastConfirmedBefore = beforeTimestamp;
+    // Begin transaction if not already open, otherwise add to pending
+    if (!this._cursor.inTransaction) {
+      this._cursor.beginTransaction(writtenUpdates, writtenEvents, beforeTimestamp);
+    } else {
+      this._cursor.addPending(writtenUpdates, writtenEvents, beforeTimestamp);
+    }
+
+    // Commit immediately — data is already on disk when this is called
+    this._cursor.commit();
+
     this.pendingUpdates -= writtenUpdates;
     this.pendingEvents -= writtenEvents;
-    
-    // Persist immediately after confirmation
-    this._persist();
   }
 
   /**
-   * Persist cursor state to disk
-   * ONLY called after writes are confirmed
-   */
-  _persist() {
-    try {
-      if (!existsSync(CURSOR_DIR)) {
-        mkdirSync(CURSOR_DIR, { recursive: true });
-      }
-
-      const cursorData = {
-        id: `cursor-${this.migrationId}-${this.synchronizerId.substring(0, 20)}`,
-        migration_id: this.migrationId,
-        synchronizer_id: this.synchronizerId,
-        shard_index: this.shardIndex,
-        
-        // CONFIRMED state - safe to resume from here
-        last_confirmed_before: this.lastConfirmedBefore,
-        confirmed_updates: this.confirmedUpdates,
-        confirmed_events: this.confirmedEvents,
-        
-        // Legacy fields for compatibility
-        last_before: this.lastConfirmedBefore,
-        total_updates: this.confirmedUpdates,
-        total_events: this.confirmedEvents,
-        
-        // Pending state - not yet confirmed
-        pending_updates: this.pendingUpdates,
-        pending_events: this.pendingEvents,
-        
-        // Metadata
-        updated_at: new Date().toISOString(),
-        complete: false,
-      };
-
-      atomicWriteFile(this.cursorPath, cursorData);
-    } catch (err) {
-      console.error(`[IntegrityCursor] CRITICAL: Failed to save cursor: ${err.message}`);
-      throw err; // This is critical - must not continue
-    }
-  }
-
-  /**
-   * Mark as complete ONLY after all writes verified
+   * Mark as complete ONLY after all writes verified.
+   * Delegates to AtomicCursor.markComplete() which enforces GCS sync.
    */
   markComplete() {
     if (this.pendingUpdates > 0 || this.pendingEvents > 0) {
-      throw new Error(`Cannot mark complete with pending data: ${this.pendingUpdates} updates, ${this.pendingEvents} events`);
+      throw new Error(
+        `Cannot mark complete with pending data: ${this.pendingUpdates} updates, ${this.pendingEvents} events`
+      );
     }
-
-    const cursorData = {
-      id: `cursor-${this.migrationId}-${this.synchronizerId.substring(0, 20)}`,
-      migration_id: this.migrationId,
-      synchronizer_id: this.synchronizerId,
-      shard_index: this.shardIndex,
-      last_confirmed_before: this.lastConfirmedBefore,
-      last_before: this.lastConfirmedBefore,
-      confirmed_updates: this.confirmedUpdates,
-      confirmed_events: this.confirmedEvents,
-      total_updates: this.confirmedUpdates,
-      total_events: this.confirmedEvents,
-      pending_updates: 0,
-      pending_events: 0,
-      updated_at: new Date().toISOString(),
-      completed_at: new Date().toISOString(),
-      complete: true,
-    };
-
-    atomicWriteFile(this.cursorPath, cursorData);
+    this._cursor.markComplete();
     console.log(`[IntegrityCursor] ✅ Marked complete: ${this.confirmedUpdates} updates, ${this.confirmedEvents} events`);
+  }
+
+  /**
+   * Expose GCS confirmation for callers that use it.
+   */
+  confirmGCS(timestamp = null, updates = null, events = null) {
+    return this._cursor.confirmGCS(timestamp, updates, events);
+  }
+
+  getGCSStatus() {
+    return this._cursor.getGCSStatus();
+  }
+
+  getState() {
+    return this._cursor.getState();
   }
 }
 
 /**
- * Write verifier - confirms data was actually written to disk
+ * Write verifier - confirms data was actually written to disk.
+ *
+ * FIX #2: File counting is now scoped to a shard-specific subdirectory
+ * (or a caller-supplied scope dir) so concurrent shards/processes writing
+ * to sibling directories don't inflate counts and produce false positives.
+ *
+ * FIX #3: verifyAndConfirm now distinguishes between "no files needed"
+ * (pendingUpdates === 0) and "writes confirmed" (newFiles > 0) — each path
+ * is handled and logged separately rather than collapsed into one condition.
  */
 export class WriteVerifier {
-  constructor(rawDir = RAW_DIR) {
+  /**
+   * @param {string} rawDir      - Base raw data directory
+   * @param {string|null} scopeDir - Subdirectory scoped to this shard/process.
+   *   Pass a unique per-shard path (e.g. `${rawDir}/shard-3`) to avoid counting
+   *   files written by other concurrent shards. Defaults to rawDir for single-
+   *   process setups, but should always be set in sharded runs.
+   */
+  constructor(rawDir = RAW_DIR, scopeDir = null) {
     this.rawDir = rawDir;
-    this.lastFileCount = { updates: 0, events: 0 };
-    this.lastRecordCount = { updates: 0, events: 0 };
+    // FIX #2: Use scoped directory for counting so other shards don't interfere
+    this.scopeDir = scopeDir || rawDir;
   }
 
   /**
-   * Count files in raw directory
+   * Count .pb.zst files in the scoped directory tree.
    */
   countFiles() {
     let updates = 0;
@@ -194,15 +179,15 @@ export class WriteVerifier {
       } catch {}
     };
 
-    if (existsSync(this.rawDir)) {
-      scanDir(this.rawDir);
+    if (existsSync(this.scopeDir)) {
+      scanDir(this.scopeDir);
     }
 
     return { updates, events };
   }
 
   /**
-   * Wait for file count to increase (confirms writes completed)
+   * Wait for file count to increase (confirms writes completed).
    */
   async waitForWrites(expectedNewFiles, timeoutMs = 30000) {
     const startCounts = this.countFiles();
@@ -221,8 +206,8 @@ export class WriteVerifier {
       await new Promise(r => setTimeout(r, 100));
     }
 
-    return { 
-      success: false, 
+    return {
+      success: false,
       message: `Timeout waiting for ${expectedNewFiles} files`,
       current: this.countFiles(),
       started: startCounts,
@@ -230,34 +215,55 @@ export class WriteVerifier {
   }
 
   /**
-   * Verify writes completed before advancing cursor
+   * Verify writes completed before advancing cursor.
+   *
+   * FIX #3: The two success conditions are now separated and each logs clearly:
+   *   Path A — pendingUpdates/Events are both zero: nothing to write, confirm trivially.
+   *   Path B — newFiles > 0: writes detected in scoped directory, confirm.
+   *   Path C — neither: warn and return failure without advancing cursor.
    */
   async verifyAndConfirm(cursor, pendingUpdates, pendingEvents, beforeTimestamp, flushFn, waitFn) {
-    const beforeCounts = this.countFiles();
-
-    // Flush buffers
-    await flushFn();
-
-    // Wait for all pending writes
-    await waitFn();
-
-    // Verify file count increased
-    const afterCounts = this.countFiles();
-    const newFiles = (afterCounts.updates - beforeCounts.updates) + (afterCounts.events - beforeCounts.events);
-
-    if (newFiles > 0 || (pendingUpdates === 0 && pendingEvents === 0)) {
-      // Writes confirmed - NOW update cursor
-      cursor.confirmWrite(pendingUpdates, pendingEvents, beforeTimestamp);
-      return { success: true, newFiles };
+    // Path A: nothing was pending, no writes needed
+    if (pendingUpdates === 0 && pendingEvents === 0) {
+      console.log(`[WriteVerifier] No pending data — skipping write verification.`);
+      cursor.confirmWrite(0, 0, beforeTimestamp);
+      return { success: true, newFiles: 0, path: 'no-op' };
     }
 
-    console.warn(`[WriteVerifier] ⚠️ No new files detected after flush. Expected writes may have failed.`);
-    return { success: false, newFiles: 0 };
+    // Path B: data was pending — flush, wait, then count files in scoped dir
+    const beforeCounts = this.countFiles();
+
+    await flushFn();
+    await waitFn();
+
+    const afterCounts = this.countFiles();
+    const newFiles =
+      (afterCounts.updates - beforeCounts.updates) +
+      (afterCounts.events - beforeCounts.events);
+
+    if (newFiles > 0) {
+      console.log(`[WriteVerifier] ✅ ${newFiles} new file(s) detected — confirming cursor advance.`);
+      cursor.confirmWrite(pendingUpdates, pendingEvents, beforeTimestamp);
+      return { success: true, newFiles, path: 'confirmed' };
+    }
+
+    // Path C: expected writes but none detected
+    console.warn(
+      `[WriteVerifier] ⚠️ No new files detected after flush. ` +
+      `Expected writes for ${pendingUpdates} updates, ${pendingEvents} events. ` +
+      `Cursor NOT advanced. Scope dir: ${this.scopeDir}`
+    );
+    return { success: false, newFiles: 0, path: 'failed' };
   }
 }
 
 /**
- * Time range manager with overlap to prevent gaps
+ * Time range manager with overlap to prevent gaps.
+ *
+ * FIX #6: getNextRange now returns both the effective (overlapped) start and
+ * the non-overlapped nominal start. Callers must pass the nominal start to
+ * advance() — not the overlapped start — so consecutive ranges don't drift
+ * and double-count the overlap window.
  */
 export class TimeRangeManager {
   constructor(minTime, maxTime, overlapMs = OVERLAP_MS) {
@@ -269,7 +275,13 @@ export class TimeRangeManager {
   }
 
   /**
-   * Get next time range to fetch with overlap
+   * Get next time range to fetch with overlap.
+   *
+   * Returns:
+   *   before          - upper bound for the API query (ISO string)
+   *   atOrAfter       - effective lower bound including overlap (ISO string) — pass to the API
+   *   nominalStart    - lower bound WITHOUT overlap (ISO string) — pass to advance()
+   *   rangeMs         - size of the effective fetch window in milliseconds
    */
   getNextRange(stepMs) {
     if (this.currentBefore <= this.minTime) {
@@ -277,37 +289,40 @@ export class TimeRangeManager {
     }
 
     const rangeEnd = this.currentBefore;
-    const rangeStart = Math.max(this.minTime, this.currentBefore - stepMs);
-
-    // Add overlap to catch boundary cases
-    const effectiveStart = Math.max(this.minTime, rangeStart - this.overlapMs);
+    // FIX #6: Track the nominal (non-overlapped) start separately from the
+    // effective (overlapped) start so advance() receives the right boundary.
+    const nominalStart = Math.max(this.minTime, this.currentBefore - stepMs);
+    const effectiveStart = Math.max(this.minTime, nominalStart - this.overlapMs);
 
     return {
       before: new Date(rangeEnd).toISOString(),
-      atOrAfter: new Date(effectiveStart).toISOString(),
+      atOrAfter: new Date(effectiveStart).toISOString(),      // pass to API
+      nominalStart: new Date(nominalStart).toISOString(),     // pass to advance()
       rangeMs: rangeEnd - effectiveStart,
     };
   }
 
   /**
-   * Advance after confirmed processing
+   * Advance after confirmed processing.
+   *
+   * FIX #6: Callers should pass range.nominalStart (not range.atOrAfter) so
+   * the overlap window is not subtracted twice on consecutive calls.
    */
-  advance(oldestProcessedTime) {
-    const oldestMs = new Date(oldestProcessedTime).getTime();
-    
-    // Only advance to oldest processed, not beyond
-    if (oldestMs < this.currentBefore) {
+  advance(nominalStartTime) {
+    const nominalMs = new Date(nominalStartTime).getTime();
+
+    if (nominalMs < this.currentBefore) {
       this.processedRanges.push({
-        from: oldestMs,
+        from: nominalMs,
         to: this.currentBefore,
         processedAt: new Date().toISOString(),
       });
-      this.currentBefore = oldestMs;
+      this.currentBefore = nominalMs;
     }
   }
 
   /**
-   * Get progress percentage
+   * Get progress percentage.
    */
   getProgress() {
     const totalRange = this.maxTime - this.minTime;
@@ -317,7 +332,7 @@ export class TimeRangeManager {
   }
 
   /**
-   * Check for gaps in processed ranges
+   * Check for gaps in processed ranges.
    */
   detectGaps(thresholdMs = 60000) {
     const gaps = [];
@@ -342,7 +357,10 @@ export class TimeRangeManager {
 }
 
 /**
- * Deduplication tracker - accepts duplicates during fetch, tracks for stats
+ * Deduplication tracker - accepts duplicates during fetch, tracks for stats.
+ *
+ * FIX #5: reset() now guards against divide-by-zero when no records have
+ * been processed, returning 0 instead of NaN for dedupRate.
  */
 export class DedupTracker {
   constructor() {
@@ -352,15 +370,15 @@ export class DedupTracker {
   }
 
   /**
-   * Track and deduplicate transactions
-   * Returns only unique transactions
+   * Track and deduplicate transactions.
+   * Returns only unique transactions.
    */
   deduplicate(transactions) {
     const unique = [];
 
     for (const tx of transactions) {
       const updateId = tx.update_id || tx.transaction?.update_id || tx.reassignment?.update_id;
-      
+
       if (!updateId) {
         // No ID - accept it (can dedupe later)
         unique.push(tx);
@@ -382,13 +400,17 @@ export class DedupTracker {
   }
 
   /**
-   * Clear tracker to free memory (call periodically)
+   * Clear tracker to free memory (call periodically).
+   *
+   * FIX #5: Guard against divide-by-zero — dedupRate is 0 when no records seen.
    */
   reset() {
+    const total = this.uniqueCount + this.duplicateCount;
     const stats = {
       uniqueCount: this.uniqueCount,
       duplicateCount: this.duplicateCount,
-      dedupRate: this.duplicateCount / (this.uniqueCount + this.duplicateCount) * 100,
+      // FIX #5: total === 0 when called before any records — return 0 not NaN
+      dedupRate: total > 0 ? (this.duplicateCount / total) * 100 : 0,
     };
     this.seenUpdateIds.clear();
     this.duplicateCount = 0;
@@ -406,34 +428,50 @@ export class DedupTracker {
 }
 
 /**
- * Empty response handler - Progressive step-back for gaps
- * 
- * Strategy: Start with 1ms, then progressively increase step size
- * after many consecutive empties (likely a migration gap).
- * This balances safety with efficiency.
+ * Empty response handler - Progressive step-back for gaps.
+ *
+ * Strategy: Start with 1ms, then progressively increase step size after many
+ * consecutive empties (likely a migration gap). This balances safety with
+ * efficiency for sparse historical data.
+ *
+ * FIX #7: Step tiers are now a constructor parameter with the original values
+ * as defaults, so callers can tune thresholds per-dataset without editing
+ * this class. stepBackMs and maxEmpty were already parameterized; tiers now
+ * follow the same pattern.
  */
 export class EmptyResponseHandler {
-  constructor(stepBackMs = STEP_BACK_MS, maxEmpty = MAX_EMPTY_BEFORE_STEP) {
+  /**
+   * @param {number} stepBackMs   - Base step size for the first tier (default: 1ms)
+   * @param {number} maxEmpty     - Legacy threshold kept for compatibility
+   * @param {Array}  stepTiers    - Override the progressive step tier table.
+   *   Each entry: { threshold: number, stepMs: number }
+   *   threshold = consecutive empty count at which this step size activates.
+   *   Entries are evaluated in order; last matching threshold wins.
+   */
+  constructor(
+    stepBackMs = STEP_BACK_MS,
+    maxEmpty = MAX_EMPTY_BEFORE_STEP,
+    stepTiers = null,
+  ) {
     this.baseStepMs = stepBackMs;
     this.maxEmpty = maxEmpty;
     this.consecutiveEmpty = 0;
     this.totalEmpty = 0;
-    
-    // Progressive step-back thresholds
-    // After N consecutive empties, use larger step
-    this.stepTiers = [
-      { threshold: 0, stepMs: 1 },           // Start: 1ms
-      { threshold: 100, stepMs: 100 },       // After 100: 100ms
-      { threshold: 200, stepMs: 1000 },      // After 200: 1 second
-      { threshold: 500, stepMs: 10000 },     // After 500: 10 seconds
-      { threshold: 1000, stepMs: 60000 },    // After 1000: 1 minute
-      { threshold: 2000, stepMs: 300000 },   // After 2000: 5 minutes
-      { threshold: 5000, stepMs: 3600000 },  // After 5000: 1 hour
+
+    // FIX #7: Accept custom tiers or fall back to well-calibrated defaults
+    this.stepTiers = stepTiers ?? [
+      { threshold: 0,    stepMs: 1        }, // Start: 1ms
+      { threshold: 100,  stepMs: 100      }, // After 100:  100ms
+      { threshold: 200,  stepMs: 1_000    }, // After 200:  1 second
+      { threshold: 500,  stepMs: 10_000   }, // After 500:  10 seconds
+      { threshold: 1000, stepMs: 60_000   }, // After 1000: 1 minute
+      { threshold: 2000, stepMs: 300_000  }, // After 2000: 5 minutes
+      { threshold: 5000, stepMs: 3_600_000}, // After 5000: 1 hour
     ];
   }
 
   /**
-   * Get current step size based on consecutive empties
+   * Get current step size based on consecutive empties.
    */
   _getCurrentStep() {
     let stepMs = this.baseStepMs;
@@ -446,7 +484,7 @@ export class EmptyResponseHandler {
   }
 
   /**
-   * Handle empty API response
+   * Handle empty API response.
    * Returns: { action: 'continue' | 'done', newBefore: string | null }
    */
   handleEmpty(currentBefore, lowerBound) {
@@ -456,12 +494,10 @@ export class EmptyResponseHandler {
     const currentMs = new Date(currentBefore).getTime();
     const lowerMs = new Date(lowerBound).getTime();
 
-    // Get progressive step size
     const stepMs = this._getCurrentStep();
     const newMs = currentMs - stepMs;
 
     if (newMs <= lowerMs) {
-      // We've reached the lower bound
       return { action: 'done', newBefore: null };
     }
 
@@ -478,8 +514,8 @@ export class EmptyResponseHandler {
       console.log(`   ⚠️ ${this.consecutiveEmpty} consecutive empties - stepping back ${stepMs / 1000}s at a time`);
     }
 
-    return { 
-      action: 'continue', 
+    return {
+      action: 'continue',
       newBefore: new Date(newMs).toISOString(),
       consecutiveEmpty: this.consecutiveEmpty,
       stepMs,
@@ -487,7 +523,7 @@ export class EmptyResponseHandler {
   }
 
   /**
-   * Reset counter on successful data
+   * Reset counter on successful data.
    */
   resetOnData() {
     const wasEmpty = this.consecutiveEmpty;
@@ -508,49 +544,77 @@ export class EmptyResponseHandler {
 }
 
 /**
- * Batch integrity tracker
+ * Batch integrity tracker.
+ *
+ * FIX #8: this.batches no longer grows without bound. A rolling window of the
+ * last MAX_BATCH_HISTORY entries is kept for diagnostics (first/last batch
+ * access, gap detection). Aggregate totals are always exact regardless of
+ * how many batches have been processed.
  */
 export class BatchIntegrityTracker {
-  constructor() {
-    this.batches = [];
+  /**
+   * @param {number} maxHistory - Max number of individual batch records to
+   *   retain in memory (default: 1000). Oldest entries are evicted once this
+   *   limit is reached. Aggregate totals are always maintained separately and
+   *   are not affected by eviction.
+   */
+  constructor(maxHistory = 1000) {
+    this.maxHistory = maxHistory;
+    this.batches = [];          // Rolling window — capped at maxHistory
+    this.totalBatchCount = 0;  // True total, unaffected by eviction
     this.totalUpdates = 0;
     this.totalEvents = 0;
+    this._firstBatch = null;   // Preserved on eviction so getSummary() stays accurate
   }
 
   recordBatch(batchId, updates, events, timeRange) {
-    this.batches.push({
+    const entry = {
       id: batchId,
       updates,
       events,
       timeRange,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Preserve first batch before it could be evicted
+    if (this.totalBatchCount === 0) {
+      this._firstBatch = entry;
+    }
+
+    this.batches.push(entry);
+    this.totalBatchCount++;
     this.totalUpdates += updates;
     this.totalEvents += events;
+
+    // FIX #8: Evict oldest entry once the rolling window is full
+    if (this.batches.length > this.maxHistory) {
+      this.batches.shift();
+    }
   }
 
   /**
-   * Verify totals match expectations
+   * Verify totals match expectations.
    */
   verify(expectedUpdates, expectedEvents) {
     return {
       match: this.totalUpdates === expectedUpdates && this.totalEvents === expectedEvents,
       expected: { updates: expectedUpdates, events: expectedEvents },
-      actual: { updates: this.totalUpdates, events: this.totalEvents },
+      actual:   { updates: this.totalUpdates,   events: this.totalEvents },
       difference: {
         updates: this.totalUpdates - expectedUpdates,
-        events: this.totalEvents - expectedEvents,
+        events:  this.totalEvents  - expectedEvents,
       },
     };
   }
 
   getSummary() {
     return {
-      batchCount: this.batches.length,
+      batchCount: this.totalBatchCount,
+      retainedBatches: this.batches.length,
       totalUpdates: this.totalUpdates,
       totalEvents: this.totalEvents,
-      firstBatch: this.batches[0],
-      lastBatch: this.batches[this.batches.length - 1],
+      firstBatch: this._firstBatch,
+      lastBatch: this.batches[this.batches.length - 1] ?? null,
     };
   }
 }
