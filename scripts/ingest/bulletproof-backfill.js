@@ -12,7 +12,8 @@
  * This module exports hardened versions of the fetch functions.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, readdirSync } from 'fs';
+import { atomicWriteFile } from './atomic-cursor.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -124,7 +125,7 @@ export class IntegrityCursor {
         complete: false,
       };
 
-      writeFileSync(this.cursorPath, JSON.stringify(cursorData, null, 2));
+      atomicWriteFile(this.cursorPath, cursorData);
     } catch (err) {
       console.error(`[IntegrityCursor] CRITICAL: Failed to save cursor: ${err.message}`);
       throw err; // This is critical - must not continue
@@ -157,7 +158,7 @@ export class IntegrityCursor {
       complete: true,
     };
 
-    writeFileSync(this.cursorPath, JSON.stringify(cursorData, null, 2));
+    atomicWriteFile(this.cursorPath, cursorData);
     console.log(`[IntegrityCursor] ✅ Marked complete: ${this.confirmedUpdates} updates, ${this.confirmedEvents} events`);
   }
 }

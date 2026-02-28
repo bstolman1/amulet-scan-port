@@ -19,8 +19,32 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, unlinkSync, statSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync, statSync, appendFileSync } from 'fs';
 import path from 'path';
+
+// Dead-letter logging for failed sync uploads
+const DEAD_LETTER_DIR_SYNC = '/tmp/ledger_raw';
+const DEAD_LETTER_FILE_SYNC = path.join(DEAD_LETTER_DIR_SYNC, 'failed-uploads.jsonl');
+
+function _logToDeadLetter(localPath, gcsPath, error) {
+  try {
+    if (!existsSync(DEAD_LETTER_DIR_SYNC)) {
+      mkdirSync(DEAD_LETTER_DIR_SYNC, { recursive: true });
+    }
+    const entry = {
+      localPath,
+      gcsPath,
+      error: error || 'Unknown error',
+      timestamp: new Date().toISOString(),
+      source: 'uploadAndCleanupSync',
+      fileExists: existsSync(localPath),
+    };
+    appendFileSync(DEAD_LETTER_FILE_SYNC, JSON.stringify(entry) + '\n');
+    console.error(`📋 [dead-letter] Logged failed sync upload: ${path.basename(localPath)} → ${gcsPath}`);
+  } catch (logErr) {
+    console.error(`❌ [dead-letter] Failed to write dead-letter log: ${logErr.message}`);
+  }
+}
 
 // Constants
 const TMP_DIR = '/tmp/ledger_raw';
@@ -266,7 +290,7 @@ export function uploadAndCleanupSync(localPath, gcsPath, options = {}) {
     maxRetries = DEFAULT_MAX_RETRIES,
     baseDelay = DEFAULT_BASE_DELAY_MS,
     maxDelay = DEFAULT_MAX_DELAY_MS,
-    deleteOnFailure = true,
+    deleteOnFailure = false,
   } = options;
   
   const result = {
@@ -341,6 +365,8 @@ export function uploadAndCleanupSync(localPath, gcsPath, options = {}) {
       result.error = lastError?.message || 'Unknown error';
       uploadStats.failedUploads++;
       console.error(`❌ [gcs-upload] Final failure for ${path.basename(localPath)}: ${result.error}`);
+      // Log to dead-letter file for later retry
+      _logToDeadLetter(localPath, gcsPath, result.error);
     }
     
   } catch (err) {
@@ -348,9 +374,10 @@ export function uploadAndCleanupSync(localPath, gcsPath, options = {}) {
     result.error = err.message;
     uploadStats.failedUploads++;
     console.error(`❌ [gcs-upload] Failed to upload ${path.basename(localPath)}: ${err.message}`);
+    _logToDeadLetter(localPath, gcsPath, err.message);
     
   } finally {
-    // ALWAYS delete local file to prevent disk accumulation (unless explicitly disabled)
+    // Only delete on success, or if explicitly enabled
     if (deleteOnFailure || result.ok) {
       if (existsSync(localPath)) {
         try {
@@ -362,6 +389,8 @@ export function uploadAndCleanupSync(localPath, gcsPath, options = {}) {
           console.error(`❌ [gcs-upload] Failed to delete ${localPath}: ${deleteErr.message}`);
         }
       }
+    } else if (!result.ok && existsSync(localPath)) {
+      console.log(`📂 [gcs-upload] Keeping local file for retry: ${path.basename(localPath)}`);
     }
   }
   

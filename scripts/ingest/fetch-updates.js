@@ -33,6 +33,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { atomicWriteFile as _atomicWriteFile } from './atomic-cursor.js';
+
+// Wrapper to reuse atomic-cursor's atomicWriteFile for live cursor writes
+function atomicWriteFileForLive(filePath, data) {
+  _atomicWriteFile(filePath, data);
+}
 import dotenv from 'dotenv';
 
 // Parse command line arguments
@@ -170,6 +176,8 @@ let lastProgressTimestamp = Date.now(); // Watchdog: last time we made progress
 let stallWatchdogInterval = null; // Watchdog interval handle
 let heartbeatInterval = null; // Heartbeat interval handle
 let currentCycleId = 0; // Unique ID for each fetch cycle
+let gcsCursorBackupConsecutiveFailures = 0;
+const GCS_CURSOR_BACKUP_MAX_FAILURES = parseInt(process.env.GCS_CURSOR_BACKUP_MAX_FAILURES) || 5;
 
 // Cursor directory (same as backfill script)
 const CURSOR_DIR = getCursorDir();
@@ -270,7 +278,8 @@ function saveLiveCursorLocal(migrationId, afterRecordTime) {
     semantics: 'forward',
     restored_from: 'gcs',
   };
-  fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
+  // Use atomic write to prevent cursor corruption on ENOSPC/crash
+  atomicWriteFileForLive(LIVE_CURSOR_FILE, cursor);
 }
 
 /**
@@ -345,7 +354,8 @@ function saveLiveCursor(migrationId, afterRecordTime) {
       semantics: 'forward', // Explicit: fetch transactions AFTER this time
     };
     
-    fs.writeFileSync(LIVE_CURSOR_FILE, JSON.stringify(cursor, null, 2));
+    // Use atomic write to prevent cursor corruption on ENOSPC/crash
+    atomicWriteFileForLive(LIVE_CURSOR_FILE, cursor);
     console.log(`  ✅ Local cursor saved: ${afterRecordTime}`);
     
     // Backup cursor to GCS if enabled
@@ -388,20 +398,27 @@ function backupCursorToGCS(cursor) {
     fs.unlinkSync(tmpCursorPath);
     
     console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
+    gcsCursorBackupConsecutiveFailures = 0; // Reset on success
     log('debug', 'cursor_backed_up_to_gcs', { 
       gcsPath, 
       migration: cursor.migration_id, 
       recordTime: cursor.record_time 
     });
   } catch (err) {
-    // Non-blocking - log warning but don't fail ingestion
-    // Show stderr if available for debugging
+    gcsCursorBackupConsecutiveFailures++;
     const stderr = err.stderr?.toString?.() || '';
-    console.warn(`  ⚠️ Failed to backup cursor to GCS: ${err.message}`);
+    console.warn(`  ⚠️ Failed to backup cursor to GCS (${gcsCursorBackupConsecutiveFailures}/${GCS_CURSOR_BACKUP_MAX_FAILURES}): ${err.message}`);
     if (stderr) {
       console.warn(`     gsutil stderr: ${stderr.trim()}`);
     }
     console.warn(`     Target path: ${gcsPath}`);
+    
+    if (gcsCursorBackupConsecutiveFailures >= GCS_CURSOR_BACKUP_MAX_FAILURES) {
+      logFatal('gcs_cursor_backup_failed', new Error(
+        `GCS cursor backup failed ${gcsCursorBackupConsecutiveFailures} consecutive times. ` +
+        `Cursor is NOT being persisted to cloud.`
+      ));
+    }
   }
 }
 
@@ -957,25 +974,75 @@ async function processUpdates(items) {
   const updates = [];
   const events = [];
 
+  let quarantinedCount = 0;
+
   for (const item of items) {
     // Normalize update (handles {transaction}, {reassignment}, or already-flat)
     const update = normalizeUpdate(item);
     updates.push(update);
 
+    // Check if this is a reassignment (same logic as fetch-backfill.js:1096-1148)
+    const isReassignment = !!item.reassignment || !!item.event;
+
     // v2/updates returns a Transaction/Reassignment shape with events_by_id + root_event_ids
-    // (NOT an array at item.transaction.events)
     const u = item.transaction || item.reassignment || item;
-    const eventsById = u?.events_by_id || u?.eventsById || {};
-    const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
 
-    const flattened = flattenEventsInTreeOrder(eventsById, rootEventIds);
-    for (const ev of flattened) {
-      // Preserve raw event (includes inner created_event/exercised_event, etc.)
-      const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev, u);
-      events.push(normalizedEvent);
+    const updateInfo = {
+      record_time: u.record_time,
+      effective_at: u.effective_at,
+      synchronizer_id: u.synchronizer_id,
+      source: u.source || null,
+      target: u.target || null,
+      unassign_id: u.unassign_id || null,
+      submitter: u.submitter || null,
+      counter: u.counter ?? null,
+    };
+
+    if (isReassignment) {
+      // Handle reassignment events (ported from fetch-backfill.js decodeInMainThread)
+      const ce = item.event?.created_event || u?.created_event;
+      const ae = item.event?.archived_event || u?.archived_event;
+
+      if (ce) {
+        const ev = normalizeEvent(ce, update.update_id, migrationId, item, updateInfo);
+        ev.event_type = 'reassign_create';
+        if (ev.effective_at) {
+          events.push(ev);
+        } else {
+          quarantinedCount++;
+          console.warn(`⚠️ [quarantine] reassign_create with null effective_at: update=${update.update_id}`);
+        }
+      }
+      if (ae) {
+        const ev = normalizeEvent(ae, update.update_id, migrationId, item, updateInfo);
+        ev.event_type = 'reassign_archive';
+        if (ev.effective_at) {
+          events.push(ev);
+        } else {
+          quarantinedCount++;
+          console.warn(`⚠️ [quarantine] reassign_archive with null effective_at: update=${update.update_id}`);
+        }
+      }
+    } else {
+      // Transaction path
+      const eventsById = u?.events_by_id || u?.eventsById || {};
+      const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
+
+      const flattened = flattenEventsInTreeOrder(eventsById, rootEventIds);
+      for (const ev of flattened) {
+        const normalizedEvent = normalizeEvent(ev, update.update_id, migrationId, ev, updateInfo);
+        if (normalizedEvent.effective_at) {
+          events.push(normalizedEvent);
+        } else {
+          quarantinedCount++;
+          console.warn(`⚠️ [quarantine] Event ${normalizedEvent.event_id || 'unknown'} with null effective_at: update=${update.update_id}`);
+        }
+      }
     }
+  }
 
-    // Reassignment shape (if present) may not have events_by_id; keep 0 events in that case.
+  if (quarantinedCount > 0) {
+    console.warn(`⚠️ [quarantine] ${quarantinedCount} events quarantined (null effective_at) in this batch`);
   }
 
   // Buffer for batch writing (async)

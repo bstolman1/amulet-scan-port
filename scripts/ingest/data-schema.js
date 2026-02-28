@@ -471,8 +471,11 @@ export function getUtcPartition(effectiveAt) {
   const day = d.getUTCDate();          // 1-31, no padding for INT64 inference
 
   // Safety guard: reject impossible values (catches corrupt timestamps)
-  if (year < 2020 || year > 2030) {
-    throw new Error(`getUtcPartition: year ${year} out of range [2020-2030] from "${effectiveAt}" — likely microsecond timestamp`);
+  // Configurable via PARTITION_YEAR_MIN / PARTITION_YEAR_MAX environment variables
+  const yearMin = parseInt(process.env.PARTITION_YEAR_MIN) || 2020;
+  const yearMax = parseInt(process.env.PARTITION_YEAR_MAX) || 2035;
+  if (year < yearMin || year > yearMax) {
+    throw new Error(`getUtcPartition: year ${year} out of range [${yearMin}-${yearMax}] from "${effectiveAt}" — likely microsecond timestamp`);
   }
   if (month < 1 || month > 12) {
     throw new Error(`getUtcPartition: month ${month} out of range [1-12] from "${effectiveAt}"`);
