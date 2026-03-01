@@ -593,10 +593,16 @@ export async function bufferEvents(events) {
 /**
  * Flush updates buffer to Parquet — all partitions written in parallel.
  *
- * FIX #5: Records are restored to the buffer on partial failure.
+ * FIX #5 (original): Records are restored to the buffer on partial failure.
  *   Previously `updatesBuffer = []` ran before Promise.all resolved, so any
- *   throw from a write left those records permanently lost. On failure the
- *   original rows are now prepended back: `updatesBuffer = [...rowsToWrite, ...updatesBuffer]`.
+ *   throw from a write left those records permanently lost.
+ *
+ * FIX #6 (new): Partial partition failure no longer re-queues already-written records.
+ *   Promise.all rejects on the FIRST failure but other partition writes may have
+ *   already completed. Re-queuing ALL rowsToWrite caused those completed partitions
+ *   to be written a second time on the next flush — silent duplication.
+ *   Now uses Promise.allSettled with per-partition outcome tracking: only the
+ *   records from genuinely-failed partitions are restored to the buffer.
  */
 export async function flushUpdates() {
   if (updatesBuffer.length === 0) return null;
@@ -606,14 +612,11 @@ export async function flushUpdates() {
   const rowsToWrite = updatesBuffer;
   updatesBuffer = [];
 
-  const groups = groupByPartition(rowsToWrite, 'updates', currentDataSource, currentMigrationId);
+  const groups      = groupByPartition(rowsToWrite, 'updates', currentDataSource, currentMigrationId);
+  const partitions  = Object.entries(groups);
 
-  // FIX #10 (audit fix #6): Use Promise.allSettled to track per-partition
-  // success. Only re-queue records from partitions that actually failed.
-  // Previously Promise.all + full rowsToWrite restore caused already-written
-  // partitions to be re-queued and written again as duplicates.
-  const partitionEntries = Object.entries(groups);
-  const writePromises = partitionEntries.map(([partition, records]) => {
+  // FIX #6: tag each write with its source records so we can restore selectively
+  const tagged = partitions.map(([partition, records]) => {
     const partitionDir = join(getDataDir(), partition);
     ensureDir(partitionDir);
     const fileName = generateFileName('updates');
@@ -623,33 +626,36 @@ export async function flushUpdates() {
       ? writeToParquetCLI(records, filePath, 'updates', partition, fileName)
       : writeToParquetPool(records, filePath, 'updates', partition, fileName);
 
-    return doWrite.then(result => {
-      totalUpdatesWritten       += records.length;
-      rowsTuneState.filesWritten++;
-      rowsTuneState.rowsWritten += records.length;
-      return result;
-    });
+    return { records, promise: doWrite };
   });
 
-  const settled = await Promise.allSettled(writePromises);
-  const results = [];
-  const failedRecords = [];
+  // FIX #6: allSettled — every partition resolves independently
+  const outcomes = await Promise.allSettled(tagged.map(t => t.promise));
 
-  for (let i = 0; i < settled.length; i++) {
-    if (settled[i].status === 'fulfilled' && settled[i].value) {
-      results.push(settled[i].value);
-    } else if (settled[i].status === 'rejected') {
-      // Only re-queue records from this specific failed partition
-      const [, records] = partitionEntries[i];
-      failedRecords.push(...records);
-      console.error(`[flushUpdates] Partition write failed: ${settled[i].reason?.message || settled[i].reason}`);
+  const results   = [];
+  const failed    = [];
+  let firstError  = null;
+
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    if (outcome.status === 'fulfilled') {
+      if (outcome.value) {
+        results.push(outcome.value);
+        totalUpdatesWritten       += tagged[i].records.length;
+        rowsTuneState.filesWritten++;
+        rowsTuneState.rowsWritten += tagged[i].records.length;
+      }
+    } else {
+      // FIX #6: only re-queue records from this specific failed partition
+      failed.push(...tagged[i].records);
+      firstError = firstError || outcome.reason;
     }
   }
 
-  if (failedRecords.length > 0) {
-    // FIX #5 + FIX #10: Only restore records from failed partitions
-    updatesBuffer = [...failedRecords, ...updatesBuffer];
-    throw settled.find(s => s.status === 'rejected').reason;
+  if (failed.length > 0) {
+    // Prepend so failed records are retried on the next flush or shutdown
+    updatesBuffer = [...failed, ...updatesBuffer];
+    throw firstError;
   }
 
   return results.length === 1 ? results[0] : results;
@@ -658,7 +664,10 @@ export async function flushUpdates() {
 /**
  * Flush events buffer to Parquet — all partitions written in parallel.
  *
- * FIX #5: Same buffer-restore-on-failure fix as flushUpdates.
+ * FIX #5 (original): Records are restored to the buffer on partial failure.
+ *
+ * FIX #6 (new): Partial partition failure no longer re-queues already-written records.
+ *   Same fix as flushUpdates — see that function for full explanation.
  */
 export async function flushEvents() {
   if (eventsBuffer.length === 0) return null;
@@ -666,11 +675,10 @@ export async function flushEvents() {
   const rowsToWrite = eventsBuffer;
   eventsBuffer = [];
 
-  const groups = groupByPartition(rowsToWrite, 'events', currentDataSource, currentMigrationId);
+  const groups     = groupByPartition(rowsToWrite, 'events', currentDataSource, currentMigrationId);
+  const partitions = Object.entries(groups);
 
-  // FIX #10 (audit fix #6): Same per-partition tracking as flushUpdates.
-  const partitionEntries = Object.entries(groups);
-  const writePromises = partitionEntries.map(([partition, records]) => {
+  const tagged = partitions.map(([partition, records]) => {
     const partitionDir = join(getDataDir(), partition);
     ensureDir(partitionDir);
     const fileName = generateFileName('events');
@@ -680,31 +688,32 @@ export async function flushEvents() {
       ? writeToParquetCLI(records, filePath, 'events', partition, fileName)
       : writeToParquetPool(records, filePath, 'events', partition, fileName);
 
-    return doWrite.then(result => {
-      totalEventsWritten        += records.length;
-      rowsTuneState.filesWritten++;
-      rowsTuneState.rowsWritten += records.length;
-      return result;
-    });
+    return { records, promise: doWrite };
   });
 
-  const settled = await Promise.allSettled(writePromises);
-  const results = [];
-  const failedRecords = [];
+  const outcomes  = await Promise.allSettled(tagged.map(t => t.promise));
+  const results   = [];
+  const failed    = [];
+  let firstError  = null;
 
-  for (let i = 0; i < settled.length; i++) {
-    if (settled[i].status === 'fulfilled' && settled[i].value) {
-      results.push(settled[i].value);
-    } else if (settled[i].status === 'rejected') {
-      const [, records] = partitionEntries[i];
-      failedRecords.push(...records);
-      console.error(`[flushEvents] Partition write failed: ${settled[i].reason?.message || settled[i].reason}`);
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    if (outcome.status === 'fulfilled') {
+      if (outcome.value) {
+        results.push(outcome.value);
+        totalEventsWritten        += tagged[i].records.length;
+        rowsTuneState.filesWritten++;
+        rowsTuneState.rowsWritten += tagged[i].records.length;
+      }
+    } else {
+      failed.push(...tagged[i].records);
+      firstError = firstError || outcome.reason;
     }
   }
 
-  if (failedRecords.length > 0) {
-    eventsBuffer = [...failedRecords, ...eventsBuffer];
-    throw settled.find(s => s.status === 'rejected').reason;
+  if (failed.length > 0) {
+    eventsBuffer = [...failed, ...eventsBuffer];
+    throw firstError;
   }
 
   return results.length === 1 ? results[0] : results;
