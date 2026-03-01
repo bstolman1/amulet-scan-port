@@ -19,9 +19,13 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkS
 import { join, dirname } from 'path';
 
 // Configuration - cross-platform path handling
+// FIX: getCursorDir()/getBaseDataDir() must NOT be called at module scope.
+// ES module imports are hoisted above dotenv.config(), so process.env.CURSOR_DIR
+// is not yet set when this module first loads. Use lazy getters instead.
 import { getBaseDataDir, getCursorDir } from './path-utils.js';
-const BASE_DATA_DIR = getBaseDataDir();
-const CURSOR_DIR = getCursorDir();
+
+function _cursorDir() { return getCursorDir(); }
+function _baseDataDir() { return getBaseDataDir(); }
 
 /**
  * Sanitize string for filename
@@ -35,7 +39,7 @@ function sanitize(str) {
  */
 export function getCursorPath(migrationId, synchronizerId, shardIndex = null) {
   const shardSuffix = shardIndex !== null ? `-shard${shardIndex}` : '';
-  return join(CURSOR_DIR, `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
+  return join(_cursorDir(), `cursor-${migrationId}-${sanitize(synchronizerId)}${shardSuffix}.json`);
 }
 
 /**
@@ -631,5 +635,5 @@ export default {
   isCursorComplete,
   atomicWriteFile,
   getCursorPath,
-  CURSOR_DIR,
+  get CURSOR_DIR() { return _cursorDir(); },
 };
