@@ -120,22 +120,19 @@ import * as parquetWriter from './write-parquet.js';
 import * as binaryWriter  from './write-binary.js';
 
 // ─── Unified writer helpers ────────────────────────────────────────────────
-// FIX #15 (audit fix #7): Run binary and parquet writes independently.
-// Previously a binary write error would prevent the parquet write from running.
-// Now both writes proceed via Promise.allSettled; errors from either are
-// collected and re-thrown after both have had a chance to complete.
+// FIX: Run binary and Parquet writers concurrently and independently.
+// Previously USE_BINARY ran first with `await`; a binary failure silently
+// dropped the Parquet write for that batch. Now both fire in parallel via
+// Promise.allSettled so each runs regardless of the other's outcome.
+// The first error (if any) is re-thrown so the caller sees failures.
 async function bufferUpdates(updates) {
   const tasks = [];
   if (USE_BINARY)  tasks.push(binaryWriter.bufferUpdates(updates));
   if (USE_PARQUET) tasks.push(parquetWriter.bufferUpdates(updates));
   if (tasks.length === 0) return;
   const results = await Promise.allSettled(tasks);
-  const errors = results.filter(r => r.status === 'rejected');
-  if (errors.length > 0) {
-    console.error(`[bufferUpdates] ${errors.length} writer(s) failed:`);
-    for (const e of errors) console.error(`  ${e.reason?.message || e.reason}`);
-    throw errors[0].reason;
-  }
+  const errs = results.filter(r => r.status === 'rejected').map(r => r.reason);
+  if (errs.length > 0) throw errs[0];
 }
 
 async function bufferEvents(events) {
@@ -144,12 +141,8 @@ async function bufferEvents(events) {
   if (USE_PARQUET) tasks.push(parquetWriter.bufferEvents(events));
   if (tasks.length === 0) return;
   const results = await Promise.allSettled(tasks);
-  const errors = results.filter(r => r.status === 'rejected');
-  if (errors.length > 0) {
-    console.error(`[bufferEvents] ${errors.length} writer(s) failed:`);
-    for (const e of errors) console.error(`  ${e.reason?.message || e.reason}`);
-    throw errors[0].reason;
-  }
+  const errs = results.filter(r => r.status === 'rejected').map(r => r.reason);
+  if (errs.length > 0) throw errs[0];
 }
 
 async function flushAll() {
@@ -801,25 +794,20 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
       apiLatencyMs: fetchLatencyMs,
     });
 
-    // FIX #13 (audit fix #2): Use max(record_time) across all transactions,
-    // not just the last array element. If the API returns transactions ordered
-    // by offset rather than record_time, the last element may not have the
-    // highest record_time — causing the cursor to undershoot or overshoot.
-    let maxRecordTime = null;
-    let maxMigrationId = null;
-    for (const tx of transactions) {
-      if (tx.record_time && (!maxRecordTime || tx.record_time > maxRecordTime)) {
-        maxRecordTime = tx.record_time;
-      }
-      if (tx.migration_id !== undefined) {
-        maxMigrationId = tx.migration_id;
-      }
-    }
-
     return {
       items:           transactions,
-      lastMigrationId: maxMigrationId,
-      lastRecordTime:  maxRecordTime,
+      lastMigrationId: transactions.length > 0 ? transactions[transactions.length - 1].migration_id : null,
+      // FIX #2: Use the MAX record_time across the entire batch, not the last element's.
+      // If the API returns transactions in an order where the last item does not have
+      // the highest record_time, advancing the cursor to transactions[last].record_time
+      // could set it lower than some items already returned — causing re-fetches of
+      // already-seen data (harmless via dedup) or, in the opposite case, skipping
+      // transactions at a record_time that the cursor overshoots.
+      lastRecordTime: transactions.length > 0
+        ? transactions.reduce((max, tx) =>
+            tx.record_time > max ? tx.record_time : max,
+            transactions[0].record_time)
+        : null,
     };
   } catch (err) {
     if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
@@ -1230,34 +1218,35 @@ async function runIngestion() {
       }
 
       const processResult = await withTimeout(processUpdates(data.items), 60_000, 'processUpdates');
-      const { updates, events, errors: batchErrors } = processResult;
-
-      // FIX #14 (audit fix #1): If any transactions failed to decode, do NOT
-      // advance the cursor past them. Log a fatal-level warning and halt the
-      // batch so the operator can investigate. Partial results are still written
-      // but the cursor stays at the pre-batch position.
-      if (batchErrors > 0) {
-        log('error', 'cursor_hold_on_errors', {
-          errorCount: batchErrors,
-          totalInBatch: data.items.length,
-          cursor: afterRecordTime,
-          migration: afterMigrationId,
-        });
-        console.error(
-          `🔴 ${batchErrors} transaction(s) failed to decode. ` +
-          `Cursor NOT advanced to prevent data loss. ` +
-          `Fix the malformed transactions or skip them explicitly.`
-        );
-        // Still count the successful ones
-        totalUpdates += updates;
-        totalEvents  += events;
-        // Do NOT advance cursor — re-fetch will include the failed txs
-        await sleep(10000, 'decode_error_hold');
-        continue;
-      }
-
+      const { updates, events, errors: decodeErrors } = processResult;
       totalUpdates += updates;
       totalEvents  += events;
+
+      // FIX #1: Decode failures must be visible and must gate cursor advancement.
+      // Previously errors[] was returned from processUpdates but destructured
+      // without checking — the cursor advanced unconditionally, permanently
+      // skipping any tx that failed to decode.
+      // Now: if decodeErrors > 0, log prominently and DO NOT advance the cursor.
+      // The batch's records are still written (the successful subset), but the
+      // cursor stays at its current position so the failed txs are re-attempted
+      // on the next poll. If the same txs keep failing, this will stall — which
+      // is intentional: a persistent decode error requires operator intervention,
+      // not silent data loss.
+      if (decodeErrors > 0) {
+        log('error', 'decode_failures_block_cursor', {
+          decodeErrors,
+          batchSize: data.items.length,
+          cursorHeld: afterRecordTime,
+          migration:  afterMigrationId,
+          message:    'Cursor NOT advanced — fix decode errors or they will repeat',
+        });
+        console.error(
+          `❌ [fetch-updates] ${decodeErrors} tx(s) failed to decode in this batch. ` +
+          `Cursor held at ${afterRecordTime}. Resolve errors to proceed.`
+        );
+        // Skip cursor advancement for this batch — outer loop will re-poll same position
+        continue;
+      }
 
       const cursorBefore = afterRecordTime;
       if (data.lastMigrationId !== null) afterMigrationId = data.lastMigrationId;
