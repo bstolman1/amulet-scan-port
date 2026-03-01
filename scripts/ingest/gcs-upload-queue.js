@@ -1,9 +1,9 @@
 /**
  * GCS Upload Queue - Background Async Upload Manager (SDK Version)
- * 
+ *
  * Uses @google-cloud/storage SDK for uploads instead of spawning gsutil processes.
  * This gives connection pooling, HTTP/2 multiplexing, and eliminates process spawn overhead.
- * 
+ *
  * Key Features:
  * - Non-blocking: write operations return immediately after queuing
  * - Parallel uploads: configurable concurrent upload limit
@@ -11,7 +11,7 @@
  * - Graceful shutdown: drains queue before exit
  * - Progress tracking: real-time stats on throughput
  * - SDK-based: no child process spawning, CRC32C integrity checks built-in
- * 
+ *
  * Usage:
  *   const queue = getUploadQueue();
  *   queue.enqueue(localPath, gcsPath);  // Returns immediately
@@ -23,7 +23,7 @@ import path from 'path';
 
 // Lazy-load the GCS SDK to avoid import-time errors if not installed
 let _storage = null;
-let _bucket = null;
+let _bucket  = null;
 
 async function getStorageClient() {
   if (_storage) return _storage;
@@ -32,7 +32,9 @@ async function getStorageClient() {
     _storage = new Storage();
     return _storage;
   } catch (err) {
-    throw new Error(`@google-cloud/storage not installed. Run: npm install @google-cloud/storage\n${err.message}`);
+    throw new Error(
+      `@google-cloud/storage not installed. Run: npm install @google-cloud/storage\n${err.message}`
+    );
   }
 }
 
@@ -45,20 +47,21 @@ async function getBucket() {
   return _bucket;
 }
 
-// LAZY env var reading - called at queue creation time, not module load time
+// LAZY env var reading — called at queue creation time, not module load time.
+// This means env vars set before the first getUploadQueue() call take effect.
 function getConfigFromEnv() {
   return {
-    maxConcurrent: parseInt(process.env.GCS_UPLOAD_CONCURRENCY) || 8,
-    queueHighWater: parseInt(process.env.GCS_QUEUE_HIGH_WATER) || 100,
-    queueLowWater: parseInt(process.env.GCS_QUEUE_LOW_WATER) || 20,
-    maxRetries: parseInt(process.env.GCS_MAX_RETRIES) || 3,
-    baseDelayMs: parseInt(process.env.GCS_RETRY_BASE_DELAY_MS) || 1000,
-    byteHighWater: parseInt(process.env.GCS_BYTE_HIGH_WATER) || 512 * 1024 * 1024,
-    byteLowWater: parseInt(process.env.GCS_BYTE_LOW_WATER) || 128 * 1024 * 1024,
+    maxConcurrent:  parseInt(process.env.GCS_UPLOAD_CONCURRENCY)    || 8,
+    queueHighWater: parseInt(process.env.GCS_QUEUE_HIGH_WATER)       || 100,
+    queueLowWater:  parseInt(process.env.GCS_QUEUE_LOW_WATER)        || 20,
+    maxRetries:     parseInt(process.env.GCS_MAX_RETRIES)             || 3,
+    baseDelayMs:    parseInt(process.env.GCS_RETRY_BASE_DELAY_MS)     || 1000,
+    byteHighWater:  parseInt(process.env.GCS_BYTE_HIGH_WATER)         || 512 * 1024 * 1024,
+    byteLowWater:   parseInt(process.env.GCS_BYTE_LOW_WATER)          || 128 * 1024 * 1024,
   };
 }
 
-// Transient error patterns
+// Transient error patterns — retried with exponential backoff
 const TRANSIENT_ERROR_PATTERNS = [
   /timeout/i, /timed out/i, /connection reset/i, /connection refused/i,
   /network unreachable/i, /temporary failure/i, /service unavailable/i,
@@ -81,20 +84,32 @@ function calculateBackoffDelay(attempt, baseDelay = 1000) {
   return Math.min(exponentialDelay + jitter, 30000);
 }
 
-// Dead-letter log directory
-const DEAD_LETTER_DIR = '/tmp/ledger_raw';
+// Dead-letter log: uploads that exhausted all retries are recorded here so
+// they can be replayed by a separate recovery script (retry-failed-uploads.js).
+// The directory is hardcoded to /tmp/ledger_raw because this module is only
+// active in GCS mode where /tmp/ledger_raw is the established scratch space.
+// If that path changes, update DEAD_LETTER_DIR to match.
+const DEAD_LETTER_DIR  = '/tmp/ledger_raw';
 const DEAD_LETTER_FILE = path.join(DEAD_LETTER_DIR, 'failed-uploads.jsonl');
 
-export function logFailedUpload(localPath, gcsPath, error, keepFile = true) {
+/**
+ * Append a failed-upload record to the dead-letter log.
+ *
+ * FIX: removed the unused `keepFile` parameter. It was declared (keepFile = true)
+ * but never referenced inside the function body — the function always logs the
+ * failure regardless of its value and never touches the local file. The parameter
+ * was misleading: callers might assume it controlled whether the file was deleted,
+ * but it had no effect. Removing it makes the contract clear: this function only
+ * appends to the dead-letter log; the caller decides what to do with the file.
+ */
+export function logFailedUpload(localPath, gcsPath, error) {
   try {
-    if (!existsSync(DEAD_LETTER_DIR)) {
-      mkdirSync(DEAD_LETTER_DIR, { recursive: true });
-    }
+    if (!existsSync(DEAD_LETTER_DIR)) mkdirSync(DEAD_LETTER_DIR, { recursive: true });
     const entry = {
       localPath,
       gcsPath,
-      error: error || 'Unknown error',
-      timestamp: new Date().toISOString(),
+      error:      error || 'Unknown error',
+      timestamp:  new Date().toISOString(),
       fileExists: existsSync(localPath),
     };
     appendFileSync(DEAD_LETTER_FILE, JSON.stringify(entry) + '\n');
@@ -110,44 +125,30 @@ export function getDeadLetterPath() {
 
 /**
  * Upload a file to GCS using the SDK with streaming.
- * SDK handles CRC32C integrity automatically.
+ * The SDK handles CRC32C integrity verification automatically.
  */
 async function sdkUpload(localPath, gcsPath, timeout = 300000) {
   const bucket = await getBucket();
-  
-  // Parse gcsPath: gs://bucket/path → path
+
+  // Parse gcsPath: gs://bucket-name/some/object → some/object
   const objectName = gcsPath.replace(/^gs:\/\/[^/]+\//, '');
-  
   const file = bucket.file(objectName);
-  
+
   await new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       reject(new Error(`Upload timed out after ${timeout}ms`));
     }, timeout);
 
-    const readStream = createReadStream(localPath);
+    const readStream  = createReadStream(localPath);
     const writeStream = file.createWriteStream({
-      resumable: false, // Small files don't need resumable uploads
-      validation: 'crc32c', // SDK validates integrity automatically
-      metadata: {
-        contentType: 'application/octet-stream',
-      },
+      resumable:   false,        // small files don't need resumable uploads
+      validation:  'crc32c',     // SDK validates integrity automatically
+      metadata:    { contentType: 'application/octet-stream' },
     });
 
-    readStream.on('error', (err) => {
-      clearTimeout(timeoutId);
-      reject(err);
-    });
-
-    writeStream.on('error', (err) => {
-      clearTimeout(timeoutId);
-      reject(err);
-    });
-
-    writeStream.on('finish', () => {
-      clearTimeout(timeoutId);
-      resolve();
-    });
+    readStream.on('error',  (err) => { clearTimeout(timeoutId); reject(err); });
+    writeStream.on('error', (err) => { clearTimeout(timeoutId); reject(err); });
+    writeStream.on('finish', ()   => { clearTimeout(timeoutId); resolve();   });
 
     readStream.pipe(writeStream);
   });
@@ -156,36 +157,41 @@ async function sdkUpload(localPath, gcsPath, timeout = 300000) {
 class GCSUploadQueue {
   constructor(maxConcurrent) {
     const config = getConfigFromEnv();
-    this.maxConcurrent = maxConcurrent || config.maxConcurrent;
+    this.maxConcurrent  = maxConcurrent || config.maxConcurrent;
     this.queueHighWater = config.queueHighWater;
-    this.queueLowWater = config.queueLowWater;
-    this.maxRetries = config.maxRetries;
-    this.baseDelayMs = config.baseDelayMs;
-    this.byteHighWater = config.byteHighWater;
-    this.byteLowWater = config.byteLowWater;
-    this.queue = [];
+    this.queueLowWater  = config.queueLowWater;
+    this.maxRetries     = config.maxRetries;
+    this.baseDelayMs    = config.baseDelayMs;
+    this.byteHighWater  = config.byteHighWater;
+    this.byteLowWater   = config.byteLowWater;
+
+    this.queue         = [];
     this.activeUploads = 0;
-    this.isPaused = false;
+    this.isPaused      = false;
     this.isShuttingDown = false;
-    this.queuedBytes = 0;
+    this.queuedBytes   = 0;
 
     this.stats = {
-      queued: 0,
-      completed: 0,
-      failed: 0,
+      queued:        0,
+      completed:     0,
+      failed:        0,
       bytesUploaded: 0,
-      startTime: Date.now(),
+      startTime:     Date.now(),
       peakQueueSize: 0,
       peakQueueBytes: 0,
-      totalRetries: 0,
+      totalRetries:  0,
     };
 
-    this.onDrain = null;
-    this.drainPromise = null;
-    this.drainResolve = null;
+    this.drainPromise  = null;
+    this.drainResolve  = null;
 
-    console.log(`☁️ [upload-queue] Initialized with ${this.maxConcurrent} concurrent uploads (SDK mode)`);
-    console.log(`☁️ [upload-queue] Backpressure: pause at ${this.queueHighWater} items or ${(this.byteHighWater / 1024 / 1024).toFixed(0)}MB`);
+    console.log(
+      `☁️ [upload-queue] Initialized with ${this.maxConcurrent} concurrent uploads (SDK mode)`
+    );
+    console.log(
+      `☁️ [upload-queue] Backpressure: pause at ${this.queueHighWater} items ` +
+      `or ${(this.byteHighWater / 1024 / 1024).toFixed(0)}MB`
+    );
   }
 
   enqueue(localPath, gcsPath, options = {}) {
@@ -195,17 +201,16 @@ class GCSUploadQueue {
     }
 
     let fileSize = 0;
-    try {
-      fileSize = existsSync(localPath) ? statSync(localPath).size : 0;
-    } catch { fileSize = 0; }
+    try { fileSize = existsSync(localPath) ? statSync(localPath).size : 0; } catch { fileSize = 0; }
 
     this.queue.push({ localPath, gcsPath, options, attempts: 0, fileSize });
     this.stats.queued++;
     this.queuedBytes += fileSize;
-    this.stats.peakQueueSize = Math.max(this.stats.peakQueueSize, this.queue.length);
-    this.stats.peakQueueBytes = Math.max(this.stats.peakQueueBytes || 0, this.queuedBytes);
+    this.stats.peakQueueSize  = Math.max(this.stats.peakQueueSize,  this.queue.length);
+    this.stats.peakQueueBytes = Math.max(this.stats.peakQueueBytes, this.queuedBytes);
 
-    if (!this.isPaused && (this.queue.length >= this.queueHighWater || this.queuedBytes >= this.byteHighWater)) {
+    if (!this.isPaused &&
+        (this.queue.length >= this.queueHighWater || this.queuedBytes >= this.byteHighWater)) {
       this.isPaused = true;
       const reason = this.queuedBytes >= this.byteHighWater
         ? `${(this.queuedBytes / 1024 / 1024).toFixed(1)}MB queued`
@@ -217,27 +222,31 @@ class GCSUploadQueue {
     return true;
   }
 
-  shouldPause() {
-    return this.isPaused;
-  }
-
-  getQueueDepth() {
-    return this.queue.length + this.activeUploads;
-  }
+  shouldPause() { return this.isPaused; }
+  getQueueDepth() { return this.queue.length + this.activeUploads; }
 
   _pump() {
     while (this.activeUploads < this.maxConcurrent && this.queue.length > 0) {
       const job = this.queue.shift();
       this.queuedBytes -= (job.fileSize || 0);
       this.activeUploads++;
-      this._processUpload(job);
+      this._processUpload(job); // intentionally not awaited — fire-and-forget
     }
 
-    if (this.isPaused && this.queue.length <= this.queueLowWater && this.queuedBytes <= this.byteLowWater) {
+    if (this.isPaused &&
+        this.queue.length <= this.queueLowWater &&
+        this.queuedBytes <= this.byteLowWater) {
       this.isPaused = false;
-      console.log(`✅ [upload-queue] Backpressure OFF: ${this.queue.length} items, ${(this.queuedBytes / 1024 / 1024).toFixed(1)}MB`);
+      console.log(
+        `✅ [upload-queue] Backpressure OFF: ` +
+        `${this.queue.length} items, ${(this.queuedBytes / 1024 / 1024).toFixed(1)}MB`
+      );
     }
 
+    // Resolve any pending drain() awaiter if the queue is now fully drained.
+    // This fires after activeUploads is decremented in _processUpload's finally block,
+    // so by the time drainResolve() is called all cleanup (unlinkSync, logging) has
+    // already completed — no partial state is visible to drain() callers.
     if (this.drainResolve && this.activeUploads === 0 && this.queue.length === 0) {
       this.drainResolve();
       this.drainResolve = null;
@@ -255,13 +264,15 @@ class GCSUploadQueue {
       }
 
       const fileSize = statSync(localPath).size;
-      let lastError = null;
+      let lastError  = null;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (attempt > 0) {
           this.stats.totalRetries++;
           const delay = calculateBackoffDelay(attempt - 1, this.baseDelayMs);
-          console.log(`🔄 [upload-queue] Retry ${attempt}/${maxRetries} for ${path.basename(localPath)}`);
+          console.log(
+            `🔄 [upload-queue] Retry ${attempt}/${maxRetries} for ${path.basename(localPath)}`
+          );
           await sleep(delay);
         }
 
@@ -272,7 +283,9 @@ class GCSUploadQueue {
           this.stats.bytesUploaded += fileSize;
 
           const retryInfo = attempt > 0 ? ` (retry ${attempt})` : '';
-          console.log(`☁️ Uploaded ${path.basename(localPath)} (${(fileSize / 1024).toFixed(1)}KB)${retryInfo}`);
+          console.log(
+            `☁️ Uploaded ${path.basename(localPath)} (${(fileSize / 1024).toFixed(1)}KB)${retryInfo}`
+          );
 
           try {
             unlinkSync(localPath);
@@ -281,25 +294,30 @@ class GCSUploadQueue {
             console.error(`⚠️ Failed to delete ${localPath}: ${e.message}`);
           }
 
-          return;
+          return; // success — exit retry loop
+
         } catch (err) {
           lastError = err;
-          if (attempt < maxRetries && isTransientError(err.message)) {
-            continue;
-          }
+          // Only retry transient errors, and never past maxRetries
+          if (attempt < maxRetries && isTransientError(err.message)) continue;
           break;
         }
       }
 
+      // All attempts exhausted
       this.stats.failed++;
-      console.error(`❌ [upload-queue] Upload failed: ${path.basename(localPath)}: ${lastError?.message}`);
+      console.error(
+        `❌ [upload-queue] Upload failed: ${path.basename(localPath)}: ${lastError?.message}`
+      );
       logFailedUpload(localPath, gcsPath, lastError?.message);
 
-      const deleteOnFailure = options.deleteOnFailure !== undefined ? options.deleteOnFailure : false;
+      const deleteOnFailure = options.deleteOnFailure ?? false;
       if (deleteOnFailure && existsSync(localPath)) {
         try {
           unlinkSync(localPath);
-          console.warn(`⚠️ [upload-queue] Deleted failed file (deleteOnFailure=true): ${path.basename(localPath)}`);
+          console.warn(
+            `⚠️ [upload-queue] Deleted failed file (deleteOnFailure=true): ${path.basename(localPath)}`
+          );
         } catch (e) {
           console.error(`⚠️ Failed to delete ${localPath}: ${e.message}`);
         }
@@ -313,18 +331,24 @@ class GCSUploadQueue {
     }
   }
 
+  /**
+   * Wait until all queued and active uploads have completed.
+   *
+   * Safe to call from multiple concurrent awaitors — they all share the same
+   * drainPromise and are resolved together when _pump() fires drainResolve().
+   * No TOCTOU race: JavaScript is single-threaded, so between the empty-check
+   * and Promise creation no _processUpload callback can run.
+   */
   async drain() {
-    if (this.activeUploads === 0 && this.queue.length === 0) {
-      return;
-    }
+    if (this.activeUploads === 0 && this.queue.length === 0) return;
 
     if (!this.drainPromise) {
-      this.drainPromise = new Promise(resolve => {
-        this.drainResolve = resolve;
-      });
+      this.drainPromise = new Promise(resolve => { this.drainResolve = resolve; });
     }
 
-    console.log(`⏳ [upload-queue] Draining ${this.queue.length} queued + ${this.activeUploads} active uploads...`);
+    console.log(
+      `⏳ [upload-queue] Draining ${this.queue.length} queued + ${this.activeUploads} active uploads...`
+    );
     await this.drainPromise;
     console.log(`✅ [upload-queue] Drain complete`);
   }
@@ -335,39 +359,47 @@ class GCSUploadQueue {
     this.printStats();
   }
 
+  /**
+   * Return a snapshot of queue statistics.
+   *
+   * FIX: guard against divide-by-zero on throughputMBps when getStats() is
+   * called immediately after construction (elapsed ≈ 0ms). Division of 0 bytes
+   * by ~0 seconds produces Infinity, which .toFixed(2) renders as the string
+   * "Infinity" — harmless but confusing in logs. Guard with Math.max(elapsed, 0.001).
+   */
   getStats() {
-    const elapsed = (Date.now() - this.stats.startTime) / 1000;
+    const elapsed        = Math.max((Date.now() - this.stats.startTime) / 1000, 0.001);
     const throughputMBps = (this.stats.bytesUploaded / 1024 / 1024) / elapsed;
 
     return {
       ...this.stats,
-      pending: this.queue.length,
-      active: this.activeUploads,
-      elapsedSeconds: elapsed.toFixed(1),
-      throughputMBps: throughputMBps.toFixed(2),
+      pending:         this.queue.length,
+      active:          this.activeUploads,
+      elapsedSeconds:  elapsed.toFixed(1),
+      throughputMBps:  throughputMBps.toFixed(2),
     };
   }
 
   printStats() {
     const stats = this.getStats();
     console.log(`\n📊 [upload-queue] Final Statistics:`);
-    console.log(`   Completed: ${stats.completed}`);
-    console.log(`   Failed: ${stats.failed}`);
+    console.log(`   Completed:     ${stats.completed}`);
+    console.log(`   Failed:        ${stats.failed}`);
     console.log(`   Total Retries: ${stats.totalRetries}`);
-    console.log(`   Peak Queue: ${stats.peakQueueSize}`);
+    console.log(`   Peak Queue:    ${stats.peakQueueSize}`);
     console.log(`   Data Uploaded: ${(stats.bytesUploaded / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`   Throughput: ${stats.throughputMBps} MB/s`);
-    console.log(`   Duration: ${stats.elapsedSeconds}s\n`);
+    console.log(`   Throughput:    ${stats.throughputMBps} MB/s`);
+    console.log(`   Duration:      ${stats.elapsedSeconds}s\n`);
   }
 }
 
-// Singleton instance
+// Module-level singleton — created lazily on first getUploadQueue() call.
+// All configuration is read from env at construction time, so env vars must
+// be set before the first call.
 let queueInstance = null;
 
 export function getUploadQueue(maxConcurrent) {
-  if (!queueInstance) {
-    queueInstance = new GCSUploadQueue(maxConcurrent);
-  }
+  if (!queueInstance) queueInstance = new GCSUploadQueue(maxConcurrent);
   return queueInstance;
 }
 
@@ -379,14 +411,11 @@ export async function shutdownUploadQueue() {
 }
 
 export function enqueueUpload(localPath, gcsPath, options = {}) {
-  const queue = getUploadQueue();
-  return queue.enqueue(localPath, gcsPath, options);
+  return getUploadQueue().enqueue(localPath, gcsPath, options);
 }
 
 export async function drainUploads() {
-  if (queueInstance) {
-    await queueInstance.drain();
-  }
+  if (queueInstance) await queueInstance.drain();
 }
 
 export function shouldPauseWrites() {
@@ -400,7 +429,9 @@ export async function waitForBackpressureRelief(timeoutMs = 30000) {
     await new Promise(r => setTimeout(r, 200));
   }
   if (queueInstance.shouldPause()) {
-    console.warn(`⚠️ [upload-queue] Backpressure relief timeout after ${timeoutMs}ms — continuing anyway`);
+    console.warn(
+      `⚠️ [upload-queue] Backpressure relief timeout after ${timeoutMs}ms — continuing anyway`
+    );
   }
 }
 
