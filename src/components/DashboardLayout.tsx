@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import cantonLogo from "@/assets/logo.svg";
 import { Link, useLocation } from "react-router-dom";
 import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import {
@@ -174,18 +175,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           <div className="flex items-center justify-between">
             {/* Logo */}
             <Link to="/" className="flex items-center space-x-3 group">
-              <div className="relative">
-                <div className="absolute inset-0 gradient-primary rounded-lg blur-xl opacity-50 group-hover:opacity-100 transition-smooth" />
-                <div className="relative gradient-primary p-2 rounded-lg">
-                  <Database className="h-6 w-6 text-primary-foreground" />
-                </div>
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-white bg-clip-text text-transparent">
-                  SCANTON
-                </h1>
-                <p className="text-xs text-muted-foreground">Canton Network Analytics</p>
-              </div>
+              <img src={cantonLogo} alt="Canton Network" className="h-10" />
             </Link>
 
             {/* Navigation */}
