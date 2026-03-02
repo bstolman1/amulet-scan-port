@@ -10,7 +10,7 @@
 @layer base {
   :root {
     /* Dark base - deep slate */
-    --background: 225 30% 8%;
+    --background: 240 95% 15%;
     --foreground: 210 20% 95%;
 
     /* Cards with subtle elevation */
@@ -20,10 +20,10 @@
     --popover: 225 25% 14%;
     --popover-foreground: 210 20% 95%;
 
-    /* Primary: Soft teal accent */
-    --primary: 175 60% 45%;
+    /* Primary: Canton Yellow #F3FF97 */
+    --primary: 67 98% 79%;
     --primary-foreground: 225 30% 8%;
-    --primary-glow: 180 50% 55%;
+    --primary-glow: 67 98% 85%;
 
     /* Secondary: Muted purple */
     --secondary: 260 40% 55%;
@@ -32,8 +32,8 @@
     --muted: 225 20% 18%;
     --muted-foreground: 220 15% 60%;
 
-    /* Accent: Soft blue */
-    --accent: 200 50% 50%;
+    /* Accent: Canton Lilac #D5A5E3 */
+    --accent: 287 53% 77%;
     --accent-foreground: 225 30% 8%;
 
     /* Neon colors - toned down for readability */
@@ -42,7 +42,7 @@
     --neon-blue: 210 60% 55%;
     --neon-cyan: 180 50% 50%;
 
-    --success: 150 50% 40%;
+    --success: 287 53% 77%;
     --success-foreground: 210 20% 95%;
 
     --warning: 40 70% 50%;
@@ -54,39 +54,39 @@
     /* Subtle borders */
     --border: 225 20% 22%;
     --input: 225 20% 20%;
-    --ring: 175 50% 45%;
+    --ring: 67 98% 79%;
 
     --radius: 0.75rem;
 
     /* Chart colors - balanced palette */
-    --chart-1: 175 50% 50%;
+    --chart-1: 67 98% 79%;
     --chart-2: 200 50% 55%;
-    --chart-3: 330 50% 55%;
+    --chart-3: 287 53% 77%;
     --chart-4: 260 45% 55%;
     --chart-5: 40 65% 55%;
 
     /* Gradients - subtle */
-    --gradient-background: linear-gradient(145deg, hsl(225 30% 8%) 0%, hsl(235 25% 10%) 100%);
-    --gradient-primary: linear-gradient(135deg, hsl(175 60% 45%) 0%, hsl(190 55% 50%) 100%);
-    --gradient-accent: linear-gradient(135deg, hsl(200 50% 50%) 0%, hsl(260 45% 55%) 100%);
+    --gradient-background: #030206;
+    --gradient-primary: linear-gradient(135deg, hsl(67 98% 79%) 0%, hsl(67 98% 85%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(287 53% 77%) 0%, hsl(270 50% 70%) 100%);
     --gradient-card: linear-gradient(145deg, hsl(225 25% 12% / 0.95) 0%, hsl(230 25% 14% / 0.9) 100%);
     --gradient-neon: linear-gradient(90deg, hsl(330 50% 55%), hsl(260 45% 55%), hsl(200 50% 55%));
 
     /* Subtle shadows */
-    --shadow-glow-primary: 0 4px 20px hsl(175 60% 45% / 0.15);
-    --shadow-glow-cyan: 0 4px 20px hsl(180 50% 50% / 0.15);
+    --shadow-glow-primary: 0 4px 20px hsl(67 98% 79% / 0.2);
+    --shadow-glow-cyan: 0 4px 20px hsl(67 98% 79% / 0.15);
     --shadow-glow-pink: 0 4px 20px hsl(330 50% 55% / 0.15);
     --shadow-glow-purple: 0 4px 20px hsl(260 45% 55% / 0.15);
     --shadow-card: 0 4px 24px hsl(225 30% 5% / 0.4);
 
     --sidebar-background: 225 28% 10%;
     --sidebar-foreground: 210 20% 90%;
-    --sidebar-primary: 175 55% 45%;
+    --sidebar-primary: 67 98% 79%;
     --sidebar-primary-foreground: 225 30% 8%;
     --sidebar-accent: 225 20% 18%;
     --sidebar-accent-foreground: 210 20% 90%;
     --sidebar-border: 225 20% 20%;
-    --sidebar-ring: 175 50% 45%;
+    --sidebar-ring: 67 98% 79%;
   }
 }
 
@@ -123,9 +123,10 @@
 @layer components {
   /* Clean card with subtle border */
   .glass-card {
-    @apply bg-card/90 backdrop-blur-sm rounded-xl shadow-lg;
-    background: var(--gradient-card);
-    border: 1px solid hsl(var(--border));
+    @apply bg-card/90 backdrop-blur-sm shadow-lg;
+    background: linear-gradient(180deg, #150E29, #030206);
+    border: 1px solid #634ba9;
+    border-radius: 20px;
     transition: all 0.2s ease;
   }
 

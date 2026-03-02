@@ -157,7 +157,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Exchange</label>
               <Select value={selectedExchange} onValueChange={setSelectedExchange}>
-                <SelectTrigger className="w-[130px] h-8 text-sm">
+                <SelectTrigger className="w-[130px] h-8 text-sm" style={{ backgroundColor: '#000', color: '#fff' }}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -173,7 +173,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Candle Interval</label>
             <Select value={twapInterval} onValueChange={setTwapInterval}>
-              <SelectTrigger className="w-[110px] h-8 text-sm">
+              <SelectTrigger className="w-[110px] h-8 text-sm" style={{ backgroundColor: '#000', color: '#fff' }}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -204,7 +204,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 </PopoverContent>
               </Popover>
               <Select value={startHour} onValueChange={(v) => { setStartHour(v); if (startDate) { setUseCustomDates(true); setActivePreset(''); } }}>
-                <SelectTrigger className="w-[72px] h-8 text-sm font-mono">
+                <SelectTrigger className="w-[72px] h-8 text-sm font-mono" style={{ backgroundColor: '#000', color: '#fff' }}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -237,7 +237,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 </PopoverContent>
               </Popover>
               <Select value={endHour} onValueChange={(v) => { setEndHour(v); if (endDate) { setUseCustomDates(true); setActivePreset(''); } }}>
-                <SelectTrigger className="w-[72px] h-8 text-sm font-mono">
+                <SelectTrigger className="w-[72px] h-8 text-sm font-mono" style={{ backgroundColor: '#000', color: '#fff' }}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

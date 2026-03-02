@@ -232,7 +232,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
           </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             <Select value={selectedExchange} onValueChange={handleExchangeSelect}>
-              <SelectTrigger className="w-[140px] h-8 text-sm">
+              <SelectTrigger className="w-[140px] h-8 text-sm" style={{ backgroundColor: '#000', color: '#fff' }}>
                 <SelectValue placeholder="Exchange" />
               </SelectTrigger>
               <SelectContent className="z-50 max-h-[300px] bg-popover">
@@ -244,7 +244,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
               </SelectContent>
             </Select>
             <Select value={selectedInstrument} onValueChange={handleInstrumentSelect}>
-              <SelectTrigger className="w-[110px] h-8 text-sm">
+              <SelectTrigger className="w-[110px] h-8 text-sm" style={{ backgroundColor: '#000', color: '#fff' }}>
                 <SelectValue placeholder="Pair" />
               </SelectTrigger>
               <SelectContent className="z-50 bg-popover">

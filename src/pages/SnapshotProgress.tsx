@@ -446,7 +446,7 @@ const SnapshotProgress = () => {
             <Filter className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Migration:</span>
             <Select value={selectedMigration} onValueChange={setSelectedMigration}>
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="w-[180px]" style={{ backgroundColor: '#000', color: '#fff' }}>
                 <SelectValue placeholder="Select migration" />
               </SelectTrigger>
               <SelectContent>

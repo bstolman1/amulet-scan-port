@@ -98,8 +98,8 @@ const ValidatorLicenses = () => {
 
           <Tabs defaultValue="licenses" className="w-full" onValueChange={() => setCurrentPage(1)}>
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="licenses">Licenses ({filteredLicenses.length})</TabsTrigger>
-              <TabsTrigger value="faucets">Faucet Activity ({filteredFaucets.length})</TabsTrigger>
+              <TabsTrigger value="licenses" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">Licenses ({filteredLicenses.length})</TabsTrigger>
+              <TabsTrigger value="faucets" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">Faucet Activity ({filteredFaucets.length})</TabsTrigger>
             </TabsList>
 
             <TabsContent value="licenses" className="space-y-3 mt-4">
