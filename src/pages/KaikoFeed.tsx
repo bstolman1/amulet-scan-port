@@ -362,7 +362,7 @@ export default function KaikoFeed() {
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Exchange</label>
                     <Select value={exchange} onValueChange={setExchange}>
-                      <SelectTrigger className="w-[180px]">
+                      <SelectTrigger className="w-[180px]" style={{ backgroundColor: '#000', color: '#fff' }}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="max-h-[300px]">
@@ -394,7 +394,7 @@ export default function KaikoFeed() {
                       </span>
                     </label>
                     <Select value={instrument} onValueChange={setInstrument}>
-                      <SelectTrigger className="w-[160px]">
+                      <SelectTrigger className="w-[160px]" style={{ backgroundColor: '#000', color: '#fff' }}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-background border z-50">
@@ -426,7 +426,7 @@ export default function KaikoFeed() {
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Interval</label>
                     <Select value={interval} onValueChange={setInterval}>
-                      <SelectTrigger className="w-[140px]">
+                      <SelectTrigger className="w-[140px]" style={{ backgroundColor: '#000', color: '#fff' }}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -569,7 +569,7 @@ export default function KaikoFeed() {
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Asset</label>
                     <Select value={asset} onValueChange={setAsset}>
-                      <SelectTrigger className="w-[180px]">
+                      <SelectTrigger className="w-[180px]" style={{ backgroundColor: '#000', color: '#fff' }}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -590,7 +590,7 @@ export default function KaikoFeed() {
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Interval</label>
                     <Select value={assetInterval} onValueChange={setAssetInterval}>
-                      <SelectTrigger className="w-[140px]">
+                      <SelectTrigger className="w-[140px]" style={{ backgroundColor: '#000', color: '#fff' }}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

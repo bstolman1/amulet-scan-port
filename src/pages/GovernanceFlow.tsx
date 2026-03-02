@@ -1884,7 +1884,7 @@ const GovernanceFlow = () => {
           
           {/* Preset Selector */}
           <Select value={datePreset} onValueChange={handleDatePreset}>
-            <SelectTrigger className="w-[160px] h-8">
+            <SelectTrigger className="w-[160px] h-8" style={{ backgroundColor: '#000', color: '#fff' }}>
               <SelectValue placeholder="Select period" />
             </SelectTrigger>
             <SelectContent>

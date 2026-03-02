@@ -492,11 +492,11 @@ const Governance = () => {
         {/* Proposals List */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
           <TabsList className="flex-wrap">
-            <TabsTrigger value="scanapi" className="gap-1">
+            <TabsTrigger value="scanapi" className="gap-1 data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
               <Globe className="h-4 w-4" />
               Historical Governance
             </TabsTrigger>
-            <TabsTrigger value="active">Active Governance</TabsTrigger>
+            <TabsTrigger value="active" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">Active Governance</TabsTrigger>
           </TabsList>
 
           {/* Scan API History Tab - Complete vote results from external API */}

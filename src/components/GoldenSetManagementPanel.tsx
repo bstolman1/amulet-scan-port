@@ -762,7 +762,7 @@ export function GoldenSetManagementPanel() {
                                 value={item.trueType} 
                                 onValueChange={(v) => updateSampleTrueType(index, v)}
                               >
-                                <SelectTrigger className="h-7 w-44 text-xs">
+                                <SelectTrigger className="h-7 w-44 text-xs" style={{ backgroundColor: '#000', color: '#fff' }}>
                                   <SelectValue placeholder="Select type..." />
                                 </SelectTrigger>
                                 <SelectContent>

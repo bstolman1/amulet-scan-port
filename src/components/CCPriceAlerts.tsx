@@ -204,7 +204,6 @@ export function CCPriceAlerts({ enabled = true }: CCPriceAlertsProps) {
               placeholder="Enter price..."
               value={newPrice}
               onChange={(e) => setNewPrice(e.target.value)}
-              className="bg-background"
             />
           </div>
           <div className="flex flex-wrap items-center gap-3">
