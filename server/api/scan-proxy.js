@@ -13,6 +13,12 @@ import {
 
 const router = Router();
 
+// FIX: Cap the maximum bytes we will buffer from a proxied Scan API response.
+// Without a limit, a misbehaving or compromised upstream can send an arbitrarily
+// large body, exhausting server memory. 50 MB is generous for any known Scan API
+// response but prevents runaway memory growth.
+const MAX_PROXY_RESPONSE_BYTES = 50 * 1024 * 1024; // 50 MB
+
 /**
  * Scan API Proxy - Transparent Method-Preserving Relay
  * 
@@ -85,7 +91,10 @@ router.get('/v0/unclaimed-development-fund-coupons', async (req, res) => {
         signal: AbortSignal.timeout(15000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+
+      // FIX: enforce size limit before buffering
+      const text = await readBodyWithLimit(response, MAX_PROXY_RESPONSE_BYTES);
+      const data = JSON.parse(text);
       const coupons = data['unclaimed-development-fund-coupons'] || [];
       console.log(`[Scan Proxy]   ${ep.name}: ${coupons.length} coupons`);
       recordSuccess(ep.url);
@@ -108,6 +117,52 @@ router.get('/v0/unclaimed-development-fund-coupons', async (req, res) => {
   res.set('X-Scan-Endpoints-Queried', successful.length.toString());
   res.json(best.data);
 });
+
+/**
+ * Read a fetch Response body up to maxBytes, then discard the rest.
+ * Throws if the body exceeds the limit so the caller can handle it.
+ *
+ * FIX: Using response.text() directly buffers the entire body with no upper
+ * bound. For a proxy that is open to the internet, a single slow/large
+ * upstream response can exhaust Node's heap. This helper streams the body
+ * and aborts once MAX_PROXY_RESPONSE_BYTES is reached.
+ */
+async function readBodyWithLimit(response, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    // Fallback for environments where body streaming isn't available
+    return response.text();
+  }
+
+  const chunks = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        reader.cancel();
+        throw new Error(
+          `Upstream response exceeds size limit (${maxBytes} bytes). Possible runaway response from Scan API.`
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Concatenate all chunks into a single string
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(combined);
+}
 
 /**
  * Generic proxy handler - preserves HTTP method
@@ -174,8 +229,18 @@ async function proxyRequest(req, res, method) {
 
       // Success or client error - return as-is
       recordSuccess(endpoint.url);
-      
-      const text = await scanRes.text();
+
+      // FIX: Read with size limit before forwarding to the client.
+      // The original code used response.text() with no bound, allowing an
+      // upstream to send gigabytes of data and OOM the server process.
+      let text;
+      try {
+        text = await readBodyWithLimit(scanRes, MAX_PROXY_RESPONSE_BYTES);
+      } catch (sizeErr) {
+        console.error(`[Scan Proxy] ✗ Response too large from ${endpoint.name}: ${sizeErr.message}`);
+        res.status(502).json({ error: 'Upstream response too large', details: sizeErr.message });
+        return;
+      }
       
       res.set('X-Scan-Endpoint', endpoint.name);
       res.status(scanRes.status).send(text);
