@@ -93,7 +93,7 @@ interface GhostLedgerEntry {
 // ─────────────────────────────
 const Validators = () => {
   const [expandedBeneficiary, setExpandedBeneficiary] = useState<string | null>(null);
-
+  const [showGhostLedger, setShowGhostLedger] = useState(false);
   const { toast } = useToast();
 
   // Schedule hourly config sync
@@ -530,8 +530,99 @@ const Validators = () => {
           </div>
         </Card>
 
-        {/* Active Validators Section */}
+        {/* ═══════════════════════════════════════════════════════════════
+            4️⃣ OPTIONAL: GhostSV Ledger (Advanced Users)
+            ═══════════════════════════════════════════════════════════════ */}
+        {displayModel.ghostLedger.length > 0 && (
+          <Card className="glass-card overflow-hidden">
+            <div className="p-4 flex items-center justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowGhostLedger(!showGhostLedger)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {showGhostLedger ? (
+                  <>
+                    <EyeOff className="w-4 h-4 mr-2" />
+                    Hide Escrow Ledger (Advanced)
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-4 h-4 mr-2" />
+                    View Escrow Ledger (Advanced)
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {showGhostLedger && (
+              <>
+                <div className="px-6 pb-4">
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-warning/10 border border-warning/30 text-warning text-sm">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <span>
+                      Weights in this table are informational and <strong>MUST NOT</strong> be summed.
+                    </span>
+                  </div>
+                </div>
+
+                <div className="px-6 pb-2">
+                  <h4 className="text-lg font-semibold">Escrow & Ghost Holdings (Non-Additive View)</h4>
+                  <p className="text-sm text-muted-foreground">
+                    For debugging, governance audits, and CIP verification.
+                  </p>
+                </div>
+
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Ghost Holder</TableHead>
+                      <TableHead>Source Beneficiary</TableHead>
+                      <TableHead className="text-right">Weight</TableHead>
+                      <TableHead>CIP</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayModel.ghostLedger.map((entry, idx) => (
+                      <TableRow key={idx} className="text-muted-foreground">
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {entry.ghostHolder}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{entry.sourceBeneficiary}</TableCell>
+                        <TableCell className="text-right">{entry.weightPct}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {entry.cip || "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+          </Card>
+        )}
+
+        {/* SV Weight History and Distribution charts removed */}
+
+        {/* ───────────────────────────── */}
+        {/* ACTIVE VALIDATORS SECTION */}
+        {/* ───────────────────────────── */}
         <ActiveValidatorsSection />
+
+        {/* Data Sources Note */}
+        <Card className="glass-card p-4 text-sm text-muted-foreground">
+          <p>
+            <strong>Design Principle:</strong> Economic entitlements are displayed once and summed;
+            custody paths are displayed only as nested, non-additive breakdowns.
+          </p>
+          <p className="mt-2">
+            <strong>Data Sources:</strong> SuperValidator configuration data is fetched from the
+            network configuration API. Active validators are queried from the Canton Network API endpoints.
+          </p>
+        </Card>
       </div>
     </DashboardLayout>
   );
