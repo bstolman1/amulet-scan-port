@@ -81,8 +81,8 @@ const navigationGroups: NavGroup[] = [
   {
     label: "Validators",
     items: [
-      { name: "Validators", href: "/validators", icon: Zap },
-      { name: "Licenses", href: "/validator-licenses", icon: Ticket },
+      { name: "Super Validators", href: "/validators", icon: Zap },
+      { name: "Validators", href: "/validator-licenses", icon: Ticket },
       { name: "Sequencers", href: "/sequencers", icon: Network },
     ],
   },
