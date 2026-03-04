@@ -754,13 +754,7 @@ const ActiveValidatorsSection = () => {
                 <Skeleton key={i} className="h-40 w-full" />
               ))}
             </div>
-          ) : isError ? (
-            <div className="text-center p-8">
-              <p className="text-muted-foreground">
-                Unable to load validator data. The API endpoint may be unavailable.
-              </p>
-            </div>
-          ) : !filteredValidators.length ? (
+          ) : isError || !filteredValidators.length ? (
             <div className="text-center p-8">
               <p className="text-muted-foreground">
                 No {statusFilter !== "all" ? statusFilter : ""} validators found
