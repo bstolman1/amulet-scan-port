@@ -19,7 +19,7 @@ import {
   FETCH_PAGE_DELAY_MS,
   FETCH_GROUP_DELAY_MS,
   FETCH_TIMEOUT_MS,
-} from '../utils/constants.js';
+} from './constants.js';
 
 const getApiKey = () => process.env.GROUPS_IO_API_KEY;
 

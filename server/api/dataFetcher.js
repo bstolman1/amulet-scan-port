@@ -11,11 +11,11 @@
 import {
   INFERENCE_THRESHOLD,
   FETCH_GLOBAL_TIMEOUT_MS,
-} from '../utils/constants.js';
-import { extractUrls, extractIdentifiers } from '../utils/textExtraction.js';
-import { getLearnedPatterns } from './patternLearning.js';
-import { getSubscribedGroups, fetchGroupTopics, delay } from './groupsFetcher.js';
-import { correlateTopics, buildStats } from './lifecycleCorrelation.js';
+} from './constants.js';
+import { extractUrls, extractIdentifiers } from './entityExtractor.js';
+import { getLearnedPatterns } from './patternCache.js';
+import { getSubscribedGroups, fetchGroupTopics, delay } from './groupsApiClient.js';
+import { correlateTopics, buildStats } from './lifecycleCorrelator.js';
 
 const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED === 'true';
 
