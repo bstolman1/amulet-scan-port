@@ -23,7 +23,7 @@ import {
 
 const getApiKey = () => process.env.GROUPS_IO_API_KEY;
 
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+export const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // ── Auth header ───────────────────────────────────────────────────────────
 
