@@ -15,8 +15,8 @@ import {
   readAuditLog,
   writeAuditLog,
   readCache,
-} from './fileRepository.js';
-import { WORKFLOW_STAGES, VALID_TYPES } from './constants.js';
+} from '../repositories/fileRepository.js';
+import { WORKFLOW_STAGES, VALID_TYPES } from '../utils/constants.js';
 
 // ── Audit log helpers ─────────────────────────────────────────────────────
 
