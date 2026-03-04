@@ -810,15 +810,15 @@ const ActiveValidatorsSection = () => {
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm text-muted-foreground mb-1">Rounds Collected</p>
                         <p className="text-2xl font-bold text-primary">
-                          {parseFloat(validator.rewards).toLocaleString(undefined, {
+                          {(parseFloat(validator.rewards ?? '0') || 0).toLocaleString(undefined, {
                             maximumFractionDigits: 0,
                           })}
                         </p>
                       </div>
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm text-muted-foreground mb-1">Missed Rounds</p>
-                        <p className={`text-2xl font-bold ${validator.numRoundsMissed > 0 ? "text-destructive" : "text-success"}`}>
-                          {validator.numRoundsMissed.toLocaleString()}
+                        <p className={`text-2xl font-bold ${(validator.numRoundsMissed ?? 0) > 0 ? "text-destructive" : "text-success"}`}>
+                          {(validator.numRoundsMissed ?? 0).toLocaleString()}
                         </p>
                       </div>
                       <div className="p-4 rounded-lg bg-background/50">
