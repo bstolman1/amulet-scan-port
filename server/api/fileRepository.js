@@ -18,7 +18,7 @@ import {
   LEARNED_PATTERNS_FILE,
   AUDIT_LOG_FILE,
   PATTERN_BACKUPS_DIR,
-} from '../utils/constants.js';
+} from './constants.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
