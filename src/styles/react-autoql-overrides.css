@@ -1,0 +1,18 @@
+/* React AutoQL Dashboard CSS Overrides */
+
+.react-autoql-dashboard-tile,
+.react-autoql-dashboard-tile > div,
+.react-autoql-dashboard-tile > div > div,
+[class*="react-autoql-dashboard-tile"],
+[class*="react-autoql-dashboard-tile"] > div {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.react-autoql-dashboard-tile:hover,
+.react-autoql-dashboard-tile:hover > div,
+.react-autoql-dashboard-tile:hover > div > div,
+[class*="react-autoql-dashboard-tile"]:hover,
+[class*="react-autoql-dashboard-tile"]:hover > div {
+  border-color: hsl(var(--primary) / 0.3) !important;
+}
+

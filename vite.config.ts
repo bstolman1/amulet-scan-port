@@ -21,9 +21,14 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+  optimizeDeps: {
+    include: ['date-fns'],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Force date-fns to resolve to root version, not nested in react-autoql
+      "date-fns": path.resolve(__dirname, "node_modules/date-fns"),
     },
   },
 }));
