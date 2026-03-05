@@ -27,3 +27,16 @@
   border-color: hsl(var(--primary) / 0.3) !important;
 }
 
+/* Optimize resize performance - isolate layout calculations */
+.react-autoql-dashboard-container,
+.react-autoql-dashboard {
+  contain: layout style !important;
+  transform: translateZ(0) !important; /* Force GPU acceleration */
+  will-change: contents !important;
+}
+
+/* Prevent layout thrashing during resize */
+.react-autoql-dashboard-tile {
+  contain: layout style paint !important;
+  transform: translateZ(0) !important;
+}
