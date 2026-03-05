@@ -67,6 +67,9 @@ import LiveUpdates from "./pages/LiveUpdates";
 import UnclaimedSVRewards from "./pages/UnclaimedSVRewards";
 import RewardCalculations from "./pages/RewardCalculations";
 
+// Dashboard viewer
+import DashboardViewer from "./pages/DashboardViewer";
+
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -152,6 +155,9 @@ const App = () => (
             {/* Legacy routes (kept for backwards compatibility) */}
             <Route path="/unclaimed-sv-rewards" element={<UnclaimedSVRewards />} />
             <Route path="/reward-calculations" element={<RewardCalculations />} />
+            
+            {/* Dashboard viewer */}
+            <Route path="/dashboard/:name" element={<DashboardViewer />} />
             
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
