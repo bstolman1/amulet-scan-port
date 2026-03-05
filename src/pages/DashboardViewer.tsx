@@ -43,7 +43,7 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
             theme: "dark",
             fontFamily: "IBM Plex Sans, -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, sans-serif",
             textColor: "hsl(0, 0.00%, 100.00%)",
-            backgroundColorPrimary: "hsl(240, 95%, 15%)",
+            backgroundColorPrimary: "#030206",
             backgroundColorSecondary: "hsl(225, 25%, 12%)",
             chartColors: [
               "#F3FF97",  // Primary yellow - most important
