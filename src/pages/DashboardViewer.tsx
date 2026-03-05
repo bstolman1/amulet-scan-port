@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { useCDNDashboards } from "@/hooks/use-cdn-dashboards";
@@ -73,11 +73,8 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
     };
   }, []);
   
-  // Note: react-autoql Dashboard component handles resize events internally,
-  // so we don't need to add our own resize handler
-  
-  // Note: react-autoql Dashboard component handles its own layout refresh on resize
-  // No need for us to call refreshTileLayouts manually
+  // Memoize tiles to prevent unnecessary re-renders
+  const memoizedTiles = useMemo(() => tiles, [tiles.map(t => t.i || t.key).join('-')]);
   
   if (loadError) {
     return (
@@ -108,24 +105,13 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
       style={{ 
         width: '100%',
         minWidth: 0,
-        position: 'relative',
-        overflow: 'visible',
-        isolation: 'isolate',
-        backgroundColor: 'transparent',
-        boxSizing: 'border-box',
-        // Use CSS containment to isolate layout calculations and prevent layout thrashing
-        contain: 'layout style',
-        // Force GPU acceleration to reduce main thread work
-        transform: 'translateZ(0)',
-        // Prevent layout shifts during resize
-        willChange: 'contents'
       }}
     >
       <Dashboard
         ref={(ref) => {
           dashboardRef.current = ref;
         }}
-        tiles={tiles}
+        tiles={memoizedTiles}
         notExecutedText="Queries will not execute in view-only mode"
         offline
         isEditable={false}
@@ -143,6 +129,14 @@ export default function DashboardViewer() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shouldRenderDashboard, setShouldRenderDashboard] = useState(false);
+
+  // Memoize dashboard URL to prevent refetching when cdnDashboards array reference changes
+  const dashboardUrl = useMemo(() => {
+    if (!name || isLoadingDashboards || cdnDashboards.length === 0) return null;
+    const decodedName = decodeURIComponent(name);
+    const dashboard = cdnDashboards.find((d) => d.name === decodedName);
+    return dashboard?.url || null;
+  }, [name, isLoadingDashboards, cdnDashboards.length, cdnDashboards.map(d => `${d.name}:${d.url}`).join('|')]);
 
   // Delay rendering Dashboard component to ensure everything else is mounted first
   useEffect(() => {
@@ -170,28 +164,18 @@ export default function DashboardViewer() {
         return;
       }
 
-      if (isLoadingDashboards) {
+      if (isLoadingDashboards || !dashboardUrl) {
         return;
       }
 
       const decodedName = decodeURIComponent(name);
-      
-      const dashboard = cdnDashboards.find((d) => d.name === decodedName);
-      
-      if (!dashboard) {
-        if (!cancelled) {
-          setError(`Dashboard "${decodedName}" not found`);
-          setIsLoading(false);
-        }
-        return;
-      }
 
       try {
         if (!cancelled) {
           setIsLoading(true);
           setError(null);
         }
-        const data = await processDashboardFileFromUrl(dashboard.url);
+        const data = await processDashboardFileFromUrl(dashboardUrl);
         if (!cancelled) {
           setDashboardData(data);
         }
@@ -211,7 +195,7 @@ export default function DashboardViewer() {
     return () => {
       cancelled = true;
     };
-  }, [name, cdnDashboards, isLoadingDashboards]);
+  }, [name, dashboardUrl, isLoadingDashboards]);
 
   if (isLoadingDashboards || isLoading) {
     return (
@@ -292,11 +276,9 @@ export default function DashboardViewer() {
 
         {dashboardData.dashboard.tiles && dashboardData.dashboard.tiles.length > 0 ? (
           shouldRenderDashboard ? (
-            <div className="-mx-6">
-              <ErrorBoundary title="Dashboard rendering error">
-                <DashboardWrapper tiles={dashboardData.dashboard.tiles} />
-              </ErrorBoundary>
-            </div>
+            <ErrorBoundary title="Dashboard rendering error">
+              <DashboardWrapper tiles={dashboardData.dashboard.tiles} />
+            </ErrorBoundary>
           ) : (
             <div className="flex items-center justify-center min-h-[400px]">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
