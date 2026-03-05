@@ -6,7 +6,6 @@ import {
   BarChart3,
   Coins,
   Database,
-  Layers,
   Zap,
   Vote,
   Award,
@@ -19,6 +18,7 @@ import {
   ChevronDown,
   type LucideIcon,
 } from "lucide-react";
+import { SyncInsightsIcon } from "./icons/SyncInsightsIcon";
 import {
   Popover,
   PopoverContent,
@@ -143,7 +143,7 @@ const NavDropdown = ({ group }: { group: NavGroup }) => {
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 }`}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-4 w-4 flex-shrink-0" />
                 <span>{item.name}</span>
               </Link>
             );
@@ -180,7 +180,7 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           return {
             name,
             href: `/dashboard/${encodeURIComponent(dashboard.name)}`,
-            icon: Layers,
+            icon: SyncInsightsIcon as LucideIcon,
           };
         })
         .filter((item) => {
