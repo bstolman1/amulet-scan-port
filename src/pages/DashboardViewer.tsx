@@ -103,8 +103,10 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
       id="dashboard-mount-point"
       className="dashboard-container w-full" 
       style={{ 
-        width: '100%',
+        width: 'calc(100% + 40px)',
         minWidth: 0,
+        marginLeft: '-20px',
+        marginRight: '-20px',
       }}
     >
       <Dashboard
