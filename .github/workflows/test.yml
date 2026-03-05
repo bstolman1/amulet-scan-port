@@ -79,14 +79,13 @@ jobs:
               if (fs.existsSync(coverageFile)) {
                 const coverage = JSON.parse(fs.readFileSync(coverageFile, 'utf8'));
                 const total = coverage.total;
-                coverageSummary = `## 📊 Coverage Report
-                
-| Metric | Coverage |
-|--------|----------|
-| Lines | ${total.lines.pct}% |
-| Statements | ${total.statements.pct}% |
-| Functions | ${total.functions.pct}% |
-| Branches | ${total.branches.pct}% |`;
+                coverageSummary = '## 📊 Coverage Report\n\n' +
+                  '| Metric | Coverage |\n' +
+                  '|--------|----------|\n' +
+                  `| Lines | ${total.lines.pct}% |\n` +
+                  `| Statements | ${total.statements.pct}% |\n` +
+                  `| Functions | ${total.functions.pct}% |\n` +
+                  `| Branches | ${total.branches.pct}% |`;
               }
             } catch (e) {
               console.log('Could not read coverage summary:', e.message);
