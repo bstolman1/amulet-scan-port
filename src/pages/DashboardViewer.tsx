@@ -16,7 +16,6 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 function DashboardWrapper({ tiles }: { tiles: any[] }) {
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const mountedRef = useRef(true);
   const dashboardRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -63,7 +62,7 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
       })
       .catch((error) => {
         if (!cancelled && mountedRef.current) {
-          console.error("❌ Failed to load react-autoql:", error);
+          console.error("Failed to load react-autoql:", error);
           setLoadError(String(error));
         }
       });
@@ -74,84 +73,11 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
     };
   }, []);
   
-  useEffect(() => {
-    if (!containerRef.current) return;
-    
-    const measureWidth = () => {
-      if (containerRef.current) {
-        const width = containerRef.current.offsetWidth;
-        setContainerWidth(width);
-      }
-    };
-    
-    measureWidth();
-    const timer = setTimeout(measureWidth, 100);
-    window.addEventListener('resize', measureWidth);
-    
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('resize', measureWidth);
-    };
-  }, [dashboardLoaded]);
+  // Note: react-autoql Dashboard component handles resize events internally,
+  // so we don't need to add our own resize handler
   
-  const tilesKey = tiles.map(t => t.i || t.key).join('-');
-  
-  useEffect(() => {
-    if (!dashboardLoaded || !Dashboard || containerWidth === null) return;
-    
-    const checkAndRefresh = () => {
-      if (!dashboardRef.current) {
-        setTimeout(checkAndRefresh, 50);
-        return;
-      }
-      
-      let rafId1: number;
-      let rafId2: number;
-      let rafId3: number;
-      let idleCallbackId: number | null = null;
-      
-      rafId1 = requestAnimationFrame(() => {
-        rafId2 = requestAnimationFrame(() => {
-          rafId3 = requestAnimationFrame(() => {
-            window.dispatchEvent(new Event("resize"));
-            
-            if (
-              dashboardRef.current &&
-              typeof dashboardRef.current.refreshTileLayouts === "function"
-            ) {
-              if ("requestIdleCallback" in window) {
-                idleCallbackId = requestIdleCallback(
-                  () => {
-                    dashboardRef.current?.refreshTileLayouts?.();
-                  },
-                  { timeout: 100 }
-                ) as unknown as number;
-              } else {
-                requestAnimationFrame(() => {
-                  dashboardRef.current?.refreshTileLayouts?.();
-                });
-              }
-            }
-          });
-        });
-      });
-      
-      return () => {
-        cancelAnimationFrame(rafId1);
-        cancelAnimationFrame(rafId2);
-        cancelAnimationFrame(rafId3);
-        if (idleCallbackId !== null && "cancelIdleCallback" in window) {
-          (window as any).cancelIdleCallback(idleCallbackId);
-        }
-      };
-    };
-    
-    const timer = setTimeout(checkAndRefresh, 100);
-    
-      return () => {
-        clearTimeout(timer);
-      };
-    }, [dashboardLoaded, tilesKey, containerWidth]);
+  // Note: react-autoql Dashboard component handles its own layout refresh on resize
+  // No need for us to call refreshTileLayouts manually
   
   if (loadError) {
     return (
@@ -180,17 +106,25 @@ function DashboardWrapper({ tiles }: { tiles: any[] }) {
       id="dashboard-mount-point"
       className="dashboard-container w-full" 
       style={{ 
-        width: containerWidth ? `${containerWidth}px` : '100%',
+        width: '100%',
+        minWidth: 0,
         position: 'relative',
         overflow: 'visible',
         isolation: 'isolate',
         backgroundColor: 'transparent',
-        boxSizing: 'border-box'
+        boxSizing: 'border-box',
+        // Use CSS containment to isolate layout calculations and prevent layout thrashing
+        contain: 'layout style',
+        // Force GPU acceleration to reduce main thread work
+        transform: 'translateZ(0)',
+        // Prevent layout shifts during resize
+        willChange: 'contents'
       }}
     >
       <Dashboard
-        ref={dashboardRef}
-        key={tilesKey}
+        ref={(ref) => {
+          dashboardRef.current = ref;
+        }}
         tiles={tiles}
         notExecutedText="Queries will not execute in view-only mode"
         offline
@@ -215,8 +149,10 @@ export default function DashboardViewer() {
     if (dashboardData && dashboardData.dashboard.tiles?.length > 0) {
       const timer = setTimeout(() => {
         setShouldRenderDashboard(true);
-      }, 100); // Reduced delay
-      return () => clearTimeout(timer);
+      }, 100);
+      return () => {
+        clearTimeout(timer);
+      };
     } else {
       setShouldRenderDashboard(false);
     }
@@ -244,7 +180,6 @@ export default function DashboardViewer() {
       
       if (!dashboard) {
         if (!cancelled) {
-          console.error("❌ Dashboard not found:", decodedName);
           setError(`Dashboard "${decodedName}" not found`);
           setIsLoading(false);
         }
@@ -262,7 +197,6 @@ export default function DashboardViewer() {
         }
       } catch (err) {
         if (!cancelled) {
-          console.error("❌ Failed to load dashboard:", err);
           setError(err instanceof Error ? err.message : "Failed to load dashboard");
         }
       } finally {
