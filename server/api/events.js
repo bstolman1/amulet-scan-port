@@ -7,6 +7,7 @@ import {
   sanitizeTimestamp,
   escapeLikePattern,
   escapeString,
+  sanitizeContractId,
 } from '../lib/sql-sanitize.js';
 
 const router = Router();
@@ -48,10 +49,24 @@ const getEventsSource = () => {
   const hasZstd = db.hasFileType('events', '.jsonl.zst');
   
   if (!hasJsonl && !hasGzip && !hasZstd) {
-    return `(SELECT NULL::VARCHAR as event_id, NULL::VARCHAR as event_type, NULL::VARCHAR as contract_id, 
-             NULL::VARCHAR as template_id, NULL::VARCHAR as package_name,
-             NULL::TIMESTAMP as timestamp, NULL::TIMESTAMP as effective_at,
-             NULL::VARCHAR[] as signatories, NULL::VARCHAR[] as observers, NULL::JSON as payload WHERE false)`;
+    // FIX: Return a typed empty subquery so downstream queries get correct column types
+    // and don't silently return nothing without an error. All columns are typed VARCHAR/TIMESTAMP
+    // to match the actual Parquet schema — avoids implicit NULL casts causing type mismatches.
+    return `(SELECT
+               CAST(NULL AS VARCHAR)    AS event_id,
+               CAST(NULL AS VARCHAR)    AS update_id,
+               CAST(NULL AS VARCHAR)    AS event_type,
+               CAST(NULL AS VARCHAR)    AS contract_id,
+               CAST(NULL AS VARCHAR)    AS template_id,
+               CAST(NULL AS VARCHAR)    AS package_name,
+               CAST(NULL AS BIGINT)     AS migration_id,
+               CAST(NULL AS VARCHAR)    AS synchronizer_id,
+               CAST(NULL AS TIMESTAMP)  AS timestamp,
+               CAST(NULL AS TIMESTAMP)  AS effective_at,
+               CAST(NULL AS VARCHAR[])  AS signatories,
+               CAST(NULL AS VARCHAR[])  AS observers,
+               CAST(NULL AS JSON)       AS payload
+             WHERE false)`;
   }
   
   const queries = [];
@@ -318,13 +333,22 @@ router.get('/member-traffic', async (req, res) => {
 router.get('/by-contract/:contractId', async (req, res) => {
   try {
     const { contractId } = req.params;
+    // FIX: Use sanitizeContractId instead of passing raw contractId to escapeString.
+    // Daml contract IDs have a well-defined format (hex::Package.Module:Template); validating
+    // the format before interpolation rejects injection payloads that pass escapeString's
+    // quote-only check (e.g., payloads using comment syntax or UNION without quotes).
+    const sanitizedContractId = sanitizeContractId(contractId);
+    if (!sanitizedContractId) {
+      return res.status(400).json({ error: 'Invalid contract ID format' });
+    }
+
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
     const sourceInfo = getDataSourceInfo();
     
     const sql = `
       SELECT *
       FROM ${getEventsSource()}
-      WHERE contract_id = '${escapeString(contractId)}'
+      WHERE contract_id = '${escapeString(sanitizedContractId)}'
       ORDER BY COALESCE(timestamp, effective_at) DESC NULLS LAST
       LIMIT ${limit}
     `;

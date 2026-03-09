@@ -293,7 +293,7 @@ const Validators = () => {
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="p-8 text-muted-foreground">Loading validator data...</div>
+        <div className="p-8 text-muted-foreground">Loading super validator data...</div>
       </DashboardLayout>
     );
   }
@@ -607,11 +607,6 @@ const Validators = () => {
 
         {/* SV Weight History and Distribution charts removed */}
 
-        {/* ───────────────────────────── */}
-        {/* ACTIVE VALIDATORS SECTION */}
-        {/* ───────────────────────────── */}
-        <ActiveValidatorsSection />
-
         {/* Data Sources Note */}
         <Card className="glass-card p-4 text-sm text-muted-foreground">
           <p>
@@ -810,15 +805,15 @@ const ActiveValidatorsSection = () => {
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm text-muted-foreground mb-1">Rounds Collected</p>
                         <p className="text-2xl font-bold text-primary">
-                          {parseFloat(validator.rewards).toLocaleString(undefined, {
+                          {(parseFloat(validator.rewards ?? '0') || 0).toLocaleString(undefined, {
                             maximumFractionDigits: 0,
                           })}
                         </p>
                       </div>
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm text-muted-foreground mb-1">Missed Rounds</p>
-                        <p className={`text-2xl font-bold ${validator.numRoundsMissed > 0 ? "text-destructive" : "text-success"}`}>
-                          {validator.numRoundsMissed.toLocaleString()}
+                        <p className={`text-2xl font-bold ${(validator.numRoundsMissed ?? 0) > 0 ? "text-destructive" : "text-success"}`}>
+                          {(validator.numRoundsMissed ?? 0).toLocaleString()}
                         </p>
                       </div>
                       <div className="p-4 rounded-lg bg-background/50">
