@@ -293,7 +293,7 @@ const Validators = () => {
   if (isLoading) {
     return (
       <DashboardLayout>
-        <div className="p-8 text-muted-foreground">Loading validator data...</div>
+        <div className="p-8 text-muted-foreground">Loading super validator data...</div>
       </DashboardLayout>
     );
   }
@@ -606,11 +606,6 @@ const Validators = () => {
         )}
 
         {/* SV Weight History and Distribution charts removed */}
-
-        {/* ───────────────────────────── */}
-        {/* ACTIVE VALIDATORS SECTION */}
-        {/* ───────────────────────────── */}
-        <ActiveValidatorsSection />
 
         {/* Data Sources Note */}
         <Card className="glass-card p-4 text-sm text-muted-foreground">

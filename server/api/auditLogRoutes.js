@@ -13,7 +13,7 @@ import {
   getAuditLogStats,
   getPendingBackfill,
   backfillAuditLog,
-} from './auditLogService.js';
+} from '../services/auditLogService.js';
 
 const router = Router();
 

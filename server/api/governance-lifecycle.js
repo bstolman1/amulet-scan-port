@@ -14,12 +14,12 @@
  */
 
 import { Router } from 'express';
-import { ensureDirs } from './fileRepository.js';
+import { ensureDirs } from './repositories/fileRepository.js';
 
-import lifecycleRoutes from './lifecycleRoutes.js';
-import overrideRoutes from './overrideRoutes.js';
-import auditLogRoutes from './auditLogRoutes.js';
-import learningRoutes from './learningRoutes.js';
+import lifecycleRoutes from './routes/lifecycleRoutes.js';
+import overrideRoutes from './routes/overrideRoutes.js';
+import auditLogRoutes from './routes/auditLogRoutes.js';
+import learningRoutes from './routes/learningRoutes.js';
 
 // Ensure cache directories exist before any route can fire
 ensureDirs();

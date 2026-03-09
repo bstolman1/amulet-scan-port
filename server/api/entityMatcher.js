@@ -14,7 +14,7 @@ import {
   FUZZY_DISTANCE_RATIO,
   FUZZY_MIN_DISTANCE,
   FUZZY_MIN_LENGTH_RATIO,
-} from './constants.js';
+} from '../utils/constants.js';
 
 const RE_COMPANY_SUFFIXES =
   /\b(llc|inc|corp|ltd|gmbh|ag|sa|bv|pty|co|company|limited|incorporated|corporation)\b\.?/gi;
