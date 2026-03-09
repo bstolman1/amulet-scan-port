@@ -11,6 +11,11 @@ const Dashboard = () => {
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
   });
+  const { data: dsoInfo } = useQuery({
+    queryKey: ["dsoInfo"],
+    queryFn: () => scanApi.fetchDsoInfo(),
+    staleTime: 30000,
+  });
   const {
     data: totalBalance,
     isError: balanceError,
@@ -47,9 +52,13 @@ const Dashboard = () => {
 
   // Calculate total rewards from validators (rounds collected) and providers (app rewards)
   const totalAppRewards = topProviders?.providersAndRewards.reduce((sum, p) => sum + parseFloat(p.rewards), 0) || 0;
-  const ccPrice = transactions?.transactions?.[0]?.amulet_price
-    ? parseFloat(transactions.transactions[0].amulet_price)
-    : undefined;
+  const ccPrice = (() => {
+    const dsoPrice = (dsoInfo as any)?.latest_mining_round?.contract?.payload?.amuletPrice;
+    if (dsoPrice) return parseFloat(dsoPrice);
+    const txPrice = transactions?.transactions?.[0]?.amulet_price;
+    if (txPrice) return parseFloat(txPrice);
+    return undefined;
+  })();
   const marketCap =
     totalBalance?.total_balance && ccPrice !== undefined
       ? (parseFloat(totalBalance.total_balance) * ccPrice).toLocaleString(undefined, {

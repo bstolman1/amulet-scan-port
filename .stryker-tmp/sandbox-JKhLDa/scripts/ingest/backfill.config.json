@@ -1,0 +1,45 @@
+{
+  "shardCount": 12,
+  
+  "parallelFetches": {
+    "start": 2,
+    "min": 1,
+    "max": 6
+  },
+  
+  "decodeWorkers": {
+    "start": 8,
+    "min": 4,
+    "max": 16
+  },
+  
+  "maxBinaryWorkers": 24,
+  "maxRowsPerFile": 15000,
+  "zstdLevel": 1,
+  "chunkSize": 4096,
+  "batchSize": 1000,
+
+  "targetMigration": 3,
+
+  "dirs": {
+    "_comment": "These are fallback defaults. Override with DATA_DIR and CURSOR_DIR environment variables.",
+    "data": "${DATA_DIR:-/home/user/ledger_data}",
+    "cursor": "${CURSOR_DIR:-/home/user/ledger_data/cursors}",
+    "logs": "${DATA_DIR:-/home/user/ledger_data}/logs"
+  },
+
+  "scanApi": {
+    "baseUrl": "https://scan.sv-1.global.canton.network.sync.global/api/scan",
+    "timeoutMs": 15000,
+    "maxRetries": 5,
+    "retryDelayMs": 1000
+  },
+  
+  "autoTuning": {
+    "fetchTuneWindowMs": 30000,
+    "decodeTuneWindowMs": 30000,
+    "minSuccessForScaleUp": 20,
+    "maxErrorRateForScaleDown": 0.10,
+    "minErrorsForScaleDown": 5
+  }
+}

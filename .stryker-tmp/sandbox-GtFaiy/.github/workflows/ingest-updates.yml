@@ -1,0 +1,38 @@
+name: Ingest Live Updates
+
+# DEPRECATED: This workflow used Supabase for ledger storage.
+# The project now uses local DuckDB/binary storage exclusively.
+# See scripts/ingest/fetch-updates.js for the new local-only fetcher.
+
+on:
+  workflow_dispatch: # Manual trigger only - disabled scheduled runs
+
+# Prevent concurrent runs that could conflict with database writes
+concurrency:
+  group: ledger-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: self-hosted
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: scripts/ingest
+        run: npm install
+
+      - name: Ingest Live Updates (Local Storage)
+        working-directory: scripts/ingest
+        run: node fetch-updates.js
+        env:
+          BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
+          DATA_DIR: ${{ secrets.DATA_DIR || '/data/ledger_raw' }}

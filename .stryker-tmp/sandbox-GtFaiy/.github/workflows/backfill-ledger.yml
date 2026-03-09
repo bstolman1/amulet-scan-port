@@ -1,0 +1,39 @@
+name: Backfill Ledger History
+
+# DEPRECATED: This workflow used Supabase for ledger storage.
+# The project now uses local DuckDB/binary storage exclusively.
+# See scripts/ingest/fetch-backfill.js for the new local-only backfill.
+
+on:
+  workflow_dispatch: # Manual trigger only - disabled scheduled runs
+
+# Prevent concurrent runs that could conflict with database writes
+concurrency:
+  group: ledger-ingestion
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: self-hosted
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        working-directory: scripts/ingest
+        run: npm install
+
+      - name: Run backfill (Local Storage)
+        working-directory: scripts/ingest
+        env:
+          BASE_URL: https://scan.sv-1.global.canton.network.sync.global/api/scan
+          DATA_DIR: ${{ secrets.DATA_DIR || '/data/ledger_raw' }}
+          BACKFILL_PAGE_SIZE: "500"
+        run: node fetch-backfill.js

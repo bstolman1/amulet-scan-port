@@ -1,0 +1,17 @@
+════════════════════════════════════════════════════════════
+  AMULET SCAN TEST COVERAGE SUMMARY
+  Generated: Sat Jan 24 20:48:34 UTC 2026
+════════════════════════════════════════════════════════════
+
+frontend:       93.57%
+server:         8.47%
+ingest:         N/A%
+
+────────────────────────────────────────────────────────────
+OVERALL:        N/A%
+
+
+Reports available at:
+  - /home/ben/amulet-scan-port/coverage/frontend/index.html
+  - /home/ben/amulet-scan-port/coverage/server/index.html
+  - /home/ben/amulet-scan-port/coverage/ingest/index.html

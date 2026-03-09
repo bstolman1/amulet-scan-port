@@ -1,0 +1,661 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`DashboardLayout > snapshots > matches snapshot for governance path 1`] = `
+<div>
+  <div
+    class="min-h-screen"
+  >
+    <header
+      class="glass-card border-b border-border/50 sticky top-0 z-50"
+    >
+      <div
+        class="container mx-auto px-6 py-4"
+      >
+        <div
+          class="flex items-center justify-between"
+        >
+          <a
+            class="flex items-center space-x-3 group"
+            data-discover="true"
+            href="/"
+          >
+            <div
+              class="relative"
+            >
+              <div
+                class="absolute inset-0 gradient-primary rounded-lg blur-xl opacity-50 group-hover:opacity-100 transition-smooth"
+              />
+              <div
+                class="relative gradient-primary p-2 rounded-lg"
+              >
+                <svg
+                  class="lucide lucide-database h-6 w-6 text-primary-foreground"
+                  fill="none"
+                  height="24"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <ellipse
+                    cx="12"
+                    cy="5"
+                    rx="9"
+                    ry="3"
+                  />
+                  <path
+                    d="M3 5V19A9 3 0 0 0 21 19V5"
+                  />
+                  <path
+                    d="M3 12A9 3 0 0 0 21 12"
+                  />
+                </svg>
+              </div>
+            </div>
+            <div>
+              <h1
+                class="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent"
+              >
+                SCANTON
+              </h1>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Canton Network Analytics
+              </p>
+            </div>
+          </a>
+          <nav
+            class="flex items-center gap-1"
+          >
+            <button
+              aria-controls="radix-:r47:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Overview
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r48:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth bg-primary/10 text-primary"
+              data-state="closed"
+              type="button"
+            >
+              Governance
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r49:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Burn/Mint
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r4a:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Validators
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r4b:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Rewards
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r4c:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Exchange Data
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r4d:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Services
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r4e:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Statistics
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+          </nav>
+        </div>
+      </div>
+    </header>
+    <main
+      class="container mx-auto px-6 py-8"
+    >
+      <div
+        data-testid="child-content"
+      >
+        Test Content
+      </div>
+    </main>
+    <div
+      class="fixed bottom-4 right-4 z-50"
+    >
+      <div
+        class="p-2 rounded-full shadow-lg border transition-all bg-muted border-muted-foreground/20 animate-pulse"
+        data-state="closed"
+      >
+        <svg
+          class="lucide lucide-wifi h-5 w-5 text-muted-foreground animate-pulse"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M12 20h.01"
+          />
+          <path
+            d="M2 8.82a15 15 0 0 1 20 0"
+          />
+          <path
+            d="M5 12.859a10 10 0 0 1 14 0"
+          />
+          <path
+            d="M8.5 16.429a5 5 0 0 1 7 0"
+          />
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`DashboardLayout > snapshots > matches snapshot for root path 1`] = `
+<div>
+  <div
+    class="min-h-screen"
+  >
+    <header
+      class="glass-card border-b border-border/50 sticky top-0 z-50"
+    >
+      <div
+        class="container mx-auto px-6 py-4"
+      >
+        <div
+          class="flex items-center justify-between"
+        >
+          <a
+            class="flex items-center space-x-3 group"
+            data-discover="true"
+            href="/"
+          >
+            <div
+              class="relative"
+            >
+              <div
+                class="absolute inset-0 gradient-primary rounded-lg blur-xl opacity-50 group-hover:opacity-100 transition-smooth"
+              />
+              <div
+                class="relative gradient-primary p-2 rounded-lg"
+              >
+                <svg
+                  class="lucide lucide-database h-6 w-6 text-primary-foreground"
+                  fill="none"
+                  height="24"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <ellipse
+                    cx="12"
+                    cy="5"
+                    rx="9"
+                    ry="3"
+                  />
+                  <path
+                    d="M3 5V19A9 3 0 0 0 21 19V5"
+                  />
+                  <path
+                    d="M3 12A9 3 0 0 0 21 12"
+                  />
+                </svg>
+              </div>
+            </div>
+            <div>
+              <h1
+                class="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent"
+              >
+                SCANTON
+              </h1>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Canton Network Analytics
+              </p>
+            </div>
+          </a>
+          <nav
+            class="flex items-center gap-1"
+          >
+            <button
+              aria-controls="radix-:r3u:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth bg-primary/10 text-primary"
+              data-state="closed"
+              type="button"
+            >
+              Overview
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r3v:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Governance
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r40:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Burn/Mint
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r41:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Validators
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r42:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Rewards
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r43:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Exchange Data
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r44:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Services
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+            <button
+              aria-controls="radix-:r45:"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth text-muted-foreground hover:text-foreground hover:bg-muted/50"
+              data-state="closed"
+              type="button"
+            >
+              Statistics
+              <svg
+                class="lucide lucide-chevron-down h-3.5 w-3.5"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m6 9 6 6 6-6"
+                />
+              </svg>
+            </button>
+          </nav>
+        </div>
+      </div>
+    </header>
+    <main
+      class="container mx-auto px-6 py-8"
+    >
+      <div
+        data-testid="child-content"
+      >
+        Test Content
+      </div>
+    </main>
+    <div
+      class="fixed bottom-4 right-4 z-50"
+    >
+      <div
+        class="p-2 rounded-full shadow-lg border transition-all bg-muted border-muted-foreground/20 animate-pulse"
+        data-state="closed"
+      >
+        <svg
+          class="lucide lucide-wifi h-5 w-5 text-muted-foreground animate-pulse"
+          fill="none"
+          height="24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M12 20h.01"
+          />
+          <path
+            d="M2 8.82a15 15 0 0 1 20 0"
+          />
+          <path
+            d="M5 12.859a10 10 0 0 1 14 0"
+          />
+          <path
+            d="M8.5 16.429a5 5 0 0 1 7 0"
+          />
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+`;

@@ -1,0 +1,11 @@
+# Force LF line endings for shell scripts (critical for Linux/VM deployment)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Default text handling - auto-detect
+* text=auto
+
+# Ensure consistent line endings for config files
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
