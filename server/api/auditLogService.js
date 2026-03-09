@@ -5,8 +5,8 @@
  * backfilling historical overrides, computing stats, and filtering.
  */
 
-import { readAuditLog, writeAuditLog, readCache } from './fileRepository.js';
-import { readOverrides } from './fileRepository.js';
+import { readAuditLog, writeAuditLog, readCache } from '../repositories/fileRepository.js';
+import { readOverrides } from '../repositories/fileRepository.js';
 import { findOriginalClassification } from './overrideService.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────

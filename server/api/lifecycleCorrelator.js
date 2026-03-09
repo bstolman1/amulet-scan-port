@@ -20,7 +20,7 @@ import {
   ENTITY_PARTIAL_SCORE,
   APP_NAME_SCORE,
   CIP_EXACT_SCORE,
-} from './constants.js';
+} from '../utils/constants.js';
 
 // ── Type-detection patterns ────────────────────────────────────────────────
 
