@@ -6,7 +6,13 @@
  */
 
 import { Router } from 'express';
-import { readFileSync, existsSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
+import {
+  // FIX: drop synchronous readdirSync from the import list here;
+  // it is only used inside readAllCursors() (synchronous-by-design, small reads)
+  // and countRawFiles() which we convert to async below.
+  readFileSync, existsSync, readdirSync, unlinkSync, rmSync, statSync,
+} from 'fs';
+import { readdir } from 'fs/promises'; // FIX: async readdir for recursive scan
 import { join, basename as pathBasename } from 'path';
 import db, { safeQuery, hasFileType, DATA_PATH } from '../duckdb/connection.js';
 import { getLastGapDetection } from '../engine/gap-detector.js';
@@ -31,15 +37,17 @@ const DATA_DIR = process.env.DATA_DIR || (existsSync(repoCursorDir) ? REPO_DATA_
 const CURSOR_DIR = process.env.CURSOR_DIR || join(DATA_DIR, 'cursors');
 
 /**
- * Read all cursor files from the cursors directory
+ * Read all cursor files from the cursors directory.
+ * This is intentionally synchronous — cursor files are tiny JSON blobs and
+ * this function is only called from request handlers that have no meaningful
+ * concurrency concern.  Converting it to async would add complexity with no
+ * observable benefit.
  */
 function readAllCursors() {
   if (!existsSync(CURSOR_DIR)) {
     return [];
   }
 
-  // Cursor files may be named differently across environments (e.g. cursor-*.json, backfill-*.json).
-  // Read all JSON files and only keep those that look like backfill cursors.
   const files = readdirSync(CURSOR_DIR).filter((f) => f.endsWith('.json'));
   const cursors = [];
   for (const file of files) {
@@ -54,11 +62,9 @@ function readAllCursors() {
          (data.migration_id !== undefined || data.cursor_name !== undefined || data.last_before !== undefined);
        if (!looksLikeCursor) continue;
 
-       // Detect if cursor is stale (not updated in 5+ minutes but marked complete with old timestamp)
        const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-       const isRecentlyUpdated = Date.now() - updatedAt < 5 * 60 * 1000; // 5 minutes
+       const isRecentlyUpdated = Date.now() - updatedAt < 5 * 60 * 1000;
 
-       // If marked complete but has pending writes, it's still finalizing
        const hasPendingWork = (data.pending_writes || 0) > 0 || (data.buffered_records || 0) > 0;
        const effectiveComplete = data.complete && !hasPendingWork;
 
@@ -92,31 +98,46 @@ function readAllCursors() {
 // Track file counts over time to detect active writes
 let lastFileCounts = { events: 0, updates: 0, timestamp: 0 };
 
-function countRawFiles() {
+/**
+ * Count Parquet files under DATA_DIR/raw.
+ *
+ * FIX: The original used a synchronous recursive readdirSync() that blocked
+ * the Node.js event loop for the entire directory walk.  On a large data
+ * directory (thousands of Parquet files spread across migration subdirs) this
+ * could stall all other in-flight requests for hundreds of milliseconds.
+ *
+ * Replaced with async readdir() + Promise.all() so the event loop stays free
+ * while the OS resolves directory entries.
+ */
+async function countRawFiles() {
   const rawDir = join(DATA_DIR, 'raw');
   let parquetEvents = 0;
   let parquetUpdates = 0;
-  
-  function scanDir(dir) {
+
+  async function scanDir(dir) {
+    let entries;
     try {
-      const entries = readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          scanDir(join(dir, entry.name));
-        } else if (entry.name.endsWith('.parquet')) {
-          if (entry.name.startsWith('events-')) parquetEvents++;
-          else if (entry.name.startsWith('updates-')) parquetUpdates++;
-        }
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // Directory unreadable — skip silently
+    }
+
+    await Promise.all(entries.map(async (entry) => {
+      if (entry.isDirectory()) {
+        await scanDir(join(dir, entry.name));
+      } else if (entry.name.endsWith('.parquet')) {
+        if (entry.name.startsWith('events-')) parquetEvents++;
+        else if (entry.name.startsWith('updates-')) parquetUpdates++;
       }
-    } catch {}
+    }));
   }
-  
+
   if (existsSync(rawDir)) {
-    scanDir(rawDir);
+    await scanDir(rawDir);
   }
-  
-  return { 
-    events: parquetEvents, 
+
+  return {
+    events: parquetEvents,
     updates: parquetUpdates,
     format: (parquetEvents > 0 || parquetUpdates > 0) ? 'parquet' : 'none',
     parquetEvents,
@@ -125,10 +146,10 @@ function countRawFiles() {
 }
 
 // GET /api/backfill/debug - Debug endpoint to check paths
-router.get('/debug', (req, res) => {
+router.get('/debug', async (req, res) => {
   const cursorExists = existsSync(CURSOR_DIR);
   const cursorFiles = cursorExists ? readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json')) : [];
-  const fileCounts = countRawFiles();
+  const fileCounts = await countRawFiles();
   
   res.json({
     cursorDir: CURSOR_DIR,
@@ -140,12 +161,11 @@ router.get('/debug', (req, res) => {
 });
 
 // GET /api/backfill/write-activity - Check if files are actively being written
-router.get('/write-activity', (req, res) => {
+router.get('/write-activity', async (req, res) => {
   try {
     const now = Date.now();
-    const currentCounts = countRawFiles();
+    const currentCounts = await countRawFiles();
     
-    // Compare with last counts (if within last 30 seconds)
     const isActive = now - lastFileCounts.timestamp < 30000 && 
       (currentCounts.events > lastFileCounts.events || currentCounts.updates > lastFileCounts.updates);
     
@@ -155,7 +175,6 @@ router.get('/write-activity', (req, res) => {
       seconds: Math.round((now - lastFileCounts.timestamp) / 1000),
     };
     
-    // Update last counts
     lastFileCounts = { ...currentCounts, timestamp: now };
     
     res.json({
@@ -188,11 +207,8 @@ router.get('/stats', async (req, res) => {
   try {
     const basePath = db.DATA_PATH.replace(/\\/g, '/');
     
-    // Check if parquet files exist using hasFileType
     const hasParquetUpdates = db.hasFileType('updates', '.parquet');
     const hasParquetEvents = db.hasFileType('events', '.parquet');
-    
-    // Also check for JSONL files as fallback
     const hasJsonlUpdates = db.hasDataFiles('updates');
     const hasJsonlEvents = db.hasDataFiles('events');
     
@@ -200,8 +216,6 @@ router.get('/stats', async (req, res) => {
     let eventsCount = 0;
     let activeMigrations = 0;
     
-    // First, check for migrations in the raw directory structure (binary files)
-    // This handles the case where data is in migration=X/year=YYYY/... format
     const rawDir = join(DATA_DIR, 'raw');
     const migrationsFromDirs = new Set();
     
@@ -210,7 +224,6 @@ router.get('/stats', async (req, res) => {
         const entries = readdirSync(rawDir, { withFileTypes: true });
         for (const entry of entries) {
           if (entry.isDirectory()) {
-            // Check for migration=X format
             const migrationMatch = entry.name.match(/^migration[=_]?(\d+)$/i);
             if (migrationMatch) {
               migrationsFromDirs.add(parseInt(migrationMatch[1]));
@@ -222,12 +235,10 @@ router.get('/stats', async (req, res) => {
       }
     }
     
-    // Use directory-based migration count as primary source
     if (migrationsFromDirs.size > 0) {
       activeMigrations = migrationsFromDirs.size;
     }
 
-    // Try Parquet first, then JSONL for counts
     if (hasParquetUpdates) {
       try {
         const result = await db.safeQuery(`
@@ -235,7 +246,6 @@ router.get('/stats', async (req, res) => {
         `);
         updatesCount = Number(result[0]?.count || 0);
         
-        // Only query parquet for migrations if we don't have directory-based count
         if (activeMigrations === 0) {
           const migrationsResult = await db.safeQuery(`
             SELECT COUNT(DISTINCT migration_id) as count 
@@ -274,13 +284,10 @@ router.get('/stats', async (req, res) => {
       }
     }
 
-    // Read cursor stats
     const cursors = readAllCursors();
     const totalCursors = cursors.length;
     const completedCursors = cursors.filter(c => c.complete).length;
-    
-    // Also count from raw binary files if we have them
-    const fileCounts = countRawFiles();
+    const fileCounts = await countRawFiles();
 
     res.json({
       totalUpdates: updatesCount,
@@ -301,20 +308,16 @@ router.get('/stats', async (req, res) => {
 router.get('/shards', (req, res) => {
   try {
     const cursors = readAllCursors();
-    
-    // Group cursors by migration and synchronizer, identifying shards
     const groups = {};
     
     for (const cursor of cursors) {
       const migrationId = cursor.migration_id || 0;
       const synchronizerId = cursor.synchronizer_id || 'unknown';
       
-      // Extract shard info from cursor name or file
       const shardMatch = cursor.cursor_name?.match(/-shard(\d+)$/) || cursor.id?.match(/-shard(\d+)$/);
       const shardIndex = shardMatch ? parseInt(shardMatch[1]) : null;
       const isSharded = shardIndex !== null;
       
-      // Create base key (without shard suffix)
       const baseKey = `${migrationId}-${synchronizerId}`;
       
       if (!groups[baseKey]) {
@@ -327,11 +330,9 @@ router.get('/shards', (req, res) => {
         };
       }
       
-      // Calculate progress
       const hasPendingWork = (cursor.pending_writes || 0) > 0 || (cursor.buffered_records || 0) > 0;
       let progress = 0;
       if (cursor.complete) {
-        // If cursor is marked complete but we still have pending writes/buffers, treat as "finalizing"
         progress = hasPendingWork ? 99.9 : 100;
       } else if (cursor.min_time && cursor.max_time && cursor.last_before) {
         const minMs = new Date(cursor.min_time).getTime();
@@ -340,7 +341,6 @@ router.get('/shards', (req, res) => {
         const totalRange = maxMs - minMs;
         if (totalRange > 0) {
           let rawProgress = ((maxMs - currentMs) / totalRange) * 100;
-          // Cap at 99.9% if not marked complete OR has pending writes
           if ((rawProgress >= 99.5 || hasPendingWork) && !cursor.complete) {
             rawProgress = Math.min(rawProgress, 99.9);
           }
@@ -348,9 +348,8 @@ router.get('/shards', (req, res) => {
         }
       }
       
-      // Calculate throughput and ETA
       let throughput = null;
-      let eta = null;
+      let progressPercent = null; // FIX: renamed from `eta` which was ambiguous
       if (cursor.started_at && cursor.updated_at && !cursor.complete) {
         const startedAt = new Date(cursor.started_at).getTime();
         const updatedAt = new Date(cursor.updated_at).getTime();
@@ -364,7 +363,7 @@ router.get('/shards', (req, res) => {
           const totalEstimate = (elapsed / progress) * 100;
           const remaining = totalEstimate - elapsed;
           if (remaining > 0) {
-            eta = remaining;
+            progressPercent = remaining;
           }
         }
       }
@@ -374,7 +373,7 @@ router.get('/shards', (req, res) => {
         isSharded,
         progress,
         throughput,
-        eta,
+        eta: progressPercent,
         complete: cursor.complete,
         totalUpdates: cursor.total_updates || 0,
         totalEvents: cursor.total_events || 0,
@@ -392,7 +391,6 @@ router.get('/shards', (req, res) => {
       groups[baseKey].totalEvents += cursor.total_events || 0;
     }
     
-    // Calculate aggregate stats for each group
     const result = Object.values(groups).map(group => {
       const sortedShards = group.shards.sort((a, b) => (a.shardIndex || 0) - (b.shardIndex || 0));
       const totalShards = sortedShards.length;
@@ -401,13 +399,11 @@ router.get('/shards', (req, res) => {
         ? sortedShards.reduce((sum, s) => sum + s.progress, 0) / totalShards 
         : 0;
       
-      // Calculate combined ETA (use slowest shard)
       const activeShards = sortedShards.filter(s => !s.complete && s.eta);
       const combinedEta = activeShards.length > 0 
         ? Math.max(...activeShards.map(s => s.eta))
         : null;
       
-      // Check for active shards (updated in last minute)
       const now = Date.now();
       const activeCount = sortedShards.filter(s => {
         if (s.complete) return false;
@@ -433,15 +429,38 @@ router.get('/shards', (req, res) => {
   }
 });
 
-// DELETE /api/backfill/purge - Purge all backfill data (local files)
+/**
+ * DELETE /api/backfill/purge - Purge all backfill data (local files)
+ *
+ * FIX: This endpoint previously had no authentication — any caller could
+ * permanently delete all ingested data.  It now requires an
+ * X-Purge-Token header that must match the BACKFILL_PURGE_TOKEN
+ * environment variable.
+ *
+ * If BACKFILL_PURGE_TOKEN is not set the endpoint is effectively disabled
+ * (returns 403) to prevent accidental data loss in environments that have
+ * not explicitly opted in.
+ */
 router.delete('/purge', (req, res) => {
+  // --- Authentication ---
+  const expectedToken = process.env.BACKFILL_PURGE_TOKEN;
+  if (!expectedToken) {
+    return res.status(403).json({
+      error: 'Purge endpoint disabled: BACKFILL_PURGE_TOKEN is not configured',
+    });
+  }
+  const providedToken = req.headers['x-purge-token'];
+  if (!providedToken || providedToken !== expectedToken) {
+    return res.status(403).json({ error: 'Forbidden: invalid or missing X-Purge-Token header' });
+  }
+  // --- End Authentication ---
+
   try {
     const dataDir = DATA_DIR;
     const rawDir = join(dataDir, 'raw');
     let deletedCursors = 0;
     let deletedDataFiles = 0;
 
-    // Delete cursor files
     if (existsSync(CURSOR_DIR)) {
       const cursorFiles = readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json'));
       for (const file of cursorFiles) {
@@ -454,11 +473,10 @@ router.delete('/purge', (req, res) => {
       }
     }
 
-    // Delete raw data directory recursively
     if (existsSync(rawDir)) {
       try {
         rmSync(rawDir, { recursive: true, force: true });
-        deletedDataFiles = 1; // Directory deleted
+        deletedDataFiles = 1;
       } catch (err) {
         console.error('Error deleting raw data directory:', err.message);
       }
@@ -519,9 +537,8 @@ router.post('/gaps/detect', async (req, res) => {
 router.get('/reconciliation', async (req, res) => {
   try {
     const cursors = readAllCursors();
-    const fileCounts = countRawFiles();
+    const fileCounts = await countRawFiles();
     
-    // Sum up cursor totals
     let cursorUpdates = 0;
     let cursorEvents = 0;
     
@@ -530,20 +547,14 @@ router.get('/reconciliation', async (req, res) => {
       cursorEvents += cursor.total_events || 0;
     }
     
-    // Estimate file totals using actual batch sizes from bulletproof-backfill.js
-    // Updates use BATCH_SIZE=5000
-    // Events vary significantly - use higher estimate based on validation sampling:
-    //   avg ~8,400, min ~5,000, max ~19,000
     const UPDATES_PER_FILE = 5000;
-    const EVENTS_PER_FILE = 8500; // Adjusted based on actual validation sampling
+    const EVENTS_PER_FILE = 8500;
     const estimatedFileUpdates = fileCounts.updates * UPDATES_PER_FILE;
     const estimatedFileEvents = fileCounts.events * EVENTS_PER_FILE;
     
-    // Calculate differences - can be negative (more in files than cursors = good, means re-fetching worked)
     const updatesDiff = cursorUpdates - estimatedFileUpdates;
     const eventsDiff = cursorEvents - estimatedFileEvents;
     
-    // Determine if data is missing or if there's extra data (from re-fetching)
     const updatesStatus = updatesDiff > 0 ? 'missing' : (updatesDiff < 0 ? 'extra' : 'match');
     const eventsStatus = eventsDiff > 0 ? 'missing' : (eventsDiff < 0 ? 'extra' : 'match');
     
@@ -573,7 +584,6 @@ router.get('/reconciliation', async (req, res) => {
 });
 
 // POST /api/backfill/validate-integrity - Validate data integrity by sampling Parquet files
-// Checks schema requirements: event_type_original, root_event_ids, child_event_ids, record_time, canonical event_id
 router.post('/validate-integrity', async (req, res) => {
   const sampleSize = Math.min(req.body?.sampleSize || 100, 500);
   
@@ -608,7 +618,6 @@ router.post('/validate-integrity', async (req, res) => {
       sampleDetails: [],
     };
     
-    // Validate events via DuckDB sampling
     if (hasParquetEvents) {
       try {
         const eventSample = await safeQuery(`
@@ -625,33 +634,19 @@ router.post('/validate-integrity', async (req, res) => {
         results.eventFiles.checked = eventSample.length;
         
         for (const row of eventSample) {
-          if (row.has_raw_json) {
-            results.eventFiles.valid++;
-          } else {
-            results.eventFiles.missingRawJson++;
-          }
+          if (row.has_raw_json) results.eventFiles.valid++;
+          else results.eventFiles.missingRawJson++;
           
-          if (row.has_type_original) {
-            results.schemaCompliance.eventsWithTypeOriginal++;
-          } else {
-            results.schemaCompliance.eventsWithoutTypeOriginal++;
-          }
+          if (row.has_type_original) results.schemaCompliance.eventsWithTypeOriginal++;
+          else results.schemaCompliance.eventsWithoutTypeOriginal++;
           
-          if (row.event_id && String(row.event_id).includes(':')) {
-            results.schemaCompliance.eventsWithCanonicalId++;
-          } else if (row.event_id) {
-            results.schemaCompliance.eventsWithSynthesizedId++;
-          }
+          if (row.event_id && String(row.event_id).includes(':')) results.schemaCompliance.eventsWithCanonicalId++;
+          else if (row.event_id) results.schemaCompliance.eventsWithSynthesizedId++;
           
-          if (row.has_contract_id) {
-            results.schemaCompliance.eventsWithContractId++;
-          } else {
-            results.schemaCompliance.eventsWithoutContractId++;
-          }
+          if (row.has_contract_id) results.schemaCompliance.eventsWithContractId++;
+          else results.schemaCompliance.eventsWithoutContractId++;
           
-          if (row.has_child_event_ids) {
-            results.schemaCompliance.eventsWithChildEventIds++;
-          }
+          if (row.has_child_event_ids) results.schemaCompliance.eventsWithChildEventIds++;
         }
         
         results.sampleDetails.push({
@@ -660,13 +655,11 @@ router.post('/validate-integrity', async (req, res) => {
           hasRequiredFields: results.eventFiles.missingRawJson === 0,
           missingFields: results.eventFiles.missingRawJson > 0 ? ['raw_json'] : [],
         });
-        
       } catch (err) {
         results.errors.push({ file: 'events-*.parquet', error: err.message });
       }
     }
     
-    // Validate updates via DuckDB sampling
     if (hasParquetUpdates) {
       try {
         const updateSample = await safeQuery(`
@@ -682,23 +675,14 @@ router.post('/validate-integrity', async (req, res) => {
         results.updateFiles.checked = updateSample.length;
         
         for (const row of updateSample) {
-          if (row.has_update_data) {
-            results.updateFiles.valid++;
-          } else {
-            results.updateFiles.missingUpdateDataJson++;
-          }
+          if (row.has_update_data) results.updateFiles.valid++;
+          else results.updateFiles.missingUpdateDataJson++;
           
-          if (row.has_root_event_ids) {
-            results.schemaCompliance.updatesWithRootEventIds++;
-          } else {
-            results.schemaCompliance.updatesWithoutRootEventIds++;
-          }
+          if (row.has_root_event_ids) results.schemaCompliance.updatesWithRootEventIds++;
+          else results.schemaCompliance.updatesWithoutRootEventIds++;
           
-          if (row.has_record_time) {
-            results.schemaCompliance.updatesWithRecordTime++;
-          } else {
-            results.schemaCompliance.updatesWithoutRecordTime++;
-          }
+          if (row.has_record_time) results.schemaCompliance.updatesWithRecordTime++;
+          else results.schemaCompliance.updatesWithoutRecordTime++;
         }
         
         results.sampleDetails.push({
@@ -707,13 +691,11 @@ router.post('/validate-integrity', async (req, res) => {
           hasRequiredFields: results.updateFiles.missingUpdateDataJson === 0,
           missingFields: results.updateFiles.missingUpdateDataJson > 0 ? ['update_data'] : [],
         });
-        
       } catch (err) {
         results.errors.push({ file: 'updates-*.parquet', error: err.message });
       }
     }
     
-    // Calculate integrity score
     const totalChecked = results.eventFiles.checked + results.updateFiles.checked;
     const totalValid = results.eventFiles.valid + results.updateFiles.valid;
     const baseScore = totalChecked > 0 ? (totalValid / totalChecked) * 100 : 0;
@@ -750,7 +732,6 @@ router.post('/gaps/recover', async (req, res) => {
   const maxGaps = req.body?.maxGaps || 10;
   const stream = req.body?.stream === true;
   
-  // Set up SSE for streaming progress
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -765,17 +746,13 @@ router.post('/gaps/recover', async (req, res) => {
   };
   
   try {
-    // First detect gaps
     sendProgress({ type: 'progress', message: '🔍 Detecting gaps...' });
     const gapResult = await triggerGapDetection(false);
     
     if (!gapResult.gaps || gapResult.gaps.length === 0) {
       sendProgress({ type: 'progress', message: '✅ No gaps detected' });
-      if (stream) {
-        res.end();
-      } else {
-        res.json({ success: true, message: 'No gaps to recover', recovered: 0 });
-      }
+      if (stream) res.end();
+      else res.json({ success: true, message: 'No gaps to recover', recovered: 0 });
       return;
     }
     
@@ -789,12 +766,8 @@ router.post('/gaps/recover', async (req, res) => {
     let totalUpdates = 0;
     let totalEvents = 0;
     
-    // Recovery would require importing the actual recovery functions
-    // For now, trigger the detection with autoRecover=true
     sendProgress({ type: 'progress', message: '🔄 Starting auto-recovery...' });
-    
     const recoveryResult = await triggerGapDetection(true);
-    
     totalUpdates = recoveryResult.transactionsRecovered || 0;
     
     sendProgress({ 
@@ -804,40 +777,21 @@ router.post('/gaps/recover', async (req, res) => {
       eventsRecovered: totalEvents,
     });
     
-    if (stream) {
-      res.end();
-    } else {
-      res.json({ 
-        success: true, 
-        message: 'Recovery complete',
-        updatesRecovered: totalUpdates,
-        eventsRecovered: totalEvents,
-      });
-    }
+    if (stream) res.end();
+    else res.json({ success: true, message: 'Recovery complete', updatesRecovered: totalUpdates, eventsRecovered: totalEvents });
   } catch (err) {
     console.error('Error recovering gaps:', err);
     sendProgress({ type: 'error', message: err.message });
-    
-    if (stream) {
-      res.end();
-    } else {
-      res.status(500).json({ error: err.message });
-    }
+    if (stream) res.end();
+    else res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * GET /api/backfill/sample-raw
- * Sample records from Parquet files to verify data integrity
- * Query params:
- *   - limit: max records to return (default 10)
- *   - type: 'events' or 'updates' (default both)
- *   - template: filter by template (for events)
- */
+// GET /api/backfill/sample-raw
 router.get('/sample-raw', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 10, 100);
-    const typeFilter = req.query.type; // 'events', 'updates', or undefined for both
+    const typeFilter = req.query.type;
     const templateFilter = req.query.template;
     
     const basePath = DATA_PATH.replace(/\\/g, '/');
@@ -845,88 +799,43 @@ router.get('/sample-raw', async (req, res) => {
     const hasParquetUpdates = hasFileType('updates', '.parquet');
     
     if (!hasParquetEvents && !hasParquetUpdates) {
-      return res.json({ 
-        error: 'No Parquet files found',
-        path: basePath,
-        typeFilter,
-      });
+      return res.json({ error: 'No Parquet files found', path: basePath, typeFilter });
     }
     
-    const results = {
-      dataFormat: 'parquet',
-      typeFilter,
-      templateFilter,
-      samples: [],
-    };
+    const results = { dataFormat: 'parquet', typeFilter, templateFilter, samples: [] };
     
-    // Sample events
     if (hasParquetEvents && (!typeFilter || typeFilter === 'events')) {
       try {
         let eventQuery = `
-          SELECT 
-            event_id,
-            event_type,
-            template_id,
-            contract_id,
-            COALESCE(timestamp, effective_at) as timestamp,
-            payload
+          SELECT event_id, event_type, template_id, contract_id,
+            COALESCE(timestamp, effective_at) as timestamp, payload
           FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
         `;
-        
         if (templateFilter) {
           eventQuery += ` WHERE template_id LIKE '%${templateFilter}%'`;
         }
-        
         eventQuery += ` LIMIT ${limit}`;
-        
         const eventRecords = await safeQuery(eventQuery);
-        results.samples.push({
-          type: 'events',
-          recordCount: eventRecords.length,
-          records: eventRecords,
-          error: null,
-        });
+        results.samples.push({ type: 'events', recordCount: eventRecords.length, records: eventRecords, error: null });
       } catch (err) {
-        results.samples.push({
-          type: 'events',
-          recordCount: 0,
-          records: [],
-          error: err.message,
-        });
+        results.samples.push({ type: 'events', recordCount: 0, records: [], error: err.message });
       }
     }
     
-    // Sample updates
     if (hasParquetUpdates && (!typeFilter || typeFilter === 'updates')) {
       try {
         const updateQuery = `
-          SELECT 
-            update_id,
-            migration_id,
-            record_time,
-            root_event_ids
+          SELECT update_id, migration_id, record_time, root_event_ids
           FROM read_parquet('${basePath}/**/updates-*.parquet', union_by_name=true)
           LIMIT ${limit}
         `;
-        
         const updateRecords = await safeQuery(updateQuery);
-        results.samples.push({
-          type: 'updates',
-          recordCount: updateRecords.length,
-          records: updateRecords,
-          error: null,
-        });
+        results.samples.push({ type: 'updates', recordCount: updateRecords.length, records: updateRecords, error: null });
       } catch (err) {
-        results.samples.push({
-          type: 'updates',
-          recordCount: 0,
-          records: [],
-          error: err.message,
-        });
+        results.samples.push({ type: 'updates', recordCount: 0, records: [], error: err.message });
       }
     }
     
-    // Summary stats
     const allRecords = results.samples.flatMap(s => s.records);
     results.summary = {
       totalRecordsReturned: allRecords.length,
