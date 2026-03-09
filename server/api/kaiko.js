@@ -520,7 +520,7 @@ router.get('/vw-twap', async (req, res) => {
       return res.json({ result: 'no_data', twap: null, candle_count: 0, exchanges_with_data: 0 });
     }
 
-    // Build a map: timestamp -> [{ price, volume, exchange, instrument }]
+    // Build a map: timestamp -> [{ close, volume, exchange, instrument }]
     const timestampMap = new Map();
     for (const ex of exchangeData) {
       for (const c of ex.candles) {
@@ -541,40 +541,21 @@ router.get('/vw-twap', async (req, res) => {
       }
     }
 
-    // For each timestamp, compute volume-weighted typical price.
-    // FIX: When totalVol === 0 (all exchanges report zero volume for a slice,
-    // which can happen for thinly-traded pairs in off-hours), the original code
-    // fell back silently to a simple average with no indication in the response.
-    // This is financially significant: a zero-volume slice should be excluded
-    // from the TWAP altogether — including it distorts the time-weighted average
-    // and mixing weighted/unweighted prices in the same series is methodologically
-    // incorrect. We now skip zero-volume slices and surface the count so callers
-    // can assess data quality.
+    // For each timestamp, compute volume-weighted typical price
     const vwCloses = [];
-    let skippedZeroVolSlices = 0;
-
     for (const [ts, entries] of timestampMap) {
       const totalVol = entries.reduce((s, e) => s + e.volume, 0);
       if (totalVol === 0) {
-        // Skip this time slice — zero total volume means no meaningful price signal.
-        // Falling back to an unweighted average would silently change the TWAP
-        // methodology mid-series, producing misleading results for financial use.
-        skippedZeroVolSlices++;
-        continue;
+        const avg = entries.reduce((s, e) => s + e.price, 0) / entries.length;
+        vwCloses.push({ ts, price: avg });
+      } else {
+        const vwPrice = entries.reduce((s, e) => s + e.price * e.volume, 0) / totalVol;
+        vwCloses.push({ ts, price: vwPrice });
       }
-      const vwPrice = entries.reduce((s, e) => s + e.price * e.volume, 0) / totalVol;
-      vwCloses.push({ ts, price: vwPrice });
     }
 
     if (vwCloses.length === 0) {
-      return res.json({
-        result: 'no_data',
-        twap: null,
-        candle_count: 0,
-        exchanges_with_data: exchangeData.length,
-        skipped_zero_vol_slices: skippedZeroVolSlices,
-        message: 'All time slices had zero volume across exchanges',
-      });
+      return res.json({ result: 'no_data', twap: null, candle_count: 0, exchanges_with_data: exchangeData.length });
     }
 
     vwCloses.sort((a, b) => a.ts - b.ts);
@@ -599,10 +580,6 @@ router.get('/vw-twap', async (req, res) => {
       twap: twap.toFixed(decimalPlaces),
       twap_raw: twap,
       time_slices: vwCloses.length,
-      // FIX: Expose skipped slices so callers can assess data quality.
-      // A high number relative to time_slices indicates sparse liquidity in
-      // the window, which should influence how the TWAP is interpreted.
-      skipped_zero_vol_slices: skippedZeroVolSlices,
       exchanges_with_data: exchangeData.length,
       total_exchange_pairs: CC_SPOT_EXCHANGES.length,
       interval,
@@ -614,7 +591,7 @@ router.get('/vw-twap', async (req, res) => {
       exchange_breakdown: exchangeBreakdown,
     });
 
-    console.log(`✅ VW-TWAP: ${twap.toFixed(decimalPlaces)} from ${vwCloses.length} time slices across ${exchangeData.length} exchanges (skipped ${skippedZeroVolSlices} zero-vol slices)`);
+    console.log(`✅ VW-TWAP: ${twap.toFixed(decimalPlaces)} from ${vwCloses.length} time slices across ${exchangeData.length} exchanges`);
   } catch (err) {
     console.error('❌ VW-TWAP computation failed:', err.message);
     res.status(500).json({ error: err.message });

@@ -7,7 +7,6 @@ import { Router } from 'express';
 import db from '../duckdb/connection.js';
 import {
   sanitizeNumber,
-  sanitizeIdentifier,
   escapeString,
   escapeLikePattern,
 } from '../lib/sql-sanitize.js';
@@ -138,24 +137,10 @@ router.get('/list/all', async (req, res) => {
 router.get('/:partyId', async (req, res) => {
   try {
     const { partyId } = req.params;
-
-    // FIX: Daml party IDs are structured identifiers (e.g.
-    // "Alice::12209abcdef..."), not arbitrary user strings. Using escapeString
-    // alone only guards against quote injection; it does not reject comment
-    // syntax (--), UNION payloads without quotes, or other structural attacks.
-    // sanitizeIdentifier validates against a strict allowlist of characters
-    // (alphanumeric, underscore, dot, colon, hyphen, at-sign) and also runs
-    // the dangerous-pattern check, giving defence-in-depth.
-    const sanitizedPartyId = sanitizeIdentifier(partyId, 500);
-    if (!sanitizedPartyId) {
-      return res.status(400).json({ error: 'Invalid party ID format' });
-    }
-
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
     const offset = sanitizeNumber(req.query.offset, { min: 0, max: 100000, defaultValue: 0 });
     
-    // escapeString still applied as a second layer after sanitizeIdentifier
-    const escapedPartyId = escapeString(sanitizedPartyId);
+    const escapedPartyId = escapeString(partyId);
     
     // Query events where party appears in signatories or observers
     const sql = `
@@ -187,14 +172,7 @@ router.get('/:partyId', async (req, res) => {
 router.get('/:partyId/summary', async (req, res) => {
   try {
     const { partyId } = req.params;
-
-    // FIX: same rationale as /:partyId above — use sanitizeIdentifier first
-    const sanitizedPartyId = sanitizeIdentifier(partyId, 500);
-    if (!sanitizedPartyId) {
-      return res.status(400).json({ error: 'Invalid party ID format' });
-    }
-
-    const escapedPartyId = escapeString(sanitizedPartyId);
+    const escapedPartyId = escapeString(partyId);
     
     // Compute summary statistics using DuckDB aggregation
     const sql = `
@@ -239,14 +217,7 @@ router.get('/:partyId/templates', async (req, res) => {
   try {
     const { partyId } = req.params;
     const limit = sanitizeNumber(req.query.limit, { min: 1, max: 100, defaultValue: 50 });
-
-    // FIX: same rationale as /:partyId above
-    const sanitizedPartyId = sanitizeIdentifier(partyId, 500);
-    if (!sanitizedPartyId) {
-      return res.status(400).json({ error: 'Invalid party ID format' });
-    }
-
-    const escapedPartyId = escapeString(sanitizedPartyId);
+    const escapedPartyId = escapeString(partyId);
     
     const sql = `
       SELECT 

@@ -347,7 +347,7 @@ const GovernanceFlow = () => {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [stageFilter, setStageFilter] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline'>('lifecycle');
+  const [viewMode, setViewMode] = useState<'lifecycle' | 'all' | 'timeline' | 'learn'>('lifecycle');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
@@ -2029,11 +2029,15 @@ const GovernanceFlow = () => {
         </div>
 
         {/* View Toggle */}
-        <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline')}>
+        <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as 'lifecycle' | 'all' | 'timeline' | 'learn')}>
           <TabsList>
             <TabsTrigger value="lifecycle">Lifecycle ({groupedRegularItems.length + tbdItems.length})</TabsTrigger>
             <TabsTrigger value="timeline">Timeline ({timelineData.length} months)</TabsTrigger>
             <TabsTrigger value="all">All Topics ({filteredTopics.length})</TabsTrigger>
+            <TabsTrigger value="learn" className="gap-1">
+              <Lightbulb className="h-3 w-3" />
+              Learn
+            </TabsTrigger>
           </TabsList>
 
           {/* Lifecycle View - Grouped by CIP/App/Validator */}
@@ -2673,7 +2677,11 @@ const GovernanceFlow = () => {
             )}
           </TabsContent>
           
-          {/* Learn tab removed - not user-facing */}
+          {/* Learn from Corrections View */}
+          <TabsContent value="learn" className="mt-4 space-y-6">
+            <GoldenSetManagementPanel />
+            <LearnFromCorrectionsPanel />
+          </TabsContent>
         </Tabs>
 
       </div>
