@@ -11,21 +11,21 @@
 import {
   readLearnedPatternsFile,
   writeLearnedPatternsFile,
-} from '../repositories/fileRepository.js';
+} from './fileRepository.js';
 import {
   DECAY_HALF_LIFE_DAYS,
   MIN_CONFIDENCE,
   REINFORCEMENT_BOOST,
   SURVIVAL_REINFORCEMENT_MULTIPLIER,
   REINFORCEMENT_LOG_MAX,
-} from '../utils/constants.js';
+} from './constants.js';
 
 // ── Module-level singleton ─────────────────────────────────────────────────
 
 /** @type {{ data: LearnedPatternsFile | null, dirty: boolean }} */
 let _state = { data: null, dirty: false };
 
-/** @returns {Promise<import('../repositories/fileRepository.js').LearnedPatternsFile | null>} */
+/** @returns {Promise<import('./fileRepository.js').LearnedPatternsFile | null>} */
 async function getFileData() {
   if (_state.data === null) {
     _state.data = await readLearnedPatternsFile();
