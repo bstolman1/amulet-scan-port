@@ -115,7 +115,7 @@ const Governance = () => {
             element.classList.remove("ring-2", "ring-pink-500", "ring-offset-2", "ring-offset-background");
           }, 3000);
         }
-      }, 300);
+      }, 1000);
       return () => clearTimeout(timer);
     }
   }, [highlightedProposalId, isLoading]);
