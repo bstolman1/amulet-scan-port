@@ -278,6 +278,7 @@ export async function checkAllEndpoints() {
         
         const probeMs = Date.now() - probeStart;
         
+        // Treat 403 as unhealthy (SV blocking requests) alongside 5xx
         if (response.ok) {
           recordSuccess(endpoint.url);
           console.log(`[Endpoint Rotation] ✅ ${endpoint.name} — HTTP ${response.status} in ${probeMs}ms`);
