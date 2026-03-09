@@ -1770,7 +1770,7 @@ const GovernanceFlow = () => {
         )}
 
         {/* Group Stats */}
-        {data && Object.keys(data.stats.groupCounts).length > 0 && (
+        {data && data.stats?.groupCounts && Object.keys(data.stats.groupCounts).length > 0 && (
           <Card className="bg-muted/20">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium">Topics by Group</CardTitle>
