@@ -217,9 +217,8 @@ async function proxyRequest(req, res, method) {
       
       console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - reqStart}ms`);
 
-      // Check for server errors or access denied that warrant rotation
-      // 403 = SV blocking our IP/request; rotating to another SV typically resolves it
-      if (scanRes.status >= 500 || scanRes.status === 429 || scanRes.status === 403) {
+      // Check for server errors that warrant rotation
+      if (scanRes.status >= 500 || scanRes.status === 429) {
         console.warn(`[Scan Proxy] ⚠ ${endpoint.name} returned ${scanRes.status}, rotating to next endpoint...`);
         recordFailure(endpoint.url, new Error(`HTTP ${scanRes.status}`));
         const nextEndpoint = rotateToNextHealthy();

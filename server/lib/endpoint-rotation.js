@@ -187,9 +187,9 @@ export async function fetchWithFailover(path, options = {}) {
         return response;
       }
       
-      // Server returned an error status or access denied
-      if (response.status >= 500 || response.status === 429 || response.status === 403) {
-        // Server error, rate limit, or SV blocking requests - rotate endpoint
+      // Server returned an error status
+      if (response.status >= 500 || response.status === 429) {
+        // Server error or rate limit - rotate endpoint
         console.warn(`[Endpoint Rotation] ${endpoint.name} returned ${response.status}, rotating...`);
         recordFailure(endpoint.url, new Error(`HTTP ${response.status}`));
         rotateToNextHealthy();
@@ -278,7 +278,6 @@ export async function checkAllEndpoints() {
         
         const probeMs = Date.now() - probeStart;
         
-        // Treat 403 as unhealthy (SV blocking requests) alongside 5xx
         if (response.ok) {
           recordSuccess(endpoint.url);
           console.log(`[Endpoint Rotation] ✅ ${endpoint.name} — HTTP ${response.status} in ${probeMs}ms`);
@@ -297,22 +296,11 @@ export async function checkAllEndpoints() {
     })
   );
   
-  const resolved = results.map(r => r.status === 'fulfilled' ? r.value : { healthy: false, error: 'check failed' });
-  const healthyResults = resolved.filter(r => r.healthy);
-  console.log(`[Endpoint Rotation] Health check complete: ${healthyResults.length}/${SCAN_ENDPOINTS.length} healthy`);
-  
-  // Auto-select the fastest healthy endpoint
-  if (healthyResults.length > 0) {
-    const fastest = healthyResults.reduce((a, b) => a.latencyMs <= b.latencyMs ? a : b);
-    const idx = SCAN_ENDPOINTS.findIndex(e => e.name === fastest.name);
-    if (idx !== -1 && idx !== currentEndpointIndex) {
-      currentEndpointIndex = idx;
-      console.log(`[Endpoint Rotation] 🚀 Auto-selected fastest endpoint: ${fastest.name} (${fastest.latencyMs}ms)`);
-    }
-  }
+  const healthy = results.filter(r => r.status === 'fulfilled' && r.value.healthy).length;
+  console.log(`[Endpoint Rotation] Health check complete: ${healthy}/${SCAN_ENDPOINTS.length} healthy`);
   
   lastHealthCheck = Date.now();
-  return resolved;
+  return results.map(r => r.status === 'fulfilled' ? r.value : { healthy: false, error: 'check failed' });
 }
 
 export default {
