@@ -82,6 +82,15 @@ export const LEDGER_EVENTS_SCHEMA = {
 };
 
 // Column order for parquet files
+//
+// ADDING A NEW FIELD — update all three places or the field will be silently
+// absent from structured Parquet columns (still recoverable from raw_event /
+// update_data, but not queryable directly):
+//
+//   1. normalizeUpdate() / normalizeEvent() return object  (data-schema.js)
+//   2. UPDATES_COLUMNS / EVENTS_COLUMNS list below         (data-schema.js)
+//   3. read_json_auto columns={...} in writeToParquetCLI   (write-parquet.js)
+//
 export const UPDATES_COLUMNS = [
   'update_id',
   'update_type',
@@ -136,6 +145,7 @@ export const EVENTS_COLUMNS = [
   'unassign_id',
   'submitter',
   'reassignment_counter',
+  'trace_context',  // present on events parquet writer; must stay in sync with write-parquet.js
   'raw_event',
 ];
 
@@ -513,6 +523,9 @@ export function getUtcPartition(effectiveAt) {
   const day = d.getUTCDate();
 
   const yearMin = parseInt(process.env.PARTITION_YEAR_MIN) || 2020;
+  // OPERATIONAL NOTE: bump PARTITION_YEAR_MAX in your env before this date or
+  // all partition writes will throw. The default is 2035 — add it to your
+  // deployment runbook now so it isn't forgotten.
   const yearMax = parseInt(process.env.PARTITION_YEAR_MAX) || 2035;
   if (year < yearMin || year > yearMax) {
     throw new Error(
