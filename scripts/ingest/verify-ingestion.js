@@ -36,9 +36,11 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { execFile as execFileCb, execSync } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { randomBytes } from 'crypto';
+import { tmpdir } from 'os';
 
 const execFileAsync = promisify(execFileCb);
 
@@ -127,15 +129,22 @@ async function gsutil(...args) {
   }
 }
 
-function duckdb(sql) {
+// SECURITY FIX: replaced execSync (spawns shell, injection risk) with execFileAsync
+// via a temp SQL file. Passing SQL inline with -c required shell interpolation;
+// writing to a temp file and passing the path as a positional arg avoids the shell entirely.
+async function duckdb(sql) {
+  const tmpFile = join(tmpdir(), `duckdb_${randomBytes(6).toString('hex')}.sql`);
   try {
-    return execSync(`duckdb -noheader -list -c "${sql.replace(/"/g, '\\"')}"`, {
+    writeFileSync(tmpFile, sql, 'utf8');
+    const { stdout } = await execFileAsync('duckdb', ['-noheader', '-list', tmpFile], {
       encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 30000,
-    }).trim();
+    });
+    return stdout.trim();
   } catch (err) {
     throw new Error(`DuckDB: ${err.stderr?.toString().trim() || err.message}`);
+  } finally {
+    try { unlinkSync(tmpFile); } catch {}
   }
 }
 
@@ -297,14 +306,14 @@ async function sampleParquetFiles(migration, type, source = 'backfill', n = 5) {
     try {
       await gsutil('cp', gcsPath, localPath);
 
-      const rowStr  = duckdb(`SELECT COUNT(*) FROM '${localPath}'`);
+      const rowStr  = await duckdb(`SELECT COUNT(*) FROM '${localPath}'`);
       const rows    = parseInt(rowStr) || 0;
       totalRows    += rows;
 
       // Get time range
       const timeCol = type === 'updates' ? 'record_time' : 'effective_at';
       try {
-        const rangeStr = duckdb(
+        const rangeStr = await duckdb(
           `SELECT MIN(${timeCol}), MAX(${timeCol}) FROM '${localPath}'`
         );
         const [mn, mx] = rangeStr.split('|');
@@ -315,7 +324,7 @@ async function sampleParquetFiles(migration, type, source = 'backfill', n = 5) {
       // Get schema from first file only
       if (!schemaCols) {
         try {
-          const schemaOut = duckdb(`SELECT column_name FROM (DESCRIBE SELECT * FROM '${localPath}')`);
+          const schemaOut = await duckdb(`SELECT column_name FROM (DESCRIBE SELECT * FROM '${localPath}')`);
           schemaCols = schemaOut.split('\n').map(s => s.trim()).filter(Boolean);
         } catch {}
       }
@@ -562,8 +571,8 @@ async function verifyACS() {
   try {
     await gsutil('cp', sampleFile, localPath);
 
-    const rowStr   = duckdb(`SELECT COUNT(*) FROM '${localPath}'`);
-    const schemaOut = duckdb(`SELECT column_name FROM (DESCRIBE SELECT * FROM '${localPath}')`);
+    const rowStr   = await duckdb(`SELECT COUNT(*) FROM '${localPath}'`);
+    const schemaOut = await duckdb(`SELECT column_name FROM (DESCRIBE SELECT * FROM '${localPath}')`);
     const cols     = schemaOut.split('\n').map(s => s.trim()).filter(Boolean);
 
     console.log(`\n  Sample file: ${sampleFile.split('/').pop()}`);
@@ -590,13 +599,18 @@ async function verifyACS() {
 // 6. BIGQUERY EXTERNAL TABLES (optional)
 // ─────────────────────────────────────────────────────────────
 
-function bqQuery(sql) {
-  const projectFlag = GCP_PROJECT ? `--project_id=${GCP_PROJECT}` : '';
+// SECURITY FIX: replaced execSync (shell=true) with execFileAsync.
+// SQL is passed as a discrete CLI argument — no shell spawning or interpolation.
+async function bqQuery(sql) {
+  const args = ['query', '--use_legacy_sql=false', '--format=prettyjson'];
+  if (GCP_PROJECT) args.push(`--project_id=${GCP_PROJECT}`);
+  args.push(sql);
   try {
-    return execSync(
-      `bq query --use_legacy_sql=false --format=prettyjson ${projectFlag} '${sql.replace(/'/g, `'\\''`)}'`,
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000 }
-    ).trim();
+    const { stdout } = await execFileAsync('bq', args, {
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    return stdout.trim();
   } catch (err) {
     throw new Error(err.stderr?.toString().trim() || err.message);
   }
@@ -607,10 +621,18 @@ async function createBQExternalTable(dataset, tableName, gcsPattern, description
   const fullTable   = GCP_PROJECT ? `${GCP_PROJECT}:${dataset}.${tableName}` : `${dataset}.${tableName}`;
 
   try {
-    execSync(
-      `bq mk --external_table_definition='{"sourceFormat":"PARQUET","sourceUris":["${gcsPattern}"],"autodetect":true}' ${projectFlag} ${fullTable}`,
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-    );
+    // SECURITY FIX: execFileAsync replaces execSync — table definition passed as discrete args
+  const tableDef = JSON.stringify({
+    sourceFormat: 'PARQUET',
+    sourceUris: [gcsPattern],
+    autodetect: true,
+  });
+  const mkArgs = [`--external_table_definition=${tableDef}`];
+  if (GCP_PROJECT) mkArgs.push(`--project_id=${GCP_PROJECT}`);
+  mkArgs.push(fullTable);
+  await execFileAsync('bq', ['mk', ...mkArgs], {
+    encoding: 'utf8',
+  });
     console.log(`  ✅ Created external table: ${fullTable}`);
     return fullTable.replace(':', '.');
   } catch (err) {
@@ -631,8 +653,10 @@ async function printBQCounts(migrations) {
   // Create dataset if needed
   try {
     const projectFlag = GCP_PROJECT ? `--project_id=${GCP_PROJECT}` : '';
-    execSync(`bq mk ${projectFlag} --dataset ${dataset}`, {
-      encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+    // SECURITY FIX: execFileAsync replaces execSync
+    const dsArgs = GCP_PROJECT ? [`--project_id=${GCP_PROJECT}`, '--dataset', dataset] : ['--dataset', dataset];
+    await execFileAsync('bq', ['mk', ...dsArgs], {
+      encoding: 'utf8',
     });
     console.log(`  ✅ Created dataset: ${dataset}`);
   } catch (err) {
@@ -654,7 +678,7 @@ async function printBQCounts(migrations) {
 
         // Query exact count and time range
         const timeCol = type === 'updates' ? 'record_time' : 'effective_at';
-        const result  = bqQuery(
+        const result  = await bqQuery(
           `SELECT COUNT(*) as total, MIN(${timeCol}) as earliest, MAX(${timeCol}) as latest FROM \`${fullTable}\``
         );
 

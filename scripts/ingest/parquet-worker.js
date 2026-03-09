@@ -68,6 +68,7 @@ process.on('unhandledRejection', (reason, promise) => {
 import { parentPort, workerData, isMainThread } from 'node:worker_threads';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 // Validate we're in a worker thread
 if (isMainThread) {
@@ -188,7 +189,9 @@ async function processJob(job) {
     const normalizedFilePath = filePath.replace(/\\/g, '/');
 
     // FIX #2: append a unique suffix so concurrent jobs never share a temp path
-    const jobSuffix    = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // SECURITY FIX: Math.random() → randomBytes — temp filenames now use a
+    // cryptographically random suffix to prevent predictable path collisions.
+    const jobSuffix    = `${Date.now()}_${randomBytes(4).toString('hex')}`;
     const tempJsonlPath   = normalizedFilePath.replace('.parquet', `.temp.${jobSuffix}.jsonl`);
     const tempNativePath  = tempJsonlPath.replace(/\//g, path.sep);
 
