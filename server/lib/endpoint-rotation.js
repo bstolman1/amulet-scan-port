@@ -278,6 +278,7 @@ export async function checkAllEndpoints() {
         
         const probeMs = Date.now() - probeStart;
         
+        // Treat 403 as unhealthy (SV blocking requests) alongside 5xx
         if (response.ok) {
           recordSuccess(endpoint.url);
           console.log(`[Endpoint Rotation] ✅ ${endpoint.name} — HTTP ${response.status} in ${probeMs}ms`);
@@ -296,11 +297,22 @@ export async function checkAllEndpoints() {
     })
   );
   
-  const healthy = results.filter(r => r.status === 'fulfilled' && r.value.healthy).length;
-  console.log(`[Endpoint Rotation] Health check complete: ${healthy}/${SCAN_ENDPOINTS.length} healthy`);
+  const resolved = results.map(r => r.status === 'fulfilled' ? r.value : { healthy: false, error: 'check failed' });
+  const healthyResults = resolved.filter(r => r.healthy);
+  console.log(`[Endpoint Rotation] Health check complete: ${healthyResults.length}/${SCAN_ENDPOINTS.length} healthy`);
+  
+  // Auto-select the fastest healthy endpoint
+  if (healthyResults.length > 0) {
+    const fastest = healthyResults.reduce((a, b) => a.latencyMs <= b.latencyMs ? a : b);
+    const idx = SCAN_ENDPOINTS.findIndex(e => e.name === fastest.name);
+    if (idx !== -1 && idx !== currentEndpointIndex) {
+      currentEndpointIndex = idx;
+      console.log(`[Endpoint Rotation] 🚀 Auto-selected fastest endpoint: ${fastest.name} (${fastest.latencyMs}ms)`);
+    }
+  }
   
   lastHealthCheck = Date.now();
-  return results.map(r => r.status === 'fulfilled' ? r.value : { healthy: false, error: 'check failed' });
+  return resolved;
 }
 
 export default {
