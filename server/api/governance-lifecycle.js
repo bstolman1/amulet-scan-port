@@ -14,7 +14,7 @@
  */
 
 import { Router } from 'express';
-import { ensureDirs } from './fileRepository.js';
+import { ensureDirs } from './repositories/fileRepository.js';
 
 import lifecycleRoutes from './routes/lifecycleRoutes.js';
 import overrideRoutes from './routes/overrideRoutes.js';
