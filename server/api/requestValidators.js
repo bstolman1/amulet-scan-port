@@ -8,7 +8,7 @@
  * invalid input, preventing scattered inline checks.
  */
 
-import { VALID_TYPES } from '../utils/constants.js';
+import { VALID_TYPES } from './constants.js';
 
 // ── Primitive checks ──────────────────────────────────────────────────────
 

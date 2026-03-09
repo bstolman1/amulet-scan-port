@@ -9,10 +9,10 @@
  */
 
 import { Router } from 'express';
-import { readCache } from '../repositories/fileRepository.js';
-import { applyOverrides } from '../services/overrideService.js';
-import { fetchFreshData } from '../services/dataFetcher.js';
-import { fixLifecycleItemTypes } from '../services/lifecycleCorrelator.js';
+import { readCache } from './fileRepository.js';
+import { applyOverrides } from './overrideService.js';
+import { fetchFreshData } from './dataFetcher.js';
+import { fixLifecycleItemTypes } from './lifecycleCorrelator.js';
 
 const router = Router();
 

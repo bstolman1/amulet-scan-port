@@ -13,7 +13,7 @@ import {
   KEYWORD_MIN_OCCURRENCES,
   HIGH_PRIORITY_THRESHOLD,
   INSTRUCTIONAL_SUGGESTION_THRESHOLD,
-} from '../utils/constants.js';
+} from './constants.js';
 
 // ── Correction analysis ───────────────────────────────────────────────────
 

@@ -13,8 +13,8 @@
  */
 
 import { Router } from 'express';
-import { readOverrides } from '../repositories/fileRepository.js';
-import { readCache } from '../repositories/fileRepository.js';
+import { readOverrides } from './fileRepository.js';
+import { readCache } from './fileRepository.js';
 import {
   setItemOverride,
   deleteItemOverride,
@@ -24,10 +24,10 @@ import {
   setMoveOverride,
   findOriginalClassification,
   logOverrideAction,
-} from '../services/overrideService.js';
-import { validateBody } from '../validators/requestValidators.js';
-import { analyzeCorrections, generateImprovementSuggestions } from '../services/classificationAnalyzer.js';
-import { readAuditLog } from '../repositories/fileRepository.js';
+} from './overrideService.js';
+import { validateBody } from './requestValidators.js';
+import { analyzeCorrections, generateImprovementSuggestions } from './classificationAnalyzer.js';
+import { readAuditLog } from './fileRepository.js';
 
 const router = Router();
 
