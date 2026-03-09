@@ -1,15 +1,27 @@
-import { ReactNode, useMemo, useState } from "react";
+import { ReactNode } from "react";
 import cantonLogo from "@/assets/logo.svg";
 import { Link, useLocation } from "react-router-dom";
 import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
 import {
+  Activity,
   BarChart3,
   Coins,
   Database,
+  Layers,
+  
   Zap,
+  Globe,
+  Package,
   Vote,
   Award,
+  Shield,
+  ArrowRightLeft,
+  Wallet,
+  Radio,
+  Users,
   Ticket,
+  UserPlus,
+  Hash,
   GitBranch,
   CandlestickChart,
   Network,
@@ -18,13 +30,11 @@ import {
   ChevronDown,
   type LucideIcon,
 } from "lucide-react";
-import { SyncInsightsIcon } from "./icons/SyncInsightsIcon";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useCDNDashboards } from "@/hooks/use-cdn-dashboards";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -41,7 +51,7 @@ interface NavGroup {
   items: NavItem[];
 }
 
-const baseNavigationGroups: NavGroup[] = [
+const navigationGroups: NavGroup[] = [
   {
     label: "Overview",
     items: [
@@ -111,10 +121,9 @@ const baseNavigationGroups: NavGroup[] = [
 const NavDropdown = ({ group }: { group: NavGroup }) => {
   const location = useLocation();
   const isGroupActive = group.items.some(item => location.pathname === item.href);
-  const [open, setOpen] = useState(false);
   
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover>
       <PopoverTrigger asChild>
         <button
           className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-smooth ${
@@ -140,14 +149,13 @@ const NavDropdown = ({ group }: { group: NavGroup }) => {
               <Link
                 key={item.name}
                 to={item.href}
-                onClick={() => setOpen(false)}
                 className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-smooth ${
                   isActive
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 }`}
               >
-                <Icon className="h-4 w-4 flex-shrink-0" />
+                <Icon className="h-4 w-4" />
                 <span>{item.name}</span>
               </Link>
             );
@@ -159,48 +167,6 @@ const NavDropdown = ({ group }: { group: NavGroup }) => {
 };
 
 export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
-  const { data: cdnDashboards = [], error: cdnError } = useCDNDashboards();
-  
-  if (cdnError) {
-    console.warn("⚠️ Error loading CDN dashboards:", cdnError);
-  }
-
-  // Build navigation groups with dashboards appended to Overview
-  const navigationGroups = useMemo(() => {
-    // Create deep copies of navigation groups to avoid mutating the base array
-    const groups = baseNavigationGroups.map(group => ({
-      ...group,
-      items: [...group.items],
-    }));
-    
-    // Find Overview group and append dashboards
-    const overviewGroup = groups.find(g => g.label === "Overview");
-    if (overviewGroup && cdnDashboards.length > 0) {
-      // Create dashboard items and deduplicate by name
-      const seenNames = new Set<string>();
-      const dashboardItems: NavItem[] = cdnDashboards
-        .map((dashboard) => {
-          const name = dashboard.title || dashboard.name.replace(/\.aqldash$/, "").replace(/_/g, " ");
-          return {
-            name,
-            href: `/dashboard/${encodeURIComponent(dashboard.name)}`,
-            icon: SyncInsightsIcon as LucideIcon,
-          };
-        })
-        .filter((item) => {
-          if (seenNames.has(item.name)) {
-            return false;
-          }
-          seenNames.add(item.name);
-          return true;
-        });
-      
-      overviewGroup.items = [...overviewGroup.items, ...dashboardItems];
-    }
-    
-    return groups;
-  }, [cdnDashboards]);
-
   return (
     <div className="min-h-screen">
       {/* Header */}
