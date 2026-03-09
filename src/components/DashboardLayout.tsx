@@ -16,6 +16,8 @@ import {
   TrendingUp,
   DollarSign,
   ChevronDown,
+  Radio,
+  Layers,
   type LucideIcon,
 } from "lucide-react";
 import { SyncInsightsIcon } from "./icons/SyncInsightsIcon";
