@@ -11,11 +11,11 @@
 import {
   INFERENCE_THRESHOLD,
   FETCH_GLOBAL_TIMEOUT_MS,
-} from '../utils/constants.js';
-import { extractUrls, extractIdentifiers } from '../utils/textExtraction.js';
-import { getLearnedPatterns } from './patternLearning.js';
-import { getSubscribedGroups, fetchGroupTopics, delay } from './groupsFetcher.js';
-import { correlateTopics, buildStats } from './lifecycleCorrelation.js';
+} from './constants.js';
+import { extractUrls, extractIdentifiers } from './entityExtractor.js';
+import { getLearnedPatterns } from './patternCache.js';
+import { getSubscribedGroups, fetchGroupTopics, delay } from './groupsApiClient.js';
+import { correlateTopics } from './lifecycleCorrelator.js';
 
 const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED === 'true';
 
@@ -143,11 +143,21 @@ async function _fetchInner(signal) {
   console.log(`📊 ${allTopics.length} topics → ${lifecycleItems.length} lifecycle cards`);
   console.log(`   Accounted for: ${topicsInItems}/${allTopics.length} ${topicsInItems === allTopics.length ? '✓' : '⚠️'}`);
 
+  const typeCounts = {};
+  for (const item of lifecycleItems) {
+    typeCounts[item.type || 'unknown'] = (typeCounts[item.type || 'unknown'] || 0) + 1;
+  }
+
   return {
     lifecycleItems,
     allTopics,
     groups:   groupMap,
-    stats:    buildStats(lifecycleItems, allTopics, groupMap),
+    stats: {
+      totalTopics: allTopics.length,
+      totalItems: lifecycleItems.length,
+      totalGroups: Object.keys(groupMap).length,
+      typeCounts,
+    },
     cachedAt: new Date().toISOString(),
   };
 }

@@ -217,9 +217,8 @@ async function proxyRequest(req, res, method) {
       
       console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - reqStart}ms`);
 
-      // Check for server errors or access denied that warrant rotation
-      // 403 = SV blocking our IP/request; rotating to another SV typically resolves it
-      if (scanRes.status >= 500 || scanRes.status === 429 || scanRes.status === 403) {
+      // Check for server errors that warrant rotation
+      if (scanRes.status >= 500 || scanRes.status === 429) {
         console.warn(`[Scan Proxy] ⚠ ${endpoint.name} returned ${scanRes.status}, rotating to next endpoint...`);
         recordFailure(endpoint.url, new Error(`HTTP ${scanRes.status}`));
         const nextEndpoint = rotateToNextHealthy();
@@ -243,6 +242,7 @@ async function proxyRequest(req, res, method) {
         return;
       }
       
+      if (res.headersSent) return;
       res.set('X-Scan-Endpoint', endpoint.name);
       res.status(scanRes.status).send(text);
       return;
@@ -257,10 +257,12 @@ async function proxyRequest(req, res, method) {
   }
 
   // All retries exhausted
-  res.status(502).json({ 
-    error: lastError?.message || 'All Scan API endpoints failed',
-    endpoint: getCurrentEndpoint().name,
-  });
+  if (!res.headersSent) {
+    res.status(502).json({ 
+      error: lastError?.message || 'All Scan API endpoints failed',
+      endpoint: getCurrentEndpoint().name,
+    });
+  }
 }
 
 // GET requests - no body, query params preserved

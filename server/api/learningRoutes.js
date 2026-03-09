@@ -19,23 +19,23 @@ import {
   backupLearnedPatterns,
   readPatternBackup,
   listPatternBackups,
-} from '../repositories/fileRepository.js';
-import { readCache, readOverrides, readAuditLog } from '../repositories/fileRepository.js';
+} from './fileRepository.js';
+import { readCache, readOverrides, readAuditLog } from './fileRepository.js';
 import {
   getLearnedPatterns,
   invalidatePatternCache,
   calculatePatternConfidence,
   shouldArchivePattern,
   reinforceSurvivingPatterns,
-} from '../services/patternCache.js';
+} from './patternCache.js';
 import {
   analyzeCorrections,
   generateImprovementSuggestions,
   generateLearnedPatterns,
   simulateClassification,
-} from '../services/classificationAnalyzer.js';
-import { validateBody } from '../validators/requestValidators.js';
-import { MIN_CONFIDENCE, MINOR_VERSION_GROWTH_RATIO, CHANGELOG_MAX_ENTRIES, HISTORY_MAX_ENTRIES } from '../utils/constants.js';
+} from './classificationAnalyzer.js';
+import { validateBody } from './requestValidators.js';
+import { MIN_CONFIDENCE, MINOR_VERSION_GROWTH_RATIO, CHANGELOG_MAX_ENTRIES, HISTORY_MAX_ENTRIES } from './constants.js';
 
 const router = Router();
 
