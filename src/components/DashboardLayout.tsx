@@ -73,19 +73,13 @@ const baseNavigationGroups: NavGroup[] = [
   {
     label: "Validators",
     items: [
-      { name: "Validators", href: "/validators", icon: Zap },
-      { name: "Licenses", href: "/validator-licenses", icon: Ticket },
+      { name: "Super Validators", href: "/validators", icon: Zap },
+      { name: "Validators", href: "/validator-licenses", icon: Ticket },
       { name: "Sequencers", href: "/sequencers", icon: Network },
       
-      { name: "Traffic Status", href: "/traffic-status", icon: Radio },
     ],
   },
   {
-    label: "Rewards",
-    items: [
-      { name: "Rewards", href: "/rewards", icon: Award },
-    ],
-  },
   {
     label: "Exchange Data",
     items: [
@@ -104,8 +98,6 @@ const baseNavigationGroups: NavGroup[] = [
     label: "Statistics",
     items: [
       { name: "Statistics", href: "/stats", icon: Database },
-      { name: "Round Stats", href: "/round-stats", icon: Layers },
-      { name: "Member Traffic", href: "/member-traffic", icon: TrendingUp },
     ],
   },
 ];
