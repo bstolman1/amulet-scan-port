@@ -9,9 +9,6 @@ import { Router } from 'express';
 
 const router = Router();
 
-// Scan-only mode - all endpoints return stubs
-const SCAN_ONLY = true;
-
 // Helper: scan-only stub response
 const scanOnlyStub = (extra = {}) => ({
   mode: 'scan-only',
@@ -184,9 +181,28 @@ router.post('/cache/invalidate', (_req, res) => {
 
 /**
  * POST /acs/trigger-snapshot
+ *
+ * FIX: Previously returned HTTP 200 with { success: false } when the service
+ * is unavailable.  HTTP semantics require a non-2xx status when the operation
+ * cannot be completed.  503 + Retry-After is the correct signal for "service
+ * temporarily unavailable; try again later".
+ *
+ * Before:
+ *   res.json(scanOnlyStub({ success: false }));
+ *   → 200 OK  ← clients can't distinguish success from failure
+ *
+ * After:
+ *   res.status(503).set('Retry-After', '3600').json(...)
+ *   → 503 Service Unavailable  ← unambiguous; load-balancers/monitors act correctly
+ *
+ * The dead `const SCAN_ONLY = true` flag was also removed — it was never read
+ * anywhere in this file, so it only added noise.
  */
 router.post('/trigger-snapshot', (_req, res) => {
-  res.json(scanOnlyStub({ success: false }));
+  res
+    .status(503)
+    .set('Retry-After', '3600')
+    .json(scanOnlyStub({ success: false, reason: 'ACS service unavailable in scan-only mode' }));
 });
 
 export default router;
