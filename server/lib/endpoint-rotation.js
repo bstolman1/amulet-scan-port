@@ -187,9 +187,9 @@ export async function fetchWithFailover(path, options = {}) {
         return response;
       }
       
-      // Server returned an error status
-      if (response.status >= 500 || response.status === 429) {
-        // Server error or rate limit - rotate endpoint
+      // Server returned an error status or access denied
+      if (response.status >= 500 || response.status === 429 || response.status === 403) {
+        // Server error, rate limit, or SV blocking requests - rotate endpoint
         console.warn(`[Endpoint Rotation] ${endpoint.name} returned ${response.status}, rotating...`);
         recordFailure(endpoint.url, new Error(`HTTP ${response.status}`));
         rotateToNextHealthy();
