@@ -94,3 +94,5 @@ export const WORKFLOW_STAGES = {
 export const ALL_STAGES = [...new Set(Object.values(WORKFLOW_STAGES).flat())];
 
 export const VALID_TYPES = ['cip', 'featured-app', 'validator', 'protocol-upgrade', 'outcome', 'other'];
+
+export const FETCH_GLOBAL_TIMEOUT_MS = 120000;

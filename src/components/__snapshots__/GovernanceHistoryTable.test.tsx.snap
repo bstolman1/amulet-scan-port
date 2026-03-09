@@ -1,0 +1,743 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`GovernanceHistoryTable > snapshots > matches snapshot when loading 1`] = `
+<div>
+  <div
+    class="space-y-6"
+  >
+    <div
+      class="grid gap-4 md:grid-cols-4"
+    >
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Total Votes
+        </h3>
+        <div
+          class="animate-pulse rounded-md bg-muted h-8 w-24"
+        />
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Accepted
+        </h3>
+        <div
+          class="animate-pulse rounded-md bg-muted h-8 w-24"
+        />
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Rejected
+        </h3>
+        <div
+          class="animate-pulse rounded-md bg-muted h-8 w-24"
+        />
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Expired
+        </h3>
+        <div
+          class="animate-pulse rounded-md bg-muted h-8 w-24"
+        />
+      </div>
+    </div>
+    <div
+      class="space-y-3"
+    >
+      <div
+        class="space-y-4"
+      >
+        <div
+          class="animate-pulse rounded-md bg-muted h-32 w-full"
+        />
+        <div
+          class="animate-pulse rounded-md bg-muted h-32 w-full"
+        />
+        <div
+          class="animate-pulse rounded-md bg-muted h-32 w-full"
+        />
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`GovernanceHistoryTable > snapshots > matches snapshot with data 1`] = `
+<div>
+  <div
+    class="space-y-6"
+  >
+    <div
+      class="grid gap-4 md:grid-cols-4"
+    >
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Total Votes
+        </h3>
+        <div>
+          <p
+            class="text-2xl font-bold"
+          >
+            3
+          </p>
+          <p
+            class="text-xs text-muted-foreground mt-1"
+          >
+            governance decisions
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Accepted
+        </h3>
+        <div>
+          <p
+            class="text-2xl font-bold"
+          >
+            1
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Rejected
+        </h3>
+        <div>
+          <p
+            class="text-2xl font-bold"
+          >
+            1
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm transition-all duration-200 hover:border-primary/30 hover:shadow-lg p-6"
+      >
+        <h3
+          class="text-sm font-medium text-muted-foreground mb-2"
+        >
+          Expired
+        </h3>
+        <div>
+          <p
+            class="text-2xl font-bold"
+          >
+            1
+          </p>
+        </div>
+      </div>
+    </div>
+    <div
+      class="space-y-3"
+    >
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm duration-200 hover:border-primary/30 hover:shadow-lg p-4 space-y-3 transition-all"
+      >
+        <div
+          class="flex justify-between items-start"
+        >
+          <div
+            class="flex-1 space-y-2"
+          >
+            <div
+              class="flex items-center gap-2"
+            >
+              <svg
+                class="lucide lucide-circle-check-big h-4 w-4 text-green-500"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M21.801 10A10 10 0 1 1 17 3.335"
+                />
+                <path
+                  d="m9 11 3 3L22 4"
+                />
+              </svg>
+              <p
+                class="text-sm font-semibold"
+              >
+                Add Featured App: TestApp
+              </p>
+            </div>
+            <div>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Action Type
+              </p>
+              <p
+                class="font-mono text-xs"
+              >
+                CRARC_AddFutureAmuletConfigSchedule
+              </p>
+            </div>
+            <div
+              class="grid grid-cols-2 md:grid-cols-3 gap-3"
+            >
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Completed At
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  Jun 15, 2024 10:30
+                </p>
+              </div>
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Vote Before
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  Jun 20, 2024 10:30
+                </p>
+              </div>
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Votes
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  <span
+                    class="text-green-500"
+                  >
+                    5
+                     for
+                  </span>
+                   / 
+                  <span
+                    class="text-red-500"
+                  >
+                    2
+                     against
+                  </span>
+                </p>
+              </div>
+            </div>
+            <div
+              class="mt-3 p-3 rounded-lg bg-background/30 border border-border/30"
+            >
+              <p
+                class="text-xs text-muted-foreground mb-1 font-semibold"
+              >
+                Reason:
+              </p>
+              <p
+                class="text-sm mb-2"
+              >
+                This is a valid proposal
+              </p>
+              <a
+                class="text-sm text-primary hover:underline break-all"
+                href="https://example.com/proposal"
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                https://example.com/proposal
+              </a>
+            </div>
+            <div>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Tracking CID
+              </p>
+              <p
+                class="font-mono text-xs break-all"
+              >
+                abc123def456
+              </p>
+            </div>
+            <div
+              class="pt-2 border-t"
+              data-state="closed"
+            >
+              <button
+                aria-controls="radix-:r16:"
+                aria-expanded="false"
+                class="inline-flex items-center gap-2 whitespace-nowrap rounded-full font-medium uppercase tracking-wider ring-offset-background transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 hover:bg-accent/20 hover:text-accent-foreground h-9 px-4 text-xs w-full justify-start"
+                data-state="closed"
+                type="button"
+              >
+                <svg
+                  class="lucide lucide-code h-4 w-4 mr-2"
+                  fill="none"
+                  height="24"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <polyline
+                    points="16 18 22 12 16 6"
+                  />
+                  <polyline
+                    points="8 6 2 12 8 18"
+                  />
+                </svg>
+                Show Raw JSON
+              </button>
+              <div
+                class="mt-2"
+                data-state="closed"
+                hidden=""
+                id="radix-:r16:"
+                style=""
+              />
+            </div>
+          </div>
+          <div
+            class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-primary text-primary-foreground hover:bg-primary/80 capitalize"
+          >
+            accepted
+          </div>
+        </div>
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm duration-200 hover:border-primary/30 hover:shadow-lg p-4 space-y-3 transition-all"
+      >
+        <div
+          class="flex justify-between items-start"
+        >
+          <div
+            class="flex-1 space-y-2"
+          >
+            <div
+              class="flex items-center gap-2"
+            >
+              <svg
+                class="lucide lucide-circle-x h-4 w-4 text-red-500"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="10"
+                />
+                <path
+                  d="m15 9-6 6"
+                />
+                <path
+                  d="m9 9 6 6"
+                />
+              </svg>
+              <p
+                class="text-sm font-semibold"
+              >
+                Remove Validator: BadActor
+              </p>
+            </div>
+            <div>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Action Type
+              </p>
+              <p
+                class="font-mono text-xs"
+              >
+                SRARC_OffboardSv
+              </p>
+            </div>
+            <div
+              class="grid grid-cols-2 md:grid-cols-3 gap-3"
+            >
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Completed At
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  Jun 14, 2024 15:00
+                </p>
+              </div>
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Vote Before
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  Jun 19, 2024 15:00
+                </p>
+              </div>
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Votes
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  <span
+                    class="text-green-500"
+                  >
+                    1
+                     for
+                  </span>
+                   / 
+                  <span
+                    class="text-red-500"
+                  >
+                    6
+                     against
+                  </span>
+                </p>
+              </div>
+            </div>
+            <div
+              class="mt-3 p-3 rounded-lg bg-background/30 border border-border/30"
+            >
+              <p
+                class="text-xs text-muted-foreground mb-1 font-semibold"
+              >
+                Reason:
+              </p>
+              <p
+                class="text-sm text-muted-foreground italic"
+              >
+                No reason provided
+              </p>
+            </div>
+            <div>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Tracking CID
+              </p>
+              <p
+                class="font-mono text-xs break-all"
+              >
+                xyz789abc012
+              </p>
+            </div>
+            <div
+              class="pt-2 border-t"
+              data-state="closed"
+            >
+              <button
+                aria-controls="radix-:r17:"
+                aria-expanded="false"
+                class="inline-flex items-center gap-2 whitespace-nowrap rounded-full font-medium uppercase tracking-wider ring-offset-background transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 hover:bg-accent/20 hover:text-accent-foreground h-9 px-4 text-xs w-full justify-start"
+                data-state="closed"
+                type="button"
+              >
+                <svg
+                  class="lucide lucide-code h-4 w-4 mr-2"
+                  fill="none"
+                  height="24"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <polyline
+                    points="16 18 22 12 16 6"
+                  />
+                  <polyline
+                    points="8 6 2 12 8 18"
+                  />
+                </svg>
+                Show Raw JSON
+              </button>
+              <div
+                class="mt-2"
+                data-state="closed"
+                hidden=""
+                id="radix-:r17:"
+                style=""
+              />
+            </div>
+          </div>
+          <div
+            class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80 capitalize"
+          >
+            rejected
+          </div>
+        </div>
+      </div>
+      <div
+        class="rounded-xl border border-border bg-card/95 text-card-foreground shadow-md backdrop-blur-sm duration-200 hover:border-primary/30 hover:shadow-lg p-4 space-y-3 transition-all"
+      >
+        <div
+          class="flex justify-between items-start"
+        >
+          <div
+            class="flex-1 space-y-2"
+          >
+            <div
+              class="flex items-center gap-2"
+            >
+              <svg
+                class="lucide lucide-clock h-4 w-4 text-yellow-500"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="10"
+                />
+                <polyline
+                  points="12 6 12 12 16 14"
+                />
+              </svg>
+              <p
+                class="text-sm font-semibold"
+              >
+                Update Amulet Rules
+              </p>
+            </div>
+            <div>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Action Type
+              </p>
+              <p
+                class="font-mono text-xs"
+              >
+                ARC_AmuletRules
+              </p>
+            </div>
+            <div
+              class="grid grid-cols-2 md:grid-cols-3 gap-3"
+            >
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Completed At
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  Jun 13, 2024 08:00
+                </p>
+              </div>
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Vote Before
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  Jun 18, 2024 08:00
+                </p>
+              </div>
+              <div>
+                <p
+                  class="text-xs text-muted-foreground"
+                >
+                  Votes
+                </p>
+                <p
+                  class="text-sm"
+                >
+                  <span
+                    class="text-green-500"
+                  >
+                    3
+                     for
+                  </span>
+                   / 
+                  <span
+                    class="text-red-500"
+                  >
+                    3
+                     against
+                  </span>
+                </p>
+              </div>
+            </div>
+            <div
+              class="mt-3 p-3 rounded-lg bg-background/30 border border-border/30"
+            >
+              <p
+                class="text-xs text-muted-foreground mb-1 font-semibold"
+              >
+                Reason:
+              </p>
+              <p
+                class="text-sm mb-2"
+              >
+                Tied vote, expired
+              </p>
+            </div>
+            <div>
+              <p
+                class="text-xs text-muted-foreground"
+              >
+                Tracking CID
+              </p>
+              <p
+                class="font-mono text-xs break-all"
+              >
+                tied123456
+              </p>
+            </div>
+            <div
+              class="pt-2 border-t"
+              data-state="closed"
+            >
+              <button
+                aria-controls="radix-:r18:"
+                aria-expanded="false"
+                class="inline-flex items-center gap-2 whitespace-nowrap rounded-full font-medium uppercase tracking-wider ring-offset-background transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 hover:bg-accent/20 hover:text-accent-foreground h-9 px-4 text-xs w-full justify-start"
+                data-state="closed"
+                type="button"
+              >
+                <svg
+                  class="lucide lucide-code h-4 w-4 mr-2"
+                  fill="none"
+                  height="24"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <polyline
+                    points="16 18 22 12 16 6"
+                  />
+                  <polyline
+                    points="8 6 2 12 8 18"
+                  />
+                </svg>
+                Show Raw JSON
+              </button>
+              <div
+                class="mt-2"
+                data-state="closed"
+                hidden=""
+                id="radix-:r18:"
+                style=""
+              />
+            </div>
+          </div>
+          <div
+            class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80 capitalize"
+          >
+            expired
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`GovernanceHistoryTable > snapshots > matches snapshot with error 1`] = `
+<div>
+  <div
+    class="relative w-full rounded-lg border p-4 [&>svg~*]:pl-7 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive"
+    role="alert"
+  >
+    <svg
+      class="lucide lucide-triangle-alert h-4 w-4"
+      fill="none"
+      height="24"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="2"
+      viewBox="0 0 24 24"
+      width="24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
+      />
+      <path
+        d="M12 9v4"
+      />
+      <path
+        d="M12 17h.01"
+      />
+    </svg>
+    <div
+      class="text-sm [&_p]:leading-relaxed"
+    >
+      Failed to load governance history from Scan API: 
+      Network error
+    </div>
+  </div>
+</div>
+`;
