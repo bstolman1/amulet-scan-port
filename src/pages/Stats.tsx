@@ -107,7 +107,9 @@ const Stats = () => {
     const rounds = parseFloat(v.rewards);
     return rounds < roundsPerDay * 365 && rounds >= roundsPerDay * 180;
   });
-  const allTimeValidators = recentValidators;
+  const allTimeValidators = validatorsList.filter(
+  (v) => !svParticipantIds.has(v.provider)
+);
 
   // Calculate monthly join data for all time since network launch
   const getMonthlyJoinData = () => {
