@@ -954,10 +954,12 @@ export const scanApi = {
     return scanPost("/v0/round-totals", request);
   },
 
-  // fetchTotalBalance: from registry single instrument endpoint
+  // fetchTotalBalance: derived from round totals
   async fetchTotalBalance(): Promise<GetTotalAmuletBalanceResponse> {
-    const data = await scanGet<{ totalSupply: string }>("/registry/metadata/v1/instruments/Amulet");
-    return { total_balance: data.totalSupply || "0" };
+    const latest = await this.fetchLatestRound();
+    const totals = await this.fetchRoundTotals({ start_round: latest.round, end_round: latest.round });
+    if (totals.entries.length === 0) throw new Error("No round totals for latest round");
+    return { total_balance: totals.entries[0].total_amulet_balance };
   },
 
   // fetchActivities: POST /v0/activities
