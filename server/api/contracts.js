@@ -1,13 +1,5 @@
 import { Router } from 'express';
 import db from '../duckdb/connection.js';
-// FIX: import sanitisation helpers (previously missing — caused SQL injection)
-import {
-  sanitizeNumber,
-  sanitizeContractId,
-  sanitizeIdentifier,
-  escapeString,
-  escapeLikePattern,
-} from '../lib/sql-sanitize.js';
 
 const router = Router();
 
@@ -35,20 +27,11 @@ const getUpdatesSource = () => {
 router.get('/:contractId', async (req, res) => {
   try {
     const { contractId } = req.params;
-
-    // FIX: validate contractId before interpolation.
-    // Previously `'${contractId}'` was used directly — a classic SQL injection vector
-    // (e.g. `' OR 1=1 --`).  Other modules (events.js, search.js) already used
-    // sanitizeContractId(); this brings contracts.js into line.
-    const sanitized = sanitizeContractId(contractId);
-    if (!sanitized) {
-      return res.status(400).json({ error: 'Invalid contract ID format' });
-    }
-
+    
     const sql = `
       SELECT *
       FROM ${getUpdatesSource()}
-      WHERE contract_id = '${escapeString(sanitized)}'
+      WHERE contract_id = '${contractId}'
       ORDER BY COALESCE(timestamp, effective_at) ASC
     `;
     
@@ -63,23 +46,14 @@ router.get('/:contractId', async (req, res) => {
 router.get('/active/by-template/:templateSuffix', async (req, res) => {
   try {
     const { templateSuffix } = req.params;
-    // FIX: sanitize limit via helper instead of raw parseInt (consistent with other modules)
-    const limit = sanitizeNumber(req.query.limit, { min: 1, max: 1000, defaultValue: 100 });
-
-    // FIX: validate templateSuffix before interpolation.
-    // Previously `'%${templateSuffix}'` was used directly — same SQL injection risk.
-    const sanitizedSuffix = sanitizeIdentifier(templateSuffix);
-    if (!sanitizedSuffix) {
-      return res.status(400).json({ error: 'Invalid template suffix format' });
-    }
-    const escapedSuffix = escapeLikePattern(sanitizedSuffix);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
     
     // Find contracts that have been created but not archived
     const sql = `
       WITH created AS (
         SELECT contract_id, template_id, effective_at as created_at, payload
         FROM ${getUpdatesSource()}
-        WHERE event_type = 'created' AND template_id LIKE '%${escapedSuffix}' ESCAPE '\\\\'
+        WHERE event_type = 'created' AND template_id LIKE '%${templateSuffix}'
       ),
       archived AS (
         SELECT DISTINCT contract_id
