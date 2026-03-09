@@ -80,7 +80,6 @@ const baseNavigationGroups: NavGroup[] = [
     ],
   },
   {
-  {
     label: "Exchange Data",
     items: [
       { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
