@@ -15,6 +15,7 @@ import {
 import { extractUrls, extractIdentifiers } from './entityExtractor.js';
 import { getLearnedPatterns } from './patternCache.js';
 import { getSubscribedGroups, fetchGroupTopics, delay } from './groupsApiClient.js';
+import { writeCache } from './fileRepository.js';
 import { correlateTopics } from './lifecycleCorrelator.js';
 
 const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED === 'true';
@@ -148,7 +149,7 @@ async function _fetchInner(signal) {
     typeCounts[item.type || 'unknown'] = (typeCounts[item.type || 'unknown'] || 0) + 1;
   }
 
-  return {
+  const result = {
     lifecycleItems,
     allTopics,
     groups:   groupMap,
@@ -160,4 +161,6 @@ async function _fetchInner(signal) {
     },
     cachedAt: new Date().toISOString(),
   };
+  await writeCache(result);
+  return result;
 }
