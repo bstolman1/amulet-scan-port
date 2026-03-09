@@ -112,7 +112,7 @@ const App = () => (
             <Route path="/sequencers" element={<Sequencers />} />
             
             {/* Rewards & Pricing */}
-            <Route path="/rewards" element={<Rewards />} />
+            <Route path="/rewards" element={<div className="p-8 text-muted-foreground">This page is coming soon.</div>} />
             <Route path="/price-votes" element={<PriceVotes />} />
             <Route path="/kaiko-feed" element={<KaikoFeed />} />
             
