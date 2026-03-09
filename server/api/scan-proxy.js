@@ -242,6 +242,7 @@ async function proxyRequest(req, res, method) {
         return;
       }
       
+      if (res.headersSent) return;
       res.set('X-Scan-Endpoint', endpoint.name);
       res.status(scanRes.status).send(text);
       return;
@@ -256,10 +257,12 @@ async function proxyRequest(req, res, method) {
   }
 
   // All retries exhausted
-  res.status(502).json({ 
-    error: lastError?.message || 'All Scan API endpoints failed',
-    endpoint: getCurrentEndpoint().name,
-  });
+  if (!res.headersSent) {
+    res.status(502).json({ 
+      error: lastError?.message || 'All Scan API endpoints failed',
+      endpoint: getCurrentEndpoint().name,
+    });
+  }
 }
 
 // GET requests - no body, query params preserved
