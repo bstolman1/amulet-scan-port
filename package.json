@@ -67,12 +67,10 @@
     "lucide-react": "^0.462.0",
     "next-themes": "^0.3.0",
     "node-cron": "^4.2.1",
-    "pako": "^2.1.0",
     "pg": "^8.16.3",
     "pg-copy-streams": "^7.0.0",
     "piscina": "^5.1.4",
     "react": "^18.3.1",
-    "react-autoql": "8.26.3",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.61.1",
@@ -106,11 +104,5 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.38.0",
     "vite": "^5.4.19"
-  },
-  "overrides": {
-    "react-autoql": {
-      "react-infinite-scroller": "^1.2.6",
-      "date-fns": "2.28.0"
-    }
   }
 }

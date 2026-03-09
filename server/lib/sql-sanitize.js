@@ -174,6 +174,17 @@ export function sanitizeSearchQuery(str, maxLength = 200) {
 /**
  * Build a safe WHERE condition for LIKE queries
  * Returns null if the value contains dangerous patterns
+ *
+ * FIX: The original used `ESCAPE '\\'` (a single backslash in the SQL string).
+ * DuckDB's LIKE ... ESCAPE clause requires the escape character to be specified
+ * as a single-character SQL string literal. In a JS template literal that ends
+ * up in a SQL string, a single backslash `\` is what you want in the *SQL text*.
+ * To produce one backslash in the SQL text from a JS string you need two in the
+ * JS source: `'\\\\'` → JS string `\\` → SQL text `\` ✓
+ * The original `'\\'` → JS string `\` → SQL text `\` was accidentally correct
+ * via coincidence in some JS environments but is fragile. We now use the explicit
+ * four-backslash form `'\\\\'` to match every other ESCAPE clause in the codebase
+ * (events.js, party.js, etc.) and make the intent unambiguous.
  */
 export function buildLikeCondition(column, value, position = 'contains') {
   if (containsDangerousPatterns(value)) return null;
@@ -182,12 +193,12 @@ export function buildLikeCondition(column, value, position = 'contains') {
   
   switch (position) {
     case 'starts':
-      return `${column} LIKE '${escaped}%' ESCAPE '\\'`;
+      return `${column} LIKE '${escaped}%' ESCAPE '\\\\'`;
     case 'ends':
-      return `${column} LIKE '%${escaped}' ESCAPE '\\'`;
+      return `${column} LIKE '%${escaped}' ESCAPE '\\\\'`;
     case 'contains':
     default:
-      return `${column} LIKE '%${escaped}%' ESCAPE '\\'`;
+      return `${column} LIKE '%${escaped}%' ESCAPE '\\\\'`;
   }
 }
 

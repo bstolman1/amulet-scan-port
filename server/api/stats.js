@@ -10,9 +10,6 @@ import path from 'path';
 
 const router = Router();
 
-// Global scan-only mode - DuckDB is offline
-const SCAN_ONLY = true;
-
 // Data path for cursor files (still needed for live-status endpoint)
 const DATA_PATH = process.env.DATA_DIR || './data';
 
@@ -111,7 +108,11 @@ router.get('/live-status', (req, res) => {
     if (fs.existsSync(liveCursorFile)) {
       try {
         liveCursor = JSON.parse(fs.readFileSync(liveCursorFile, 'utf8'));
-      } catch (e) { /* ignore */ }
+      } catch (e) {
+        // FIX: was `/* ignore */` — silent failures hide corrupt cursor files in
+        // production. Log the error so operators can detect and repair them.
+        console.error(`[stats] Failed to parse live-cursor.json: ${e.message}`);
+      }
     }
     
     // Read all backfill cursors
@@ -123,7 +124,10 @@ router.get('/live-status', (req, res) => {
           if (cursor.migration_id !== undefined) {
             backfillCursors.push({ file, ...cursor });
           }
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+          // FIX: same as above — log instead of silently swallowing parse errors.
+          console.error(`[stats] Failed to parse backfill cursor ${file}: ${e.message}`);
+        }
       }
     }
     
