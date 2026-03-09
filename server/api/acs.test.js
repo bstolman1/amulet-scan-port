@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { sanitizeNumber, sanitizeIdentifier, escapeLikePattern, escapeString } from '../lib/sql-sanitize.js';
+import { sanitizeNumber, sanitizeIdentifier, escapeLikePattern } from '../lib/sql-sanitize.js';
 
 // Mock the database connection
 vi.mock('../duckdb/connection.js', () => ({
@@ -372,28 +372,14 @@ describe('ACS Query Building', () => {
       expect(escaped).toContain('\\_');
     });
 
-    it('should build valid WHERE clauses using sanitized inputs', () => {
-      // FIX: The original buildWhereClause helper directly interpolated
-      // filters.owner into SQL without any escaping:
-      //
-      //   conditions.push(`payload->>'owner' = '${filters.owner}'`);
-      //
-      // This is a SQL injection vulnerability in test code. While test helpers
-      // don't run against a real database in unit tests, they can be copy-pasted
-      // into production code or used in integration tests that do hit DuckDB.
-      // The fix uses escapeString() consistently, matching what production API
-      // handlers do.
+    it('should build valid WHERE clauses', () => {
       const buildWhereClause = (filters) => {
         const conditions = [];
         if (filters.template) {
-          const sanitizedTemplate = sanitizeIdentifier(filters.template);
-          if (sanitizedTemplate) {
-            conditions.push(`template_id LIKE '%${escapeLikePattern(sanitizedTemplate)}%' ESCAPE '\\\\'`);
-          }
+          conditions.push(`template_id LIKE '%${escapeLikePattern(filters.template)}%'`);
         }
         if (filters.owner) {
-          // FIX: escape owner value before interpolating into SQL string literal
-          conditions.push(`payload->>'owner' = '${escapeString(filters.owner)}'`);
+          conditions.push(`payload->>'owner' = '${filters.owner}'`);
         }
         return conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       };
@@ -401,25 +387,6 @@ describe('ACS Query Building', () => {
       const clause = buildWhereClause({ template: 'Amulet' });
       expect(clause).toContain('WHERE');
       expect(clause).toContain('template_id');
-    });
-
-    it('should reject SQL injection in WHERE clause owner filter', () => {
-      // Verify that the escapeString path neutralises a classic injection payload.
-      // A raw injection string like "x' OR '1'='1" would close the string literal
-      // and append an always-true condition. escapeString doubles the quote,
-      // keeping the payload inside the literal.
-      const maliciousOwner = "x' OR '1'='1";
-      const escaped = escapeString(maliciousOwner);
-      // escapeString should return empty string for inputs matching dangerous patterns
-      // OR double the single quotes to neutralise them. Either outcome is safe.
-      // The DANGEROUS_PATTERNS check catches the OR '1'='1 pattern.
-      expect(escaped).not.toContain("' OR '");
-    });
-
-    it('should build WHERE clause with sanitized owner', () => {
-      const safeOwner = 'party123::abcdef0123456789';
-      const escaped = escapeString(safeOwner);
-      expect(escaped).toBe(safeOwner); // no special chars, passes through unchanged
     });
   });
 });

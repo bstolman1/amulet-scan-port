@@ -7,17 +7,10 @@ const getApiKey = () => process.env.GROUPS_IO_API_KEY;
 const GROUP_NAME = 'supervalidator-announce'; // The subgroup name we're looking for
 const BASE_URL = 'https://lists.sync.global';
 
-// FIX: cap maximum topics to prevent unbounded fetching via ?limit=99999
-const MAX_LIMIT = 500;
-
-// FIX: URL regex that does NOT capture trailing punctuation (commas, periods, etc.)
-// that commonly appears after URLs in mailing-list plain-text bodies.
-// Old pattern: /(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/g
-//   — captured trailing "." in "See https://example.com. For more..." → broken URL
-// New pattern uses a non-greedy match and a lookahead to stop before punctuation+whitespace.
+// Helper to extract ALL URLs from text
 function extractUrls(text) {
   if (!text) return [];
-  const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+?)(?=[.,;:!?)\]>]?(?:\s|$))/g;
+  const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/g;
   const matches = text.match(urlRegex) || [];
   return [...new Set(matches)]; // Remove duplicates
 }
@@ -27,10 +20,8 @@ async function getGroupId() {
   const subsUrl = `${BASE_URL}/api/v1/getsubs?limit=100`;
   console.log('Getting subscriptions to find group_id...');
   
-  // FIX: add per-request timeout (was missing — a slow response would hang forever)
   const response = await fetch(subsUrl, {
     headers: { 'Authorization': `Bearer ${getApiKey()}` },
-    signal: AbortSignal.timeout(30_000),
   });
   
   if (response.ok) {
@@ -58,11 +49,7 @@ async function getGroupId() {
 }
 
 // Fetch all topics with pagination
-// FIX: accepts the caller's AbortSignal so the global endpoint timeout
-//      actually cancels in-flight page fetches.
-//      Previously the signal was created in fetchFreshData but never forwarded
-//      here, making the 180 s abort a no-op.
-async function fetchAllTopics(groupId, maxTopics = 500, signal = null) {
+async function fetchAllTopics(groupId, maxTopics = 500) {
   const allTopics = [];
   let pageToken = null;
   let pageCount = 0;
@@ -82,8 +69,6 @@ async function fetchAllTopics(groupId, maxTopics = 500, signal = null) {
     try {
       response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${getApiKey()}` },
-        // FIX: propagate caller signal AND add a per-page safety timeout
-        signal: signal ?? AbortSignal.timeout(45_000),
       });
     } catch (fetchError) {
       console.error('Fetch error:', fetchError);
@@ -127,9 +112,7 @@ async function fetchAllTopics(groupId, maxTopics = 500, signal = null) {
 
 // Fetch announcements from Groups.io
 router.get('/', async (req, res) => {
-  // FIX: cap limit to MAX_LIMIT (previously no upper bound — ?limit=999999 would
-  //      trigger hundreds of paginated API calls and hold the connection open)
-  const limit = Math.min(parseInt(req.query.limit) || 200, MAX_LIMIT);
+  const limit = parseInt(req.query.limit) || 200;
   
   if (!getApiKey()) {
     return res.status(500).json({ 
@@ -138,15 +121,6 @@ router.get('/', async (req, res) => {
     });
   }
 
-  // FIX: wrap the entire endpoint in a global AbortController so the fetch loop
-  //      is actually cancelled if the total operation takes too long.
-  //      Without this, the endpoint could run indefinitely on a slow upstream.
-  const controller = new AbortController();
-  const globalTimeout = setTimeout(() => {
-    console.error('⏰ Announcements fetch global timeout (120s), aborting...');
-    controller.abort();
-  }, 120_000);
-
   try {
     const groupId = await getGroupId();
     
@@ -154,8 +128,7 @@ router.get('/', async (req, res) => {
       throw new Error('Could not find group_id. Make sure your API key account is subscribed to supervalidator-announce');
     }
     
-    // Pass the controller signal so pagination respects the global deadline
-    const topics = await fetchAllTopics(groupId, limit, controller.signal);
+    const topics = await fetchAllTopics(groupId, limit);
     console.log('Total topics fetched:', topics.length);
     
     const announcements = topics.map((topic, idx) => ({
@@ -183,9 +156,6 @@ router.get('/', async (req, res) => {
       error: error.message,
       announcements: [] 
     });
-  } finally {
-    // Always clear the timeout to avoid leaking the handle
-    clearTimeout(globalTimeout);
   }
 });
 

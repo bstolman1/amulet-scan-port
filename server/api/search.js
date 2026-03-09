@@ -6,7 +6,6 @@ import {
   sanitizeEventType,
   sanitizeContractId,
   escapeLikePattern,
-  escapeString,        // FIX: was missing from imports; needed for party filter below
   buildLikeCondition,
   buildEqualCondition,
   containsDangerousPatterns,
@@ -82,23 +81,14 @@ router.get('/', async (req, res) => {
       if (containsDangerousPatterns(party)) {
         return res.status(400).json({ error: 'Invalid party filter' });
       }
-      const escapedParty = escapeString(party);
-      if (!escapedParty) {
+      const escaped = escapeLikePattern(party);
+      if (!escaped) {
         return res.status(400).json({ error: 'Invalid party filter' });
       }
-      // FIX: Use list_contains() instead of array_to_string() + LIKE.
-      //
-      // The old approach — array_to_string(signatories, ',') LIKE '%alice%' — would
-      // match a row where no single element equals 'alice' but the joined string
-      // happens to contain that substring across element boundaries, e.g.:
-      //   signatories = ['bob', 'alice-corp']  →  'bob,alice-corp'  →  contains 'alice' ✓ (wrong)
-      //   signatories = ['notali', 'ce']        →  'notali,ce'       →  contains 'alice' ✓ (wrong)
-      //
-      // list_contains() does an exact element-level lookup, which is correct.
-      // party.js already used this pattern; search.js now matches it.
+      // Use array_to_string for safer party matching
       conditions.push(`(
-        list_contains(signatories, '${escapedParty}')
-        OR list_contains(observers, '${escapedParty}')
+        array_to_string(signatories, ',') LIKE '%${escaped}%' ESCAPE '\\'
+        OR array_to_string(observers, ',') LIKE '%${escaped}%' ESCAPE '\\'
       )`);
     }
     
