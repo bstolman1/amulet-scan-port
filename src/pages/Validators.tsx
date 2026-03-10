@@ -10,8 +10,6 @@ import {
   ChevronUp,
   FileDown,
   RefreshCw,
-  Trophy,
-  Zap,
   Info,
   AlertTriangle,
   CheckCircle2,
@@ -21,9 +19,7 @@ import {
   Users,
 } from "lucide-react";
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
-import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -79,6 +75,7 @@ interface EconomicBeneficiary {
   earnedWeightBps: number;
   earnedWeightPct: string;
   status: "Active" | "Escrowed" | "Mixed";
+  isSelf: boolean;
   hasGhostHoldings: boolean;
   custodyBreakdown: {
     label: string;
@@ -105,7 +102,6 @@ const Validators = () => {
   const [expandedBeneficiary, setExpandedBeneficiary] = useState<string | null>(null);
   const [showGhostLedger, setShowGhostLedger] = useState(false);
   const [svTab, setSvTab] = useState<"standalone" | "hosted">("standalone");
-  const { toast } = useToast();
 
   useEffect(() => {
     scheduleDailySync();
@@ -164,6 +160,7 @@ const Validators = () => {
       totalWeightBps: number;
       directWeightBps: number;
       ghostWeightBps: number;
+      isSelf: boolean;
       custodyBreakdown: EconomicBeneficiary["custodyBreakdown"];
       operatorName: string;
     }>();
@@ -181,11 +178,13 @@ const Validators = () => {
         const isGhostEntry = rawName.toLowerCase().includes("ghost");
 
         if (isGhostEntry) {
-          // Derive source beneficiary name from comment when available,
+          // Derive source beneficiary name from comment when it follows "Name CIP-XXXX" pattern.
           // e.g. "Fireblocks CIP-0072 # escrow ..." → "Fireblocks"
+          // Falls back to stripping "-ghost-N" from the party name.
           let sourceName = "";
           if (comment) {
-            sourceName = comment.split(" CIP-")[0].split(" #")[0].trim();
+            const cipMatch = comment.match(/^(.+?)\s+CIP-\d+/);
+            if (cipMatch) sourceName = cipMatch[1].trim();
           }
           if (!sourceName) {
             sourceName = rawName
@@ -228,6 +227,7 @@ const Validators = () => {
               totalWeightBps: weightBps,
               directWeightBps: 0,
               ghostWeightBps: weightBps,
+              isSelf: false,
               custodyBreakdown: [{
                 label: `Escrowed under ${ghostHolder}`,
                 weightBps,
@@ -239,16 +239,20 @@ const Validators = () => {
             });
           }
         } else {
-          // Direct holding — use display name from config-sync (already derived from comment)
-          // config-sync.ts now correctly resolves the display name even for reused party IDs.
-          // The `name` field in superValidators is the display name; but here we're working
-          // from operators.extraBeneficiaries which only has the raw beneficiary string.
-          // Re-derive from comment to stay consistent with config-sync.ts logic.
+          // Direct holding. Derive display name only when comment follows "Name CIP-XXXX" pattern.
           let displayName = rawName;
           if (comment) {
-            const stripped = comment.split(" CIP-")[0].split(" #")[0].trim();
-            if (stripped) displayName = stripped;
+            const cipMatch = comment.match(/^(.+?)\s+CIP-\d+/);
+            if (cipMatch) displayName = cipMatch[1].trim();
           }
+
+          // Detect self-referential entries: operator holding weight for itself.
+          // These are explicitly known from the YAML structure.
+          const isSelf =
+            (opName === "Global-Synchronizer-Foundation" &&
+              (rawName === "GhostSV-validator-1" || rawName === "GSF-SVRewards-1")) ||
+            (opName === "MPC-Holding-Inc" &&
+              comment.toLowerCase().startsWith("mpch"));
 
           const key = `${opName}|${displayName}`;
           const existing = beneficiaryMap.get(key);
@@ -268,6 +272,7 @@ const Validators = () => {
               totalWeightBps: weightBps,
               directWeightBps: weightBps,
               ghostWeightBps: 0,
+              isSelf,
               custodyBreakdown: [{
                 label: `Held directly by ${displayName}`,
                 weightBps,
@@ -297,6 +302,7 @@ const Validators = () => {
           earnedWeightBps: b.totalWeightBps,
           earnedWeightPct: bpsToPercent(b.totalWeightBps),
           status,
+          isSelf: b.isSelf,
           hasGhostHoldings: b.ghostWeightBps > 0,
           custodyBreakdown: b.custodyBreakdown,
           operatorName: b.operatorName,
@@ -393,13 +399,13 @@ const Validators = () => {
                   </span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Standalone SVs:</span>
+                  <span className="text-muted-foreground">Operators:</span>
                   <span className="ml-2 font-semibold text-foreground">
                     {displayModel.standaloneOperators.length}
                   </span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Hosted Parties:</span>
+                  <span className="text-muted-foreground">Beneficiaries:</span>
                   <span className="ml-2 font-semibold text-foreground">
                     {displayModel.beneficiaryCount}
                   </span>
@@ -460,7 +466,7 @@ const Validators = () => {
               }`}
             >
               <Building2 className="w-4 h-4" />
-              Standalone
+              Operators
               <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-bold ${
                 svTab === "standalone" ? "bg-white/20" : "bg-muted"
               }`}>
@@ -476,7 +482,7 @@ const Validators = () => {
               }`}
             >
               <Users className="w-4 h-4" />
-              Hosted
+              Beneficiaries
               <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-bold ${
                 svTab === "hosted" ? "bg-white/20" : "bg-muted"
               }`}>
@@ -489,7 +495,7 @@ const Validators = () => {
           {svTab === "standalone" && (
             <>
               <div className="px-6 pt-4 pb-2">
-                <h3 className="text-lg font-bold">Standalone Super Validators</h3>
+                <h3 className="text-lg font-bold">Operators</h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   The {displayModel.standaloneOperators.length} operators running their own validator infrastructure.
                 </p>
@@ -547,9 +553,9 @@ const Validators = () => {
           {svTab === "hosted" && (
             <>
               <div className="px-6 pt-4 pb-2">
-                <h3 className="text-lg font-bold">Hosted Beneficiaries (Reward Entitlements)</h3>
+                <h3 className="text-lg font-bold">Beneficiaries</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Parties hosted under a standalone SV. Weights partition that operator's reward pool.
+                  Parties hosted under an operator. Weights partition that operator's reward pool.
                 </p>
               </div>
               <Table>
@@ -585,7 +591,16 @@ const Validators = () => {
                               hasBreakdown && setExpandedBeneficiary(isExpanded ? null : key)
                             }
                           >
-                            <TableCell className="font-medium">{beneficiary.name}</TableCell>
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-2">
+                                {beneficiary.name}
+                                {beneficiary.isSelf && (
+                                  <Badge variant="outline" className="text-xs border-primary/40 bg-primary/10 text-primary">
+                                    Self
+                                  </Badge>
+                                )}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
                               {beneficiary.operatorName}
                             </TableCell>
@@ -764,231 +779,10 @@ const Validators = () => {
           </Card>
         )}
 
-        {/* ─────────────────────────────────────────────────────────────── */}
-        {/* ACTIVE VALIDATORS SECTION                                        */}
-        {/* ─────────────────────────────────────────────────────────────── */}
-        <ActiveValidatorsSection />
-
-        {/* Data Sources Note */}
-        <Card className="glass-card p-4 text-sm text-muted-foreground">
-          <p>
-            <strong>Design Principle:</strong> Economic entitlements are displayed once and summed;
-            custody paths are displayed only as nested, non-additive breakdowns.
-          </p>
-          <p className="mt-2">
-            <strong>Data Sources:</strong> SuperValidator configuration data is fetched from the
-            network configuration API. Active validators are queried from the Canton Network API endpoints.
-          </p>
-        </Card>
       </div>
     </DashboardLayout>
   );
 };
 
-// ─────────────────────────────
-// Subcomponent: Active Validators (unchanged)
-// ─────────────────────────────
-const ActiveValidatorsSection = () => {
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
-  const { toast } = useToast();
-
-  const {
-    data: topValidators,
-    isLoading,
-    isError,
-  } = useQuery({
-    queryKey: ["topValidators"],
-    queryFn: async () => {
-      const data = await scanApi.fetchTopValidators();
-      const validatorIds = data.validatorsAndRewards.map((v) => v.provider);
-      const livenessData = await scanApi.fetchValidatorLiveness(validatorIds);
-      const latestRound = await scanApi.fetchLatestRound();
-      const startRound = Math.max(0, latestRound.round - 200);
-      const roundTotals = await scanApi.fetchRoundTotals({
-        start_round: startRound,
-        end_round: latestRound.round,
-      });
-
-      const roundDates = new Map<number, string>();
-      roundTotals.entries.forEach((entry) => {
-        roundDates.set(entry.closed_round, entry.closed_round_effective_at);
-      });
-
-      return {
-        ...data,
-        validatorsAndRewards: data.validatorsAndRewards.map((validator) => {
-          const livenessInfo = livenessData.validatorsReceivedFaucets.find(
-            (v) => v.validator === validator.provider
-          );
-          const lastActiveDate = livenessInfo?.lastCollectedInRound
-            ? roundDates.get(livenessInfo.lastCollectedInRound)
-            : undefined;
-          return {
-            ...validator,
-            lastActiveDate,
-            numRoundsMissed: livenessInfo?.numRoundsMissed ?? 0,
-          };
-        }),
-      };
-    },
-    retry: 1,
-  });
-
-  const getRankColor = (rank: number) => {
-    switch (rank) {
-      case 1: return "gradient-primary text-primary-foreground";
-      case 2: return "bg-chart-2/20 text-chart-2";
-      case 3: return "bg-chart-3/20 text-chart-3";
-      default: return "bg-muted text-muted-foreground";
-    }
-  };
-
-  const formatPartyId = (partyId: string) => partyId.split("::")[0] || partyId;
-
-  const totalValidators = topValidators?.validatorsAndRewards?.length || 0;
-  const activeCount =
-    topValidators?.validatorsAndRewards?.filter((v) => v.numRoundsMissed === 0).length || 0;
-  const inactiveCount = totalValidators - activeCount;
-
-  const filteredValidators = useMemo(() => {
-    if (!topValidators?.validatorsAndRewards) return [];
-    if (statusFilter === "active")
-      return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed === 0);
-    if (statusFilter === "inactive")
-      return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed > 0);
-    return topValidators.validatorsAndRewards;
-  }, [topValidators, statusFilter]);
-
-  return (
-    <>
-      <div className="flex items-center justify-between mt-8">
-        <div>
-          <h2 className="text-3xl font-bold mb-2">Validators</h2>
-          <p className="text-muted-foreground">
-            {totalValidators} validators on the Canton Network
-          </p>
-        </div>
-      </div>
-
-      {!isLoading && !isError && totalValidators > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <Card
-            className={`p-5 space-y-1 cursor-pointer transition-all ${statusFilter === "all" ? "ring-2 ring-primary" : "hover:bg-muted/50"}`}
-            onClick={() => setStatusFilter("all")}
-          >
-            <p className="text-sm text-muted-foreground">Total Validators</p>
-            <p className="text-3xl font-bold text-foreground">{totalValidators}</p>
-          </Card>
-          <Card
-            className={`p-5 space-y-1 cursor-pointer transition-all ${statusFilter === "active" ? "ring-2 ring-success" : "hover:bg-muted/50"}`}
-            onClick={() => setStatusFilter("active")}
-          >
-            <p className="text-sm text-muted-foreground">Active (0 Missed Rounds)</p>
-            <p className="text-3xl font-bold text-success">{activeCount}</p>
-          </Card>
-          <Card
-            className={`p-5 space-y-1 cursor-pointer transition-all ${statusFilter === "inactive" ? "ring-2 ring-destructive" : "hover:bg-muted/50"}`}
-            onClick={() => setStatusFilter("inactive")}
-          >
-            <p className="text-sm text-muted-foreground">Inactive (Missed Rounds &gt; 0)</p>
-            <p className={`text-3xl font-bold ${inactiveCount > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-              {inactiveCount}
-            </p>
-          </Card>
-        </div>
-      )}
-
-      <Card className="glass-card">
-        <div className="p-6">
-          {isLoading ? (
-            <div className="space-y-4">
-              {[1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="h-40 w-full" />
-              ))}
-            </div>
-          ) : isError ? (
-            <div className="text-center p-8">
-              <p className="text-muted-foreground">
-                Unable to load validator data. The API endpoint may be unavailable.
-              </p>
-            </div>
-          ) : !filteredValidators.length ? (
-            <div className="text-center p-8">
-              <p className="text-muted-foreground">
-                No {statusFilter !== "all" ? statusFilter : ""} validators found
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {filteredValidators.map((validator, index) => {
-                const rank = index + 1;
-                return (
-                  <div
-                    key={validator.provider}
-                    className="p-6 rounded-lg bg-muted/30 hover:bg-muted/50 transition-smooth border border-border/50"
-                  >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center space-x-4">
-                        <div
-                          className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold ${getRankColor(rank)}`}
-                        >
-                          {rank <= 3 ? <Trophy className="h-6 w-6" /> : rank}
-                        </div>
-                        <div>
-                          <h3 className="text-xl font-bold mb-1">
-                            {formatPartyId(validator.provider)}
-                          </h3>
-                          <p className="font-mono text-sm text-muted-foreground truncate max-w-md">
-                            {validator.provider}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <Badge className="bg-success/10 text-success border-success/20">
-                          <Zap className="h-3 w-3 mr-1" />
-                          active
-                        </Badge>
-                        {validator.lastActiveDate && (
-                          <span className="text-xs text-muted-foreground">
-                            Last: {new Date(validator.lastActiveDate).toLocaleDateString()}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                      <div className="p-4 rounded-lg bg-background/50">
-                        <p className="text-sm text-muted-foreground mb-1">Rounds Collected</p>
-                        <p className="text-2xl font-bold text-primary">
-                          {(parseFloat(validator.rewards ?? "0") || 0).toLocaleString(undefined, {
-                            maximumFractionDigits: 0,
-                          })}
-                        </p>
-                      </div>
-                      <div className="p-4 rounded-lg bg-background/50">
-                        <p className="text-sm text-muted-foreground mb-1">Missed Rounds</p>
-                        <p className={`text-2xl font-bold ${(validator.numRoundsMissed ?? 0) > 0 ? "text-destructive" : "text-success"}`}>
-                          {(validator.numRoundsMissed ?? 0).toLocaleString()}
-                        </p>
-                      </div>
-                      <div className="p-4 rounded-lg bg-background/50">
-                        <p className="text-sm text-muted-foreground mb-1">Rank</p>
-                        <p className="text-2xl font-bold text-foreground">#{rank}</p>
-                      </div>
-                      <div className="p-4 rounded-lg bg-background/50">
-                        <p className="text-sm text-muted-foreground mb-1">Status</p>
-                        <p className="text-2xl font-bold text-success">Active</p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </Card>
-    </>
-  );
-};
 
 export default Validators;
