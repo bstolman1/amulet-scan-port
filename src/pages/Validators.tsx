@@ -11,8 +11,6 @@ import {
   FileDown,
   RefreshCw,
   Info,
-  AlertTriangle,
-  CheckCircle2,
   Eye,
   EyeOff,
   Building2,
@@ -418,24 +416,7 @@ const Validators = () => {
                 </div>
               </div>
 
-              <div className="mt-4 pt-4 border-t border-border">
-                {displayModel.invariantSatisfied ? (
-                  <div className="flex items-center gap-2 text-success">
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span className="text-sm font-medium">
-                      Beneficiary weights sum to operator total
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 text-warning">
-                    <AlertTriangle className="w-5 h-5" />
-                    <span className="text-sm font-medium">
-                      Beneficiary weights {displayModel.drift > 0 ? "exceed" : "fall short of"} operator total by{" "}
-                      {Math.abs(parseFloat(displayModel.driftPct))}%
-                    </span>
-                  </div>
-                )}
-              </div>
+
             </div>
 
             <div className="flex gap-2 flex-shrink-0">
