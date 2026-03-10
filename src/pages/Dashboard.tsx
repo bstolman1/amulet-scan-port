@@ -6,7 +6,6 @@ import { scanApi } from "@/lib/api-client";
 import { fetchConfigData } from "@/lib/config-sync";
 
 const Dashboard = () => {
-  // Fetch real data from Canton Scan API via scan-proxy
   const { data: latestRound } = useQuery({
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
@@ -31,10 +30,16 @@ const Dashboard = () => {
     queryFn: () => scanApi.fetchTopValidators(),
     retry: 1,
   });
-  const { data: topProviders } = useQuery({
+  const {
+    data: topProviders,
+    isLoading: providersLoading,
+    isError: providersError,
+  } = useQuery({
     queryKey: ["topProviders"],
     queryFn: () => scanApi.fetchTopProviders(),
-    retry: 1,
+    retry: 2,
+    retryDelay: 1000,
+    staleTime: 30000,
   });
   const { data: transactions } = useQuery({
     queryKey: ["recentTransactions"],
@@ -50,7 +55,6 @@ const Dashboard = () => {
     staleTime: 24 * 60 * 60 * 1000,
   });
 
-  // Calculate total rewards from validators (rounds collected) and providers (app rewards)
   const totalAppRewards = topProviders?.providersAndRewards.reduce((sum, p) => sum + parseFloat(p.rewards), 0) || 0;
   const ccPrice = (() => {
     const dsoPrice = (dsoInfo as any)?.latest_mining_round?.contract?.payload?.amuletPrice;
@@ -81,19 +85,19 @@ const Dashboard = () => {
     superValidators: configData ? superValidatorCount.toString() : "Loading...",
     currentRound: latestRound?.round.toLocaleString() || "Loading...",
     coinPrice: ccPrice !== undefined ? `$${ccPrice.toFixed(4)}` : "Loading...",
-    totalRewards:
-      totalAppRewards > 0
-        ? parseFloat(totalAppRewards.toString()).toLocaleString(undefined, {
+    totalRewards: providersLoading
+      ? "Loading..."
+      : providersError
+        ? "Loading..."
+        : parseFloat(totalAppRewards.toString()).toLocaleString(undefined, {
             maximumFractionDigits: 2,
-          })
-        : "Connection Failed",
+          }),
     networkHealth: "99.9%",
   };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Hero Section */}
         <div className="relative">
           <div className="absolute inset-0 gradient-primary rounded-xl blur-3xl opacity-20" />
           <div className="relative glass-card p-6 text-center">
@@ -104,7 +108,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Live Network Stats Grid */}
         <div>
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
             <Activity className="h-4 w-4 text-primary" />
@@ -116,10 +119,7 @@ const Dashboard = () => {
               title="Canton Coin Price (USD)"
               value={stats.coinPrice}
               icon={Activity}
-              trend={{
-                value: "",
-                positive: true,
-              }}
+              trend={{ value: "", positive: true }}
             />
             <StatCard title="Market Cap (USD)" value={`$${stats.marketCap}`} icon={Users} />
             <StatCard title="Current Round" value={stats.currentRound} icon={Package} />
@@ -131,4 +131,5 @@ const Dashboard = () => {
     </DashboardLayout>
   );
 };
+
 export default Dashboard;
