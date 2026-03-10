@@ -106,11 +106,18 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
       const [partyName, address] = ex.beneficiary.split("::");
       const isGhost = partyName.toLowerCase().includes("ghost");
 
-      // Derive display name from comment (e.g. "Talos CIP-0085 # ..." → "Talos")
+      // Derive display name from comment only when it follows the pattern
+      // "Friendly Name CIP-XXXX ..." — i.e. the comment starts with a name
+      // followed by a CIP reference. This avoids using free-form comments
+      // (like the GhostSV annotation) as display names.
       let displayName = partyName;
       if (ex.comment) {
-        const stripped = ex.comment.split(" CIP-")[0].split(" #")[0].trim();
-        if (stripped) displayName = stripped;
+        const cipMatch = ex.comment.match(/^(.+?)\s+CIP-\d+/);
+        if (cipMatch) {
+          // "Talos CIP-0085 # ..." → "Talos"
+          displayName = cipMatch[1].trim();
+        }
+        // Otherwise keep partyName as-is (e.g. GhostSV-validator-1, GSF-SVRewards-1)
       }
 
       flattened.push({
