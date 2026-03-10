@@ -4,10 +4,9 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Coins, AlertTriangle, Package, Clock, Copy, Check, Search, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Coins, AlertTriangle, Package, Clock, Copy, Check } from "lucide-react";
 import { useDevFundCoupons } from "@/hooks/use-dev-fund-coupons";
 import { pickAmount } from "@/lib/amount-utils";
-import { Input } from "@/components/ui/input";
 import { format } from "date-fns";
 import { useState, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
@@ -44,30 +43,8 @@ const CopyButton = ({ text }: { text: string }) => {
 
 const DevFund = () => {
   const { data: coupons, isLoading, error } = useDevFundCoupons();
-  const [search, setSearch] = useState("");
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-
-  const toggleExpand = (id: string) => {
-    setExpandedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const filtered = useMemo(() => {
-    if (!coupons) return [];
-    if (!search.trim()) return coupons;
-    const q = search.toLowerCase();
-    return coupons.filter(c =>
-      c.contract.contract_id.toLowerCase().includes(q) ||
-      c.contract.template_id.toLowerCase().includes(q) ||
-      c.domain_id.toLowerCase().includes(q)
-    );
-  }, [coupons, search]);
 
   const extractAmount = (coupon: typeof coupons extends (infer T)[] ? T : never) => {
-    // Payload amount is already in CC (human-readable), not raw ledger units
     return pickAmount(coupon.contract.payload);
   };
 
@@ -199,22 +176,8 @@ const DevFund = () => {
 
         {/* Coupons table */}
         <Card>
-          <div className="p-4 border-b border-border flex items-center justify-between gap-4">
-            <h2 className="text-lg font-semibold text-foreground shrink-0">Unclaimed Coupons</h2>
-            <div className="relative max-w-sm w-full">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Filter by contract ID, template, or domain…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 pr-8"
-              />
-              {search && (
-                <button onClick={() => setSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
+          <div className="p-4 border-b border-border">
+            <h2 className="text-lg font-semibold text-foreground">Unclaimed Coupons</h2>
           </div>
           {isLoading ? (
             <div className="p-4 space-y-3">
@@ -222,74 +185,41 @@ const DevFund = () => {
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
-          ) : filtered.length === 0 ? (
+          ) : !coupons || coupons.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">
               <Coins className="h-12 w-12 mx-auto mb-4 opacity-30" />
-              <p className="text-lg font-medium">{search ? "No matching coupons" : "No unclaimed coupons"}</p>
-              <p className="text-sm mt-1">
-                {search
-                  ? `No coupons match "${search}".`
-                  : "All development fund coupons have been claimed."}
-              </p>
+              <p className="text-lg font-medium">No unclaimed coupons</p>
+              <p className="text-sm mt-1">All development fund coupons have been claimed.</p>
             </div>
           ) : (
             <Table>
               <TableHeader>
-                 <TableRow>
-                   <TableHead className="w-8"></TableHead>
-                   <TableHead>Contract ID</TableHead>
-                    <TableHead className="text-right">Amount (CC)</TableHead>
-                    <TableHead>Created At</TableHead>
-                 </TableRow>
+                <TableRow>
+                  <TableHead>Contract ID</TableHead>
+                  <TableHead className="text-right">Amount (CC)</TableHead>
+                  <TableHead>Created At</TableHead>
+                </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((coupon) => {
+                {coupons.map((coupon) => {
                   const id = coupon.contract.contract_id;
-                  const isExpanded = expandedIds.has(id);
                   return (
-                    <>
-                      <TableRow key={id} className="cursor-pointer hover:bg-muted/50" onClick={() => toggleExpand(id)}>
-                        <TableCell className="w-8 px-2">
-                          {isExpanded
-                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          <span title={id}>{truncateId(id)}</span>
-                          <CopyButton text={id} />
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm">
-                          {extractAmount(coupon).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {safeFormatDate(coupon.contract.created_at)}
-                        </TableCell>
-                      </TableRow>
-                      {isExpanded && (
-                        <TableRow key={`${id}-detail`}>
-                          <TableCell colSpan={4} className="bg-muted/30 p-0">
-                            <div className="p-4 max-h-96 overflow-auto">
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Full Contract JSON</span>
-                                <CopyButton text={JSON.stringify(coupon, null, 2)} />
-                              </div>
-                              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-all bg-background/50 rounded-md border border-border p-3">
-                                {JSON.stringify(coupon, null, 2)}
-                              </pre>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </>
+                    <TableRow key={id}>
+                      <TableCell className="font-mono text-xs">
+                        <span title={id}>{truncateId(id)}</span>
+                        <CopyButton text={id} />
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm">
+                        {extractAmount(coupon).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {safeFormatDate(coupon.contract.created_at)}
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
-          )}
-          {!isLoading && search && filtered.length > 0 && (
-            <div className="px-4 py-2 border-t border-border text-xs text-muted-foreground">
-              Showing {filtered.length} of {coupons?.length ?? 0} coupons
-            </div>
           )}
         </Card>
       </div>
