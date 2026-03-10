@@ -294,7 +294,7 @@ export default function KaikoFeed() {
           </Button>
         </div>
 
-        {!status?.configured && (
+        {status !== undefined && !status?.configured && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertTitle>API Key Not Configured</AlertTitle>
