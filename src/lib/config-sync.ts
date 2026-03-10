@@ -33,38 +33,35 @@ export interface ConfigData {
 export async function fetchConfigData(forceRefresh = false): Promise<ConfigData> {
   const cacheKey = "sv-config-cache-v5";
 
-  // ─────────────────────────────
-  // Cache
-  // ─────────────────────────────
   if (!forceRefresh) {
     const cached = localStorage.getItem(cacheKey);
     if (cached) return JSON.parse(cached);
   }
 
-  // ─────────────────────────────
-  // Fetch YAML from GitHub
-  // ─────────────────────────────
   const res = await fetch(CONFIG_URL);
   if (!res.ok) throw new Error("Failed to fetch config file from GitHub");
   const text = await res.text();
-  
-  // Extract inline comments (# ...) from raw YAML before parsing
-  const inlineComments = new Map<string, string>();
-  const lines = text.split('\n');
-  for (const line of lines) {
-    const beneficiaryMatch = line.match(/beneficiary:\s*"([^"]+)"\s*#\s*(.+)/);
-    if (beneficiaryMatch) {
-      inlineComments.set(beneficiaryMatch[1], beneficiaryMatch[2].trim());
+
+  // Extract inline comments before YAML parsing strips them.
+  //
+  // BUG FIX 2: The same party ID can appear multiple times with DIFFERENT
+  // meanings (e.g. CoinMetrics' party ID is reused for Talos in CIP-0085).
+  // A single Map<partyId, string> overwrites the first entry with the second.
+  // Fix: store ALL comments in insertion order as Map<partyId, string[]>,
+  // then pick comment[N] for the Nth occurrence of that party ID.
+  const inlineComments = new Map<string, string[]>();
+  for (const line of text.split('\n')) {
+    const m = line.match(/beneficiary:\s*"([^"]+)"\s*#\s*(.+)/);
+    if (m) {
+      const [, partyId, comment] = m;
+      if (!inlineComments.has(partyId)) inlineComments.set(partyId, []);
+      inlineComments.get(partyId)!.push(comment.trim());
     }
   }
-  
-  const parsed = YAML.parse(text);
 
+  const parsed = YAML.parse(text);
   const approved = parsed.approvedSvIdentities || [];
 
-  // ─────────────────────────────
-  // Build Operators and Flatten Beneficiaries
-  // ─────────────────────────────
   const operators: ConfigData["operators"] = [];
   const flattened: ConfigData["superValidators"] = [];
   let totalRewardBps = 0;
@@ -73,53 +70,63 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
     const operatorName = sv.name;
     const rewardWeightBps = Number(String(sv.rewardWeightBps).replace(/_/g, ""));
     totalRewardBps += rewardWeightBps;
-    const operatorComment = sv.comment || undefined;
 
     const extras = sv.extraBeneficiaries || [];
+
+    // Per-operator counter so we pick the right comment for repeated party IDs.
+    const seenCounts = new Map<string, number>();
+
     const normalizedExtras = extras.map((ex: any) => {
-      // Handle both number and string weights (some YAML entries use quotes)
-      const rawWeight = ex.weight;
-      const parsedWeight = typeof rawWeight === 'string' 
-        ? Number(rawWeight.replace(/_/g, ""))
-        : Number(String(rawWeight).replace(/_/g, ""));
-      
-      return {
-        beneficiary: ex.beneficiary,
-        weight: parsedWeight,
-        comment: inlineComments.get(ex.beneficiary) || undefined,
-      };
+      // BUG FIX 1: Five-North-1's bsv-ghost-1 entry uses `rewardWeightBps`
+      // instead of `weight`. Fall back to it when `weight` is absent.
+      const rawWeight = ex.weight ?? ex.rewardWeightBps;
+      const parsedWeight =
+        rawWeight == null
+          ? 0
+          : Number(String(rawWeight).replace(/_/g, ""));
+
+      const partyId = ex.beneficiary;
+      const idx = seenCounts.get(partyId) ?? 0;
+      seenCounts.set(partyId, idx + 1);
+
+      const comment = (inlineComments.get(partyId) ?? [])[idx];
+
+      return { beneficiary: partyId, weight: parsedWeight, comment };
     });
 
-    // Save operator entry
     operators.push({
       name: operatorName,
       rewardWeightBps,
       joinRound: sv.joinRound ?? null,
-      comment: operatorComment,
+      comment: sv.comment || undefined,
       extraBeneficiaries: normalizedExtras,
     });
 
-    // Flatten beneficiaries for UI tables
     for (const ex of normalizedExtras) {
-      const fullPartyId = ex.beneficiary;
-      const [beneficiaryName, address] = ex.beneficiary.split("::");
+      const [partyName, address] = ex.beneficiary.split("::");
+      const isGhost = partyName.toLowerCase().includes("ghost");
+
+      // Derive display name from comment (e.g. "Talos CIP-0085 # ..." → "Talos")
+      let displayName = partyName;
+      if (ex.comment) {
+        const stripped = ex.comment.split(" CIP-")[0].split(" #")[0].trim();
+        if (stripped) displayName = stripped;
+      }
+
       flattened.push({
-        name: beneficiaryName,
+        name: displayName,
         address: address || "",
-        fullPartyId,
+        fullPartyId: ex.beneficiary,
         operatorName,
         weight: ex.weight,
         parentWeight: rewardWeightBps,
         joinRound: sv.joinRound ?? null,
-        isGhost: beneficiaryName.toLowerCase().includes("ghost"),
+        isGhost,
         comment: ex.comment || undefined,
       });
     }
   }
 
-  // ─────────────────────────────
-  // Compose Final Data
-  // ─────────────────────────────
   const data: ConfigData = {
     superValidators: flattened,
     operators,
@@ -127,15 +134,11 @@ export async function fetchConfigData(forceRefresh = false): Promise<ConfigData>
     lastUpdated: Date.now(),
   };
 
-  // Cache locally
   localStorage.setItem(cacheKey, JSON.stringify(data));
   return data;
 }
 
-// ─────────────────────────────
-// Schedule periodic background refresh (every hour)
-// ─────────────────────────────
 export function scheduleDailySync() {
-  const interval = setInterval(fetchConfigData, 60 * 60 * 1000); // 1 hour
+  const interval = setInterval(fetchConfigData, 60 * 60 * 1000);
   return () => clearInterval(interval);
 }
