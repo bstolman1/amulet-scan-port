@@ -82,7 +82,7 @@ const Dashboard = () => {
             Live Network Stats
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <StatCard title="Total Amulet Balance" value={stats.totalBalance} icon={Coins} gradient />
+            <StatCard title="Total Supply" value={stats.totalBalance} icon={Coins} gradient />
             <StatCard
               title="Canton Coin Price (USD)"
               value={stats.coinPrice}
