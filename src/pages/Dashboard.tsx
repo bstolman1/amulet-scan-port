@@ -55,7 +55,7 @@ const Dashboard = () => {
         ? "Connection Failed"
         : totalBalance?.total_balance
           ? parseFloat(totalBalance.total_balance).toLocaleString(undefined, {
-              maximumFractionDigits: 2,
+              maximumFractionDigits: 0,
             })
           : "Loading...",
     marketCap: balanceLoading ? "Loading..." : balanceError ? "Connection Failed" : marketCap,
