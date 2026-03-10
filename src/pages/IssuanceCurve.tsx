@@ -56,6 +56,16 @@ const formatLargeNumber = (value?: string | number): string => {
   return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
 };
 
+const formatCompact = (value?: string | number): string => {
+  if (value === undefined || value === null) return "—";
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  if (isNaN(num)) return "—";
+  if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`;
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
+};
+
 const NETWORK_LAUNCH_DATE = new Date("2024-07-01T00:00:00Z");
 
 const getMicrosecondsSinceLaunch = (): number =>
@@ -302,15 +312,11 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
                       {s.effectiveMicros === 0 ? "Launch" : formatDate(s.effectiveMicros)}
                     </span>
                   </div>
-                  <div
-                    className={`grid gap-x-6 gap-y-1 text-sm ${
-                      devFundPct != null ? "grid-cols-5" : "grid-cols-4"
-                    }`}
-                  >
+                  <div className="grid gap-x-4 gap-y-1 text-sm grid-cols-[2fr_1fr_1fr_1fr_1fr]">
                     <div>
                       <span className="text-muted-foreground text-xs">Issuance/yr</span>
-                      <p className="font-semibold whitespace-nowrap">
-                        {formatLargeNumber(s.values?.amuletToIssuePerYear)}
+                      <p className="font-semibold tabular-nums">
+                        {formatCompact(s.values?.amuletToIssuePerYear)}
                       </p>
                     </div>
                     <div>
@@ -325,12 +331,16 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
                       <span className="text-muted-foreground text-xs">SV</span>
                       <p className="font-semibold">{(svPct * 100).toFixed(0)}%</p>
                     </div>
-                    {devFundPct != null && (
-                      <div>
-                        <span className="text-muted-foreground text-xs">Dev Fund</span>
-                        <p className="font-semibold">{(devFundPct * 100).toFixed(0)}%</p>
-                      </div>
-                    )}
+                    <div>
+                      {devFundPct != null ? (
+                        <>
+                          <span className="text-muted-foreground text-xs">Dev Fund</span>
+                          <p className="font-semibold">{(devFundPct * 100).toFixed(0)}%</p>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground text-xs opacity-0">—</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -428,7 +438,7 @@ export default function IssuanceCurve() {
               <CardTitle className="text-sm text-muted-foreground">Annual Issuance</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-bold">{formatLargeNumber(values?.amuletToIssuePerYear)}</p>
+              <p className="text-2xl font-bold">{formatCompact(values?.amuletToIssuePerYear)}</p>
               <p className="text-xs text-muted-foreground">CC per year</p>
             </CardContent>
           </Card>
@@ -437,7 +447,7 @@ export default function IssuanceCurve() {
               <CardTitle className="text-sm text-muted-foreground">Validator Reward Cap</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-bold">{formatLargeNumber(values?.validatorRewardCap)}</p>
+              <p className="text-2xl font-bold">{formatCompact(values?.validatorRewardCap)}</p>
               <p className="text-xs text-muted-foreground">Per round</p>
             </CardContent>
           </Card>
@@ -446,7 +456,7 @@ export default function IssuanceCurve() {
               <CardTitle className="text-sm text-muted-foreground">Featured App Cap</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-bold">{formatLargeNumber(values?.featuredAppRewardCap)}</p>
+              <p className="text-2xl font-bold">{formatCompact(values?.featuredAppRewardCap)}</p>
               <p className="text-xs text-muted-foreground">Per round</p>
             </CardContent>
           </Card>
