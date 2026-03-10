@@ -1857,7 +1857,7 @@ const GovernanceFlow = () => {
               {/* Show only stages relevant to the selected type */}
               {(() => {
                 const stagesToShow = typeFilter === 'all' 
-                  ? [...new Set(Object.values(WORKFLOW_STAGES).flat())]
+                  ? []
                   : WORKFLOW_STAGES[typeFilter as keyof typeof WORKFLOW_STAGES] || [];
                 return ['all', ...stagesToShow].map(stage => (
                   <Button
