@@ -17,6 +17,8 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
+  Building2,
+  Users,
 } from "lucide-react";
 import { fetchConfigData, scheduleDailySync } from "@/lib/config-sync";
 import { scanApi } from "@/lib/api-client";
@@ -64,6 +66,14 @@ const formatLastSynced = (timestamp: number) => {
 // ─────────────────────────────
 // Types
 // ─────────────────────────────
+interface StandaloneOperator {
+  name: string;
+  rewardWeightBps: number;
+  rewardWeightPct: string;
+  hostedCount: number;
+  joinRound?: number | null;
+}
+
 interface EconomicBeneficiary {
   name: string;
   earnedWeightBps: number;
@@ -94,9 +104,9 @@ interface GhostLedgerEntry {
 const Validators = () => {
   const [expandedBeneficiary, setExpandedBeneficiary] = useState<string | null>(null);
   const [showGhostLedger, setShowGhostLedger] = useState(false);
+  const [svTab, setSvTab] = useState<"standalone" | "hosted">("standalone");
   const { toast } = useToast();
 
-  // Schedule hourly config sync
   useEffect(() => {
     scheduleDailySync();
   }, []);
@@ -109,35 +119,46 @@ const Validators = () => {
   } = useQuery({
     queryKey: ["sv-config", "v5"],
     queryFn: () => fetchConfigData(true),
-    staleTime: 60 * 60 * 1000, // 1 hour
+    staleTime: 60 * 60 * 1000,
   });
 
   // ─────────────────────────────
-  // Transform Config → New Display Model
+  // Transform Config → Display Model
+  //
+  // KEY CHANGE: Previously only GSF's extraBeneficiaries were processed.
+  // Now we:
+  //   • Show ALL 13 operators as "Standalone" rows
+  //   • Show extraBeneficiaries from ALL operators in the "Hosted" tab
   // ─────────────────────────────
   const displayModel = useMemo(() => {
     if (!configData) return null;
 
     const operators = configData.operators || [];
+    if (operators.length === 0) return null;
 
-    // Find GSF operator - the primary operator with extraBeneficiaries
-    const gsfOperator = operators.find(
-      (op: any) => op.name === "Global-Synchronizer-Foundation"
+    // ── Standalone: one row per operator ───────────────────────────────────
+    const standaloneOperators: StandaloneOperator[] = operators
+      .map((op) => ({
+        name: op.name,
+        rewardWeightBps: normalizeBps(op.rewardWeightBps),
+        rewardWeightPct: bpsToPercent(normalizeBps(op.rewardWeightBps)),
+        hostedCount: (op.extraBeneficiaries || []).length,
+        joinRound: op.joinRound ?? null,
+      }))
+      .sort((a, b) => b.rewardWeightBps - a.rewardWeightBps);
+
+    const totalOperatorWeightBps = standaloneOperators.reduce(
+      (s, op) => s + op.rewardWeightBps,
+      0
     );
 
-    if (!gsfOperator) {
-      return null;
-    }
-
-    // The invariant: GSF's declared reward weight
-    const totalOperatorWeightBps = normalizeBps(gsfOperator.rewardWeightBps);
-
-    // Ghost ledger for advanced view
+    // ── Hosted: beneficiaries from ALL operators ───────────────────────────
     const ghostLedger: GhostLedgerEntry[] = [];
 
-    // Group beneficiaries by their economic identity
-    // Key insight: Multiple entries with same party_id get merged
-    // Ghost entries get attributed to their source beneficiary
+    // Each unique economic entity gets one row.
+    // Key = display name (NOT party ID — party IDs can be reused across entities).
+    // We disambiguate by building the key as `operatorName|displayName` so that
+    // the same name hosted by different operators gets separate rows.
     const beneficiaryMap = new Map<string, {
       name: string;
       totalWeightBps: number;
@@ -147,105 +168,129 @@ const Validators = () => {
       operatorName: string;
     }>();
 
-    const extraBeneficiaries = gsfOperator.extraBeneficiaries || [];
+    for (const op of operators) {
+      const opName = op.name;
+      const extraBeneficiaries = op.extraBeneficiaries || [];
 
-    for (const entry of extraBeneficiaries) {
-      const fullPartyId = entry.beneficiary;
-      const [rawName] = fullPartyId.split("::");
-      const weightBps = normalizeBps(entry.weight);
-      const comment = entry.comment || "";
+      for (const entry of extraBeneficiaries) {
+        const fullPartyId = entry.beneficiary;
+        const [rawName] = fullPartyId.split("::");
+        const weightBps = normalizeBps(entry.weight);
+        const comment = entry.comment || "";
 
-      // Determine if this is a ghost/escrow entry
-      const isGhostEntry = rawName.toLowerCase().includes("ghost");
-      
-      if (isGhostEntry) {
-        // Extract source beneficiary name from ghost name (e.g., "Fireblocks-ghost-1" → "Fireblocks")
-        const sourceName = rawName
-          .replace(/-ghost.*$/i, "")
-          .replace(/ghost.*$/i, "")
-          .replace(/-\d+$/, "")
-          .trim();
+        const isGhostEntry = rawName.toLowerCase().includes("ghost");
 
-        // Add to ghost ledger for advanced view
-        ghostLedger.push({
-          ghostHolder: "GhostSV",
-          sourceBeneficiary: sourceName || rawName,
-          weightBps,
-          weightPct: bpsToPercent(weightBps),
-          cip: comment,
-        });
+        if (isGhostEntry) {
+          // Derive source beneficiary name from comment when available,
+          // e.g. "Fireblocks CIP-0072 # escrow ..." → "Fireblocks"
+          let sourceName = "";
+          if (comment) {
+            sourceName = comment.split(" CIP-")[0].split(" #")[0].trim();
+          }
+          if (!sourceName) {
+            sourceName = rawName
+              .replace(/-ghost.*$/i, "")
+              .replace(/ghost.*$/i, "")
+              .replace(/-\d+$/, "")
+              .trim();
+          }
 
-        // Find or create the source beneficiary entry
-        const key = sourceName || rawName;
-        const existing = beneficiaryMap.get(key);
-        if (existing) {
-          existing.totalWeightBps += weightBps;
-          existing.ghostWeightBps += weightBps;
-          existing.custodyBreakdown.push({
-            label: `Escrowed under GhostSV`,
+          // Determine which ghost holder this is (GhostSV or MPCH ghost, etc.)
+          // Look at the party_id's address to find the host operator.
+          const ghostHolder = opName;
+
+          ghostLedger.push({
+            ghostHolder,
+            sourceBeneficiary: sourceName || rawName,
             weightBps,
             weightPct: bpsToPercent(weightBps),
-            isGhost: true,
-            partyId: fullPartyId,
+            cip: comment,
           });
-        } else {
-          beneficiaryMap.set(key, {
-            name: key,
-            totalWeightBps: weightBps,
-            directWeightBps: 0,
-            ghostWeightBps: weightBps,
-            custodyBreakdown: [{
-              label: `Escrowed under GhostSV`,
+
+          // Attribute ghost weight to the source beneficiary's economic row.
+          // Use `opName|sourceName` as the map key so hosted-by-different-operators
+          // entities are kept separate.
+          const key = `${opName}|${sourceName || rawName}`;
+          const existing = beneficiaryMap.get(key);
+          if (existing) {
+            existing.totalWeightBps += weightBps;
+            existing.ghostWeightBps += weightBps;
+            existing.custodyBreakdown.push({
+              label: `Escrowed under ${ghostHolder}`,
               weightBps,
               weightPct: bpsToPercent(weightBps),
               isGhost: true,
               partyId: fullPartyId,
-            }],
-            operatorName: gsfOperator.name,
-          });
-        }
-      } else {
-        // Direct holding - use the name as-is
-        const key = rawName;
-        const existing = beneficiaryMap.get(key);
-        if (existing) {
-          existing.totalWeightBps += weightBps;
-          existing.directWeightBps += weightBps;
-          existing.custodyBreakdown.unshift({
-            label: `Held directly by ${rawName}`,
-            weightBps,
-            weightPct: bpsToPercent(weightBps),
-            isGhost: false,
-            partyId: fullPartyId,
-          });
+            });
+          } else {
+            beneficiaryMap.set(key, {
+              name: sourceName || rawName,
+              totalWeightBps: weightBps,
+              directWeightBps: 0,
+              ghostWeightBps: weightBps,
+              custodyBreakdown: [{
+                label: `Escrowed under ${ghostHolder}`,
+                weightBps,
+                weightPct: bpsToPercent(weightBps),
+                isGhost: true,
+                partyId: fullPartyId,
+              }],
+              operatorName: opName,
+            });
+          }
         } else {
-          beneficiaryMap.set(key, {
-            name: rawName,
-            totalWeightBps: weightBps,
-            directWeightBps: weightBps,
-            ghostWeightBps: 0,
-            custodyBreakdown: [{
-              label: `Held directly by ${rawName}`,
+          // Direct holding — use display name from config-sync (already derived from comment)
+          // config-sync.ts now correctly resolves the display name even for reused party IDs.
+          // The `name` field in superValidators is the display name; but here we're working
+          // from operators.extraBeneficiaries which only has the raw beneficiary string.
+          // Re-derive from comment to stay consistent with config-sync.ts logic.
+          let displayName = rawName;
+          if (comment) {
+            const stripped = comment.split(" CIP-")[0].split(" #")[0].trim();
+            if (stripped) displayName = stripped;
+          }
+
+          const key = `${opName}|${displayName}`;
+          const existing = beneficiaryMap.get(key);
+          if (existing) {
+            existing.totalWeightBps += weightBps;
+            existing.directWeightBps += weightBps;
+            existing.custodyBreakdown.unshift({
+              label: `Held directly by ${displayName}`,
               weightBps,
               weightPct: bpsToPercent(weightBps),
               isGhost: false,
               partyId: fullPartyId,
-            }],
-            operatorName: gsfOperator.name,
-          });
+            });
+          } else {
+            beneficiaryMap.set(key, {
+              name: displayName,
+              totalWeightBps: weightBps,
+              directWeightBps: weightBps,
+              ghostWeightBps: 0,
+              custodyBreakdown: [{
+                label: `Held directly by ${displayName}`,
+                weightBps,
+                weightPct: bpsToPercent(weightBps),
+                isGhost: false,
+                partyId: fullPartyId,
+              }],
+              operatorName: opName,
+            });
+          }
         }
       }
     }
 
-    // Convert to array and determine status
+    // Convert map → array
     const economicBeneficiaries: EconomicBeneficiary[] = Array.from(beneficiaryMap.values())
       .map((b) => {
-        let status: EconomicBeneficiary["status"] = "Active";
-        if (b.ghostWeightBps > 0 && b.directWeightBps > 0) {
-          status = "Mixed";
-        } else if (b.ghostWeightBps > 0) {
-          status = "Escrowed";
-        }
+        const status: EconomicBeneficiary["status"] =
+          b.ghostWeightBps > 0 && b.directWeightBps > 0
+            ? "Mixed"
+            : b.ghostWeightBps > 0
+            ? "Escrowed"
+            : "Active";
 
         return {
           name: b.name,
@@ -259,22 +304,18 @@ const Validators = () => {
       })
       .sort((a, b) => b.earnedWeightBps - a.earnedWeightBps);
 
-    // Calculate total beneficiary weight
     const totalBeneficiaryWeightBps = economicBeneficiaries.reduce(
       (sum, b) => sum + b.earnedWeightBps,
       0
     );
 
-    // Check invariant
     const drift = totalBeneficiaryWeightBps - totalOperatorWeightBps;
     const driftPct = ((drift / totalOperatorWeightBps) * 100).toFixed(2);
     const invariantSatisfied = Math.abs(drift) <= 1;
-
-    // Network share: GSF's weight as % of total network (100% = 1,000,000 bps)
     const networkSharePct = ((totalOperatorWeightBps / 1000000) * 100).toFixed(2);
 
     return {
-      operatorName: gsfOperator.name,
+      standaloneOperators,
       totalOperatorWeightBps,
       totalOperatorWeightPct: bpsToPercent(totalOperatorWeightBps),
       totalBeneficiaryWeightBps,
@@ -306,26 +347,22 @@ const Validators = () => {
     );
   }
 
-  // ─────────────────────────────
-  // Export CSV
-  // ─────────────────────────────
   const exportCSV = () => {
     const rows = [
-      ["Beneficiary", "Earned Weight (%)", "Earned Weight (bps)", "Status", "Operator"],
+      ["Beneficiary", "Hosted By", "Earned Weight (%)", "Earned Weight (bps)", "Status"],
       ...displayModel.economicBeneficiaries.map((b) => [
         b.name,
+        b.operatorName,
         b.earnedWeightPct,
         b.earnedWeightBps,
         b.status,
-        b.operatorName,
       ]),
     ];
-
     const csv = rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "economic-beneficiaries.csv";
+    link.download = "super-validators.csv";
     link.click();
   };
 
@@ -336,15 +373,15 @@ const Validators = () => {
     <DashboardLayout>
       <div className="space-y-8">
         {/* ═══════════════════════════════════════════════════════════════
-            1️⃣ HEADER: Operator Summary (Single Source of Truth)
+            1️⃣ HEADER SUMMARY CARD
             ═══════════════════════════════════════════════════════════════ */}
         <Card className="glass-card p-6">
           <div className="flex flex-col md:flex-row justify-between md:items-start gap-4">
             <div className="space-y-1">
-              <h2 className="text-2xl font-bold">Super Validator Rewards</h2>
+              <h2 className="text-2xl font-bold">Super Validators</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-2 text-sm mt-4">
                 <div>
-                  <span className="text-muted-foreground">Operator Reward Weight:</span>
+                  <span className="text-muted-foreground">Total Reward Weight:</span>
                   <span className="ml-2 font-semibold text-foreground">
                     {displayModel.totalOperatorWeightPct}
                   </span>
@@ -356,12 +393,18 @@ const Validators = () => {
                   </span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Beneficiaries:</span>
+                  <span className="text-muted-foreground">Standalone SVs:</span>
+                  <span className="ml-2 font-semibold text-foreground">
+                    {displayModel.standaloneOperators.length}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Hosted Parties:</span>
                   <span className="ml-2 font-semibold text-foreground">
                     {displayModel.beneficiaryCount}
                   </span>
                 </div>
-                <div>
+                <div className="col-span-2 md:col-span-4">
                   <span className="text-muted-foreground">Last Synced:</span>
                   <span className="ml-2 font-mono text-xs text-foreground">
                     {formatLastSynced(displayModel.lastUpdated)}
@@ -369,7 +412,6 @@ const Validators = () => {
                 </div>
               </div>
 
-              {/* Invariant Status */}
               <div className="mt-4 pt-4 border-t border-border">
                 {displayModel.invariantSatisfied ? (
                   <div className="flex items-center gap-2 text-success">
@@ -404,134 +446,252 @@ const Validators = () => {
         </Card>
 
         {/* ═══════════════════════════════════════════════════════════════
-            2️⃣ PRIMARY TABLE: Economic Beneficiaries (ONLY Additive Table)
+            2️⃣ STANDALONE / HOSTED TAB TABLE
             ═══════════════════════════════════════════════════════════════ */}
         <Card className="glass-card overflow-hidden">
-          <div className="p-6 border-b border-border">
-            <h3 className="text-xl font-bold">Economic Beneficiaries (Reward Entitlements)</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              These weights partition the operator's reward pool. Each row represents a unique economic entity.
-            </p>
+          {/* Tab Toggle */}
+          <div className="p-4 border-b border-border flex items-center gap-2">
+            <button
+              onClick={() => setSvTab("standalone")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                svTab === "standalone"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              <Building2 className="w-4 h-4" />
+              Standalone
+              <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-bold ${
+                svTab === "standalone" ? "bg-white/20" : "bg-muted"
+              }`}>
+                {displayModel.standaloneOperators.length}
+              </span>
+            </button>
+            <button
+              onClick={() => setSvTab("hosted")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                svTab === "hosted"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              Hosted
+              <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-bold ${
+                svTab === "hosted" ? "bg-white/20" : "bg-muted"
+              }`}>
+                {displayModel.beneficiaryCount}
+              </span>
+            </button>
           </div>
 
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="w-[40%]">Beneficiary</TableHead>
-                <TableHead className="text-right">Earned Weight</TableHead>
-                <TableHead className="text-center">Status</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {displayModel.economicBeneficiaries.map((beneficiary) => {
-                const isExpanded = expandedBeneficiary === beneficiary.name;
-                const hasBreakdown = beneficiary.custodyBreakdown.length > 1 || beneficiary.hasGhostHoldings;
-
-                return (
-                  <Collapsible
-                    key={beneficiary.name}
-                    open={isExpanded}
-                    onOpenChange={() =>
-                      setExpandedBeneficiary(isExpanded ? null : beneficiary.name)
-                    }
-                    asChild
-                  >
-                    <>
-                      <TableRow
-                        className={`cursor-pointer ${hasBreakdown ? "hover:bg-muted/50" : ""}`}
-                        onClick={() => hasBreakdown && setExpandedBeneficiary(isExpanded ? null : beneficiary.name)}
-                      >
-                        <TableCell className="font-medium">{beneficiary.name}</TableCell>
-                        <TableCell className="text-right font-bold text-primary">
-                          {beneficiary.earnedWeightPct}
-                        </TableCell>
-                        <TableCell className="text-center">
+          {/* ── STANDALONE TABLE ─────────────────────────────────────────── */}
+          {svTab === "standalone" && (
+            <>
+              <div className="px-6 pt-4 pb-2">
+                <h3 className="text-lg font-bold">Standalone Super Validators</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  The {displayModel.standaloneOperators.length} operators running their own validator infrastructure.
+                </p>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Operator</TableHead>
+                    <TableHead className="text-right">Reward Weight</TableHead>
+                    <TableHead className="text-center">Hosted Parties</TableHead>
+                    <TableHead className="text-center">Join Round</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayModel.standaloneOperators.map((op) => (
+                    <TableRow key={op.name}>
+                      <TableCell className="font-medium">{op.name}</TableCell>
+                      <TableCell className="text-right font-bold text-primary">
+                        {op.rewardWeightPct}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {op.hostedCount > 0 ? (
                           <Badge
-                            variant="outline"
-                            className={`
-                              ${beneficiary.status === "Active" ? "border-success/50 bg-success/10 text-success" : ""}
-                              ${beneficiary.status === "Escrowed" ? "border-muted-foreground/50 bg-muted/30 text-muted-foreground" : ""}
-                              ${beneficiary.status === "Mixed" ? "border-chart-4/50 bg-chart-4/10 text-chart-4" : ""}
-                            `}
+                            variant="secondary"
+                            className="cursor-pointer hover:bg-primary/20"
+                            onClick={() => setSvTab("hosted")}
                           >
-                            {beneficiary.status}
+                            {op.hostedCount}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {hasBreakdown && (
-                            <CollapsibleTrigger asChild>
-                              <Button variant="ghost" size="sm" className="p-1 h-auto">
-                                {isExpanded ? (
-                                  <ChevronUp className="h-4 w-4" />
-                                ) : (
-                                  <ChevronDown className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </CollapsibleTrigger>
-                          )}
-                        </TableCell>
-                      </TableRow>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center text-sm text-muted-foreground">
+                        {op.joinRound ?? "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+                <TableFooter>
+                  <TableRow className="bg-muted/50 font-bold">
+                    <TableCell>Total</TableCell>
+                    <TableCell className="text-right text-primary">
+                      {displayModel.totalOperatorWeightPct}
+                    </TableCell>
+                    <TableCell></TableCell>
+                    <TableCell></TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+            </>
+          )}
 
-                      {/* 3️⃣ ROW EXPANSION: Custody / Ghost Breakdown (Non-Additive) */}
-                      <CollapsibleContent asChild>
-                        <TableRow className="bg-muted/20 hover:bg-muted/30">
-                          <TableCell colSpan={4} className="p-0">
-                            <div className="p-4 pl-8 border-l-2 border-muted-foreground/30 ml-4 my-2">
-                              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                                Custody Breakdown
-                              </div>
-                              <div className="space-y-2">
-                                {beneficiary.custodyBreakdown.map((custody, idx) => (
-                                  <div
-                                    key={idx}
-                                    className="flex justify-between items-center text-sm"
-                                  >
-                                    <span className={custody.isGhost ? "text-muted-foreground" : "text-foreground"}>
-                                      {custody.label}
-                                    </span>
-                                    <span className={custody.isGhost ? "text-muted-foreground" : "text-foreground"}>
-                                      {custody.weightPct}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                              {beneficiary.hasGhostHoldings && (
-                                <div className="mt-3 pt-3 border-t border-border flex items-start gap-2 text-xs text-muted-foreground">
-                                  <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                                  <span>
-                                    Escrowed weight is already included in {beneficiary.name}'s total above
-                                  </span>
-                                </div>
+          {/* ── HOSTED TABLE ──────────────────────────────────────────────── */}
+          {svTab === "hosted" && (
+            <>
+              <div className="px-6 pt-4 pb-2">
+                <h3 className="text-lg font-bold">Hosted Beneficiaries (Reward Entitlements)</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Parties hosted under a standalone SV. Weights partition that operator's reward pool.
+                </p>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-[35%]">Beneficiary</TableHead>
+                    <TableHead>Hosted By</TableHead>
+                    <TableHead className="text-right">Earned Weight</TableHead>
+                    <TableHead className="text-center">Status</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayModel.economicBeneficiaries.map((beneficiary) => {
+                    const isExpanded = expandedBeneficiary === `${beneficiary.operatorName}|${beneficiary.name}`;
+                    const key = `${beneficiary.operatorName}|${beneficiary.name}`;
+                    const hasBreakdown =
+                      beneficiary.custodyBreakdown.length > 1 || beneficiary.hasGhostHoldings;
+
+                    return (
+                      <Collapsible
+                        key={key}
+                        open={isExpanded}
+                        onOpenChange={() =>
+                          setExpandedBeneficiary(isExpanded ? null : key)
+                        }
+                        asChild
+                      >
+                        <>
+                          <TableRow
+                            className={`cursor-pointer ${hasBreakdown ? "hover:bg-muted/50" : ""}`}
+                            onClick={() =>
+                              hasBreakdown && setExpandedBeneficiary(isExpanded ? null : key)
+                            }
+                          >
+                            <TableCell className="font-medium">{beneficiary.name}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {beneficiary.operatorName}
+                            </TableCell>
+                            <TableCell className="text-right font-bold text-primary">
+                              {beneficiary.earnedWeightPct}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge
+                                variant="outline"
+                                className={`
+                                  ${beneficiary.status === "Active" ? "border-success/50 bg-success/10 text-success" : ""}
+                                  ${beneficiary.status === "Escrowed" ? "border-muted-foreground/50 bg-muted/30 text-muted-foreground" : ""}
+                                  ${beneficiary.status === "Mixed" ? "border-chart-4/50 bg-chart-4/10 text-chart-4" : ""}
+                                `}
+                              >
+                                {beneficiary.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {hasBreakdown && (
+                                <CollapsibleTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="p-1 h-auto">
+                                    {isExpanded ? (
+                                      <ChevronUp className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronDown className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </CollapsibleTrigger>
                               )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      </CollapsibleContent>
-                    </>
-                  </Collapsible>
-                );
-              })}
-            </TableBody>
-            <TableFooter>
-              <TableRow className="bg-muted/50 font-bold">
-                <TableCell>Total Economic Weight</TableCell>
-                <TableCell className="text-right text-primary">
-                  {displayModel.totalBeneficiaryWeightPct}
-                </TableCell>
-                <TableCell></TableCell>
-                <TableCell></TableCell>
-              </TableRow>
-            </TableFooter>
-          </Table>
+                            </TableCell>
+                          </TableRow>
 
-          <div className="p-4 border-t border-border bg-muted/20 text-xs text-muted-foreground">
-            🔒 This table must always sum to {displayModel.totalOperatorWeightPct}. If it doesn't → config error, not UI error.
-          </div>
+                          <CollapsibleContent asChild>
+                            <TableRow className="bg-muted/20 hover:bg-muted/30">
+                              <TableCell colSpan={5} className="p-0">
+                                <div className="p-4 pl-8 border-l-2 border-muted-foreground/30 ml-4 my-2">
+                                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                                    Custody Breakdown
+                                  </div>
+                                  <div className="space-y-2">
+                                    {beneficiary.custodyBreakdown.map((custody, idx) => (
+                                      <div
+                                        key={idx}
+                                        className="flex justify-between items-center text-sm"
+                                      >
+                                        <span
+                                          className={
+                                            custody.isGhost
+                                              ? "text-muted-foreground"
+                                              : "text-foreground"
+                                          }
+                                        >
+                                          {custody.label}
+                                        </span>
+                                        <span
+                                          className={
+                                            custody.isGhost
+                                              ? "text-muted-foreground"
+                                              : "text-foreground"
+                                          }
+                                        >
+                                          {custody.weightPct}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {beneficiary.hasGhostHoldings && (
+                                    <div className="mt-3 pt-3 border-t border-border flex items-start gap-2 text-xs text-muted-foreground">
+                                      <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                                      <span>
+                                        Escrowed weight is already included in{" "}
+                                        {beneficiary.name}'s total above
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          </CollapsibleContent>
+                        </>
+                      </Collapsible>
+                    );
+                  })}
+                </TableBody>
+                <TableFooter>
+                  <TableRow className="bg-muted/50 font-bold">
+                    <TableCell>Total Economic Weight</TableCell>
+                    <TableCell></TableCell>
+                    <TableCell className="text-right text-primary">
+                      {displayModel.totalBeneficiaryWeightPct}
+                    </TableCell>
+                    <TableCell></TableCell>
+                    <TableCell></TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+              <div className="p-4 border-t border-border bg-muted/20 text-xs text-muted-foreground">
+                🔒 This table must always sum to {displayModel.totalOperatorWeightPct}. If it doesn't → config error, not UI error.
+              </div>
+            </>
+          )}
         </Card>
 
         {/* ═══════════════════════════════════════════════════════════════
-            4️⃣ OPTIONAL: GhostSV Ledger (Advanced Users)
+            3️⃣ OPTIONAL: Ghost / Escrow Ledger (Advanced)
             ═══════════════════════════════════════════════════════════════ */}
         {displayModel.ghostLedger.length > 0 && (
           <Card className="glass-card overflow-hidden">
@@ -562,18 +722,17 @@ const Validators = () => {
                   <div className="flex items-start gap-2 p-3 rounded-md bg-warning/10 border border-warning/30 text-warning text-sm">
                     <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                     <span>
-                      Weights in this table are informational and <strong>MUST NOT</strong> be summed.
+                      Weights in this table are informational and{" "}
+                      <strong>MUST NOT</strong> be summed.
                     </span>
                   </div>
                 </div>
-
                 <div className="px-6 pb-2">
                   <h4 className="text-lg font-semibold">Escrow & Ghost Holdings (Non-Additive View)</h4>
                   <p className="text-sm text-muted-foreground">
                     For debugging, governance audits, and CIP verification.
                   </p>
                 </div>
-
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
@@ -605,11 +764,9 @@ const Validators = () => {
           </Card>
         )}
 
-        {/* SV Weight History and Distribution charts removed */}
-
-        {/* ───────────────────────────── */}
-        {/* ACTIVE VALIDATORS SECTION */}
-        {/* ───────────────────────────── */}
+        {/* ─────────────────────────────────────────────────────────────── */}
+        {/* ACTIVE VALIDATORS SECTION                                        */}
+        {/* ─────────────────────────────────────────────────────────────── */}
         <ActiveValidatorsSection />
 
         {/* Data Sources Note */}
@@ -629,7 +786,7 @@ const Validators = () => {
 };
 
 // ─────────────────────────────
-// Subcomponent for Active Validators Section
+// Subcomponent: Active Validators (unchanged)
 // ─────────────────────────────
 const ActiveValidatorsSection = () => {
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
@@ -679,32 +836,26 @@ const ActiveValidatorsSection = () => {
 
   const getRankColor = (rank: number) => {
     switch (rank) {
-      case 1:
-        return "gradient-primary text-primary-foreground";
-      case 2:
-        return "bg-chart-2/20 text-chart-2";
-      case 3:
-        return "bg-chart-3/20 text-chart-3";
-      default:
-        return "bg-muted text-muted-foreground";
+      case 1: return "gradient-primary text-primary-foreground";
+      case 2: return "bg-chart-2/20 text-chart-2";
+      case 3: return "bg-chart-3/20 text-chart-3";
+      default: return "bg-muted text-muted-foreground";
     }
   };
 
-  const formatPartyId = (partyId: string) => {
-    const parts = partyId.split("::");
-    return parts[0] || partyId;
-  };
+  const formatPartyId = (partyId: string) => partyId.split("::")[0] || partyId;
 
   const totalValidators = topValidators?.validatorsAndRewards?.length || 0;
-  const activeCount = topValidators?.validatorsAndRewards?.filter(
-    (v) => v.numRoundsMissed === 0
-  ).length || 0;
+  const activeCount =
+    topValidators?.validatorsAndRewards?.filter((v) => v.numRoundsMissed === 0).length || 0;
   const inactiveCount = totalValidators - activeCount;
 
   const filteredValidators = useMemo(() => {
     if (!topValidators?.validatorsAndRewards) return [];
-    if (statusFilter === "active") return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed === 0);
-    if (statusFilter === "inactive") return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed > 0);
+    if (statusFilter === "active")
+      return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed === 0);
+    if (statusFilter === "inactive")
+      return topValidators.validatorsAndRewards.filter((v) => v.numRoundsMissed > 0);
     return topValidators.validatorsAndRewards;
   }, [topValidators, statusFilter]);
 
@@ -719,7 +870,6 @@ const ActiveValidatorsSection = () => {
         </div>
       </div>
 
-      {/* Active / Inactive counts — clickable as filters */}
       {!isLoading && !isError && totalValidators > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <Card
@@ -741,7 +891,9 @@ const ActiveValidatorsSection = () => {
             onClick={() => setStatusFilter("inactive")}
           >
             <p className="text-sm text-muted-foreground">Inactive (Missed Rounds &gt; 0)</p>
-            <p className={`text-3xl font-bold ${inactiveCount > 0 ? "text-destructive" : "text-muted-foreground"}`}>{inactiveCount}</p>
+            <p className={`text-3xl font-bold ${inactiveCount > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+              {inactiveCount}
+            </p>
           </Card>
         </div>
       )}
@@ -778,9 +930,7 @@ const ActiveValidatorsSection = () => {
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center space-x-4">
                         <div
-                          className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold ${getRankColor(
-                            rank
-                          )}`}
+                          className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold ${getRankColor(rank)}`}
                         >
                           {rank <= 3 ? <Trophy className="h-6 w-6" /> : rank}
                         </div>
@@ -810,7 +960,7 @@ const ActiveValidatorsSection = () => {
                       <div className="p-4 rounded-lg bg-background/50">
                         <p className="text-sm text-muted-foreground mb-1">Rounds Collected</p>
                         <p className="text-2xl font-bold text-primary">
-                          {(parseFloat(validator.rewards ?? '0') || 0).toLocaleString(undefined, {
+                          {(parseFloat(validator.rewards ?? "0") || 0).toLocaleString(undefined, {
                             maximumFractionDigits: 0,
                           })}
                         </p>
