@@ -1,12 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Button } from "@/components/ui/button";
-import { ChevronRight, TrendingUp } from "lucide-react";
+
+import { TrendingUp } from "lucide-react";
 import { useAmuletRules } from "@/hooks/use-canton-scan-api";
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
 
@@ -358,8 +357,6 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
 
 export default function IssuanceCurve() {
   const { data: amuletRulesData, isLoading } = useAmuletRules();
-  const [jsonOpen, setJsonOpen] = useState(false);
-
   const issuanceCurve = useMemo(() => {
     if (!amuletRulesData) return null;
     const raw = amuletRulesData as any;
@@ -522,25 +519,7 @@ export default function IssuanceCurve() {
           </Card>
         </div>
 
-        <Collapsible open={jsonOpen} onOpenChange={setJsonOpen}>
-          <CollapsibleTrigger asChild>
-            <Button variant="outline" className="w-full justify-start">
-              <ChevronRight
-                className={`h-4 w-4 mr-2 transition-transform ${jsonOpen ? "rotate-90" : ""}`}
-              />
-              View Raw JSON
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <Card className="mt-2">
-              <CardContent className="pt-4">
-                <pre className="text-xs overflow-auto max-h-96 bg-muted p-4 rounded">
-                  {JSON.stringify(issuanceCurve, null, 2)}
-                </pre>
-              </CardContent>
-            </Card>
-          </CollapsibleContent>
-        </Collapsible>
+
       </div>
     </DashboardLayout>
   );
