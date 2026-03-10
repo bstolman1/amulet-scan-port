@@ -78,9 +78,19 @@ export interface ParsedVoteResult {
   offboarded: string[];
 }
 
-// Parse action tag into readable title
-function parseActionTitle(tag: string): string {
-  return tag
+// Parse action into a readable title, drilling into the inner action tag
+// to avoid surfacing unhelpful outer wrappers like "Dso Rules" or "Amulet Rules".
+// Structure: action.tag = "ARC_DsoRules", action.value.dsoAction.tag = "SRARC_OffboardSv", etc.
+function parseActionTitle(tag: string, value?: any): string {
+  const innerTag =
+    value?.dsoAction?.tag ||
+    value?.amuletRulesAction?.tag ||
+    value?.tag ||
+    null;
+
+  const resolved = innerTag || tag;
+
+  return resolved
     .replace(/^(SRARC_|ARC_|CRARC_|ARAC_)/, "")
     .replace(/([A-Z])/g, " $1")
     .trim();
@@ -172,7 +182,7 @@ function parseVoteResults(results: VoteResult[]): ParsedVoteResult[] {
       id: trackingCid ? trackingCid.slice(0, 12) : "unknown",
       trackingCid: trackingCid,
       actionType: action?.tag || "Unknown",
-      actionTitle: parseActionTitle(action?.tag || "Unknown"),
+      actionTitle: parseActionTitle(action?.tag || "Unknown", action?.value),
       actionDetails: action?.value,
       requester: request?.requester || "",
       reasonBody: request?.reason?.body || "",
