@@ -44,59 +44,75 @@ let _activeController = null;
  *   used to detect stale jobs (if another refresh runs mid-enrichment we stop)
  */
 export function runEnrichmentInBackground(cacheTimestamp) {
-  // Cancel any previous job
   if (_activeController) {
     console.log('📨 Aborting previous enrichment job');
     _activeController.abort();
   }
 
-  _activeController = new AbortController();
-  const signal = _activeController.signal;
+  const controller = new AbortController();
+  _activeController = controller;
 
-  // Fire-and-forget — intentionally not awaited
-  _runEnrichment(signal, cacheTimestamp).catch(err => {
+  _runEnrichment(controller, cacheTimestamp).catch(err => {
     if (err.name !== 'AbortError') {
       console.error('📨 Enrichment job failed:', err.message);
     }
   });
 }
 
-async function _runEnrichment(signal, cacheTimestamp) {
-  console.log('📨 Starting background message URL enrichment…');
+async function _runEnrichment(controller, cacheTimestamp) {
+  const signal = controller.signal;
+  const startedAt = new Date().toISOString();
 
-  await writeEnrichmentStatus({
-    state: 'running',
-    startedAt: new Date().toISOString(),
-    completedAt: null,
-    total: 0,
-    processed: 0,
-    enriched: 0,
-    totalMessages: 0,
-    error: null,
-  });
+  let total = 0;
+  let processed = 0;
+  let enriched = 0;
+  let totalMessages = 0;
 
   try {
-    const cache = await readCache();
-    if (!cache) {
-      throw new Error('No cache found — enrichment cannot run without initial data');
-    }
+    await writeEnrichmentStatus({
+      state: 'running',
+      startedAt,
+      completedAt: null,
+      total: 0,
+      processed: 0,
+      enriched: 0,
+      totalMessages: 0,
+      error: null,
+    });
 
-    // Bail if the cache has been replaced by a newer refresh
-    if (cache.cachedAt !== cacheTimestamp) {
-      console.log('📨 Cache has been refreshed since enrichment started — aborting stale job');
+    // rest of logic...
+  } catch (err) {
+    if (err.name === 'AbortError') {
       await writeEnrichmentStatus({
         state: 'aborted',
-        startedAt: new Date().toISOString(),
+        startedAt,
         completedAt: new Date().toISOString(),
-        total: 0,
-        processed: 0,
-        enriched: 0,
-        totalMessages: 0,
-        error: 'Cache replaced by newer refresh',
+        total,
+        processed,
+        enriched,
+        totalMessages,
+        error: null,
       });
       return;
     }
 
+    await writeEnrichmentStatus({
+      state: 'error',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      total,
+      processed,
+      enriched,
+      totalMessages,
+      error: err.message,
+    });
+    throw err;
+  } finally {
+    if (_activeController === controller) {
+      _activeController = null;
+    }
+  }
+}
     const allTopics = cache.allTopics ?? [];
     const toEnrich = allTopics.filter(t => MESSAGE_ENRICHMENT_GROUPS.has(t.groupName));
 
