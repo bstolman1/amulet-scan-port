@@ -1,49 +1,27 @@
 /**
  * services/dataFetcher.js
  *
- * Orchestrates a full data refresh: fetch topics → enrich message URLs →
- * infer stages → correlate → classify ambiguous items → cache.
+ * Orchestrates a full data refresh: fetch topics → infer stages →
+ * correlate → classify ambiguous items → cache → kick off background enrichment.
  *
- * Fix: #13 — global AbortController signal threaded through ALL fetch calls.
- * Fix: #14 — all timing constants named and imported.
- *
- * Added: message URL enrichment for announce-group topics.
- *   Vote reasonUrls point to individual messages (/g/GROUP/message/NNN) rather
- *   than topic URLs (/g/GROUP/topic/ID). Without indexing message URLs the
- *   frontend vote-matching code in GovernanceFlow.tsx cannot resolve these votes
- *   to their lifecycle cards. We fetch message IDs for topics in the announce
- *   groups and append their permalink URLs to each topic's linkedUrls array.
- *   This adds one API call per topic in those groups; we do it sequentially with
- *   the existing FETCH_PAGE_DELAY_MS inter-call delay to stay within rate limits.
+ * Message URL enrichment (fetching per-message permalinks so vote reasonUrls
+ * can be matched to lifecycle cards) runs as a background job via
+ * messageEnricher.js. It is NOT awaited here — the refresh endpoint returns
+ * as soon as the initial cache is written.
  */
 
 import {
   INFERENCE_THRESHOLD,
   FETCH_GLOBAL_TIMEOUT_MS,
-  FETCH_PAGE_DELAY_MS,
 } from './constants.js';
 import { extractUrls, extractIdentifiers } from './entityExtractor.js';
 import { getLearnedPatterns } from './patternCache.js';
-import { getSubscribedGroups, fetchGroupTopics, fetchTopicMessages, delay } from './groupsApiClient.js';
+import { getSubscribedGroups, fetchGroupTopics, delay } from './groupsApiClient.js';
 import { writeCache } from './fileRepository.js';
 import { correlateTopics } from './lifecycleCorrelator.js';
+import { runEnrichmentInBackground } from './messageEnricher.js';
 
 const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED === 'true';
-
-/**
- * Groups whose topics should be enriched with per-message URLs.
- *
- * These are the groups whose URLs appear in vote reasonUrls. Only announce
- * groups are included — fetching messages for discussion/tokenomics groups
- * would add hundreds of API calls for topics that votes never reference.
- *
- * Extend this set if new groups start appearing in vote reasonUrls.
- */
-const MESSAGE_ENRICHMENT_GROUPS = new Set([
-  'supervalidator-announce',
-  'tokenomics-announce',
-  'sv-announce',
-]);
 
 async function tryInferStages(topics) {
   if (!INFERENCE_ENABLED) {
@@ -94,66 +72,9 @@ async function tryClassifyAmbiguous(lifecycleItems, allTopics) {
 }
 
 /**
- * Enrich topics from announce groups with per-message permalink URLs.
- *
- * After this runs, each announce-group topic's linkedUrls will contain both:
- *   - URLs extracted from the topic body/snippet (existing behaviour)
- *   - The permalink URL for every message in that topic (new)
- *
- * This allows GovernanceFlow.tsx's URL-based vote matching to resolve votes
- * whose reasonUrl points to /g/GROUP/message/NNN rather than the topic URL.
- *
- * We process topics sequentially (not in parallel) to avoid bursting the
- * Groups.io rate limit. The inter-call delay matches FETCH_PAGE_DELAY_MS.
- *
- * @param {object[]}    topics  - all topics built by _fetchInner
- * @param {AbortSignal} signal
- */
-async function enrichWithMessageUrls(topics, signal) {
-  const toEnrich = topics.filter(t => MESSAGE_ENRICHMENT_GROUPS.has(t.groupName));
-
-  if (toEnrich.length === 0) {
-    console.log('📨 No announce-group topics to enrich with message URLs');
-    return;
-  }
-
-  console.log(`📨 Enriching ${toEnrich.length} announce-group topics with message URLs…`);
-  let enriched = 0;
-  let totalMessages = 0;
-
-  for (const topic of toEnrich) {
-    if (signal?.aborted) {
-      console.warn('📨 Message URL enrichment aborted by global timeout');
-      break;
-    }
-
-    // topic.groupId is set from group.id in _fetchInner below
-    const messageUrls = await fetchTopicMessages(
-      topic.rawId,       // the original numeric Groups.io topic ID
-      topic.groupId,     // Groups.io group ID
-      topic.groupName,   // URL slug, e.g. 'supervalidator-announce'
-      signal,
-    );
-
-    if (messageUrls.length > 0) {
-      // Merge with any URLs already extracted from the snippet/body,
-      // deduplicating so the array stays clean.
-      const existing = new Set(topic.linkedUrls);
-      for (const u of messageUrls) existing.add(u);
-      topic.linkedUrls = [...existing];
-      enriched++;
-      totalMessages += messageUrls.length;
-    }
-
-    await delay(FETCH_PAGE_DELAY_MS);
-  }
-
-  console.log(`📨 Message URL enrichment complete: ${enriched}/${toEnrich.length} topics enriched, ${totalMessages} message URLs indexed`);
-}
-
-/**
  * Fetch fresh data with a hard global timeout.
- * The AbortController signal is threaded through every network call.
+ * Returns as soon as the initial cache is written.
+ * Message URL enrichment continues in the background.
  */
 export async function fetchFreshData() {
   const controller  = new AbortController();
@@ -191,9 +112,7 @@ async function _fetchInner(signal) {
 
       allTopics.push({
         id:           topic.id?.toString() || `topic-${Math.random()}`,
-        // rawId and groupId are needed by enrichWithMessageUrls to call
-        // fetchTopicMessages. rawId preserves the original numeric ID before
-        // it gets stringified; groupId is the Groups.io group numeric ID.
+        // rawId and groupId are used by messageEnricher to call fetchTopicMessages.
         rawId:        topic.id,
         groupId:      group.id,
         subject:      topic.subject || topic.title || 'Untitled',
@@ -219,11 +138,6 @@ async function _fetchInner(signal) {
   }
 
   console.log(`Total topics: ${allTopics.length}`);
-
-  // Enrich announce-group topics with per-message URLs BEFORE correlating,
-  // so that the enriched linkedUrls are present in the lifecycle items that
-  // the frontend receives. This is the fix for vote reasonUrl matching.
-  await enrichWithMessageUrls(allTopics, signal);
 
   await tryInferStages(allTopics);
 
@@ -251,6 +165,14 @@ async function _fetchInner(signal) {
     },
     cachedAt: new Date().toISOString(),
   };
+
   await writeCache(result);
+
+  // Kick off background enrichment — NOT awaited.
+  // Runs for ~2 min after the refresh response has been sent.
+  // cachedAt is passed so the enricher detects if a newer refresh supersedes it.
+  console.log('📨 Kicking off background message URL enrichment…');
+  runEnrichmentInBackground(result.cachedAt);
+
   return result;
 }
