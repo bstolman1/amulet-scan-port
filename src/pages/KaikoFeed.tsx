@@ -8,11 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, AssetMetricData } from "@/hooks/use-kaiko-ohlcv";
-import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2, Bell, Info } from "lucide-react";
+import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics } from "@/hooks/use-kaiko-ohlcv";
+import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Database, Building2, Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { CCPriceChart } from "@/components/CCPriceChart";
 import { CCMarketOverview } from "@/components/CCMarketOverview";
 import { CCExchangeComparison } from "@/components/CCExchangeComparison";
 import { CCCandlestickChart } from "@/components/CCCandlestickChart";
@@ -23,7 +22,6 @@ import { CCTwapCard } from "@/components/CCTwapCard";
 
 // Exchange to instrument mapping based on Kaiko reference data
 const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
-  // CC Spot exchanges
   krkn: ['cc-usd', 'cc-usdt', 'cc-usdc', 'cc-eur', 'btc-usd', 'eth-usd', 'sol-usd'],
   gate: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
   kcon: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
@@ -31,13 +29,11 @@ const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
   bbsp: ['cc-usdt', 'cc-usdc', 'btc-usdt', 'eth-usdt'],
   hitb: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
   cnex: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
-  // CC Derivatives
   binc: ['cc-usdt', 'btc-usdt', 'eth-usdt', 'sol-usdt'],
   okex: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
   gtdm: ['cc-usdt', 'btc-usdt'],
   bbit: ['cc-usdt', 'btc-usdt', 'eth-usdt'],
   hbdm: ['cc-usdt', 'btc-usdt'],
-  // Other exchanges (non-CC)
   cbse: ['btc-usd', 'eth-usd', 'sol-usd', 'btc-usdt', 'eth-usdt'],
   bfnx: ['btc-usd', 'eth-usd', 'btc-usdt', 'eth-usdt'],
   stmp: ['btc-usd', 'eth-usd', 'xrp-usd'],
@@ -52,7 +48,6 @@ const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
   bvav: ['btc-usd', 'eth-usd'],
   bull: ['btc-usd', 'eth-usd'],
   whbt: ['btc-usdt', 'eth-usdt'],
-  // DEXs
   usp3: ['eth-usdt', 'eth-usd'],
   usp2: ['eth-usdt'],
   sush: ['eth-usdt'],
@@ -65,9 +60,7 @@ const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
   dydx: ['btc-usd', 'eth-usd'],
 };
 
-// All available Kaiko exchanges
 const EXCHANGES = [
-  // Major exchanges with CC trading pairs (prioritized)
   { value: 'krkn', label: 'Kraken', hasCC: true },
   { value: 'binc', label: 'Binance', hasCC: true },
   { value: 'bbsp', label: 'Bybit Spot', hasCC: true },
@@ -77,7 +70,6 @@ const EXCHANGES = [
   { value: 'okex', label: 'OKX', hasCC: true },
   { value: 'hitb', label: 'HitBTC', hasCC: true },
   { value: 'cnex', label: 'CoinEx', hasCC: true },
-  // Other major exchanges
   { value: 'cbse', label: 'Coinbase' },
   { value: 'bfnx', label: 'Bitfinex' },
   { value: 'stmp', label: 'Bitstamp' },
@@ -92,7 +84,6 @@ const EXCHANGES = [
   { value: 'bvav', label: 'Bitvavo' },
   { value: 'bull', label: 'Bullish' },
   { value: 'whbt', label: 'WhiteBIT' },
-  // DEXs and DeFi
   { value: 'usp3', label: 'Uniswap V3' },
   { value: 'usp2', label: 'Uniswap V2' },
   { value: 'sush', label: 'Sushiswap' },
@@ -101,7 +92,6 @@ const EXCHANGES = [
   { value: 'pksp', label: 'Pancakeswap' },
   { value: 'orca', label: 'Orca' },
   { value: 'raya', label: 'Raydium' },
-  // Derivative markets
   { value: 'gtdm', label: 'Gate.io Derivatives', hasCC: true },
   { value: 'hbdm', label: 'Huobi Derivatives', hasCC: true },
   { value: 'bbit', label: 'Bybit Perps', hasCC: true },
@@ -109,7 +99,6 @@ const EXCHANGES = [
   { value: 'dydx', label: 'dYdX' },
 ];
 
-// All instruments with labels
 const ALL_INSTRUMENTS: Record<string, { label: string; isCC?: boolean }> = {
   'cc-usd': { label: 'CC/USD', isCC: true },
   'cc-usdt': { label: 'CC/USDT', isCC: true },
@@ -134,7 +123,6 @@ const INTERVALS = [
   { value: '1d', label: '1 Day' },
 ];
 
-// Assets including Canton Coin
 const ASSETS = [
   { value: 'cc', label: 'Canton Coin (CC)', isCC: true },
   { value: 'btc', label: 'Bitcoin (BTC)' },
@@ -153,28 +141,47 @@ const ASSET_INTERVALS = [
   { value: '1d', label: '1 Day' },
 ];
 
-function formatPrice(value: string | null): string {
-  if (!value) return '-';
-  const num = parseFloat(value);
+function formatPrice(value: string | number | null | undefined): string {
+  if (value == null) return '-';
+  const num = typeof value === 'number' ? value : parseFloat(value);
+  if (!Number.isFinite(num)) return '-';
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function formatVolume(value: string): string {
-  const num = parseFloat(value);
+function formatVolume(value: string | number | null | undefined): string {
+  const num =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? parseFloat(value)
+        : NaN;
+
+  if (!Number.isFinite(num)) return '0.00';
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
   if (num >= 1_000) return `${(num / 1_000).toFixed(2)}K`;
   return num.toFixed(2);
 }
 
-function formatTimestamp(ts: number): string {
-  return new Date(ts).toLocaleString();
+function formatTimestamp(ts: number | string | null | undefined): string {
+  if (ts == null) return '-';
+  const date = new Date(ts);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+}
+
+function formatInteger(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '0';
 }
 
 function PriceChange({ open, close }: { open: string | null; close: string | null }) {
   if (!open || !close) return <span className="text-muted-foreground">-</span>;
-  
+
   const openNum = parseFloat(open);
   const closeNum = parseFloat(close);
+
+  if (!Number.isFinite(openNum) || !Number.isFinite(closeNum) || openNum === 0) {
+    return <span className="text-muted-foreground">-</span>;
+  }
+
   const change = ((closeNum - openNum) / openNum) * 100;
   const isPositive = change >= 0;
 
@@ -201,17 +208,13 @@ function StatCard({ title, value, icon: Icon }: { title: string; value: string; 
 }
 
 export default function KaikoFeed() {
-  // Default to Kraken + CC/USD for Canton Coin
   const [exchange, setExchange] = useState('krkn');
   const [instrument, setInstrument] = useState('cc-usd');
   const [interval, setInterval] = useState('1h');
   const [activeTab, setActiveTab] = useState('cc-overview');
-  
-  // Asset Metrics state - default to Canton Coin
   const [asset, setAsset] = useState('cc');
   const [assetInterval, setAssetInterval] = useState('1h');
 
-  // Get available instruments for the selected exchange
   const availableInstruments = useMemo(() => {
     const instruments = EXCHANGE_INSTRUMENTS[exchange] || [];
     return instruments.map(code => ({
@@ -221,11 +224,9 @@ export default function KaikoFeed() {
     }));
   }, [exchange]);
 
-  // When exchange changes, update instrument if current one isn't available
   useEffect(() => {
     const available = EXCHANGE_INSTRUMENTS[exchange] || [];
     if (!available.includes(instrument)) {
-      // Pick first CC pair if available, otherwise first pair
       const ccPair = available.find(i => i.startsWith('cc-'));
       setInstrument(ccPair || available[0] || 'btc-usd');
     }
@@ -239,12 +240,12 @@ export default function KaikoFeed() {
     pageSize: 50,
   }, status?.configured && (activeTab === 'ohlcv' || activeTab === 'cc-overview'));
 
-  const { 
-    data: assetData, 
-    isLoading: assetLoading, 
-    error: assetError, 
-    refetch: refetchAsset, 
-    isFetching: assetFetching 
+  const {
+    data: assetData,
+    isLoading: assetLoading,
+    error: assetError,
+    refetch: refetchAsset,
+    isFetching: assetFetching
   } = useKaikoAssetMetrics({
     asset,
     interval: assetInterval,
@@ -254,14 +255,25 @@ export default function KaikoFeed() {
   const candles = data?.data || [];
   const latestCandle = candles[0];
 
-  // Calculate stats from candles
-  const totalVolume = candles.reduce((sum, c) => sum + parseFloat(c.volume || '0'), 0);
-  const totalTrades = candles.reduce((sum, c) => sum + c.count, 0);
-  const avgVWAP = candles.filter(c => c.price).length > 0
-    ? candles.reduce((sum, c) => sum + parseFloat(c.price || '0'), 0) / candles.filter(c => c.price).length
+  const totalVolume = candles.reduce((sum, c) => {
+    const volume = typeof c.volume === 'string' ? parseFloat(c.volume) : 0;
+    return sum + (Number.isFinite(volume) ? volume : 0);
+  }, 0);
+
+  const totalTrades = candles.reduce(
+    (sum, c) => sum + (typeof c.count === 'number' ? c.count : 0),
+    0
+  );
+
+  const pricedCandles = candles.filter(c => {
+    const price = typeof c.price === 'string' ? parseFloat(c.price) : NaN;
+    return Number.isFinite(price);
+  });
+
+  const avgVWAP = pricedCandles.length > 0
+    ? pricedCandles.reduce((sum, c) => sum + parseFloat(c.price || '0'), 0) / pricedCandles.length
     : 0;
 
-  // Asset metrics data
   const assetMetrics = assetData?.data || [];
   const latestMetric = assetMetrics[0];
 
@@ -324,18 +336,13 @@ export default function KaikoFeed() {
             </TabsTrigger>
           </TabsList>
 
-          {/* CC Overview Tab */}
           <TabsContent value="cc-overview" className="space-y-6">
             <CCPriceTicker enabled={status?.configured && activeTab === 'cc-overview'} />
-            
             <CCTwapCard enabled={status?.configured && activeTab === 'cc-overview'} />
-            
             <CCTimeframeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
-            
             <CCMarketOverview enabled={status?.configured && activeTab === 'cc-overview'} />
-            
-            <CCCandlestickChart 
-              candles={candles} 
+            <CCCandlestickChart
+              candles={candles}
               isLoading={isLoading}
               exchange={exchange}
               instrument={instrument}
@@ -344,15 +351,11 @@ export default function KaikoFeed() {
                 setInstrument(newInstrument);
               }}
             />
-            
             <CCPriceAlerts enabled={status?.configured && activeTab === 'cc-overview'} />
-            
             <CCExchangeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
           </TabsContent>
 
-          {/* OHLCV Tab */}
           <TabsContent value="ohlcv" className="space-y-6">
-            {/* Filters */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Filters</CardTitle>
@@ -386,9 +389,10 @@ export default function KaikoFeed() {
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">
-                      Instrument 
+                      Instrument
                       <span className="text-xs text-muted-foreground/70 ml-1">
                         ({availableInstruments.length} available)
                       </span>
@@ -423,6 +427,7 @@ export default function KaikoFeed() {
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Interval</label>
                     <Select value={interval} onValueChange={setInterval}>
@@ -440,7 +445,6 @@ export default function KaikoFeed() {
               </CardContent>
             </Card>
 
-            {/* Stats */}
             {status?.configured && (
               <div className="grid gap-4 md:grid-cols-4">
                 <StatCard
@@ -450,23 +454,22 @@ export default function KaikoFeed() {
                 />
                 <StatCard
                   title="Avg VWAP"
-                  value={isLoading ? '...' : `$${formatPrice(String(avgVWAP))}`}
+                  value={isLoading ? '...' : `$${formatPrice(avgVWAP)}`}
                   icon={BarChart3}
                 />
                 <StatCard
                   title="Total Volume"
-                  value={isLoading ? '...' : formatVolume(String(totalVolume))}
+                  value={isLoading ? '...' : formatVolume(totalVolume)}
                   icon={TrendingUp}
                 />
                 <StatCard
                   title="Trade Count"
-                  value={isLoading ? '...' : totalTrades.toLocaleString()}
+                  value={isLoading ? '...' : formatInteger(totalTrades)}
                   icon={Activity}
                 />
               </div>
             )}
 
-            {/* Data Table */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -544,7 +547,7 @@ export default function KaikoFeed() {
                                 ${formatPrice(candle.price)}
                               </TableCell>
                               <TableCell className="text-right font-mono">
-                                {candle.count.toLocaleString()}
+                                {formatInteger(candle.count)}
                               </TableCell>
                             </TableRow>
                           ))
@@ -557,9 +560,7 @@ export default function KaikoFeed() {
             </Card>
           </TabsContent>
 
-          {/* Asset Metrics Tab */}
           <TabsContent value="assets" className="space-y-6">
-            {/* Asset Filters */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Asset Selection</CardTitle>
@@ -587,6 +588,7 @@ export default function KaikoFeed() {
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">Interval</label>
                     <Select value={assetInterval} onValueChange={setAssetInterval}>
@@ -604,33 +606,37 @@ export default function KaikoFeed() {
               </CardContent>
             </Card>
 
-            {/* Asset Stats */}
             {status?.configured && latestMetric && (
               <div className="grid gap-4 md:grid-cols-4">
                 <StatCard
                   title="Price (USD)"
-                  value={assetLoading ? '...' : `$${latestMetric.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}`}
+                  value={
+                    assetLoading
+                      ? '...'
+                      : `$${typeof latestMetric.price === 'number'
+                        ? latestMetric.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                        : '-'}`
+                  }
                   icon={Coins}
                 />
                 <StatCard
                   title="Total Volume (USD)"
-                  value={assetLoading ? '...' : formatVolume(String(latestMetric.total_volume_usd || 0))}
+                  value={assetLoading ? '...' : formatVolume(latestMetric.total_volume_usd || 0)}
                   icon={TrendingUp}
                 />
                 <StatCard
                   title="Total Trades"
-                  value={assetLoading ? '...' : latestMetric.total_trade_count?.toLocaleString() || '0'}
+                  value={assetLoading ? '...' : formatInteger(latestMetric.total_trade_count)}
                   icon={Activity}
                 />
                 <StatCard
                   title="Off-Chain Volume"
-                  value={assetLoading ? '...' : formatVolume(String(latestMetric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0))}
+                  value={assetLoading ? '...' : formatVolume(latestMetric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0)}
                   icon={Database}
                 />
               </div>
             )}
 
-            {/* Asset Metrics Table */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -708,25 +714,27 @@ export default function KaikoFeed() {
                           assetMetrics.map((metric) => (
                             <TableRow key={metric.timestamp}>
                               <TableCell className="font-mono text-sm">
-                                {new Date(metric.timestamp).toLocaleString()}
+                                {formatTimestamp(metric.timestamp)}
                               </TableCell>
                               <TableCell className="text-right font-mono font-semibold">
-                                ${metric.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
+                                ${typeof metric.price === 'number'
+                                  ? metric.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                  : '-'}
                               </TableCell>
                               <TableCell className="text-right font-mono">
-                                {formatVolume(String(metric.total_volume_usd || 0))}
+                                {formatVolume(metric.total_volume_usd || 0)}
                               </TableCell>
                               <TableCell className="text-right font-mono">
-                                {formatVolume(String(metric.total_volume_asset || 0))}
+                                {formatVolume(metric.total_volume_asset || 0)}
                               </TableCell>
                               <TableCell className="text-right font-mono">
-                                {metric.total_trade_count?.toLocaleString() || '0'}
+                                {formatInteger(metric.total_trade_count)}
                               </TableCell>
                               <TableCell className="text-right font-mono text-blue-500">
-                                {formatVolume(String(metric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0))}
+                                {formatVolume(metric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0)}
                               </TableCell>
                               <TableCell className="text-right font-mono text-purple-500">
-                                {formatVolume(String(metric.on_chain_liquidity_data?.total_on_chain_volume_usd || 0))}
+                                {formatVolume(metric.on_chain_liquidity_data?.total_on_chain_volume_usd || 0)}
                               </TableCell>
                             </TableRow>
                           ))
@@ -738,7 +746,6 @@ export default function KaikoFeed() {
               </CardContent>
             </Card>
 
-            {/* Exchange Breakdown */}
             {latestMetric?.off_chain_liquidity_data?.trade_data && latestMetric.off_chain_liquidity_data.trade_data.length > 0 && (
               <Card>
                 <CardHeader>
@@ -765,13 +772,13 @@ export default function KaikoFeed() {
                               {trade.exchange.toUpperCase()}
                             </TableCell>
                             <TableCell className="text-right font-mono">
-                              {formatVolume(String(trade.volume_usd))}
+                              {formatVolume(trade.volume_usd)}
                             </TableCell>
                             <TableCell className="text-right font-mono">
-                              {formatVolume(String(trade.volume_asset))}
+                              {formatVolume(trade.volume_asset)}
                             </TableCell>
                             <TableCell className="text-right font-mono">
-                              {trade.trade_count.toLocaleString()}
+                              {formatInteger(trade.trade_count)}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -783,7 +790,6 @@ export default function KaikoFeed() {
             )}
           </TabsContent>
 
-          {/* Exchanges Tab */}
           <TabsContent value="exchanges" className="space-y-6">
             <CCExchangeComparison enabled={status?.configured && activeTab === 'exchanges'} />
           </TabsContent>
