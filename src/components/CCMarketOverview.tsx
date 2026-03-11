@@ -4,22 +4,43 @@ import { Badge } from "@/components/ui/badge";
 import { useCCMarketOverview } from "@/hooks/use-kaiko-ohlcv";
 import { TrendingUp, TrendingDown, DollarSign, Activity, BarChart3, Building2 } from "lucide-react";
 
-function formatCurrency(value: number | null): string {
-  if (value === null) return '-';
-  return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+function safeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
 }
 
-function formatVolume(value: number): string {
-  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `$${(value / 1_000).toFixed(2)}K`;
-  return `$${value.toFixed(2)}`;
+function formatCurrency(value: number | null | undefined): string {
+  const num = safeNumber(value, NaN);
+  if (!Number.isFinite(num)) return "-";
+  return num.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
 }
 
-function formatNumber(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return value.toLocaleString();
+function formatVolume(value: number | null | undefined): string {
+  const num = safeNumber(value, 0);
+  if (num >= 1_000_000_000) return `$${(num / 1_000_000_000).toFixed(2)}B`;
+  if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(2)}M`;
+  if (num >= 1_000) return `$${(num / 1_000).toFixed(2)}K`;
+  return `$${num.toFixed(2)}`;
+}
+
+function formatNumber(value: number | null | undefined): string {
+  const num = safeNumber(value, 0);
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(2)}K`;
+  return num.toLocaleString();
+}
+
+function formatTime(value: unknown): string {
+  if (!value) return "-";
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleTimeString();
 }
 
 interface StatItemProps {
@@ -87,8 +108,16 @@ export function CCMarketOverview({ enabled = true }: CCMarketOverviewProps) {
     );
   }
 
-  const { summary } = data;
-  const isPositive = summary.change24h !== null && summary.change24h >= 0;
+  const summary = data.summary ?? {};
+  const change24h =
+    typeof summary.change24h === "number" && Number.isFinite(summary.change24h)
+      ? summary.change24h
+      : null;
+  const isPositive = change24h !== null ? change24h >= 0 : false;
+
+  const exchanges = Array.isArray(data.exchanges) ? data.exchanges : [];
+  const activeExchanges = safeNumber(summary.activeExchanges, exchanges.length);
+  const totalTrades = safeNumber(summary.totalTrades, 0);
 
   return (
     <Card className="col-span-full border-primary/20 bg-gradient-to-br from-background to-muted/20">
@@ -102,10 +131,11 @@ export function CCMarketOverview({ enabled = true }: CCMarketOverviewProps) {
             </Badge>
           </CardTitle>
           <span className="text-xs text-muted-foreground">
-            Updated: {new Date(data.timestamp).toLocaleTimeString()}
+            Updated: {formatTime(data.timestamp)}
           </span>
         </div>
       </CardHeader>
+
       <CardContent>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatItem
@@ -113,46 +143,50 @@ export function CCMarketOverview({ enabled = true }: CCMarketOverviewProps) {
             value={`$${formatCurrency(summary.price)}`}
             icon={<DollarSign className="h-5 w-5" />}
             subValue={
-              summary.change24h !== null && (
-                <div className={`flex items-center gap-1 text-sm ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
+              change24h !== null ? (
+                <div className={`flex items-center gap-1 text-sm ${isPositive ? "text-green-500" : "text-red-500"}`}>
                   {isPositive ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                  <span>{isPositive ? '+' : ''}{summary.change24h.toFixed(2)}% (24h)</span>
+                  <span>
+                    {isPositive ? "+" : ""}
+                    {change24h.toFixed(2)}% (24h)
+                  </span>
                 </div>
-              )
+              ) : null
             }
           />
+
           <StatItem
             label="VWAP"
             value={`$${formatCurrency(summary.vwap)}`}
             icon={<BarChart3 className="h-5 w-5" />}
-            subValue={
-              <p className="text-xs text-muted-foreground mt-1">Volume-Weighted Avg</p>
-            }
+            subValue={<p className="text-xs text-muted-foreground mt-1">Volume-Weighted Avg</p>}
           />
+
           <StatItem
             label="24h Volume"
             value={formatVolume(summary.totalVolume)}
             icon={<Activity className="h-5 w-5" />}
             subValue={
               <p className="text-xs text-muted-foreground mt-1">
-                {formatNumber(summary.totalTrades)} trades
+                {formatNumber(totalTrades)} trades
               </p>
             }
           />
+
           <StatItem
             label="Active Markets"
-            value={`${summary.activeExchanges} venues`}
+            value={`${activeExchanges} venues`}
             icon={<Building2 className="h-5 w-5" />}
             subValue={
               <div className="flex flex-wrap gap-1 mt-1">
-                {data.exchanges.slice(0, 3).map(ex => (
+                {exchanges.slice(0, 3).map((ex: any) => (
                   <Badge key={ex.exchange} variant="secondary" className="text-[10px] px-1">
-                    {ex.exchangeName}
+                    {ex.exchangeName || ex.exchange || "Unknown"}
                   </Badge>
                 ))}
-                {data.exchanges.length > 3 && (
+                {exchanges.length > 3 && (
                   <Badge variant="secondary" className="text-[10px] px-1">
-                    +{data.exchanges.length - 3}
+                    +{exchanges.length - 3}
                   </Badge>
                 )}
               </div>
