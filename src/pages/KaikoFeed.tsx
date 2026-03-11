@@ -8,8 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-// FIX #10: Import CCMarketOverviewData (renamed type) separately from the
-// CCMarketOverview React component to avoid name collision.
 import { useKaikoOHLCV, useKaikoStatus, useKaikoAssetMetrics, KaikoCandle, AssetMetricData } from "@/hooks/use-kaiko-ohlcv";
 import { TrendingUp, TrendingDown, Activity, BarChart3, AlertCircle, RefreshCw, Coins, Users, Database, Building2, Bell, Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -174,7 +172,7 @@ function formatTimestamp(ts: number): string {
 
 function PriceChange({ open, close }: { open: string | null; close: string | null }) {
   if (!open || !close) return <span className="text-muted-foreground">-</span>;
-
+  
   const openNum = parseFloat(open);
   const closeNum = parseFloat(close);
   const change = ((closeNum - openNum) / openNum) * 100;
@@ -208,7 +206,7 @@ export default function KaikoFeed() {
   const [instrument, setInstrument] = useState('cc-usd');
   const [interval, setInterval] = useState('1h');
   const [activeTab, setActiveTab] = useState('cc-overview');
-
+  
   // Asset Metrics state - default to Canton Coin
   const [asset, setAsset] = useState('cc');
   const [assetInterval, setAssetInterval] = useState('1h');
@@ -227,16 +225,13 @@ export default function KaikoFeed() {
   useEffect(() => {
     const available = EXCHANGE_INSTRUMENTS[exchange] || [];
     if (!available.includes(instrument)) {
+      // Pick first CC pair if available, otherwise first pair
       const ccPair = available.find(i => i.startsWith('cc-'));
       setInstrument(ccPair || available[0] || 'btc-usd');
     }
   }, [exchange, instrument]);
 
-  // FIX #7: Gate the status fetch so it only fires when this page is mounted.
-  // The `enabled` default in useKaikoStatus is true, so passing true explicitly
-  // here is clear intent — but other pages that don't use Kaiko can pass false.
-  const { data: status } = useKaikoStatus(true);
-
+  const { data: status } = useKaikoStatus();
   const { data, isLoading, error, refetch, isFetching } = useKaikoOHLCV({
     exchange,
     instrument,
@@ -244,12 +239,12 @@ export default function KaikoFeed() {
     pageSize: 50,
   }, status?.configured && (activeTab === 'ohlcv' || activeTab === 'cc-overview'));
 
-  const {
-    data: assetData,
-    isLoading: assetLoading,
-    error: assetError,
-    refetch: refetchAsset,
-    isFetching: assetFetching
+  const { 
+    data: assetData, 
+    isLoading: assetLoading, 
+    error: assetError, 
+    refetch: refetchAsset, 
+    isFetching: assetFetching 
   } = useKaikoAssetMetrics({
     asset,
     interval: assetInterval,
@@ -259,47 +254,24 @@ export default function KaikoFeed() {
   const candles = data?.data || [];
   const latestCandle = candles[0];
 
-  // FIX #5: Only include candles that actually have a VWAP price in both the
-  // numerator and the denominator. Previously null-price candles added 0 to the
-  // sum but were excluded from the count, silently depressing the average.
-  const pricedCandles = useMemo(() => candles.filter(c => c.price != null), [candles]);
+  // Calculate stats from candles
   const totalVolume = candles.reduce((sum, c) => sum + parseFloat(c.volume || '0'), 0);
   const totalTrades = candles.reduce((sum, c) => sum + c.count, 0);
-  const avgVWAP = pricedCandles.length > 0
-    ? pricedCandles.reduce((sum, c) => sum + parseFloat(c.price!), 0) / pricedCandles.length
+  const avgVWAP = candles.filter(c => c.price).length > 0
+    ? candles.reduce((sum, c) => sum + parseFloat(c.price || '0'), 0) / candles.filter(c => c.price).length
     : 0;
 
   // Asset metrics data
   const assetMetrics = assetData?.data || [];
   const latestMetric = assetMetrics[0];
 
-  // FIX #8: handleRefresh now covers all four tabs.
-  // cc-overview and exchanges tabs use child components with their own queries;
-  // we trigger their refetch by invalidating via the shared queryClient, but
-  // those components control their own refetch. The simplest correct approach
-  // is to refetch everything relevant to the current tab.
   const handleRefresh = () => {
-    switch (activeTab) {
-      case 'ohlcv':
-        refetch();
-        break;
-      case 'assets':
-        refetchAsset();
-        break;
-      case 'cc-overview':
-      case 'exchanges':
-        // Child components (CCMarketOverview, CCPriceTicker, CCExchangeComparison, etc.)
-        // manage their own queries. Trigger the OHLCV refetch (used by CCCandlestickChart)
-        // and also refetch asset data in case it's used by children.
-        refetch();
-        refetchAsset();
-        break;
-      default:
-        refetch();
+    if (activeTab === 'ohlcv') {
+      refetch();
+    } else {
+      refetchAsset();
     }
   };
-
-  const isRefreshing = isFetching || assetFetching;
 
   return (
     <DashboardLayout>
@@ -315,9 +287,9 @@ export default function KaikoFeed() {
             variant="outline"
             size="sm"
             onClick={handleRefresh}
-            disabled={isRefreshing}
+            disabled={isFetching || assetFetching}
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 mr-2 ${(isFetching || assetFetching) ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
@@ -355,15 +327,15 @@ export default function KaikoFeed() {
           {/* CC Overview Tab */}
           <TabsContent value="cc-overview" className="space-y-6">
             <CCPriceTicker enabled={status?.configured && activeTab === 'cc-overview'} />
-
+            
             <CCTwapCard enabled={status?.configured && activeTab === 'cc-overview'} />
-
+            
             <CCTimeframeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
-
+            
             <CCMarketOverview enabled={status?.configured && activeTab === 'cc-overview'} />
-
-            <CCCandlestickChart
-              candles={candles}
+            
+            <CCCandlestickChart 
+              candles={candles} 
               isLoading={isLoading}
               exchange={exchange}
               instrument={instrument}
@@ -372,9 +344,9 @@ export default function KaikoFeed() {
                 setInstrument(newInstrument);
               }}
             />
-
+            
             <CCPriceAlerts enabled={status?.configured && activeTab === 'cc-overview'} />
-
+            
             <CCExchangeComparison enabled={status?.configured && activeTab === 'cc-overview'} />
           </TabsContent>
 
@@ -416,7 +388,7 @@ export default function KaikoFeed() {
                   </div>
                   <div className="space-y-1">
                     <label className="text-sm text-muted-foreground">
-                      Instrument
+                      Instrument 
                       <span className="text-xs text-muted-foreground/70 ml-1">
                         ({availableInstruments.length} available)
                       </span>
