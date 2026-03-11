@@ -224,22 +224,52 @@ const isMilestoneVote = (actionTag: string, text: string): boolean => {
  */
 const extractPartyIdFromAction = (actionTag: string, actionValue: any): string | null => {
   if (!actionValue) return null;
-  const inner =
-    actionValue?.dsoAction?.value ||
-    actionValue?.amuletRulesAction?.value ||
-    actionValue?.svAction?.value ||
-    actionValue;
-  const partyId =
-    inner?.provider ||
-    inner?.featuredAppProvider ||
-    inner?.featuredApp ||
-    inner?.beneficiary ||
-    inner?.validator ||
-    inner?.sv ||
-    inner?.svParty ||
-    inner?.name ||
-    null;
-  return partyId ? String(partyId) : null;
+
+  // actionValue = action.value from the API, which is structured as:
+  // { dsoAction: { tag: "SRARC_GrantFeaturedAppRight", value: { provider: "mainnet:kora-app::122..." } } }
+  // OR { amuletRulesAction: { tag: "CRARC_...", value: { ... } } }
+  // We need to drill to the innermost value object that has the actual party field.
+
+  // Collect all candidate value objects from most-specific to least-specific
+  const candidates: any[] = [];
+
+  // Level 2: inner action value (most specific — has the actual party fields)
+  if (actionValue?.dsoAction?.value) candidates.push(actionValue.dsoAction.value);
+  if (actionValue?.amuletRulesAction?.value) candidates.push(actionValue.amuletRulesAction.value);
+  if (actionValue?.svAction?.value) candidates.push(actionValue.svAction.value);
+
+  // Level 1: the wrapper itself (fallback)
+  candidates.push(actionValue);
+
+  // Known party field names — in order of specificity
+  const partyFields = [
+    'provider', 'featuredAppProvider', 'featuredApp',
+    'validator', 'beneficiary', 'sv', 'svParty',
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    for (const field of partyFields) {
+      const val = candidate[field];
+      if (val && typeof val === 'string' && val.length > 3 && !['provider', 'validator', 'sv', 'beneficiary'].includes(val)) {
+        // Looks like an actual party ID value, not a field name echo
+        return val;
+      }
+    }
+  }
+
+  // Last resort: scan all string values in the innermost candidate that look like party IDs
+  // (contain '::' fingerprint or 'mainnet:'/'testnet:' prefix)
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    for (const val of Object.values(candidate)) {
+      if (typeof val === 'string' && (val.includes('::') || /^(mainnet|testnet):/i.test(val))) {
+        return val;
+      }
+    }
+  }
+
+  return null;
 };
 
 /** Infer governance type from a lifecycle key string */
@@ -372,6 +402,134 @@ const resolveVoteKey = (
   }
 
   return null;
+};
+
+/**
+ * Build synthetic LifecycleItem entries for votes that have no corresponding
+ * Groups.io lifecycle card. These are real on-chain votes (validator onboardings,
+ * featured app grants, etc.) that were never discussed on the mailing list.
+ *
+ * Strategy:
+ * - For each historical vote that resolves to a key NOT in the lifecycle data,
+ *   create a minimal LifecycleItem so the vote shows up on the Governance Lifecycle page.
+ * - Title is derived from actionTitle + party name.
+ * - These items are marked with a synthetic flag so the UI can label them differently.
+ */
+const buildSyntheticLifecycleItems = (
+  historicalVotes: ParsedVoteResult[],
+  activeVotes: VoteRequest[],
+  existingKeys: Set<string>,
+  urlIndex: Map<string, string>
+): LifecycleItem[] => {
+  // Collect all votes (historical + active) that don't map to an existing lifecycle item
+  const syntheticMap = new Map<string, {
+    key: string;
+    type: LifecycleItem['type'];
+    votes: ParsedVoteResult[];
+    activeVotes: VoteRequest[];
+    firstDate: string;
+    lastDate: string;
+    title: string;
+    partyId: string;
+  }>();
+
+  for (const vote of historicalVotes) {
+    const mapping = resolveVoteKey(
+      vote.reasonUrl ?? '', vote.reasonBody ?? '',
+      vote.actionType ?? '', vote.actionDetails ?? null,
+      urlIndex
+    );
+    if (!mapping || existingKeys.has(mapping.key)) continue;
+
+    const existing = syntheticMap.get(mapping.key);
+    const date = vote.completedAt || vote.voteBefore || '';
+
+    // Derive a human-readable title from the vote
+    const partyId = extractPartyIdFromAction(vote.actionType, vote.actionDetails) ?? mapping.key;
+    const shortParty = normalizePartyId(partyId).split('::')[0];
+    const title = vote.actionTitle
+      ? `${vote.actionTitle}: ${shortParty}`
+      : shortParty;
+
+    if (existing) {
+      existing.votes.push(vote);
+      if (date && date < existing.firstDate) existing.firstDate = date;
+      if (date && date > existing.lastDate) existing.lastDate = date;
+    } else {
+      syntheticMap.set(mapping.key, {
+        key: mapping.key,
+        type: mapping.type,
+        votes: [vote],
+        activeVotes: [],
+        firstDate: date,
+        lastDate: date,
+        title,
+        partyId,
+      });
+    }
+  }
+
+  // Also check active vote requests
+  for (const vr of activeVotes) {
+    const payload = vr.payload;
+    const mapping = resolveVoteKey(
+      payload?.reason?.url ?? '', payload?.reason?.body ?? '',
+      payload?.action?.tag ?? '', payload?.action?.value ?? null,
+      urlIndex
+    );
+    if (!mapping || existingKeys.has(mapping.key)) continue;
+
+    const existing = syntheticMap.get(mapping.key);
+    const partyId = extractPartyIdFromAction(payload?.action?.tag ?? '', payload?.action?.value ?? null) ?? mapping.key;
+    const shortParty = normalizePartyId(partyId).split('::')[0];
+    const title = `${payload?.action?.tag ?? 'Vote'}: ${shortParty}`;
+    const date = vr.record_time || '';
+
+    if (existing) {
+      existing.activeVotes.push(vr);
+      if (date && date < existing.firstDate) existing.firstDate = date;
+      if (date && date > existing.lastDate) existing.lastDate = date;
+    } else {
+      syntheticMap.set(mapping.key, {
+        key: mapping.key,
+        type: mapping.type,
+        votes: [],
+        activeVotes: [vr],
+        firstDate: date,
+        lastDate: date,
+        title,
+        partyId,
+      });
+    }
+  }
+
+  // Convert to LifecycleItem shape
+  const items: LifecycleItem[] = [];
+  for (const [key, entry] of syntheticMap.entries()) {
+    // Skip junk keys — bare field names or very short strings
+    if (['provider', 'validator', 'sv', 'beneficiary', 'partyid', 'name'].includes(key)) continue;
+    if (key.length < 4) continue;
+    // Skip raw Canton hashes (no base name)
+    if (/^[0-9a-f]{40,}$/i.test(key)) continue;
+
+    items.push({
+      id: `synthetic-${key}`,
+      primaryId: entry.title || key,
+      type: entry.type,
+      network: null,
+      stages: {},
+      topics: [],
+      firstDate: entry.firstDate || new Date().toISOString(),
+      lastDate: entry.lastDate || new Date().toISOString(),
+      currentStage: 'sv-onchain-vote',
+      // Use overrideReason to flag as synthetic for UI display
+      overrideApplied: false,
+      overrideReason: `synthetic:${key}`,
+      llmClassified: false,
+    } as LifecycleItem & { _syntheticKey: string });
+  }
+
+  return items;
 };
 
 const GovernanceFlow = () => {
@@ -528,7 +686,10 @@ const GovernanceFlow = () => {
           urlIndex
         );
         if (mapping) matched.add(mapping.key);
-        else unmatched.push(`${vote.actionType} | ${vote.reasonUrl}`);
+        else {
+          if (unmatched.length < 3) console.log('[vote-match] UNMATCHED FULL VOTE:', JSON.stringify(vote, null, 2));
+          unmatched.push(`${vote.actionType} | ${vote.reasonUrl}`);
+        }
       }
       console.log(`[vote-match] HIST matched: ${matched.size}, unmatched: ${unmatched.length}`);
       if (unmatched.length) console.table(unmatched.slice(0, 20));
@@ -537,9 +698,13 @@ const GovernanceFlow = () => {
       );
       const orphanVoteKeys = [...matched].filter(k => !lifecycleKeys.has(k));
       if (orphanVoteKeys.length) console.warn('[vote-match] votes matched to unknown lifecycle keys:', orphanVoteKeys);
-      // Add after the orphanVoteKeys log
       console.log('[vote-match] sample lifecycle keys:', [...lifecycleKeys].slice(0, 30));
       console.log('[vote-match] sample orphan vote keys:', orphanVoteKeys.slice(0, 30));
+      const orphanVotes = historicalVotes.filter(v => {
+        const m = resolveVoteKey(v.reasonUrl ?? '', v.reasonBody ?? '', v.actionType ?? '', v.actionDetails ?? null, urlIndex);
+        return m && orphanVoteKeys.includes(m.key);
+      });
+      console.log('[vote-match] sample orphan full votes:', JSON.stringify(orphanVotes.slice(0, 3), null, 2));
     }
 
     return map;
@@ -549,6 +714,37 @@ const GovernanceFlow = () => {
   const getVotesForItem = useCallback(
     (item: LifecycleItem): OnChainVoteItem[] => {
       const key = deriveLifecycleKey(item);
+      if (!key) return [];
+      return combinedVoteMap.get(key) ?? [];
+    },
+    [combinedVoteMap]
+  );
+
+  // Synthetic lifecycle items: votes that have no Groups.io discussion thread.
+  // These are real on-chain votes (validator onboardings, featured app grants, etc.)
+  // that never appeared on the mailing list. We surface them so nothing is hidden.
+  const syntheticItems = useMemo(() => {
+    if (!data) return [];
+    const existingKeys = new Set(
+      data.lifecycleItems.map(i => deriveLifecycleKey(i)).filter((k): k is string => !!k)
+    );
+    return buildSyntheticLifecycleItems(historicalVotes, voteRequests, existingKeys, urlIndex);
+  }, [data, historicalVotes, voteRequests, urlIndex]);
+
+  // Helper to get the canonical lookup key for a synthetic item
+  // (stored in overrideReason as "synthetic:<key>")
+  const getSyntheticKey = (item: LifecycleItem): string | undefined => {
+    if (item.overrideReason?.startsWith('synthetic:')) {
+      return item.overrideReason.replace('synthetic:', '');
+    }
+    return deriveLifecycleKey(item);
+  };
+
+  const getVotesForItemExtended = useCallback(
+    (item: LifecycleItem): OnChainVoteItem[] => {
+      const key = item.overrideReason?.startsWith('synthetic:')
+        ? item.overrideReason.replace('synthetic:', '')
+        : deriveLifecycleKey(item);
       if (!key) return [];
       return combinedVoteMap.get(key) ?? [];
     },
@@ -902,7 +1098,10 @@ const GovernanceFlow = () => {
   // Separate CIP-00XX items from regular items
   const { tbdItems, regularItems } = useMemo(() => {
     if (!data) return { tbdItems: [], regularItems: [] };
-    const allFiltered = data.lifecycleItems.filter(item => {
+    // Merge real lifecycle items with synthetic items built from orphan votes
+    const allItems = [...data.lifecycleItems, ...syntheticItems];
+
+    const allFiltered = allItems.filter(item => {
       if (typeFilter !== 'all' && item.type !== typeFilter) return false;
 
       if (stageFilter !== 'all') {
@@ -910,7 +1109,7 @@ const GovernanceFlow = () => {
         if (!isVoteStageFilter) {
           if (item.currentStage !== stageFilter) return false;
         } else {
-          const matchingVotes = getVotesForItem(item);
+          const matchingVotes = getVotesForItemExtended(item);
           const hasVotesInStage = matchingVotes.some(v => v.stage === stageFilter);
           const hasTopicsInStage = (item.stages[stageFilter]?.length || 0) > 0;
           if (!(hasVotesInStage || hasTopicsInStage || item.currentStage === stageFilter)) return false;
@@ -926,7 +1125,7 @@ const GovernanceFlow = () => {
       tbdItems: allFiltered.filter(item => item.primaryId?.includes('00XX')),
       regularItems: allFiltered.filter(item => !item.primaryId?.includes('00XX')),
     };
-  }, [data, typeFilter, stageFilter, searchQuery, dateFrom, dateTo, combinedVoteMap]);
+  }, [data, syntheticItems, typeFilter, stageFilter, searchQuery, dateFrom, dateTo, combinedVoteMap]);
 
   const filteredItems = useMemo(() => [...tbdItems, ...regularItems], [tbdItems, regularItems]);
 
@@ -1129,7 +1328,7 @@ const GovernanceFlow = () => {
   const renderLifecycleProgress = (item: LifecycleItem) => {
     const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
     const currentIdx = stages.indexOf(item.currentStage);
-    const matchingVotes = getVotesForItem(item);
+    const matchingVotes = getVotesForItemExtended(item);
 
     return (
       <div className="flex items-center gap-1 flex-wrap">
@@ -1523,12 +1722,15 @@ const GovernanceFlow = () => {
                               <div className="pt-1">{renderLifecycleProgress(group.items[0])}</div>
                               {/* Active Vote Badge */}
                               {(() => {
-                                const matchingVotes = getVotesForItem(group.items[0]);
+                                const matchingVotes = getVotesForItemExtended(group.items[0]);
                                 const hasActiveVote = matchingVotes.some(v => v.source === 'active' && v.status === 'pending');
                                 return hasActiveVote ? (
                                   <Badge className="bg-pink-500/20 text-pink-400 border border-pink-500/30 animate-pulse">🗳️ Active Vote</Badge>
                                 ) : null;
                               })()}
+                              {group.items[0]?.overrideReason?.startsWith('synthetic:') && (
+                                <Badge variant="outline" className="text-[10px] h-5 border-slate-500/50 text-slate-400 bg-slate-500/10" title="No mailing list discussion found — derived from on-chain vote data only">⛓ On-chain only</Badge>
+                              )}
                               {group.items[0]?.overrideApplied && (
                                 <Badge variant="outline" className="text-[10px] h-5 border-purple-500/50 text-purple-400 bg-purple-500/10">✎ Manually classified</Badge>
                               )}
@@ -1571,7 +1773,7 @@ const GovernanceFlow = () => {
                           <CardContent className="pt-0 space-y-3 border-t">
                             {group.items.map((item) => {
                               const stages = WORKFLOW_STAGES[item.type] || WORKFLOW_STAGES.other;
-                              const matchingVotes = getVotesForItem(item);
+                              const matchingVotes = getVotesForItemExtended(item);
                               return (
                                 <div key={item.id} className="space-y-2 pt-3">
                                   {group.hasMultipleNetworks && (
