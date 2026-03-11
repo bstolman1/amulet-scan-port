@@ -353,8 +353,6 @@ const Governance = () => {
                                 <div>
                                   <h4 className="font-semibold text-lg">{proposal.title}</h4>
                                   <p className="text-sm text-muted-foreground">
-                                    <span className="font-mono text-xs">{proposal.actionType}</span>
-                                    <span className="mx-2">·</span>
                                     Requested by{" "}
                                     <span className="font-medium text-foreground">{proposal.requester}</span>
                                   </p>
