@@ -113,9 +113,25 @@ async function _runEnrichment(signal, cacheTimestamp) {
       error: null,
     });
 
-    // Build a lookup map: topic id → topic object in the live allTopics array
-    // so we can mutate in place and write back in batches
+    // Build lookup maps:
+    // topicById         → topic object in allTopics (flat list)
+    // lifecycleTopicById → topic copies nested inside lifecycleItems[].topics[]
+    // Both must be updated — they are separate objects (correlateTopics clones topics).
     const topicById = new Map(allTopics.map(t => [t.id, t]));
+
+    const lifecycleItems = cache.lifecycleItems ?? [];
+    const lifecycleTopicById = new Map();
+    for (const item of lifecycleItems) {
+      for (const t of (item.topics ?? [])) {
+        lifecycleTopicById.set(t.id, t);
+      }
+      // Also update stage-keyed topics inside item.stages
+      for (const stageTopics of Object.values(item.stages ?? {})) {
+        for (const t of stageTopics) {
+          lifecycleTopicById.set(t.id, t);
+        }
+      }
+    }
 
     let processed = 0;
     let enriched = 0;
@@ -136,11 +152,19 @@ async function _runEnrichment(signal, cacheTimestamp) {
       );
 
       if (messageUrls.length > 0) {
+        // Update in allTopics
         const live = topicById.get(topic.id);
         if (live) {
           const existing = new Set(live.linkedUrls ?? []);
           for (const u of messageUrls) existing.add(u);
           live.linkedUrls = [...existing];
+        }
+        // Also update the cloned copy inside lifecycleItems[].topics[] / .stages[][]
+        const lcTopic = lifecycleTopicById.get(topic.id);
+        if (lcTopic) {
+          const existing = new Set(lcTopic.linkedUrls ?? []);
+          for (const u of messageUrls) existing.add(u);
+          lcTopic.linkedUrls = [...existing];
         }
         enriched++;
         totalMessages += messageUrls.length;
@@ -155,7 +179,7 @@ async function _runEnrichment(signal, cacheTimestamp) {
         // then splice in the updated allTopics
         const latest = await readCache();
         if (latest && latest.cachedAt === cacheTimestamp) {
-          await writeCache({ ...latest, allTopics });
+          await writeCache({ ...latest, allTopics, lifecycleItems });
         }
 
         await writeEnrichmentStatus({
@@ -179,7 +203,7 @@ async function _runEnrichment(signal, cacheTimestamp) {
     if (!signal.aborted) {
       const latest = await readCache();
       if (latest && latest.cachedAt === cacheTimestamp) {
-        await writeCache({ ...latest, allTopics });
+        await writeCache({ ...latest, allTopics, lifecycleItems });
       }
     }
 
