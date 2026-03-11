@@ -1,15 +1,16 @@
 /**
  * Core lifecycle routes.
  *
- * GET  /              - serve from cache (or fetch fresh)
- * POST /refresh       - explicitly fetch fresh data
- * GET  /cache-info    - metadata about the cached dataset
- * GET  /cip-list      - list of all CIP items
- * GET  /card-list     - list of all cards (for move-to dropdown)
+ * GET  /                  - serve from cache (or fetch fresh)
+ * POST /refresh           - explicitly fetch fresh data
+ * GET  /cache-info        - metadata about the cached dataset
+ * GET  /enrichment-status - progress of the background message URL enrichment job
+ * GET  /cip-list          - list of all CIP items
+ * GET  /card-list         - list of all cards (for move-to dropdown)
  */
 
 import { Router } from 'express';
-import { readCache } from './fileRepository.js';
+import { readCache, readEnrichmentStatus } from './fileRepository.js';
 import { applyOverrides } from './overrideService.js';
 import { fetchFreshData } from './dataFetcher.js';
 import { fixLifecycleItemTypes } from './lifecycleCorrelator.js';
@@ -75,7 +76,14 @@ async function handleRefresh(req, res) {
   }
   try {
     const data = await fetchFreshData();
-    return res.json({ success: true, stats: data.stats, cachedAt: data.cachedAt });
+    return res.json({
+      success: true,
+      stats: data.stats,
+      cachedAt: data.cachedAt,
+      // Let the caller know enrichment is running in the background
+      enrichment: 'started',
+      enrichmentStatusUrl: '/api/governance-lifecycle/enrichment-status',
+    });
   } catch (error) {
     console.error('Error refreshing governance lifecycle:', error);
     return res.status(500).json({ error: error.message });
@@ -83,7 +91,34 @@ async function handleRefresh(req, res) {
 }
 
 router.post('/refresh', handleRefresh);
-// NOTE: GET /refresh deliberately removed — GET requests must not have side effects.
+
+// ── GET /enrichment-status ────────────────────────────────────────────────
+
+/**
+ * Returns the current state of the background message URL enrichment job.
+ *
+ * Poll this after triggering a refresh to know when enrichment is complete
+ * and the full linkedUrls data (including /message/NNN URLs) is available.
+ *
+ * Response shape:
+ * {
+ *   state: 'running' | 'complete' | 'aborted' | 'error' | 'never_run',
+ *   total: number,       // announce-group topics to enrich
+ *   processed: number,   // topics attempted so far
+ *   enriched: number,    // topics that got ≥1 message URL
+ *   totalMessages: number,
+ *   startedAt: string,
+ *   completedAt: string | null,
+ *   error: string | null,
+ * }
+ */
+router.get('/enrichment-status', async (req, res) => {
+  const status = await readEnrichmentStatus();
+  if (!status) {
+    return res.json({ state: 'never_run', total: 0, processed: 0, enriched: 0, totalMessages: 0 });
+  }
+  return res.json(status);
+});
 
 // ── GET /cache-info ───────────────────────────────────────────────────────
 
