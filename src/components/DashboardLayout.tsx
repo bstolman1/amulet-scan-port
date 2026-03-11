@@ -71,7 +71,7 @@ const baseNavigationGroups: NavGroup[] = [
   //   ],
   // },
   {
-    label: "Validators",
+    label: "Network",
     items: [
       { name: "Super Validators", href: "/validators", icon: Zap },
       { name: "Validators", href: "/validator-licenses", icon: Ticket },
