@@ -1,132 +1,234 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/duckdb-api-client";
 
-export interface TwapCandle {
+export interface KaikoCandle {
   timestamp: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  typical_price: number;
+  open: string | null;
+  high: string | null;
+  low: string | null;
+  close: string | null;
+  volume: string;
+  price: string | null; // Kaiko field name for VWAP
+  count: number;
 }
 
-export interface TwapResponse {
+export interface KaikoResponse {
+  query: {
+    exchange: string;
+    instrument_class: string;
+    instrument: string;
+    interval: string;
+    sort: string;
+  };
+  data: KaikoCandle[];
   result: string;
-  twap: string | null;
-  twap_raw: number | null;
-  candle_count: number;
-  total_candles_fetched: number;
-  interval: string;
-  exchange: string;
-  instrument: string;
-  instrument_class: string;
-  start_time: string;
-  end_time: string;
-  decimals: number;
-  first_candle?: number;
-  last_candle?: number;
-  candles?: TwapCandle[];
-  message?: string;
+  continuation_token?: string;
+  next_url?: string;
 }
 
-export interface TwapParams {
+export interface KaikoParams {
   exchange?: string;
   instrumentClass?: string;
   instrument?: string;
   interval?: string;
-  startTime: string;
-  endTime: string;
-  decimals?: number;
+  startTime?: string;
+  endTime?: string;
+  sort?: 'asc' | 'desc';
+  pageSize?: number;
 }
 
-export function useKaikoTwap(params: TwapParams | null, enabled = true) {
-  return useQuery<TwapResponse, Error>({
-    queryKey: ['kaiko-twap', params],
+export function useKaikoOHLCV(params: KaikoParams = {}, enabled = true) {
+  const {
+    exchange = 'cbse',
+    instrumentClass = 'spot',
+    instrument = 'btc-usd',
+    interval = '1h',
+    startTime,
+    endTime,
+    sort = 'desc',
+    pageSize = 100,
+  } = params;
+
+  return useQuery<KaikoResponse, Error>({
+    queryKey: ['kaiko-ohlcv', exchange, instrumentClass, instrument, interval, startTime, endTime, sort, pageSize],
     queryFn: async () => {
-      if (!params) throw new Error('No params');
-      const {
-        exchange = 'krkn',
-        instrumentClass = 'spot',
-        instrument = 'cc-usd',
-        interval = '5m',
-        startTime,
-        endTime,
-        decimals = 5,
-      } = params;
-
-      // Kaiko API treats end_time as exclusive, so add +1 hour to include the last candle
-      const inclusiveEnd = new Date(new Date(endTime).getTime() + 60 * 60 * 1000).toISOString();
-
-      const sp = new URLSearchParams({
+      const searchParams = new URLSearchParams({
         exchange,
         instrument_class: instrumentClass,
         instrument,
         interval,
-        start_time: startTime,
-        end_time: inclusiveEnd,
-        decimals: String(decimals),
+        sort,
+        page_size: String(pageSize),
       });
 
-      return apiFetch<TwapResponse>(`/api/kaiko/twap?${sp.toString()}`);
+      if (startTime) searchParams.set('start_time', startTime);
+      if (endTime) searchParams.set('end_time', endTime);
+
+      return apiFetch<KaikoResponse>(`/api/kaiko/ohlcv?${searchParams.toString()}`);
     },
-    enabled: enabled && !!params,
-    staleTime: 30_000,
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 }
 
-// Volume-Weighted TWAP types
-export interface VwTwapExchangeBreakdown {
+// FIX #7: `enabled` param added so callers can gate the status fetch behind
+// a condition (e.g. only when the Kaiko page is active). Defaults to true for
+// backwards compatibility, but callers on non-Kaiko pages should pass false.
+export function useKaikoStatus(enabled = true) {
+  return useQuery({
+    queryKey: ['kaiko-status'],
+    queryFn: () => apiFetch<{ configured: boolean; message: string }>('/api/kaiko/status'),
+    staleTime: 5 * 60_000,
+    enabled,
+  });
+}
+
+// Asset Metrics types
+export interface AssetTradeData {
   exchange: string;
-  instrument: string;
-  candle_count: number;
-  total_volume: number;
+  volume_usd: number;
+  volume_asset: number;
+  trade_count: number;
 }
 
-export interface VwTwapResponse {
-  result: string;
-  twap: string | null;
-  twap_raw: number | null;
-  time_slices: number;
-  exchanges_with_data: number;
-  total_exchange_pairs: number;
-  interval: string;
-  start_time: string;
-  end_time: string;
-  decimals: number;
-  first_slice?: number;
-  last_slice?: number;
-  exchange_breakdown?: VwTwapExchangeBreakdown[];
-  message?: string;
+export interface MarketDepth {
+  exchange: string;
+  volume_assets: Record<string, number>;
+  volume_usds: Record<string, number>;
 }
 
-export interface VwTwapParams {
+export interface TokenInfo {
+  blockchain: string;
+  token_address: string;
+  nb_of_holders: number;
+  main_holders: Array<{
+    address: string;
+    amount: number;
+    percentage: number;
+  }>;
+  total_supply: number;
+}
+
+export interface AssetMetricData {
+  timestamp: string;
+  price: number | null;
+  total_volume_usd: number;
+  total_volume_asset: number;
+  total_trade_count: number;
+  off_chain_liquidity_data?: {
+    total_off_chain_volume_usd: number;
+    total_off_chain_volume_asset: number;
+    total_off_chain_trade_count: number;
+    trade_data: AssetTradeData[];
+    buy_market_depths?: MarketDepth[];
+    sell_market_depths?: MarketDepth[];
+    total_buy_market_depth?: { volume_assets: Record<string, number>; volume_usds: Record<string, number> };
+    total_sell_market_depth?: { volume_assets: Record<string, number>; volume_usds: Record<string, number> };
+  };
+  on_chain_liquidity_data?: {
+    total_on_chain_volume_usd: number;
+    total_on_chain_volume_asset: number;
+    total_on_chain_trade_count: number;
+    trades_data: AssetTradeData[];
+    token_information?: TokenInfo[];
+  };
+}
+
+export interface AssetMetricsResponse {
+  data: AssetMetricData[];
+  result?: string;
+  continuation_token?: string;
+  next_url?: string;
+}
+
+export interface AssetMetricsParams {
+  asset?: string;
+  startTime?: string;
+  endTime?: string;
   interval?: string;
-  startTime: string;
-  endTime: string;
-  decimals?: number;
+  sources?: boolean;
+  pageSize?: number;
 }
 
-export function useKaikoVwTwap(params: VwTwapParams | null, enabled = true) {
-  return useQuery<VwTwapResponse, Error>({
-    queryKey: ['kaiko-vw-twap', params],
+export function useKaikoAssetMetrics(params: AssetMetricsParams = {}, enabled = true) {
+  const {
+    asset = 'btc',
+    startTime,
+    endTime,
+    interval = '1h',
+    sources = true,
+    pageSize = 100,
+  } = params;
+
+  return useQuery<AssetMetricsResponse, Error>({
+    queryKey: ['kaiko-asset-metrics', asset, startTime, endTime, interval, sources, pageSize],
     queryFn: async () => {
-      if (!params) throw new Error('No params');
-      const { interval = '5m', startTime, endTime, decimals = 5 } = params;
-
-      // Kaiko API treats end_time as exclusive, so add +1 hour to include the last candle
-      const inclusiveEnd = new Date(new Date(endTime).getTime() + 60 * 60 * 1000).toISOString();
-
-      const sp = new URLSearchParams({
+      const searchParams = new URLSearchParams({
+        asset,
         interval,
-        start_time: startTime,
-        end_time: inclusiveEnd,
-        decimals: String(decimals),
+        sources: String(sources),
+        page_size: String(pageSize),
       });
 
-      return apiFetch<VwTwapResponse>(`/api/kaiko/vw-twap?${sp.toString()}`);
+      if (startTime) searchParams.set('start_time', startTime);
+      if (endTime) searchParams.set('end_time', endTime);
+
+      return apiFetch<AssetMetricsResponse>(`/api/kaiko/asset-metrics?${searchParams.toString()}`);
     },
-    enabled: enabled && !!params,
-    staleTime: 30_000,
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}
+
+// FIX #1 + #10: Renamed from CCMarketOverview to CCMarketOverviewData to avoid
+// collision with the CCMarketOverview React component imported in KaikoFeed.tsx.
+// The `price` field is removed; per-exchange data now has `close` (closing price)
+// and `vwap` (volume-weighted avg price) as distinct, unambiguous fields.
+export interface CCExchangeData {
+  exchange: string;
+  exchangeName: string;
+  instrument: string;
+  instrumentClass: string;
+  /** Closing price for the candle */
+  close: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  /** Volume-weighted average price (from Kaiko `price` field) */
+  vwap: number | null;
+  volume: number;
+  tradeCount: number;
+  previousClose: number | null;
+  change24h: number | null;
+}
+
+// FIX #10: Renamed type to CCMarketOverviewData (was CCMarketOverview) to avoid
+// name collision with the CCMarketOverview React component in KaikoFeed.tsx.
+export interface CCMarketOverviewData {
+  result: string;
+  timestamp: string;
+  summary: {
+    /** Reference closing price (from Kraken CC/USD, or first available close) */
+    price: number | null;
+    change24h: number | null;
+    /** Volume-weighted average price across all pairs */
+    vwap: number | null;
+    totalVolume: number;
+    totalTrades: number;
+    activeExchanges: number;
+  };
+  exchanges: CCExchangeData[];
+}
+
+export function useCCMarketOverview(enabled = true) {
+  // FIX #10: Return type updated to CCMarketOverviewData
+  return useQuery<CCMarketOverviewData, Error>({
+    queryKey: ['cc-market-overview'],
+    queryFn: () => apiFetch<CCMarketOverviewData>('/api/kaiko/cc-market-overview'),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 }
