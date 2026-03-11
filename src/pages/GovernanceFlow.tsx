@@ -537,6 +537,9 @@ const GovernanceFlow = () => {
       );
       const orphanVoteKeys = [...matched].filter(k => !lifecycleKeys.has(k));
       if (orphanVoteKeys.length) console.warn('[vote-match] votes matched to unknown lifecycle keys:', orphanVoteKeys);
+      // Add after the orphanVoteKeys log
+      console.log('[vote-match] sample lifecycle keys:', [...lifecycleKeys].slice(0, 30));
+      console.log('[vote-match] sample orphan vote keys:', orphanVoteKeys.slice(0, 30));
     }
 
     return map;
