@@ -1,7 +1,6 @@
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { KaikoCandle } from "@/hooks/use-kaiko-ohlcv";
@@ -20,18 +19,18 @@ import { ZoomIn, ZoomOut, Move, RotateCcw, CandlestickChart } from "lucide-react
 
 // CC exchanges and their available pairs
 const CC_EXCHANGES = [
-  { value: 'krkn', label: 'Kraken', instruments: ['cc-usd', 'cc-usdt', 'cc-usdc', 'cc-eur'] },
-  { value: 'gate', label: 'Gate.io', instruments: ['cc-usdt'] },
-  { value: 'kcon', label: 'KuCoin', instruments: ['cc-usdt'] },
-  { value: 'mexc', label: 'MEXC', instruments: ['cc-usdt', 'cc-usdc'] },
-  { value: 'bbsp', label: 'Bybit Spot', instruments: ['cc-usdt', 'cc-usdc'] },
-  { value: 'hitb', label: 'HitBTC', instruments: ['cc-usdt'] },
-  { value: 'cnex', label: 'CoinEx', instruments: ['cc-usdt'] },
-  { value: 'binc', label: 'Binance (Perp)', instruments: ['cc-usdt'] },
-  { value: 'okex', label: 'OKX (Perp)', instruments: ['cc-usdt'] },
-  { value: 'gtdm', label: 'Gate.io (Perp)', instruments: ['cc-usdt'] },
-  { value: 'bbit', label: 'Bybit (Perp)', instruments: ['cc-usdt'] },
-  { value: 'hbdm', label: 'Huobi (Perp)', instruments: ['cc-usdt'] },
+  { value: "krkn", label: "Kraken", instruments: ["cc-usd", "cc-usdt", "cc-usdc", "cc-eur"] },
+  { value: "gate", label: "Gate.io", instruments: ["cc-usdt"] },
+  { value: "kcon", label: "KuCoin", instruments: ["cc-usdt"] },
+  { value: "mexc", label: "MEXC", instruments: ["cc-usdt", "cc-usdc"] },
+  { value: "bbsp", label: "Bybit Spot", instruments: ["cc-usdt", "cc-usdc"] },
+  { value: "hitb", label: "HitBTC", instruments: ["cc-usdt"] },
+  { value: "cnex", label: "CoinEx", instruments: ["cc-usdt"] },
+  { value: "binc", label: "Binance (Perp)", instruments: ["cc-usdt"] },
+  { value: "okex", label: "OKX (Perp)", instruments: ["cc-usdt"] },
+  { value: "gtdm", label: "Gate.io (Perp)", instruments: ["cc-usdt"] },
+  { value: "bbit", label: "Bybit (Perp)", instruments: ["cc-usdt"] },
+  { value: "hbdm", label: "Huobi (Perp)", instruments: ["cc-usdt"] },
 ];
 
 interface CCCandlestickChartProps {
@@ -58,61 +57,92 @@ interface CandleData {
   wickHigh: number;
 }
 
-export function CCCandlestickChart({ candles, isLoading, exchange, instrument, onExchangeChange }: CCCandlestickChartProps) {
+function safeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
+function safeLocale(value: unknown, options?: Intl.NumberFormatOptions, fallback = "0"): string {
+  const num = safeNumber(value, NaN);
+  return Number.isFinite(num) ? num.toLocaleString(undefined, options) : fallback;
+}
+
+function safeFixed(value: unknown, digits: number, fallback?: string): string {
+  const num = safeNumber(value, NaN);
+  if (!Number.isFinite(num)) return fallback ?? `0.${"0".repeat(digits)}`;
+  return num.toFixed(digits);
+}
+
+export function CCCandlestickChart({
+  candles,
+  isLoading,
+  exchange,
+  instrument,
+  onExchangeChange,
+}: CCCandlestickChartProps) {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [brushStartIndex, setBrushStartIndex] = useState<number | undefined>(undefined);
   const [brushEndIndex, setBrushEndIndex] = useState<number | undefined>(undefined);
-  const [selectedExchange, setSelectedExchange] = useState(exchange || 'krkn');
-  const [selectedInstrument, setSelectedInstrument] = useState(instrument || 'cc-usd');
+  const [selectedExchange, setSelectedExchange] = useState(exchange || "krkn");
+  const [selectedInstrument, setSelectedInstrument] = useState(instrument || "cc-usd");
 
-  // Get available instruments for selected exchange
   const availableInstruments = useMemo(() => {
-    const ex = CC_EXCHANGES.find(e => e.value === selectedExchange);
-    return ex?.instruments || ['cc-usd'];
+    const ex = CC_EXCHANGES.find((e) => e.value === selectedExchange);
+    return ex?.instruments || ["cc-usd"];
   }, [selectedExchange]);
 
-  // Sync with parent props when they change
   useEffect(() => {
     if (exchange && exchange !== selectedExchange) {
       setSelectedExchange(exchange);
-      const ex = CC_EXCHANGES.find(e => e.value === exchange);
-      const validInstrument = ex?.instruments.includes(instrument || '') ? instrument : ex?.instruments[0];
-      setSelectedInstrument(validInstrument || 'cc-usd');
+      const ex = CC_EXCHANGES.find((e) => e.value === exchange);
+      const validInstrument = ex?.instruments.includes(instrument || "") ? instrument : ex?.instruments[0];
+      setSelectedInstrument(validInstrument || "cc-usd");
     }
-  }, [exchange, instrument]);
+  }, [exchange, instrument, selectedExchange]);
 
-  const handleExchangeSelect = useCallback((value: string) => {
-    setSelectedExchange(value);
-    const ex = CC_EXCHANGES.find(e => e.value === value);
-    const defaultInstrument = ex?.instruments[0] || 'cc-usdt';
-    setSelectedInstrument(defaultInstrument);
-    onExchangeChange?.(value, defaultInstrument);
-  }, [onExchangeChange]);
+  const handleExchangeSelect = useCallback(
+    (value: string) => {
+      setSelectedExchange(value);
+      const ex = CC_EXCHANGES.find((e) => e.value === value);
+      const defaultInstrument = ex?.instruments[0] || "cc-usdt";
+      setSelectedInstrument(defaultInstrument);
+      onExchangeChange?.(value, defaultInstrument);
+    },
+    [onExchangeChange],
+  );
 
-  const handleInstrumentSelect = useCallback((value: string) => {
-    setSelectedInstrument(value);
-    onExchangeChange?.(selectedExchange, value);
-  }, [selectedExchange, onExchangeChange]);
+  const handleInstrumentSelect = useCallback(
+    (value: string) => {
+      setSelectedInstrument(value);
+      onExchangeChange?.(selectedExchange, value);
+    },
+    [selectedExchange, onExchangeChange],
+  );
 
   const chartData = useMemo((): CandleData[] => {
     if (!candles.length) return [];
-    
+
     return [...candles].reverse().map((candle) => {
-      const open = candle.open ? parseFloat(candle.open) : 0;
-      const close = candle.close ? parseFloat(candle.close) : 0;
-      const high = candle.high ? parseFloat(candle.high) : 0;
-      const low = candle.low ? parseFloat(candle.low) : 0;
+      const open = safeNumber(candle.open, 0);
+      const close = safeNumber(candle.close, 0);
+      const high = safeNumber(candle.high, 0);
+      const low = safeNumber(candle.low, 0);
+      const volume = safeNumber(candle.volume, 0);
       const isUp = close >= open;
 
       return {
         timestamp: candle.timestamp,
-        time: new Date(candle.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: new Date(candle.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         date: new Date(candle.timestamp).toLocaleDateString(),
         open,
         high,
         low,
         close,
-        volume: parseFloat(candle.volume || '0'),
+        volume,
         isUp,
         bodyBottom: Math.min(open, close),
         bodyHeight: Math.abs(close - open),
@@ -124,20 +154,27 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
 
   const { minPrice, maxPrice, avgPrice } = useMemo(() => {
     if (!chartData.length) return { minPrice: 0, maxPrice: 0, avgPrice: 0 };
-    const lows = chartData.map(d => d.low).filter(v => v > 0);
-    const highs = chartData.map(d => d.high).filter(v => v > 0);
+
+    const lows = chartData.map((d) => d.low).filter((v) => Number.isFinite(v) && v > 0);
+    const highs = chartData.map((d) => d.high).filter((v) => Number.isFinite(v) && v > 0);
+
+    if (lows.length === 0 || highs.length === 0) {
+      return { minPrice: 0, maxPrice: 0, avgPrice: 0 };
+    }
+
     const min = Math.min(...lows) * 0.995;
     const max = Math.max(...highs) * 1.005;
-    const avg = chartData.reduce((sum, d) => sum + d.close, 0) / chartData.length;
+    const avg = chartData.reduce((sum, d) => sum + safeNumber(d.close, 0), 0) / chartData.length;
+
     return { minPrice: min, maxPrice: max, avgPrice: avg };
   }, [chartData]);
 
   const handleZoomIn = useCallback(() => {
-    setZoomLevel(prev => Math.min(prev + 0.5, 3));
+    setZoomLevel((prev) => Math.min(prev + 0.5, 3));
   }, []);
 
   const handleZoomOut = useCallback(() => {
-    setZoomLevel(prev => Math.max(prev - 0.5, 0.5));
+    setZoomLevel((prev) => Math.max(prev - 0.5, 0.5));
   }, []);
 
   const handleReset = useCallback(() => {
@@ -169,37 +206,37 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
     );
   }
 
-  // Custom candlestick shape renderer
   const CandlestickShape = (props: any) => {
-    const { x, y, width, payload } = props;
+    const { x, width, payload } = props;
     if (!payload) return null;
-    
-    const { open, high, low, close, isUp } = payload;
+
+    const open = safeNumber(payload.open, 0);
+    const high = safeNumber(payload.high, 0);
+    const low = safeNumber(payload.low, 0);
+    const close = safeNumber(payload.close, 0);
+    const isUp = Boolean(payload.isUp);
+
     const candleWidth = Math.max(width * 0.6, 4);
     const wickWidth = 1;
-    
-    const color = isUp ? 'hsl(var(--chart-2))' : 'hsl(var(--destructive))';
-    
-    // Calculate positions relative to the price scale
-    const priceRange = maxPrice - minPrice;
-    const chartHeight = 350; // Approximate chart height
-    
+    const color = isUp ? "hsl(var(--chart-2))" : "hsl(var(--destructive))";
+
+    const priceRange = maxPrice - minPrice || 1;
+    const chartHeight = 350;
+
     const toY = (price: number) => {
       return ((maxPrice - price) / priceRange) * chartHeight;
     };
-    
+
     const bodyTop = toY(Math.max(open, close));
     const bodyBottom = toY(Math.min(open, close));
     const bodyHeight = Math.max(bodyBottom - bodyTop, 1);
-    
+
     const wickTop = toY(high);
     const wickBottom = toY(low);
-    
     const centerX = x + width / 2;
-    
+
     return (
       <g>
-        {/* Wick */}
         <line
           x1={centerX}
           y1={wickTop}
@@ -208,13 +245,12 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
           stroke={color}
           strokeWidth={wickWidth}
         />
-        {/* Body */}
         <rect
           x={centerX - candleWidth / 2}
           y={bodyTop}
           width={candleWidth}
           height={bodyHeight}
-          fill={isUp ? color : color}
+          fill={color}
           stroke={color}
           strokeWidth={1}
         />
@@ -232,7 +268,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
           </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
             <Select value={selectedExchange} onValueChange={handleExchangeSelect}>
-              <SelectTrigger className="w-[140px] h-8 text-sm" style={{ backgroundColor: '#000', color: '#fff' }}>
+              <SelectTrigger className="w-[140px] h-8 text-sm" style={{ backgroundColor: "#000", color: "#fff" }}>
                 <SelectValue placeholder="Exchange" />
               </SelectTrigger>
               <SelectContent className="z-50 max-h-[300px] bg-popover">
@@ -243,8 +279,9 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                 ))}
               </SelectContent>
             </Select>
+
             <Select value={selectedInstrument} onValueChange={handleInstrumentSelect}>
-              <SelectTrigger className="w-[110px] h-8 text-sm" style={{ backgroundColor: '#000', color: '#fff' }}>
+              <SelectTrigger className="w-[110px] h-8 text-sm" style={{ backgroundColor: "#000", color: "#fff" }}>
                 <SelectValue placeholder="Pair" />
               </SelectTrigger>
               <SelectContent className="z-50 bg-popover">
@@ -255,6 +292,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                 ))}
               </SelectContent>
             </Select>
+
             <div className="flex items-center gap-1 ml-2">
               <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomIn} title="Zoom In">
                 <ZoomIn className="h-4 w-4" />
@@ -269,20 +307,18 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
           </div>
         </div>
       </CardHeader>
+
       <CardContent>
         {chartData.length === 0 ? (
           <div className="h-[400px] flex items-center justify-center text-muted-foreground">
             No chart data available
           </div>
         ) : (
-          <div style={{ width: '100%', height: 480 * zoomLevel, minHeight: 480, maxHeight: 980 }}>
+          <div style={{ width: "100%", height: 480 * zoomLevel, minHeight: 480, maxHeight: 980 }}>
             <ResponsiveContainer width="100%" height="70%">
-              <ComposedChart 
-                data={chartData} 
-                margin={{ top: 20, right: 30, left: 0, bottom: 5 }}
-              >
+              <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis 
+                <XAxis
                   dataKey="time"
                   tick={{ fontSize: 10 }}
                   className="text-muted-foreground"
@@ -295,58 +331,68 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                   height={42}
                   tickMargin={10}
                 />
-                <YAxis 
+                <YAxis
                   domain={[minPrice, maxPrice]}
                   tick={{ fontSize: 10 }}
                   className="text-muted-foreground"
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(value) => `$${value.toFixed(2)}`}
+                  tickFormatter={(value) => `$${safeFixed(value, 2, "0.00")}`}
                   width={65}
                 />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: 'hsl(var(--background))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px',
-                    padding: '12px',
+                    backgroundColor: "hsl(var(--background))",
+                    border: "1px solid hsl(var(--border))",
+                    borderRadius: "8px",
+                    padding: "12px",
                   }}
-                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 'bold' }}
+                  labelStyle={{ color: "hsl(var(--foreground))", fontWeight: "bold" }}
                   content={({ active, payload }) => {
                     if (!active || !payload?.[0]?.payload) return null;
                     const p = payload[0].payload;
-                    const color = p.isUp ? 'hsl(var(--chart-2))' : 'hsl(var(--destructive))';
+                    const color = p.isUp ? "hsl(var(--chart-2))" : "hsl(var(--destructive))";
+
                     return (
                       <div className="bg-background border border-border rounded-lg p-3 shadow-lg">
-                        <div className="font-semibold text-foreground mb-2">{p.date} {p.time}</div>
+                        <div className="font-semibold text-foreground mb-2">
+                          {p.date} {p.time}
+                        </div>
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                           <span className="text-muted-foreground">Open:</span>
-                          <span className="text-foreground">${p.open.toFixed(4)}</span>
+                          <span className="text-foreground">${safeFixed(p.open, 4, "0.0000")}</span>
+
                           <span className="text-muted-foreground">High:</span>
-                          <span className="text-foreground">${p.high.toFixed(4)}</span>
+                          <span className="text-foreground">${safeFixed(p.high, 4, "0.0000")}</span>
+
                           <span className="text-muted-foreground">Low:</span>
-                          <span className="text-foreground">${p.low.toFixed(4)}</span>
+                          <span className="text-foreground">${safeFixed(p.low, 4, "0.0000")}</span>
+
                           <span className="text-muted-foreground">Close:</span>
-                          <span style={{ color }} className="font-medium">${p.close.toFixed(4)}</span>
+                          <span style={{ color }} className="font-medium">
+                            ${safeFixed(p.close, 4, "0.0000")}
+                          </span>
+
                           <span className="text-muted-foreground">Volume:</span>
-                          <span className="text-foreground">{p.volume.toLocaleString()}</span>
+                          <span className="text-foreground">
+                            {safeLocale(p.volume, undefined, "0")}
+                          </span>
                         </div>
                       </div>
                     );
                   }}
                 />
-                <ReferenceLine 
-                  y={avgPrice} 
-                  stroke="hsl(var(--muted-foreground))" 
+                <ReferenceLine
+                  y={avgPrice}
+                  stroke="hsl(var(--muted-foreground))"
                   strokeDasharray="5 5"
-                  label={{ 
-                    value: `Avg: $${avgPrice.toFixed(2)}`, 
-                    position: 'right',
-                    fill: 'hsl(var(--muted-foreground))',
+                  label={{
+                    value: `Avg: $${safeFixed(avgPrice, 2, "0.00")}`,
+                    position: "right",
+                    fill: "hsl(var(--muted-foreground))",
                     fontSize: 10,
                   }}
                 />
-                {/* Render candles as bars with custom coloring */}
                 <Bar
                   dataKey="high"
                   fill="transparent"
@@ -355,12 +401,9 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                 />
               </ComposedChart>
             </ResponsiveContainer>
-            {/* Volume bars chart */}
+
             <ResponsiveContainer width="100%" height="25%">
-              <ComposedChart
-                data={chartData}
-                margin={{ top: 5, right: 30, left: 0, bottom: 5 }}
-              >
+              <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" opacity={0.3} />
                 <XAxis
                   dataKey="time"
@@ -370,15 +413,16 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                   axisLine={false}
                   height={10}
                 />
-                <YAxis 
+                <YAxis
                   tick={{ fontSize: 9 }}
                   className="text-muted-foreground"
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(value) => {
-                    if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
-                    if (value >= 1000) return `${(value / 1000).toFixed(0)}K`;
-                    return value.toFixed(0);
+                    const num = safeNumber(value, 0);
+                    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+                    if (num >= 1_000) return `${(num / 1_000).toFixed(0)}K`;
+                    return num.toFixed(0);
                   }}
                   width={65}
                 />
@@ -388,8 +432,12 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                     const p = payload[0].payload;
                     return (
                       <div className="bg-background border border-border rounded-lg p-2 shadow-lg text-xs">
-                        <div className="text-muted-foreground">{p.date} {p.time}</div>
-                        <div className="text-foreground font-medium">Volume: {p.volume.toLocaleString()}</div>
+                        <div className="text-muted-foreground">
+                          {p.date} {p.time}
+                        </div>
+                        <div className="text-foreground font-medium">
+                          Volume: {safeLocale(p.volume, undefined, "0")}
+                        </div>
                       </div>
                     );
                   }}
@@ -402,6 +450,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
                 />
               </ComposedChart>
             </ResponsiveContainer>
+
             <div className="h-[60px]">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
@@ -420,6 +469,7 @@ export function CCCandlestickChart({ candles, isLoading, exchange, instrument, o
             </div>
           </div>
         )}
+
         <div className="flex items-center justify-center gap-4 mt-4 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <Move className="h-3 w-3" />
