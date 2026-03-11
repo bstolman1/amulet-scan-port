@@ -211,7 +211,7 @@ export default function KaikoFeed() {
   const [exchange, setExchange] = useState('krkn');
   const [instrument, setInstrument] = useState('cc-usd');
   const [interval, setInterval] = useState('1h');
-  const [activeTab, setActiveTab] = useState('ohlcv');
+  const [activeTab, setActiveTab] = useState('cc-overview');
   const [asset, setAsset] = useState('cc');
   const [assetInterval, setAssetInterval] = useState('1h');
 
