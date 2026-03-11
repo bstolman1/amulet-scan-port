@@ -517,7 +517,8 @@ const GovernanceFlow = () => {
     }
 
     // TEMP DIAGNOSTIC — remove after checking
-    if (import.meta.env.DEV) {
+    {
+      console.log(`[vote-match] diagnostic running — historicalVotes: ${historicalVotes.length}, urlIndex size: ${urlIndex.size}, lifecycleItems: ${data?.lifecycleItems?.length ?? 0}`);
       const matched = new Set<string>();
       const unmatched: string[] = [];
       for (const vote of historicalVotes) {
