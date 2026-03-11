@@ -516,6 +516,28 @@ const GovernanceFlow = () => {
       }));
     }
 
+    // TEMP DIAGNOSTIC — remove after checking
+    if (import.meta.env.DEV) {
+      const matched = new Set<string>();
+      const unmatched: string[] = [];
+      for (const vote of historicalVotes) {
+        const mapping = resolveVoteKey(
+          vote.reasonUrl ?? '', vote.reasonBody ?? '',
+          vote.actionType ?? '', vote.actionDetails ?? null,
+          urlIndex
+        );
+        if (mapping) matched.add(mapping.key);
+        else unmatched.push(`${vote.actionType} | ${vote.reasonUrl}`);
+      }
+      console.log(`[vote-match] HIST matched: ${matched.size}, unmatched: ${unmatched.length}`);
+      if (unmatched.length) console.table(unmatched.slice(0, 20));
+      const lifecycleKeys = new Set(
+        (data?.lifecycleItems ?? []).map(i => deriveLifecycleKey(i)).filter(Boolean)
+      );
+      const orphanVoteKeys = [...matched].filter(k => !lifecycleKeys.has(k));
+      if (orphanVoteKeys.length) console.warn('[vote-match] votes matched to unknown lifecycle keys:', orphanVoteKeys);
+    }
+
     return map;
   }, [voteRequests, historicalVotes, urlIndex]);
 
