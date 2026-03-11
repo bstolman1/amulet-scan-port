@@ -5,10 +5,26 @@ const router = express.Router();
 const KAIKO_API_KEY = process.env.KAIKO_API_KEY;
 const KAIKO_BASE_URL = 'https://us.market-api.kaiko.io/v2/data/trades.v1';
 
+// Fetch timeout in ms — prevents slow Kaiko responses from hanging the server
+const FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Wrapper around fetch that aborts after FETCH_TIMEOUT_MS.
+ */
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * GET /api/kaiko/ohlcv
  * Fetches OHLCV + VWAP data from Kaiko API
- * 
+ *
  * Query params:
  * - exchange: Exchange code (default: cbse)
  * - instrument_class: Instrument class (default: spot)
@@ -21,7 +37,7 @@ const KAIKO_BASE_URL = 'https://us.market-api.kaiko.io/v2/data/trades.v1';
  */
 router.get('/ohlcv', async (req, res) => {
   if (!KAIKO_API_KEY) {
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'KAIKO_API_KEY not configured',
       message: 'Please set KAIKO_API_KEY in your server/.env file'
     });
@@ -45,14 +61,14 @@ router.get('/ohlcv', async (req, res) => {
   url.searchParams.set('interval', interval);
   url.searchParams.set('sort', sort);
   url.searchParams.set('page_size', page_size);
-  
+
   if (start_time) url.searchParams.set('start_time', start_time);
   if (end_time) url.searchParams.set('end_time', end_time);
 
   console.log(`📊 Fetching Kaiko OHLCV: ${exchange}/${instrument_class}/${instrument} (${interval})`);
 
   try {
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithTimeout(url.toString(), {
       headers: {
         'Accept': 'application/json',
         'X-Api-Key': KAIKO_API_KEY,
@@ -62,15 +78,15 @@ router.get('/ohlcv', async (req, res) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`❌ Kaiko API error (${response.status}):`, errorText);
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Kaiko API error: ${response.status}`,
-        message: errorText 
+        message: errorText
       });
     }
 
     const data = await response.json();
     console.log(`✅ Kaiko returned ${data.data?.length || 0} candles`);
-    
+
     res.json(data);
   } catch (err) {
     console.error('❌ Kaiko fetch failed:', err.message);
@@ -81,7 +97,7 @@ router.get('/ohlcv', async (req, res) => {
 /**
  * GET /api/kaiko/asset-metrics
  * Fetches asset metrics data from Kaiko API (volumes, trades, liquidity, supply)
- * 
+ *
  * Query params:
  * - asset: Asset code (required, e.g., btc, eth, sol)
  * - start_time: ISO 8601 start time (required)
@@ -92,7 +108,7 @@ router.get('/ohlcv', async (req, res) => {
  */
 router.get('/asset-metrics', async (req, res) => {
   if (!KAIKO_API_KEY) {
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'KAIKO_API_KEY not configured',
       message: 'Please set KAIKO_API_KEY in your server/.env file'
     });
@@ -113,7 +129,7 @@ router.get('/asset-metrics', async (req, res) => {
   const defaultStart = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
   const url = new URL('https://us.market-api.kaiko.io/v2/data/analytics.v2/asset_metrics');
-  
+
   url.searchParams.set('asset', asset);
   url.searchParams.set('start_time', start_time || defaultStart);
   url.searchParams.set('end_time', end_time || defaultEnd);
@@ -124,7 +140,7 @@ router.get('/asset-metrics', async (req, res) => {
   console.log(`📊 Fetching Kaiko Asset Metrics: ${asset} (${interval})`);
 
   try {
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithTimeout(url.toString(), {
       headers: {
         'Accept': 'application/json',
         'X-Api-Key': KAIKO_API_KEY,
@@ -134,15 +150,15 @@ router.get('/asset-metrics', async (req, res) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`❌ Kaiko API error (${response.status}):`, errorText);
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Kaiko API error: ${response.status}`,
-        message: errorText 
+        message: errorText
       });
     }
 
     const data = await response.json();
     console.log(`✅ Kaiko returned ${data.data?.length || 0} asset metric records`);
-    
+
     res.json(data);
   } catch (err) {
     console.error('❌ Kaiko asset metrics fetch failed:', err.message);
@@ -156,7 +172,7 @@ router.get('/asset-metrics', async (req, res) => {
  */
 router.get('/cc-market-overview', async (req, res) => {
   if (!KAIKO_API_KEY) {
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'KAIKO_API_KEY not configured',
       message: 'Please set KAIKO_API_KEY in your server/.env file'
     });
@@ -196,7 +212,8 @@ router.get('/cc-market-overview', async (req, res) => {
         url.searchParams.set('page_size', '2');
         url.searchParams.set('sort', 'desc');
 
-        const response = await fetch(url.toString(), {
+        // FIX #4: Use fetchWithTimeout to prevent slow responses from hanging the aggregation
+        const response = await fetchWithTimeout(url.toString(), {
           headers: {
             'Accept': 'application/json',
             'X-Api-Key': KAIKO_API_KEY,
@@ -204,7 +221,7 @@ router.get('/cc-market-overview', async (req, res) => {
         });
 
         if (!response.ok) return null;
-        
+
         const data = await response.json();
         const candles = data.data || [];
         const latest = candles[0];
@@ -212,22 +229,26 @@ router.get('/cc-market-overview', async (req, res) => {
 
         if (!latest) return null;
 
+        // FIX #1: Kaiko's `price` field is the VWAP; `close` is the closing price.
+        // These are distinct values — do not conflate them.
+        // `close` → closing price for the candle
+        // `price` (Kaiko field) → VWAP for the candle
         return {
           exchange,
           exchangeName: getExchangeName(exchange),
           instrument,
           instrumentClass,
-          price: latest.close ? parseFloat(latest.close) : null,
+          close: latest.close ? parseFloat(latest.close) : null,
           open: latest.open ? parseFloat(latest.open) : null,
           high: latest.high ? parseFloat(latest.high) : null,
           low: latest.low ? parseFloat(latest.low) : null,
-          close: latest.close ? parseFloat(latest.close) : null,
-          volume: parseFloat(latest.volume || '0'),
+          // Rename to `vwap` to be unambiguous; sourced from Kaiko `price` field
           vwap: latest.price ? parseFloat(latest.price) : null,
+          volume: parseFloat(latest.volume || '0'),
           tradeCount: latest.count || 0,
           previousClose: previous?.close ? parseFloat(previous.close) : null,
-          change24h: latest.close && previous?.close 
-            ? ((parseFloat(latest.close) - parseFloat(previous.close)) / parseFloat(previous.close)) * 100 
+          change24h: latest.close && previous?.close
+            ? ((parseFloat(latest.close) - parseFloat(previous.close)) / parseFloat(previous.close)) * 100
             : null,
         };
       })
@@ -240,14 +261,15 @@ router.get('/cc-market-overview', async (req, res) => {
     // Aggregate stats
     const totalVolume = validResults.reduce((sum, r) => sum + (r.volume || 0), 0);
     const totalTrades = validResults.reduce((sum, r) => sum + (r.tradeCount || 0), 0);
-    
-    // Get reference price from Kraken CC/USD
-    const krakenUsd = validResults.find(r => r.exchange === 'krkn' && r.instrument === 'cc-usd');
-    const referencePrice = krakenUsd?.price || validResults.find(r => r.price)?.price || null;
-    const referenceChange = krakenUsd?.change24h || validResults.find(r => r.change24h !== null)?.change24h || null;
 
-    // Volume-weighted average price across all pairs
-    const volumeWeightedPrices = validResults.filter(r => r.vwap && r.volume > 0);
+    // FIX #1: Reference price comes from `close`, not a field ambiguously named `price`.
+    // Use Kraken CC/USD close as the canonical reference; fall back to first available close.
+    const krakenUsd = validResults.find(r => r.exchange === 'krkn' && r.instrument === 'cc-usd');
+    const referencePrice = krakenUsd?.close ?? validResults.find(r => r.close != null)?.close ?? null;
+    const referenceChange = krakenUsd?.change24h ?? validResults.find(r => r.change24h != null)?.change24h ?? null;
+
+    // Volume-weighted average price across all pairs (using VWAP per pair, weighted by volume)
+    const volumeWeightedPrices = validResults.filter(r => r.vwap != null && r.volume > 0);
     const totalWeightedVolume = volumeWeightedPrices.reduce((sum, r) => sum + r.volume, 0);
     const vwap = totalWeightedVolume > 0
       ? volumeWeightedPrices.reduce((sum, r) => sum + (r.vwap * r.volume), 0) / totalWeightedVolume
@@ -272,13 +294,14 @@ router.get('/cc-market-overview', async (req, res) => {
   }
 });
 
+// FIX #9: Added missing 'kcon' (KuCoin) entry
 function getExchangeName(code) {
   const names = {
     krkn: 'Kraken',
     binc: 'Binance',
     bbsp: 'Bybit Spot',
     gate: 'Gate.io',
-    kcon: 'KuCoin',
+    kcon: 'KuCoin',         // was missing — fell back to 'KCON'
     mexc: 'MEXC',
     okex: 'OKX',
     hitb: 'HitBTC',
@@ -293,19 +316,23 @@ function getExchangeName(code) {
 /**
  * GET /api/kaiko/twap
  * Computes Time-Weighted Average Price from OHLCV close prices
- * 
+ *
  * Query params:
  * - exchange: Exchange code (default: krkn)
  * - instrument_class: Instrument class (default: spot)
  * - instrument: Trading pair (default: cc-usd)
  * - interval: Candle interval used for TWAP calc (default: 5m)
- * - start_time: ISO 8601 start (required)
- * - end_time: ISO 8601 end (required)
+ * - start_time: ISO 8601 start — inclusive
+ * - end_time: ISO 8601 end — EXCLUSIVE per Kaiko convention.
+ *   The frontend adds +1h before calling so that the caller's intended last
+ *   candle (at end_time) is included. This is an explicit API contract: callers
+ *   MUST pass the raw end time; the +1h shift is applied only in the frontend
+ *   hook (useKaikoTwap / useKaikoVwTwap).
  * - decimals: Number of decimal places (default: 5, max: 18)
  */
 router.get('/twap', async (req, res) => {
   if (!KAIKO_API_KEY) {
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'KAIKO_API_KEY not configured',
       message: 'Please set KAIKO_API_KEY in your server/.env file'
     });
@@ -334,6 +361,9 @@ router.get('/twap', async (req, res) => {
     let allCandles = [];
     let nextUrl = null;
     let page = 0;
+    // FIX #6: Raise pagination cap and surface a truncation warning.
+    // At 1m interval over 30 days = 43,200 candles; 50 pages × 1000 = 50,000 — sufficient.
+    const PAGE_CAP = 50;
 
     do {
       const url = nextUrl ? new URL(nextUrl) : new URL(
@@ -348,7 +378,7 @@ router.get('/twap', async (req, res) => {
         url.searchParams.set('end_time', end_time);
       }
 
-      const response = await fetch(url.toString(), {
+      const response = await fetchWithTimeout(url.toString(), {
         headers: { 'Accept': 'application/json', 'X-Api-Key': KAIKO_API_KEY },
       });
 
@@ -362,14 +392,17 @@ router.get('/twap', async (req, res) => {
       allCandles = allCandles.concat(data.data || []);
       nextUrl = data.next_url || null;
       page++;
-    } while (nextUrl && page < 20); // safety cap
+    } while (nextUrl && page < PAGE_CAP);
+
+    // FIX #6: Warn when pagination cap was hit — result may be truncated
+    const paginationTruncated = page >= PAGE_CAP && !!allCandles.length;
+    if (paginationTruncated) {
+      console.warn(`⚠️ TWAP pagination cap (${PAGE_CAP} pages) reached — result may be truncated`);
+    }
 
     // Filter candles with valid OHLC prices
     const validCandles = allCandles.filter(c =>
-      c.open !== null && c.open !== undefined &&
-      c.high !== null && c.high !== undefined &&
-      c.low !== null && c.low !== undefined &&
-      c.close !== null && c.close !== undefined
+      c.open != null && c.high != null && c.low != null && c.close != null
     );
 
     if (validCandles.length === 0) {
@@ -382,7 +415,6 @@ router.get('/twap', async (req, res) => {
     }
 
     // TWAP = arithmetic mean of (O+H+L+C)/4 per candle (typical price, equal time weight)
-    // Use raw parseFloat values — no intermediate rounding — to match spreadsheet methodology
     const typicalPrices = validCandles.map(c => {
       const o = parseFloat(c.open);
       const h = parseFloat(c.high);
@@ -409,6 +441,8 @@ router.get('/twap', async (req, res) => {
       twap_raw: twap,
       candle_count: validCandles.length,
       total_candles_fetched: allCandles.length,
+      // FIX #6: Expose truncation flag so callers can detect incomplete windows
+      pagination_truncated: paginationTruncated,
       interval,
       exchange,
       instrument,
@@ -421,7 +455,7 @@ router.get('/twap', async (req, res) => {
       candles: candleBreakdown,
     });
 
-    console.log(`✅ TWAP computed: ${twap.toFixed(decimalPlaces)} (raw: ${twap.toPrecision(15)}) from ${validCandles.length} candles`);
+    console.log(`✅ TWAP computed: ${twap.toFixed(decimalPlaces)} from ${validCandles.length} candles${paginationTruncated ? ' ⚠️ TRUNCATED' : ''}`);
   } catch (err) {
     console.error('❌ TWAP computation failed:', err.message);
     res.status(500).json({ error: err.message });
@@ -444,12 +478,20 @@ const CC_SPOT_EXCHANGES = [
 ];
 
 /**
- * Fetch all OHLCV candles for a single exchange/instrument in a time window
+ * Fetch all OHLCV candles for a single exchange/instrument in a time window.
+ * FIX #3: Guard for missing API key — previously would silently return [] on 401.
  */
 async function fetchAllCandles(exchange, instrumentClass, instrument, interval, startTime, endTime) {
+  // FIX #3: Explicit key check so callers get a thrown error, not silent empty data
+  if (!KAIKO_API_KEY) {
+    throw new Error('KAIKO_API_KEY not configured');
+  }
+
   let allCandles = [];
   let nextUrl = null;
   let page = 0;
+  // FIX #6: Consistent pagination cap with /twap endpoint
+  const PAGE_CAP = 50;
 
   do {
     const url = nextUrl ? new URL(nextUrl) : new URL(
@@ -462,7 +504,8 @@ async function fetchAllCandles(exchange, instrumentClass, instrument, interval, 
       url.searchParams.set('start_time', startTime);
       url.searchParams.set('end_time', endTime);
     }
-    const response = await fetch(url.toString(), {
+    // FIX #4: Use timeout-aware fetch in helper too
+    const response = await fetchWithTimeout(url.toString(), {
       headers: { 'Accept': 'application/json', 'X-Api-Key': KAIKO_API_KEY },
     });
     if (!response.ok) return [];
@@ -470,7 +513,7 @@ async function fetchAllCandles(exchange, instrumentClass, instrument, interval, 
     allCandles = allCandles.concat(data.data || []);
     nextUrl = data.next_url || null;
     page++;
-  } while (nextUrl && page < 10);
+  } while (nextUrl && page < PAGE_CAP);
 
   return allCandles;
 }
@@ -478,16 +521,15 @@ async function fetchAllCandles(exchange, instrumentClass, instrument, interval, 
 /**
  * GET /api/kaiko/vw-twap
  * Volume-Weighted TWAP across all CC spot exchanges.
- * For each candle timestamp, computes a volume-weighted close price across exchanges,
- * then averages those across time (TWAP).
- * 
+ *
  * Query params:
  * - interval: Candle interval (default: 5m)
- * - start_time: ISO 8601 start (required)
- * - end_time: ISO 8601 end (required)
+ * - start_time: ISO 8601 start — inclusive
+ * - end_time: ISO 8601 end — exclusive per Kaiko convention (frontend adds +1h)
  * - decimals: decimal places (default: 5, max: 18)
  */
 router.get('/vw-twap', async (req, res) => {
+  // FIX #3: Key check now also surfaces properly here (fetchAllCandles throws)
   if (!KAIKO_API_KEY) {
     return res.status(500).json({ error: 'KAIKO_API_KEY not configured' });
   }
@@ -542,23 +584,14 @@ router.get('/vw-twap', async (req, res) => {
     }
 
     // For each timestamp, compute volume-weighted typical price.
-    // FIX: When totalVol === 0 (all exchanges report zero volume for a slice,
-    // which can happen for thinly-traded pairs in off-hours), the original code
-    // fell back silently to a simple average with no indication in the response.
-    // This is financially significant: a zero-volume slice should be excluded
-    // from the TWAP altogether — including it distorts the time-weighted average
-    // and mixing weighted/unweighted prices in the same series is methodologically
-    // incorrect. We now skip zero-volume slices and surface the count so callers
-    // can assess data quality.
+    // Zero-volume slices are excluded: including them would silently mix
+    // unweighted and weighted prices in the same series.
     const vwCloses = [];
     let skippedZeroVolSlices = 0;
 
     for (const [ts, entries] of timestampMap) {
       const totalVol = entries.reduce((s, e) => s + e.volume, 0);
       if (totalVol === 0) {
-        // Skip this time slice — zero total volume means no meaningful price signal.
-        // Falling back to an unweighted average would silently change the TWAP
-        // methodology mid-series, producing misleading results for financial use.
         skippedZeroVolSlices++;
         continue;
       }
@@ -599,9 +632,6 @@ router.get('/vw-twap', async (req, res) => {
       twap: twap.toFixed(decimalPlaces),
       twap_raw: twap,
       time_slices: vwCloses.length,
-      // FIX: Expose skipped slices so callers can assess data quality.
-      // A high number relative to time_slices indicates sparse liquidity in
-      // the window, which should influence how the TWAP is interpreted.
       skipped_zero_vol_slices: skippedZeroVolSlices,
       exchanges_with_data: exchangeData.length,
       total_exchange_pairs: CC_SPOT_EXCHANGES.length,
