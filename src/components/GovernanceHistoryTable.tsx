@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +29,7 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
   const highlightedProposalId = searchParams.get("proposal");
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const { data: voteResults, isLoading, error } = useGovernanceVoteHistory(limit);
+  const [typeFilter, setTypeFilter] = useState<string>("all");
 
   useEffect(() => {
     if (highlightedProposalId && !isLoading && voteResults) {
@@ -45,6 +46,26 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
       return () => clearTimeout(timer);
     }
   }, [highlightedProposalId, isLoading, voteResults]);
+
+  // Derive unique action titles from loaded results for the filter
+  const actionTypes = useMemo(() => {
+    if (!voteResults) return [];
+    const seen = new Set<string>();
+    return voteResults
+      .map((r) => r.actionTitle)
+      .filter((t) => {
+        if (!t || seen.has(t)) return false;
+        seen.add(t);
+        return true;
+      })
+      .sort();
+  }, [voteResults]);
+
+  const filtered = useMemo(() => {
+    if (!voteResults) return [];
+    if (typeFilter === "all") return voteResults;
+    return voteResults.filter((r) => r.actionTitle === typeFilter);
+  }, [voteResults, typeFilter]);
 
   const getOutcomeVariant = (outcome: ParsedVoteResult["outcome"]) => {
     switch (outcome) {
@@ -115,16 +136,50 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
         </Card>
       </div>
 
+      {/* Type filter */}
+      {!isLoading && actionTypes.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setTypeFilter("all")}
+            className={cn(
+              "px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+              typeFilter === "all"
+                ? "bg-[#F3FF97] text-[#030206] border-[#F3FF97]"
+                : "bg-transparent text-muted-foreground border-border hover:border-foreground hover:text-foreground"
+            )}
+          >
+            All ({stats.total})
+          </button>
+          {actionTypes.map((type) => {
+            const count = voteResults?.filter((r) => r.actionTitle === type).length || 0;
+            return (
+              <button
+                key={type}
+                onClick={() => setTypeFilter(type)}
+                className={cn(
+                  "px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+                  typeFilter === type
+                    ? "bg-[#F3FF97] text-[#030206] border-[#F3FF97]"
+                    : "bg-transparent text-muted-foreground border-border hover:border-foreground hover:text-foreground"
+                )}
+              >
+                {type} ({count})
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Vote results list */}
       <div className="space-y-3">
         {isLoading ? (
           <div className="space-y-4">
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full" />)}
           </div>
-        ) : voteResults?.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <p className="text-center text-muted-foreground py-8">No governance history found</p>
         ) : (
-          voteResults?.map((result, idx) => {
+          filtered.map((result, idx) => {
             const proposalKey = result.trackingCid || `idx-${idx}`;
             const shortId = result.trackingCid?.slice(0, 12);
             const isHighlighted = highlightedProposalId && (
@@ -149,17 +204,11 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
               >
                 <div className="flex justify-between items-start">
                   <div className="flex-1 space-y-2">
-                    {/* Title + action type */}
                     <div className="flex items-center gap-2">
                       {getOutcomeIcon(result.outcome)}
                       <p className="text-sm font-semibold">{result.actionTitle || "Unknown Action"}</p>
                     </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Action Type</p>
-                      <p className="font-mono text-xs">{result.actionType}</p>
-                    </div>
 
-                    {/* Dates + votes */}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                       <div>
                         <p className="text-xs text-muted-foreground">Completed At</p>
@@ -179,7 +228,6 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                       </div>
                     </div>
 
-                    {/* Reason */}
                     <div className="p-3 rounded-lg bg-background/30 border border-border/30">
                       <p className="text-xs text-muted-foreground mb-1 font-semibold">Reason</p>
                       {result.reasonBody && (
