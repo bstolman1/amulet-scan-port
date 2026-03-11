@@ -11,6 +11,8 @@ export const OVERRIDES_FILE = path.join(CACHE_DIR, 'governance-overrides.json');
 export const LEARNED_PATTERNS_FILE = path.join(CACHE_DIR, 'learned-patterns.json');
 export const AUDIT_LOG_FILE = path.join(CACHE_DIR, 'override-audit-log.json');
 export const PATTERN_BACKUPS_DIR = path.join(CACHE_DIR, 'pattern-backups');
+// Tracks the progress of the background message-URL enrichment job
+export const ENRICHMENT_STATUS_FILE = path.join(CACHE_DIR, 'enrichment-status.json');
 
 // ---------- Feature flags ----------
 export const INFERENCE_ENABLED = process.env.INFERENCE_ENABLED === 'true';
