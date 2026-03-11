@@ -7,6 +7,11 @@
  *  - All magic numbers are constants.
  *  - Rate-limit retry and pagination logic are isolated functions.
  *  - getApiKey() lazy read is still here so env is read after dotenv loads.
+ *
+ * Added:
+ *  - fetchTopicMessages — fetches all message permalinks for a single topic.
+ *    Used by dataFetcher to populate linkedUrls with message-level URLs so
+ *    vote reasonUrls (/message/NNN) can be matched to their parent lifecycle card.
  */
 
 import {
@@ -89,7 +94,6 @@ export async function fetchGroupTopics(groupId, groupName, signal) {
   let retries = 0;
 
   while (allTopics.length < MAX_TOPICS_PER_GROUP) {
-    // Respect the global abort signal before each iteration
     if (signal?.aborted) {
       console.warn(`[${groupName}] Fetch aborted by global timeout`);
       break;
@@ -102,7 +106,6 @@ export async function fetchGroupTopics(groupId, groupName, signal) {
     try {
       response = await fetch(url, {
         headers: authHeader(),
-        // Compose the page-level timeout with the global abort signal
         signal: AbortSignal.any(
           [AbortSignal.timeout(FETCH_TIMEOUT_MS), signal].filter(Boolean),
         ),
@@ -144,6 +147,96 @@ export async function fetchGroupTopics(groupId, groupName, signal) {
   }
 
   return allTopics;
+}
+
+// ── Message fetching ──────────────────────────────────────────────────────
+
+/**
+ * Fetch all message permalinks for a single topic.
+ *
+ * Vote reasonUrls point to individual messages (/g/GROUP/message/NNN) rather
+ * than topic URLs (/g/GROUP/topic/ID). Without indexing message URLs we cannot
+ * match votes back to their lifecycle cards. This function fetches the message
+ * list for a topic and returns the full permalink for each message.
+ *
+ * The Groups.io getmessages endpoint returns a page of messages. Each message
+ * object has an `id` field; the permalink is constructed as:
+ *   ${BASE_URL}/g/${groupUrlName}/message/${message.id}
+ *
+ * We only call this for announce-group topics (the groups whose URLs appear in
+ * vote reasonUrls) to keep the extra API call count manageable. Caller is
+ * responsible for filtering which topics to enrich.
+ *
+ * @param {number|string} topicId       - Groups.io topic ID
+ * @param {number|string} groupId       - Groups.io group ID
+ * @param {string}        groupUrlName  - URL slug, e.g. 'supervalidator-announce'
+ * @param {AbortSignal}   [signal]
+ * @returns {Promise<string[]>}         - list of absolute message permalink URLs
+ */
+export async function fetchTopicMessages(topicId, groupId, groupUrlName, signal) {
+  const messageUrls = [];
+  let pageToken = null;
+  let retries = 0;
+  // Messages per topic are typically < 20; cap at 10 pages (1000 msgs) as a safety limit
+  const PAGE_CAP = 10;
+  let page = 0;
+
+  while (page < PAGE_CAP) {
+    if (signal?.aborted) break;
+
+    let url = `${BASE_URL}/api/v1/getmessages?group_id=${groupId}&topic_id=${topicId}&limit=100`;
+    if (pageToken) url += `&page_token=${pageToken}`;
+
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: authHeader(),
+        signal: AbortSignal.any(
+          [AbortSignal.timeout(FETCH_TIMEOUT_MS), signal].filter(Boolean),
+        ),
+      });
+    } catch (err) {
+      if (err.name === 'AbortError' || signal?.aborted) break;
+      if (retries < FETCH_RETRY_MAX) {
+        retries++;
+        await delay(FETCH_RETRY_DELAY_MS);
+        continue;
+      }
+      console.error(`[fetchTopicMessages] topic=${topicId} failed:`, err.message);
+      break;
+    }
+
+    if (!response.ok) {
+      if ((response.status === 429 || response.status === 400) && retries < FETCH_RETRY_MAX) {
+        retries++;
+        await delay(FETCH_RETRY_DELAY_MS);
+        continue;
+      }
+      // 404 = topic has no messages yet; not an error
+      if (response.status !== 404) {
+        console.warn(`[fetchTopicMessages] topic=${topicId} HTTP ${response.status}`);
+      }
+      break;
+    }
+
+    const data = await response.json();
+    const messages = data.data ?? [];
+
+    for (const msg of messages) {
+      if (msg.id) {
+        messageUrls.push(`${BASE_URL}/g/${groupUrlName}/message/${msg.id}`);
+      }
+    }
+
+    retries = 0;
+    page++;
+
+    if (!data.has_more || !data.next_page_token) break;
+    pageToken = data.next_page_token;
+    await delay(FETCH_PAGE_DELAY_MS);
+  }
+
+  return messageUrls;
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────
