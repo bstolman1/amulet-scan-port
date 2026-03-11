@@ -18,6 +18,7 @@ import {
   LEARNED_PATTERNS_FILE,
   AUDIT_LOG_FILE,
   PATTERN_BACKUPS_DIR,
+  ENRICHMENT_STATUS_FILE,
 } from './constants.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -64,6 +65,34 @@ export async function readCache() {
 /** @param {object} data */
 export async function writeCache(data) {
   await writeJSON(CACHE_FILE, data);
+}
+
+// ── Enrichment status ─────────────────────────────────────────────────────
+
+/**
+ * Read the current enrichment job status.
+ * Returns null if no enrichment has ever run.
+ *
+ * Shape: {
+ *   state: 'running' | 'complete' | 'aborted' | 'error',
+ *   startedAt: ISO string,
+ *   completedAt: ISO string | null,
+ *   total: number,       // topics to enrich
+ *   processed: number,   // topics attempted so far
+ *   enriched: number,    // topics that got ≥1 message URL
+ *   totalMessages: number,
+ *   error: string | null,
+ * }
+ *
+ * @returns {Promise<object|null>}
+ */
+export async function readEnrichmentStatus() {
+  return readJSON(ENRICHMENT_STATUS_FILE);
+}
+
+/** @param {object} status */
+export async function writeEnrichmentStatus(status) {
+  await writeJSON(ENRICHMENT_STATUS_FILE, status);
 }
 
 // ── Overrides ──────────────────────────────────────────────────────────────
@@ -127,7 +156,6 @@ export async function backupLearnedPatterns(version) {
   const src = LEARNED_PATTERNS_FILE;
   const dest = path.join(PATTERN_BACKUPS_DIR, `learned-patterns-v${version}.json`);
   try {
-    // Only backup if the destination doesn't already exist
     await fs.access(dest);
   } catch {
     try {
