@@ -1,4 +1,5 @@
 import { ReactNode, useMemo, useState } from "react";
+import { ErrorBoundary } from "./ErrorBoundary";
 import cantonLogo from "@/assets/logo.svg";
 import { Link, useLocation } from "react-router-dom";
 import { ConnectionStatusIndicator } from "./ConnectionStatusIndicator";
@@ -216,7 +217,11 @@ export const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-6 py-8">{children}</main>
+      <main className="container mx-auto px-6 py-8">
+        <ErrorBoundary title="Dashboard failed to render">
+          {children}
+        </ErrorBoundary>
+      </main>
       
       {/* Connection Status Indicator */}
       <ConnectionStatusIndicator />
