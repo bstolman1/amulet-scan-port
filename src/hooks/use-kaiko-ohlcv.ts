@@ -184,7 +184,6 @@ export interface CCExchangeData {
   exchangeName: string;
   instrument: string;
   instrumentClass: string;
-  price: number | null;
   open: number | null;
   high: number | null;
   low: number | null;

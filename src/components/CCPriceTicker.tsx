@@ -46,10 +46,10 @@ export function CCPriceTicker({ enabled = true }: CCPriceTickerProps) {
     if (!data?.exchanges) return [];
 
     return data.exchanges
-      .filter((ex) => safeNumber(ex.price, NaN) === safeNumber(ex.price, NaN))
+      .filter((ex) => ex.close != null && Number.isFinite(ex.close))
       .map((ex, idx) => ({
         idx,
-        price: safeNumber(ex.price, 0),
+        price: safeNumber(ex.close, 0),
       }))
       .sort((a, b) => a.price - b.price);
   }, [data?.exchanges]);
