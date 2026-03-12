@@ -613,7 +613,7 @@ export default function KaikoFeed() {
                   value={
                     assetLoading
                       ? '...'
-                      : `$${typeof latestMetric.price === 'number'
+                      : `$${typeof latestMetric?.price === 'number'
                         ? latestMetric.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                         : '-'}`
                   }
@@ -621,17 +621,17 @@ export default function KaikoFeed() {
                 />
                 <StatCard
                   title="Total Volume (USD)"
-                  value={assetLoading ? '...' : formatVolume(latestMetric.total_volume_usd || 0)}
+                  value={assetLoading ? '...' : formatVolume(latestMetric?.total_volume_usd ?? 0)}
                   icon={TrendingUp}
                 />
                 <StatCard
                   title="Total Trades"
-                  value={assetLoading ? '...' : formatInteger(latestMetric.total_trade_count)}
+                  value={assetLoading ? '...' : formatInteger(latestMetric?.total_trade_count)}
                   icon={Activity}
                 />
                 <StatCard
                   title="Off-Chain Volume"
-                  value={assetLoading ? '...' : formatVolume(latestMetric.off_chain_liquidity_data?.total_off_chain_volume_usd || 0)}
+                  value={assetLoading ? '...' : formatVolume(latestMetric?.off_chain_liquidity_data?.total_off_chain_volume_usd ?? 0)}
                   icon={Database}
                 />
               </div>
@@ -766,7 +766,7 @@ export default function KaikoFeed() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {latestMetric.off_chain_liquidity_data.trade_data.map((trade) => (
+                        {latestMetric?.off_chain_liquidity_data?.trade_data?.map((trade) => (
                           <TableRow key={trade.exchange}>
                             <TableCell className="font-mono font-semibold">
                               {trade.exchange.toUpperCase()}
