@@ -54,8 +54,8 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
     return data.exchanges.filter((e) =>
       safeNumber(e.volume, 0) > 0 &&
       safeNumber(e.tradeCount, 0) > 0 &&
-      e.price !== null &&
-      e.price !== undefined
+      e.close !== null &&
+      e.close !== undefined
     );
   }, [data?.exchanges]);
 
@@ -72,8 +72,8 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
           bVal = safeNumber(b.volume, 0);
           break;
         case "price":
-          aVal = safeNumber(a.price, 0);
-          bVal = safeNumber(b.price, 0);
+          aVal = safeNumber(a.close, 0);
+          bVal = safeNumber(b.close, 0);
           break;
         case "change24h":
           aVal = safeNumber(a.change24h, 0);
@@ -225,7 +225,7 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
                       </TableCell>
 
                       <TableCell className="text-right font-mono px-4 whitespace-nowrap">
-                        ${formatCurrency(exchange.price)}
+                        ${formatCurrency(exchange.close)}
                       </TableCell>
 
                       <TableCell className="text-right px-4">
