@@ -41,19 +41,19 @@ interface NormalizedIssuanceFutureValue {
   values?: NormalizedIssuanceValue;
 }
 
+interface RewardDistribution {
+  validatorPct: number;
+  appPct: number;
+  svPct: number;
+  devFundPct?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const pickFirstDefined = <T,>(...values: Array<T | undefined | null>): T | undefined =>
   values.find((v) => v !== undefined && v !== null);
-
-const formatLargeNumber = (value?: string | number): string => {
-  if (value === undefined || value === null) return "—";
-  const num = typeof value === "string" ? parseFloat(value) : value;
-  if (isNaN(num)) return "—";
-  return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
-};
 
 const formatCompact = (value?: string | number): string => {
   if (value === undefined || value === null) return "—";
@@ -70,22 +70,17 @@ const NETWORK_LAUNCH_DATE = new Date("2024-07-01T00:00:00Z");
 const getMicrosecondsSinceLaunch = (): number =>
   (Date.now() - NETWORK_LAUNCH_DATE.getTime()) * 1000;
 
-/**
- * Apply the dev fund scaling from stage 2 onward.
- * Stage 0-1: original distribution
- * Stage 2+: 5% goes to dev fund, remaining 95% is split proportionally
- * across validators, apps, and SVs.
- */
-const applyDevFund = (
+const getPctDecimals = (stage: number) =>
+  stage >= DEV_FUND_APPLIES_FROM_STAGE ? 2 : 0;
+
+const formatPct = (pct: number, stage: number) =>
+  `${(pct * 100).toFixed(getPctDecimals(stage))}%`;
+
+const getRewardDistribution = (
   rawValPct: number,
   rawAppPct: number,
   stageIndex: number
-): {
-  validatorPct: number;
-  appPct: number;
-  svPct: number;
-  devFundPct: number | undefined;
-} => {
+): RewardDistribution => {
   const rawSvPct = 1 - rawValPct - rawAppPct;
 
   if (stageIndex < DEV_FUND_APPLIES_FROM_STAGE) {
@@ -93,7 +88,6 @@ const applyDevFund = (
       validatorPct: rawValPct,
       appPct: rawAppPct,
       svPct: rawSvPct,
-      devFundPct: undefined,
     };
   }
 
@@ -122,6 +116,7 @@ const normalizeIssuanceValue = (value: any): NormalizedIssuanceValue | undefined
 
 const normalizeFutureValues = (futureValues: any): NormalizedIssuanceFutureValue[] => {
   if (!Array.isArray(futureValues)) return [];
+
   return futureValues
     .map((item) => {
       const effectiveAfterMicroseconds = pickFirstDefined(
@@ -131,7 +126,9 @@ const normalizeFutureValues = (futureValues: any): NormalizedIssuanceFutureValue
       );
       const rawValues = pickFirstDefined(item?.values, item?._2);
       const values = normalizeIssuanceValue(rawValues);
+
       if (!effectiveAfterMicroseconds && !values) return null;
+
       return { effectiveAfterMicroseconds, values } as NormalizedIssuanceFutureValue;
     })
     .filter(Boolean) as NormalizedIssuanceFutureValue[];
@@ -167,6 +164,7 @@ const getCurrentIssuanceStage = (
 // ---------------------------------------------------------------------------
 
 interface RewardDistributionChartProps {
+  stage: number;
   validatorPct: number;
   appPct: number;
   svPct: number;
@@ -174,11 +172,14 @@ interface RewardDistributionChartProps {
 }
 
 const RewardDistributionChart = ({
+  stage,
   validatorPct,
   appPct,
   svPct,
   devFundPct,
 }: RewardDistributionChartProps) => {
+  const decimals = getPctDecimals(stage);
+
   const data = [
     { name: "Validator", value: validatorPct * 100, color: REWARD_COLORS.validator },
     { name: "App", value: appPct * 100, color: REWARD_COLORS.app },
@@ -204,7 +205,7 @@ const RewardDistributionChart = ({
             ))}
           </Pie>
           <Tooltip
-            formatter={(value: number) => [`${value.toFixed(1)}%`, "Share"]}
+            formatter={(value: number) => [`${value.toFixed(decimals)}%`, "Share"]}
             contentStyle={{
               backgroundColor: "hsl(222 47% 11%)",
               border: "1px solid hsl(217 33% 17%)",
@@ -221,7 +222,7 @@ const RewardDistributionChart = ({
             wrapperStyle={{ paddingLeft: "30px" }}
             formatter={(value, entry: any) => (
               <span className="text-sm text-foreground">
-                {value}: {entry.payload.value.toFixed(1)}%
+                {value}: {entry.payload.value.toFixed(decimals)}%
               </span>
             )}
           />
@@ -293,33 +294,34 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
             const isPast = !s.isActive && elapsedMicros >= s.effectiveMicros;
             const isFuture = elapsedMicros < s.effectiveMicros;
             const isNext = idx === firstFutureIdx;
+
             const rawValPct = parseFloat(s.values?.validatorRewardPercentage || "0");
             const rawAppPct = parseFloat(s.values?.appRewardPercentage || "0");
-            const { validatorPct, appPct, svPct, devFundPct } = applyDevFund(rawValPct, rawAppPct, s.stage);
+            const distribution = getRewardDistribution(rawValPct, rawAppPct, s.stage);
 
             return (
               <div key={idx} className="relative pl-10">
                 <div
-                  className={`absolute left-1.5 top-4 w-3.5 h-3.5 rounded-full border-2 ${
+                  className={`absolute left-1.5 top-4 h-3.5 w-3.5 rounded-full border-2 ${
                     s.isActive
-                      ? "bg-primary border-primary ring-4 ring-primary/20"
+                      ? "border-primary bg-primary ring-4 ring-primary/20"
                       : isPast
-                      ? "bg-muted-foreground/50 border-muted-foreground/50"
-                      : "bg-background border-muted-foreground/30"
+                      ? "border-muted-foreground/50 bg-muted-foreground/50"
+                      : "border-muted-foreground/30 bg-background"
                   }`}
                 />
                 <div
-                  className={`p-4 rounded-lg text-sm transition-all ${
+                  className={`rounded-lg p-4 text-sm transition-all ${
                     s.isActive
-                      ? "bg-primary/10 border border-primary/30"
+                      ? "border border-primary/30 bg-primary/10"
                       : isPast
                       ? "bg-muted/30 opacity-60"
                       : "bg-muted/20"
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="mb-2 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-base">{s.label}</span>
+                      <span className="text-base font-semibold">{s.label}</span>
                       {s.isActive && (
                         <Badge variant="default" className="text-xs">
                           Current
@@ -336,33 +338,41 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
                     </span>
                   </div>
 
-                  <div className="grid gap-x-4 gap-y-1 text-sm grid-cols-[2fr_1fr_1fr_1fr_1fr]">
+                  <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-x-4 gap-y-1 text-sm">
                     <div>
-                      <span className="text-muted-foreground text-xs">Issuance/yr</span>
-                      <p className="font-semibold tabular-nums">
+                      <span className="text-xs text-muted-foreground">Issuance/yr</span>
+                      <p className="tabular-nums font-semibold">
                         {formatCompact(s.values?.amuletToIssuePerYear)}
                       </p>
                     </div>
                     <div>
-                      <span className="text-muted-foreground text-xs">Validator</span>
-                      <p className="font-semibold">{(validatorPct * 100).toFixed(0)}%</p>
+                      <span className="text-xs text-muted-foreground">Validator</span>
+                      <p className="font-semibold">
+                        {formatPct(distribution.validatorPct, s.stage)}
+                      </p>
                     </div>
                     <div>
-                      <span className="text-muted-foreground text-xs">App</span>
-                      <p className="font-semibold">{(appPct * 100).toFixed(0)}%</p>
+                      <span className="text-xs text-muted-foreground">App</span>
+                      <p className="font-semibold">
+                        {formatPct(distribution.appPct, s.stage)}
+                      </p>
                     </div>
                     <div>
-                      <span className="text-muted-foreground text-xs">SV</span>
-                      <p className="font-semibold">{(svPct * 100).toFixed(0)}%</p>
+                      <span className="text-xs text-muted-foreground">SV</span>
+                      <p className="font-semibold">
+                        {formatPct(distribution.svPct, s.stage)}
+                      </p>
                     </div>
                     <div>
-                      {devFundPct != null ? (
+                      {distribution.devFundPct != null ? (
                         <>
-                          <span className="text-muted-foreground text-xs">Dev Fund</span>
-                          <p className="font-semibold">{(devFundPct * 100).toFixed(0)}%</p>
+                          <span className="text-xs text-muted-foreground">Dev Fund</span>
+                          <p className="font-semibold">
+                            {formatPct(distribution.devFundPct, s.stage)}
+                          </p>
                         </>
                       ) : (
-                        <span className="text-muted-foreground text-xs opacity-0">—</span>
+                        <span className="text-xs text-muted-foreground opacity-0">—</span>
                       )}
                     </div>
                   </div>
@@ -389,15 +399,22 @@ export default function IssuanceCurve() {
     const raw = amuletRulesData as any;
     const payload = raw.contract?.payload ?? raw.payload ?? raw;
     const configSchedule = pickFirstDefined(payload.configSchedule, payload.config_schedule);
-    const configInitialValue = pickFirstDefined(configSchedule?.initialValue, configSchedule?.initial_value);
+    const configInitialValue = pickFirstDefined(
+      configSchedule?.initialValue,
+      configSchedule?.initial_value
+    );
     const source = configInitialValue ?? payload;
     const curve = pickFirstDefined(source.issuanceCurve, source.issuance_curve);
 
     if (!curve) return null;
 
     return {
-      initialValue: normalizeIssuanceValue(pickFirstDefined(curve.initialValue, curve.initial_value)),
-      futureValues: normalizeFutureValues(pickFirstDefined(curve.futureValues, curve.future_values)),
+      initialValue: normalizeIssuanceValue(
+        pickFirstDefined(curve.initialValue, curve.initial_value)
+      ),
+      futureValues: normalizeFutureValues(
+        pickFirstDefined(curve.futureValues, curve.future_values)
+      ),
     };
   }, [amuletRulesData]);
 
@@ -417,7 +434,9 @@ export default function IssuanceCurve() {
       <DashboardLayout>
         <Alert>
           <AlertTitle>No Issuance Curve data</AlertTitle>
-          <AlertDescription>Unable to fetch issuance curve from the Canton Scan API.</AlertDescription>
+          <AlertDescription>
+            Unable to fetch issuance curve from the Canton Scan API.
+          </AlertDescription>
         </Alert>
       </DashboardLayout>
     );
@@ -430,13 +449,13 @@ export default function IssuanceCurve() {
 
   const rawValPct = parseFloat(values?.validatorRewardPercentage || "0");
   const rawAppPct = parseFloat(values?.appRewardPercentage || "0");
-  const { validatorPct, appPct, svPct, devFundPct } = applyDevFund(rawValPct, rawAppPct, stage);
+  const distribution = getRewardDistribution(rawValPct, rawAppPct, stage);
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div>
-          <div className="flex items-center gap-3 mb-2">
+          <div className="mb-2 flex items-center gap-3">
             <TrendingUp className="h-8 w-8 text-primary" />
             <h1 className="text-3xl font-bold">Issuance Curve</h1>
           </div>
@@ -445,7 +464,7 @@ export default function IssuanceCurve() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm text-muted-foreground">Current Stage</CardTitle>
@@ -489,44 +508,53 @@ export default function IssuanceCurve() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <Card>
             <CardHeader>
               <CardTitle>Reward Distribution — {label}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
+              <p className="mb-4 text-sm text-muted-foreground">
                 How newly issued tokens are split among network participants
               </p>
 
               <RewardDistributionChart
-                validatorPct={validatorPct}
-                appPct={appPct}
-                svPct={svPct}
-                devFundPct={devFundPct}
+                stage={stage}
+                validatorPct={distribution.validatorPct}
+                appPct={distribution.appPct}
+                svPct={distribution.svPct}
+                devFundPct={distribution.devFundPct}
               />
 
               <div
-                className={`grid gap-4 mt-4 text-center ${
-                  devFundPct != null ? "grid-cols-4" : "grid-cols-3"
+                className={`mt-4 grid gap-4 text-center ${
+                  distribution.devFundPct != null ? "grid-cols-4" : "grid-cols-3"
                 }`}
               >
-                <div className="p-3 rounded-lg bg-muted/50">
+                <div className="rounded-lg bg-muted/50 p-3">
                   <p className="text-xs text-muted-foreground">Validators</p>
-                  <p className="text-lg font-semibold">{(validatorPct * 100).toFixed(1)}%</p>
+                  <p className="text-lg font-semibold">
+                    {formatPct(distribution.validatorPct, stage)}
+                  </p>
                 </div>
-                <div className="p-3 rounded-lg bg-muted/50">
+                <div className="rounded-lg bg-muted/50 p-3">
                   <p className="text-xs text-muted-foreground">Apps</p>
-                  <p className="text-lg font-semibold">{(appPct * 100).toFixed(1)}%</p>
+                  <p className="text-lg font-semibold">
+                    {formatPct(distribution.appPct, stage)}
+                  </p>
                 </div>
-                <div className="p-3 rounded-lg bg-muted/50">
+                <div className="rounded-lg bg-muted/50 p-3">
                   <p className="text-xs text-muted-foreground">Super Validators</p>
-                  <p className="text-lg font-semibold">{(svPct * 100).toFixed(1)}%</p>
+                  <p className="text-lg font-semibold">
+                    {formatPct(distribution.svPct, stage)}
+                  </p>
                 </div>
-                {devFundPct != null && (
-                  <div className="p-3 rounded-lg bg-muted/50">
+                {distribution.devFundPct != null && (
+                  <div className="rounded-lg bg-muted/50 p-3">
                     <p className="text-xs text-muted-foreground">Dev Fund</p>
-                    <p className="text-lg font-semibold">{(devFundPct * 100).toFixed(1)}%</p>
+                    <p className="text-lg font-semibold">
+                      {formatPct(distribution.devFundPct, stage)}
+                    </p>
                   </div>
                 )}
               </div>
@@ -538,7 +566,7 @@ export default function IssuanceCurve() {
               <CardTitle>Issuance Schedule</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
+              <p className="mb-4 text-sm text-muted-foreground">
                 Progression through bootstrapping and steady-state phases
               </p>
 
