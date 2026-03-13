@@ -71,9 +71,10 @@ const getMicrosecondsSinceLaunch = (): number =>
   (Date.now() - NETWORK_LAUNCH_DATE.getTime()) * 1000;
 
 /**
- * Apply the dev fund scaling for stage 2+.
- * CIP-82: 5% of each round's issuance goes to the development fund from stage 2.
- * The remaining 95% is split among validators, apps, and SVs proportionally.
+ * Apply the dev fund scaling from stage 2 onward.
+ * Stage 0-1: original distribution
+ * Stage 2+: 5% goes to dev fund, remaining 95% is split proportionally
+ * across validators, apps, and SVs.
  */
 const applyDevFund = (
   rawValPct: number,
@@ -85,19 +86,23 @@ const applyDevFund = (
   svPct: number;
   devFundPct: number | undefined;
 } => {
+  const rawSvPct = 1 - rawValPct - rawAppPct;
+
   if (stageIndex < DEV_FUND_APPLIES_FROM_STAGE) {
     return {
       validatorPct: rawValPct,
       appPct: rawAppPct,
-      svPct: 1 - rawValPct - rawAppPct,
+      svPct: rawSvPct,
       devFundPct: undefined,
     };
   }
+
   const scale = 1 - DEV_FUND_PCT;
+
   return {
     validatorPct: rawValPct * scale,
     appPct: rawAppPct * scale,
-    svPct: (1 - rawValPct - rawAppPct) * scale,
+    svPct: rawSvPct * scale,
     devFundPct: DEV_FUND_PCT,
   };
 };
@@ -137,11 +142,14 @@ const getCurrentIssuanceStage = (
   futureValues: NormalizedIssuanceFutureValue[] | undefined
 ): { stage: number; label: string; values: NormalizedIssuanceValue | undefined } => {
   const elapsedMicros = getMicrosecondsSinceLaunch();
+
   if (!futureValues || futureValues.length === 0) {
     return { stage: 0, label: "Stage 0", values: initialValue };
   }
+
   let currentStage = 0;
   let currentValues = initialValue;
+
   for (let i = 0; i < futureValues.length; i++) {
     if (elapsedMicros >= Number(futureValues[i].effectiveAfterMicroseconds || 0)) {
       currentStage = i + 1;
@@ -150,6 +158,7 @@ const getCurrentIssuanceStage = (
       break;
     }
   }
+
   return { stage: currentStage, label: `Stage ${currentStage}`, values: currentValues };
 };
 
@@ -164,7 +173,12 @@ interface RewardDistributionChartProps {
   devFundPct?: number;
 }
 
-const RewardDistributionChart = ({ validatorPct, appPct, svPct, devFundPct }: RewardDistributionChartProps) => {
+const RewardDistributionChart = ({
+  validatorPct,
+  appPct,
+  svPct,
+  devFundPct,
+}: RewardDistributionChartProps) => {
   const data = [
     { name: "Validator", value: validatorPct * 100, color: REWARD_COLORS.validator },
     { name: "App", value: appPct * 100, color: REWARD_COLORS.app },
@@ -207,7 +221,7 @@ const RewardDistributionChart = ({ validatorPct, appPct, svPct, devFundPct }: Re
             wrapperStyle={{ paddingLeft: "30px" }}
             formatter={(value, entry: any) => (
               <span className="text-sm text-foreground">
-                {value}: {entry.payload.value.toFixed(0)}%
+                {value}: {entry.payload.value.toFixed(1)}%
               </span>
             )}
           />
@@ -252,6 +266,7 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
         futureValues?.[idx + 1]
           ? Number(futureValues[idx + 1].effectiveAfterMicroseconds || 0)
           : Infinity;
+
       return {
         stage: idx + 1,
         label: `Stage ${idx + 1}`,
@@ -270,6 +285,7 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
         <span className="text-muted-foreground">Network Launch: Jul 2024</span>
         <span className="font-medium text-primary">Elapsed: {formatDuration(elapsedMicros)}</span>
       </div>
+
       <div className="relative">
         <div className="absolute left-3 top-0 bottom-0 w-0.5 bg-border" />
         <div className="space-y-2">
@@ -304,13 +320,22 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-base">{s.label}</span>
-                      {s.isActive && <Badge variant="default" className="text-xs">Current</Badge>}
-                      {isFuture && isNext && <Badge variant="outline" className="text-xs">Next</Badge>}
+                      {s.isActive && (
+                        <Badge variant="default" className="text-xs">
+                          Current
+                        </Badge>
+                      )}
+                      {isFuture && isNext && (
+                        <Badge variant="outline" className="text-xs">
+                          Next
+                        </Badge>
+                      )}
                     </div>
                     <span className="text-sm text-muted-foreground">
                       {s.effectiveMicros === 0 ? "Launch" : formatDate(s.effectiveMicros)}
                     </span>
                   </div>
+
                   <div className="grid gap-x-4 gap-y-1 text-sm grid-cols-[2fr_1fr_1fr_1fr_1fr]">
                     <div>
                       <span className="text-muted-foreground text-xs">Issuance/yr</span>
@@ -357,15 +382,19 @@ const IssuanceTimeline = ({ initialValue, futureValues }: IssuanceTimelineProps)
 
 export default function IssuanceCurve() {
   const { data: amuletRulesData, isLoading } = useAmuletRules();
+
   const issuanceCurve = useMemo(() => {
     if (!amuletRulesData) return null;
+
     const raw = amuletRulesData as any;
     const payload = raw.contract?.payload ?? raw.payload ?? raw;
     const configSchedule = pickFirstDefined(payload.configSchedule, payload.config_schedule);
     const configInitialValue = pickFirstDefined(configSchedule?.initialValue, configSchedule?.initial_value);
     const source = configInitialValue ?? payload;
     const curve = pickFirstDefined(source.issuanceCurve, source.issuance_curve);
+
     if (!curve) return null;
+
     return {
       initialValue: normalizeIssuanceValue(pickFirstDefined(curve.initialValue, curve.initial_value)),
       futureValues: normalizeFutureValues(pickFirstDefined(curve.futureValues, curve.future_values)),
@@ -388,9 +417,7 @@ export default function IssuanceCurve() {
       <DashboardLayout>
         <Alert>
           <AlertTitle>No Issuance Curve data</AlertTitle>
-          <AlertDescription>
-            Unable to fetch issuance curve from the Canton Scan API.
-          </AlertDescription>
+          <AlertDescription>Unable to fetch issuance curve from the Canton Scan API.</AlertDescription>
         </Alert>
       </DashboardLayout>
     );
@@ -400,6 +427,7 @@ export default function IssuanceCurve() {
     issuanceCurve.initialValue,
     issuanceCurve.futureValues
   );
+
   const rawValPct = parseFloat(values?.validatorRewardPercentage || "0");
   const rawAppPct = parseFloat(values?.appRewardPercentage || "0");
   const { validatorPct, appPct, svPct, devFundPct } = applyDevFund(rawValPct, rawAppPct, stage);
@@ -417,7 +445,6 @@ export default function IssuanceCurve() {
           </p>
         </div>
 
-        {/* Current Stage Overview */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardHeader className="pb-2">
@@ -430,6 +457,7 @@ export default function IssuanceCurve() {
               </div>
             </CardContent>
           </Card>
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm text-muted-foreground">Annual Issuance</CardTitle>
@@ -439,6 +467,7 @@ export default function IssuanceCurve() {
               <p className="text-xs text-muted-foreground">CC per year</p>
             </CardContent>
           </Card>
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm text-muted-foreground">Validator Reward Cap</CardTitle>
@@ -448,6 +477,7 @@ export default function IssuanceCurve() {
               <p className="text-xs text-muted-foreground">Per round</p>
             </CardContent>
           </Card>
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm text-muted-foreground">Featured App Cap</CardTitle>
@@ -460,7 +490,6 @@ export default function IssuanceCurve() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Reward Distribution */}
           <Card>
             <CardHeader>
               <CardTitle>Reward Distribution — {label}</CardTitle>
@@ -469,12 +498,14 @@ export default function IssuanceCurve() {
               <p className="text-sm text-muted-foreground mb-4">
                 How newly issued tokens are split among network participants
               </p>
+
               <RewardDistributionChart
                 validatorPct={validatorPct}
                 appPct={appPct}
                 svPct={svPct}
                 devFundPct={devFundPct}
               />
+
               <div
                 className={`grid gap-4 mt-4 text-center ${
                   devFundPct != null ? "grid-cols-4" : "grid-cols-3"
@@ -502,7 +533,6 @@ export default function IssuanceCurve() {
             </CardContent>
           </Card>
 
-          {/* Issuance Timeline */}
           <Card>
             <CardHeader>
               <CardTitle>Issuance Schedule</CardTitle>
@@ -511,6 +541,7 @@ export default function IssuanceCurve() {
               <p className="text-sm text-muted-foreground mb-4">
                 Progression through bootstrapping and steady-state phases
               </p>
+
               <IssuanceTimeline
                 initialValue={issuanceCurve.initialValue}
                 futureValues={issuanceCurve.futureValues}
@@ -518,8 +549,6 @@ export default function IssuanceCurve() {
             </CardContent>
           </Card>
         </div>
-
-
       </div>
     </DashboardLayout>
   );
