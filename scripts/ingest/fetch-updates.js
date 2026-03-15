@@ -178,6 +178,8 @@ const FETCH_TIMEOUT_MS               = parseInt(process.env.FETCH_TIMEOUT_MS)   
 const STALL_DETECTION_INTERVAL_MS    = parseInt(process.env.STALL_DETECTION_INTERVAL_MS)    || 30000;
 const STALL_THRESHOLD_MS             = parseInt(process.env.STALL_THRESHOLD_MS)             || 120000;
 const GCS_CURSOR_BACKUP_MAX_FAILURES = parseInt(process.env.GCS_CURSOR_BACKUP_MAX_FAILURES) || 5;
+const MAX_TRANSIENT_ERRORS           = parseInt(process.env.MAX_TRANSIENT_ERRORS)           || 100;
+const ENDPOINT_ROTATE_AFTER_ERRORS   = parseInt(process.env.ENDPOINT_ROTATE_AFTER_ERRORS)  || 3;
 
 const ALL_SCAN_ENDPOINTS = [
   { name: 'Global-Synchronizer-Foundation',  url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
@@ -1031,6 +1033,42 @@ async function probeAllScanEndpoints() {
   });
 }
 
+/**
+ * Lightweight endpoint probe for runtime failover.
+ * Returns the fastest healthy endpoint that is NOT the current one,
+ * or null if no alternatives are reachable.
+ */
+async function probeAllScanEndpoints_fast() {
+  const candidates = ALL_SCAN_ENDPOINTS.filter(ep => ep.url !== activeScanUrl);
+  if (candidates.length === 0) return null;
+
+  const results = await Promise.allSettled(
+    candidates.map(async (ep) => {
+      const probeStart = Date.now();
+      try {
+        const response = await axios.get(`${ep.url}/v0/dso`, {
+          timeout:    10000,
+          httpsAgent: new https.Agent({ rejectUnauthorized: getTLSRejectUnauthorized() }),
+          headers:    { Accept: 'application/json' },
+        });
+        if (response.status >= 200 && response.status < 300) {
+          return { name: ep.name, url: ep.url, latencyMs: Date.now() - probeStart };
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const healthy = results
+    .filter(r => r.status === 'fulfilled' && r.value !== null)
+    .map(r => r.value)
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+
+  return healthy.length > 0 ? healthy[0] : null;
+}
+
 // ─── Sleep / timeout helpers ───────────────────────────────────────────────
 
 async function sleep(ms, reason = 'unknown') {
@@ -1295,6 +1333,25 @@ async function runIngestion() {
       logError('fetch', err, { cycleId: currentCycleId, migration: afterMigrationId, cursor: afterRecordTime, error_count: sessionErrorCount, is_transient: isTransient });
 
       if (isTransient) {
+        // Rotate to a different endpoint after repeated failures on the same one
+        if (sessionErrorCount > 0 && sessionErrorCount % ENDPOINT_ROTATE_AFTER_ERRORS === 0) {
+          const healthyEndpoints = (await probeAllScanEndpoints_fast());
+          if (healthyEndpoints) {
+            const oldName = ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom';
+            activeScanUrl = healthyEndpoints.url;
+            client.defaults.baseURL = healthyEndpoints.url;
+            log('warn', 'endpoint_rotated_on_error', { from: oldName, to: healthyEndpoints.name, error_count: sessionErrorCount });
+            console.log(`🔄 Rotated endpoint: ${oldName} → ${healthyEndpoints.name} (after ${sessionErrorCount} errors)`);
+          }
+        }
+
+        // Exit after too many consecutive transient errors to allow process supervisor to restart
+        if (sessionErrorCount >= MAX_TRANSIENT_ERRORS) {
+          logFatal('max_transient_errors', err, { error_count: sessionErrorCount, max: MAX_TRANSIENT_ERRORS, migration: afterMigrationId });
+          console.error(`🔴 FATAL: ${sessionErrorCount} consecutive transient errors (max=${MAX_TRANSIENT_ERRORS}). Exiting for restart.`);
+          throw err;
+        }
+
         const backoffMs  = Math.min(60000, 10000 * Math.pow(2, Math.min(sessionErrorCount - 1, 3)));
         const cooldownMs = backoffMs + Math.random() * 5000;
 
@@ -1303,7 +1360,6 @@ async function runIngestion() {
         await sleep(cooldownMs, 'cooldown_backoff');
 
         log('info', 'cycle_reenter', { cycleId: currentCycleId, reason: 'error_recovery', cooldownMs: Math.round(cooldownMs) });
-        lastProgressTimestamp = Date.now();
       } else {
         if (sessionErrorCount >= 10) {
           logFatal('too_many_errors', err, { error_count: sessionErrorCount, migration: afterMigrationId });
