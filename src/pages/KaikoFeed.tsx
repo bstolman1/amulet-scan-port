@@ -20,6 +20,9 @@ import { CCPriceAlerts } from "@/components/CCPriceAlerts";
 import { CCTimeframeComparison } from "@/components/CCTimeframeComparison";
 import { CCTwapCard } from "@/components/CCTwapCard";
 
+// Exchanges that use perpetual-future instrument class (not spot)
+const PERP_EXCHANGES = new Set(['binc', 'okex', 'gtdm', 'bbit', 'hbdm']);
+
 // Exchange to instrument mapping based on Kaiko reference data
 const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
   krkn: ['cc-usd', 'cc-usdt', 'cc-usdc', 'cc-eur', 'btc-usd', 'eth-usd', 'sol-usd'],
@@ -62,12 +65,12 @@ const EXCHANGE_INSTRUMENTS: Record<string, string[]> = {
 
 const EXCHANGES = [
   { value: 'krkn', label: 'Kraken', hasCC: true },
-  { value: 'binc', label: 'Binance', hasCC: true },
+  { value: 'binc', label: 'Binance (Perp)', hasCC: true },
   { value: 'bbsp', label: 'Bybit Spot', hasCC: true },
   { value: 'gate', label: 'Gate.io', hasCC: true },
   { value: 'kcon', label: 'KuCoin', hasCC: true },
   { value: 'mexc', label: 'MEXC', hasCC: true },
-  { value: 'okex', label: 'OKX', hasCC: true },
+  { value: 'okex', label: 'OKX (Perp)', hasCC: true },
   { value: 'hitb', label: 'HitBTC', hasCC: true },
   { value: 'cnex', label: 'CoinEx', hasCC: true },
   { value: 'cbse', label: 'Coinbase' },
@@ -215,6 +218,9 @@ export default function KaikoFeed() {
   const [asset, setAsset] = useState('cc');
   const [assetInterval, setAssetInterval] = useState('1h');
 
+  // Derive instrument class from exchange — perp exchanges must use 'perpetual-future'
+  const instrumentClass = PERP_EXCHANGES.has(exchange) ? 'perpetual-future' : 'spot';
+
   const availableInstruments = useMemo(() => {
     const instruments = EXCHANGE_INSTRUMENTS[exchange] || [];
     return instruments.map(code => ({
@@ -235,6 +241,7 @@ export default function KaikoFeed() {
   const { data: status } = useKaikoStatus();
   const { data, isLoading, error, refetch, isFetching } = useKaikoOHLCV({
     exchange,
+    instrumentClass,
     instrument,
     interval,
     pageSize: 50,
@@ -441,6 +448,14 @@ export default function KaikoFeed() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {PERP_EXCHANGES.has(exchange) && (
+                    <div className="flex items-end pb-1">
+                      <Badge variant="secondary" className="text-xs">
+                        Perpetual Futures
+                      </Badge>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
