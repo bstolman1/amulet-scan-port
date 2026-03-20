@@ -427,8 +427,7 @@ const Validators = () => {
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Operator</TableHead>
                     <TableHead className="text-right">Reward Weight</TableHead>
-                    <TableHead className="text-center">Hosted Parties</TableHead>
-                    <TableHead className="text-center">Join Round</TableHead>
+                    <TableHead className="text-center">Beneficiaries</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -451,9 +450,7 @@ const Validators = () => {
                           <span className="text-muted-foreground text-xs">—</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-center text-sm text-muted-foreground">
-                        {op.joinRound ?? "—"}
-                      </TableCell>
+
                     </TableRow>
                   ))}
                 </TableBody>
@@ -463,7 +460,6 @@ const Validators = () => {
                     <TableCell className="text-right text-primary">
                       {formatBps(displayModel.totalOperatorWeightBps)}
                     </TableCell>
-                    <TableCell></TableCell>
                     <TableCell></TableCell>
                   </TableRow>
                 </TableFooter>
@@ -603,7 +599,6 @@ const Validators = () => {
                     <TableCell className="text-right text-primary">
                       {formatBps(displayModel.totalBeneficiaryWeightBps)}
                     </TableCell>
-                    <TableCell></TableCell>
                     <TableCell></TableCell>
                   </TableRow>
                 </TableFooter>
