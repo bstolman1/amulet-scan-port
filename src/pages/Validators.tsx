@@ -11,8 +11,6 @@ import {
   FileDown,
   RefreshCw,
   Info,
-  Eye,
-  EyeOff,
   Building2,
   Users,
 } from "lucide-react";
@@ -50,7 +48,7 @@ const normalizeBps = (val: any) => {
   return 0;
 };
 
-const bpsToPercent = (bps: number) => (bps / 10000).toFixed(2) + "%";
+const formatBps = (bps: number) => bps.toLocaleString();
 
 const formatLastSynced = (timestamp: number) => {
   const date = new Date(timestamp);
@@ -63,7 +61,6 @@ const formatLastSynced = (timestamp: number) => {
 interface StandaloneOperator {
   name: string;
   rewardWeightBps: number;
-  rewardWeightPct: string;
   hostedCount: number;
   joinRound?: number | null;
 }
@@ -71,14 +68,12 @@ interface StandaloneOperator {
 interface EconomicBeneficiary {
   name: string;
   earnedWeightBps: number;
-  earnedWeightPct: string;
   status: "Active" | "Escrowed" | "Mixed";
   isSelf: boolean;
   hasGhostHoldings: boolean;
   custodyBreakdown: {
     label: string;
     weightBps: number;
-    weightPct: string;
     isGhost: boolean;
     partyId?: string;
   }[];
@@ -89,7 +84,6 @@ interface GhostLedgerEntry {
   ghostHolder: string;
   sourceBeneficiary: string;
   weightBps: number;
-  weightPct: string;
   cip?: string;
 }
 
@@ -115,14 +109,6 @@ const Validators = () => {
     staleTime: 60 * 60 * 1000,
   });
 
-  // ─────────────────────────────
-  // Transform Config → Display Model
-  //
-  // KEY CHANGE: Previously only GSF's extraBeneficiaries were processed.
-  // Now we:
-  //   • Show ALL 13 operators as "Standalone" rows
-  //   • Show extraBeneficiaries from ALL operators in the "Hosted" tab
-  // ─────────────────────────────
   const displayModel = useMemo(() => {
     if (!configData) return null;
 
@@ -134,7 +120,6 @@ const Validators = () => {
       .map((op) => ({
         name: op.name,
         rewardWeightBps: normalizeBps(op.rewardWeightBps),
-        rewardWeightPct: bpsToPercent(normalizeBps(op.rewardWeightBps)),
         hostedCount: (op.extraBeneficiaries || []).length,
         joinRound: op.joinRound ?? null,
       }))
@@ -148,10 +133,6 @@ const Validators = () => {
     // ── Hosted: beneficiaries from ALL operators ───────────────────────────
     const ghostLedger: GhostLedgerEntry[] = [];
 
-    // Each unique economic entity gets one row.
-    // Key = display name (NOT party ID — party IDs can be reused across entities).
-    // We disambiguate by building the key as `operatorName|displayName` so that
-    // the same name hosted by different operators gets separate rows.
     const beneficiaryMap = new Map<string, {
       name: string;
       totalWeightBps: number;
@@ -175,9 +156,6 @@ const Validators = () => {
         const isGhostEntry = rawName.toLowerCase().includes("ghost");
 
         if (isGhostEntry) {
-          // Derive source beneficiary name from comment when it follows "Name CIP-XXXX" pattern.
-          // e.g. "Fireblocks CIP-0072 # escrow ..." → "Fireblocks"
-          // Falls back to stripping "-ghost-N" from the party name.
           let sourceName = "";
           if (comment) {
             const cipMatch = comment.match(/^(.+?)\s+CIP-\d+/);
@@ -191,21 +169,15 @@ const Validators = () => {
               .trim();
           }
 
-          // Determine which ghost holder this is (GhostSV or MPCH ghost, etc.)
-          // Look at the party_id's address to find the host operator.
           const ghostHolder = opName;
 
           ghostLedger.push({
             ghostHolder,
             sourceBeneficiary: sourceName || rawName,
             weightBps,
-            weightPct: bpsToPercent(weightBps),
             cip: comment,
           });
 
-          // Attribute ghost weight to the source beneficiary's economic row.
-          // Use `opName|sourceName` as the map key so hosted-by-different-operators
-          // entities are kept separate.
           const key = `${opName}|${sourceName || rawName}`;
           const existing = beneficiaryMap.get(key);
           if (existing) {
@@ -214,7 +186,6 @@ const Validators = () => {
             existing.custodyBreakdown.push({
               label: `Escrowed under ${ghostHolder}`,
               weightBps,
-              weightPct: bpsToPercent(weightBps),
               isGhost: true,
               partyId: fullPartyId,
             });
@@ -228,7 +199,6 @@ const Validators = () => {
               custodyBreakdown: [{
                 label: `Escrowed under ${ghostHolder}`,
                 weightBps,
-                weightPct: bpsToPercent(weightBps),
                 isGhost: true,
                 partyId: fullPartyId,
               }],
@@ -236,15 +206,12 @@ const Validators = () => {
             });
           }
         } else {
-          // Direct holding. Derive display name only when comment follows "Name CIP-XXXX" pattern.
           let displayName = rawName;
           if (comment) {
             const cipMatch = comment.match(/^(.+?)\s+CIP-\d+/);
             if (cipMatch) displayName = cipMatch[1].trim();
           }
 
-          // Detect self-referential entries: operator holding weight for itself.
-          // These are explicitly known from the YAML structure.
           const isSelf =
             (opName === "Global-Synchronizer-Foundation" &&
               (rawName === "GhostSV-validator-1" || rawName === "GSF-SVRewards-1")) ||
@@ -259,7 +226,6 @@ const Validators = () => {
             existing.custodyBreakdown.unshift({
               label: `Held directly by ${displayName}`,
               weightBps,
-              weightPct: bpsToPercent(weightBps),
               isGhost: false,
               partyId: fullPartyId,
             });
@@ -273,7 +239,6 @@ const Validators = () => {
               custodyBreakdown: [{
                 label: `Held directly by ${displayName}`,
                 weightBps,
-                weightPct: bpsToPercent(weightBps),
                 isGhost: false,
                 partyId: fullPartyId,
               }],
@@ -284,7 +249,6 @@ const Validators = () => {
       }
     }
 
-    // Convert map → array
     const economicBeneficiaries: EconomicBeneficiary[] = Array.from(beneficiaryMap.values())
       .map((b) => {
         const status: EconomicBeneficiary["status"] =
@@ -297,7 +261,6 @@ const Validators = () => {
         return {
           name: b.name,
           earnedWeightBps: b.totalWeightBps,
-          earnedWeightPct: bpsToPercent(b.totalWeightBps),
           status,
           isSelf: b.isSelf,
           hasGhostHoldings: b.ghostWeightBps > 0,
@@ -312,22 +275,13 @@ const Validators = () => {
       0
     );
 
-    const drift = totalBeneficiaryWeightBps - totalOperatorWeightBps;
-    const driftPct = ((drift / totalOperatorWeightBps) * 100).toFixed(2);
-    const invariantSatisfied = Math.abs(drift) <= 1;
-    const networkSharePct = ((totalOperatorWeightBps / 1000000) * 100).toFixed(2);
-
+    const invariantSatisfied = Math.abs(totalBeneficiaryWeightBps - totalOperatorWeightBps) <= 1;
     return {
       standaloneOperators,
       totalOperatorWeightBps,
-      totalOperatorWeightPct: bpsToPercent(totalOperatorWeightBps),
       totalBeneficiaryWeightBps,
-      totalBeneficiaryWeightPct: bpsToPercent(totalBeneficiaryWeightBps),
-      networkSharePct,
       beneficiaryCount: economicBeneficiaries.length,
       invariantSatisfied,
-      drift,
-      driftPct,
       economicBeneficiaries,
       ghostLedger,
       lastUpdated: configData.lastUpdated,
@@ -352,11 +306,10 @@ const Validators = () => {
 
   const exportCSV = () => {
     const rows = [
-      ["Beneficiary", "Hosted By", "Earned Weight (%)", "Earned Weight (bps)", "Status"],
+      ["Beneficiary", "Hosted By", "Earned Weight (bps)", "Status"],
       ...displayModel.economicBeneficiaries.map((b) => [
         b.name,
         b.operatorName,
-        b.earnedWeightPct,
         b.earnedWeightBps,
         b.status,
       ]),
@@ -369,9 +322,6 @@ const Validators = () => {
     link.click();
   };
 
-  // ─────────────────────────────
-  // Render
-  // ─────────────────────────────
   return (
     <DashboardLayout>
       <div className="space-y-8">
@@ -386,13 +336,7 @@ const Validators = () => {
                 <div>
                   <span className="text-muted-foreground">Total Reward Weight:</span>
                   <span className="ml-2 font-semibold text-foreground">
-                    {displayModel.totalOperatorWeightPct}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Network Share:</span>
-                  <span className="ml-2 font-semibold text-foreground">
-                    {displayModel.networkSharePct}%
+                    {formatBps(displayModel.totalOperatorWeightBps)} bps
                   </span>
                 </div>
                 <div>
@@ -414,8 +358,6 @@ const Validators = () => {
                   </span>
                 </div>
               </div>
-
-
             </div>
 
             <div className="flex gap-2 flex-shrink-0">
@@ -471,7 +413,7 @@ const Validators = () => {
             </button>
           </div>
 
-          {/* ── STANDALONE TABLE ─────────────────────────────────────────── */}
+          {/* ── OPERATORS TABLE ───────────────────────────────────────────── */}
           {svTab === "standalone" && (
             <>
               <div className="px-6 pt-4 pb-2">
@@ -484,7 +426,7 @@ const Validators = () => {
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Operator</TableHead>
-                    <TableHead className="text-right">Reward Weight</TableHead>
+                    <TableHead className="text-right">Reward Weight (bps)</TableHead>
                     <TableHead className="text-center">Hosted Parties</TableHead>
                     <TableHead className="text-center">Join Round</TableHead>
                   </TableRow>
@@ -494,7 +436,7 @@ const Validators = () => {
                     <TableRow key={op.name}>
                       <TableCell className="font-medium">{op.name}</TableCell>
                       <TableCell className="text-right font-bold text-primary">
-                        {op.rewardWeightPct}
+                        {formatBps(op.rewardWeightBps)}
                       </TableCell>
                       <TableCell className="text-center">
                         {op.hostedCount > 0 ? (
@@ -519,7 +461,7 @@ const Validators = () => {
                   <TableRow className="bg-muted/50 font-bold">
                     <TableCell>Total</TableCell>
                     <TableCell className="text-right text-primary">
-                      {displayModel.totalOperatorWeightPct}
+                      {formatBps(displayModel.totalOperatorWeightBps)}
                     </TableCell>
                     <TableCell></TableCell>
                     <TableCell></TableCell>
@@ -529,7 +471,7 @@ const Validators = () => {
             </>
           )}
 
-          {/* ── HOSTED TABLE ──────────────────────────────────────────────── */}
+          {/* ── BENEFICIARIES TABLE ───────────────────────────────────────── */}
           {svTab === "hosted" && (
             <>
               <div className="px-6 pt-4 pb-2">
@@ -543,7 +485,7 @@ const Validators = () => {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[35%]">Beneficiary</TableHead>
                     <TableHead>Hosted By</TableHead>
-                    <TableHead className="text-right">Earned Weight</TableHead>
+                    <TableHead className="text-right">Earned Weight (bps)</TableHead>
                     <TableHead className="text-center">Status</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
@@ -585,7 +527,7 @@ const Validators = () => {
                               {beneficiary.operatorName}
                             </TableCell>
                             <TableCell className="text-right font-bold text-primary">
-                              {beneficiary.earnedWeightPct}
+                              {formatBps(beneficiary.earnedWeightBps)}
                             </TableCell>
                             <TableCell className="text-center">
                               <Badge
@@ -627,23 +569,11 @@ const Validators = () => {
                                         key={idx}
                                         className="flex justify-between items-center text-sm"
                                       >
-                                        <span
-                                          className={
-                                            custody.isGhost
-                                              ? "text-muted-foreground"
-                                              : "text-foreground"
-                                          }
-                                        >
+                                        <span className={custody.isGhost ? "text-muted-foreground" : "text-foreground"}>
                                           {custody.label}
                                         </span>
-                                        <span
-                                          className={
-                                            custody.isGhost
-                                              ? "text-muted-foreground"
-                                              : "text-foreground"
-                                          }
-                                        >
-                                          {custody.weightPct}
+                                        <span className={custody.isGhost ? "text-muted-foreground" : "text-foreground"}>
+                                          {formatBps(custody.weightBps)} bps
                                         </span>
                                       </div>
                                     ))}
@@ -671,7 +601,7 @@ const Validators = () => {
                     <TableCell>Total Economic Weight</TableCell>
                     <TableCell></TableCell>
                     <TableCell className="text-right text-primary">
-                      {displayModel.totalBeneficiaryWeightPct}
+                      {formatBps(displayModel.totalBeneficiaryWeightBps)}
                     </TableCell>
                     <TableCell></TableCell>
                     <TableCell></TableCell>
@@ -679,18 +609,14 @@ const Validators = () => {
                 </TableFooter>
               </Table>
               <div className="p-4 border-t border-border bg-muted/20 text-xs text-muted-foreground">
-                🔒 This table must always sum to {displayModel.totalOperatorWeightPct}. If it doesn't → config error, not UI error.
+                🔒 This table must always sum to {formatBps(displayModel.totalOperatorWeightBps)} bps. If it doesn't → config error, not UI error.
               </div>
             </>
           )}
         </Card>
-
-
-
       </div>
     </DashboardLayout>
   );
 };
-
 
 export default Validators;
