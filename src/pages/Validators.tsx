@@ -306,7 +306,7 @@ const Validators = () => {
 
   const exportCSV = () => {
     const rows = [
-      ["Beneficiary", "Hosted By", "Earned Weight (bps)", "Status"],
+      ["Beneficiary", "Hosted By", "Earned Weight", "Status"],
       ...displayModel.economicBeneficiaries.map((b) => [
         b.name,
         b.operatorName,
@@ -336,7 +336,7 @@ const Validators = () => {
                 <div>
                   <span className="text-muted-foreground">Total Reward Weight:</span>
                   <span className="ml-2 font-semibold text-foreground">
-                    {formatBps(displayModel.totalOperatorWeightBps)} bps
+                    {formatBps(displayModel.totalOperatorWeightBps)}
                   </span>
                 </div>
                 <div>
@@ -426,7 +426,7 @@ const Validators = () => {
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Operator</TableHead>
-                    <TableHead className="text-right">Reward Weight (bps)</TableHead>
+                    <TableHead className="text-right">Reward Weight</TableHead>
                     <TableHead className="text-center">Hosted Parties</TableHead>
                     <TableHead className="text-center">Join Round</TableHead>
                   </TableRow>
@@ -485,7 +485,7 @@ const Validators = () => {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[35%]">Beneficiary</TableHead>
                     <TableHead>Hosted By</TableHead>
-                    <TableHead className="text-right">Earned Weight (bps)</TableHead>
+                    <TableHead className="text-right">Earned Weight</TableHead>
                     <TableHead className="text-center">Status</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
@@ -573,7 +573,7 @@ const Validators = () => {
                                           {custody.label}
                                         </span>
                                         <span className={custody.isGhost ? "text-muted-foreground" : "text-foreground"}>
-                                          {formatBps(custody.weightBps)} bps
+                                          {formatBps(custody.weightBps)}
                                         </span>
                                       </div>
                                     ))}
@@ -609,7 +609,7 @@ const Validators = () => {
                 </TableFooter>
               </Table>
               <div className="p-4 border-t border-border bg-muted/20 text-xs text-muted-foreground">
-                🔒 This table must always sum to {formatBps(displayModel.totalOperatorWeightBps)} bps. If it doesn't → config error, not UI error.
+                🔒 This table must always sum to {formatBps(displayModel.totalOperatorWeightBps)}. If it doesn't → config error, not UI error.
               </div>
             </>
           )}
