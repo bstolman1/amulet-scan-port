@@ -54,14 +54,19 @@ export interface SVLockingRecord {
   roundsUnderThreshold: number[];
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Theme-aligned tier config ────────────────────────────────────────────────
+// primary   = Canton Yellow  hsl(67 98% 79%)
+// accent    = Canton Lilac   hsl(287 53% 77%)
+// warning   = hsl(40 70% 50%)
+// destructive = hsl(0 60% 50%)
 
 interface TierConfig {
   label: string;
   threshold: number;
   weightMultiplier: number;
-  color: string;
   badgeClass: string;
+  barClass: string;
+  textClass: string;
 }
 
 const TIER_CONFIG: Record<Tier, TierConfig> = {
@@ -69,29 +74,37 @@ const TIER_CONFIG: Record<Tier, TierConfig> = {
     label: "Tier 1 — 100% Weight",
     threshold: 70,
     weightMultiplier: 1.0,
-    color: "text-emerald-400",
-    badgeClass: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+    // Canton Yellow tint
+    badgeClass: "bg-primary/15 text-primary border-primary/30",
+    barClass: "bg-primary",
+    textClass: "text-primary",
   },
   tier2: {
     label: "Tier 2 — 60% Weight",
     threshold: 45,
     weightMultiplier: 0.6,
-    color: "text-amber-400",
-    badgeClass: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+    // Canton Lilac tint
+    badgeClass: "bg-accent/15 text-accent border-accent/30",
+    barClass: "bg-accent",
+    textClass: "text-accent",
   },
   tier3: {
     label: "Tier 3 — 40% Weight",
     threshold: 35,
     weightMultiplier: 0.4,
-    color: "text-orange-400",
-    badgeClass: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+    // Warning tint
+    badgeClass: "bg-warning/15 text-warning border-warning/30",
+    barClass: "bg-warning",
+    textClass: "text-warning",
   },
   none: {
     label: "No Tier — 0% Weight",
     threshold: 0,
     weightMultiplier: 0,
-    color: "text-red-400",
-    badgeClass: "bg-red-500/15 text-red-400 border-red-500/30",
+    // Destructive tint
+    badgeClass: "bg-destructive/15 text-destructive border-destructive/30",
+    barClass: "bg-destructive",
+    textClass: "text-destructive",
   },
 };
 
@@ -130,7 +143,7 @@ const ComplianceStatusBadge = ({
 }) => {
   if (daysUnder === null) {
     return (
-      <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
+      <Badge variant="outline" className="bg-primary/15 text-primary border-primary/30">
         <CheckCircle2 className="h-3 w-3 mr-1" />
         Compliant
       </Badge>
@@ -138,8 +151,8 @@ const ComplianceStatusBadge = ({
   }
   const isUrgent = daysUnder >= 20;
   const cls = isUrgent
-    ? "bg-red-500/15 text-red-400 border-red-500/30"
-    : "bg-amber-500/15 text-amber-400 border-amber-500/30";
+    ? "bg-destructive/15 text-destructive border-destructive/30"
+    : "bg-warning/15 text-warning border-warning/30";
   const badge = (
     <Badge variant="outline" className={`${cls} border`}>
       <Clock className="h-3 w-3 mr-1" />
@@ -158,29 +171,32 @@ const ComplianceStatusBadge = ({
 const LockPercentBar = ({
   lockedPct,
   currentTierThreshold,
+  tier,
 }: {
   lockedPct: number;
   currentTierThreshold: number;
+  tier: Tier;
 }) => {
   const fill = Math.min(lockedPct, 100);
   const isUnder = lockedPct < currentTierThreshold;
-  const barColor = isUnder ? "bg-red-500" : lockedPct >= 70 ? "bg-emerald-500" : "bg-amber-500";
+  const barClass = isUnder ? "bg-destructive" : TIER_CONFIG[tier].barClass;
 
   return (
     <div className="space-y-1">
       <div className="flex justify-between text-xs text-muted-foreground">
         <span>Locked</span>
-        <span className={isUnder ? "text-red-400 font-semibold" : "text-foreground font-semibold"}>
+        <span className={`font-semibold ${isUnder ? "text-destructive" : "text-foreground"}`}>
           {lockedPct.toFixed(1)}%
         </span>
       </div>
       <div className="relative h-2 w-full rounded-full bg-muted overflow-visible">
         <div
-          className={`h-2 rounded-full transition-all ${barColor}`}
+          className={`h-2 rounded-full transition-all ${barClass}`}
           style={{ width: `${fill}%` }}
         />
+        {/* threshold marker */}
         <div
-          className="absolute top-[-3px] h-4 w-0.5 bg-foreground/50 rounded"
+          className="absolute top-[-3px] h-4 w-0.5 bg-muted-foreground/50 rounded"
           style={{ left: `${Math.min(currentTierThreshold, 100)}%` }}
         />
       </div>
@@ -198,7 +214,7 @@ const UnlockTrancheRow = ({ tranche }: { tranche: UnlockTranche }) => {
       : 0;
 
   return (
-    <div className="flex items-center justify-between py-2 border-b border-border/50 last:border-0 text-sm">
+    <div className="flex items-center justify-between py-2 border-b border-border/50 last:border-0 text-sm gap-2 flex-wrap">
       <div>
         <p className="text-xs text-muted-foreground">Initiated</p>
         <p className="font-mono text-xs">{tranche.initiatedDate}</p>
@@ -209,13 +225,13 @@ const UnlockTrancheRow = ({ tranche }: { tranche: UnlockTranche }) => {
       </div>
       <div className="text-right">
         <p className="text-xs text-muted-foreground">Vested</p>
-        <p className="font-mono text-xs text-emerald-400">{formatCC(tranche.vestedAmount)} CC</p>
+        <p className="font-mono text-xs text-primary">{formatCC(tranche.vestedAmount)} CC</p>
       </div>
       <div className="text-right">
         <p className="text-xs text-muted-foreground">Unvested</p>
-        <p className="font-mono text-xs text-amber-400">{formatCC(tranche.remainingUnvested)} CC</p>
+        <p className="font-mono text-xs text-accent">{formatCC(tranche.remainingUnvested)} CC</p>
       </div>
-      <Badge variant="outline" className="text-xs">
+      <Badge variant="outline" className="text-xs border-border">
         {vestedPct.toFixed(0)}% vested
       </Badge>
     </div>
@@ -229,12 +245,14 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
   const effectiveWeight = Math.round(sv.svWeight * tierCfg.weightMultiplier);
 
   return (
-    <Card className="p-6 space-y-4">
+    <Card className="p-6 space-y-4 glass-card">
+      {/* Header */}
       <div className="flex items-start justify-between gap-2 flex-wrap">
         <div>
-          <h3 className="font-semibold text-lg">{sv.svName}</h3>
+          <h3 className="font-semibold text-lg text-foreground">{sv.svName}</h3>
           <p className="text-xs text-muted-foreground">
-            Base Weight: {sv.svWeight} → Effective: {effectiveWeight}
+            Base Weight: {sv.svWeight} → Effective:{" "}
+            <span className={tierCfg.textClass}>{effectiveWeight}</span>
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -246,23 +264,30 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
         </div>
       </div>
 
-      <LockPercentBar lockedPct={lockedPct} currentTierThreshold={tierCfg.threshold} />
+      {/* Lock bar */}
+      <LockPercentBar
+        lockedPct={lockedPct}
+        currentTierThreshold={tierCfg.threshold}
+        tier={sv.currentTier}
+      />
 
+      {/* CC summary */}
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div className="bg-muted/40 rounded-lg p-3">
           <p className="text-xs text-muted-foreground mb-0.5">Lifetime Earned</p>
-          <p className="font-mono font-semibold">{formatCC(sv.lifetimeEarned)} CC</p>
+          <p className="font-mono font-semibold text-foreground">{formatCC(sv.lifetimeEarned)} CC</p>
         </div>
         <div className="bg-muted/40 rounded-lg p-3">
           <p className="text-xs text-muted-foreground mb-0.5">Total Locked</p>
-          <p className={`font-mono font-semibold ${lockedPct < tierCfg.threshold ? "text-red-400" : "text-emerald-400"}`}>
+          <p className={`font-mono font-semibold ${lockedPct < tierCfg.threshold ? "text-destructive" : "text-primary"}`}>
             {formatCC(sv.lockedAmount)} CC
           </p>
         </div>
       </div>
 
+      {/* Implied tier change warning */}
       {impliedChanged && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+        <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           <TrendingDown className="h-4 w-4 shrink-0" />
           <span>
             Implied tier change:{" "}
@@ -271,9 +296,10 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
         </div>
       )}
 
+      {/* Rounds under threshold */}
       {sv.roundsUnderThreshold.length > 0 && (
         <div className="text-xs text-muted-foreground">
-          <span className="text-amber-400 font-semibold">{sv.roundsUnderThreshold.length}</span>{" "}
+          <span className="text-warning font-semibold">{sv.roundsUnderThreshold.length}</span>{" "}
           round{sv.roundsUnderThreshold.length > 1 ? "s" : ""} under threshold in last 35 days
           {sv.roundsUnderThreshold.length <= 5 && (
             <span className="ml-1">(#{sv.roundsUnderThreshold.join(", #")})</span>
@@ -281,9 +307,10 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
         </div>
       )}
 
+      {/* Wallets */}
       <Collapsible>
         <CollapsibleTrigger asChild>
-          <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs">
+          <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground">
             <Wallet className="h-3.5 w-3.5" />
             {sv.wallets.length} Reported Wallet{sv.wallets.length !== 1 ? "s" : ""}
             <ChevronDown className="h-3.5 w-3.5 ml-auto" />
@@ -296,13 +323,13 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
                 key={i}
                 className="flex items-center justify-between rounded border border-border/50 bg-muted/30 px-3 py-2 text-xs"
               >
-                <div>
+                <div className="flex items-center gap-2">
                   <Badge
                     variant="outline"
                     className={
                       w.type === "locking"
-                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 mr-2"
-                        : "bg-amber-500/10 text-amber-400 border-amber-500/20 mr-2"
+                        ? "bg-primary/10 text-primary border-primary/20"
+                        : "bg-accent/10 text-accent border-accent/20"
                     }
                   >
                     {w.type === "locking" ? (
@@ -312,10 +339,10 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
                     )}
                     {w.type}
                   </Badge>
-                  <span className="font-mono">{formatPartyId(w.partyId)}</span>
+                  <span className="font-mono text-muted-foreground">{formatPartyId(w.partyId)}</span>
                 </div>
                 {w.type === "locking" && (
-                  <span className="font-mono text-emerald-400">{formatCC(w.lockedAmount)} CC</span>
+                  <span className="font-mono text-primary">{formatCC(w.lockedAmount)} CC</span>
                 )}
               </div>
             ))}
@@ -323,10 +350,11 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
         </CollapsibleContent>
       </Collapsible>
 
+      {/* Unlock Tranches */}
       {sv.unlockTranches.length > 0 && (
         <Collapsible>
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs">
+            <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground">
               <CalendarClock className="h-3.5 w-3.5" />
               {sv.unlockTranches.length} Active Unlock Tranche{sv.unlockTranches.length !== 1 ? "s" : ""}
               <ChevronDown className="h-3.5 w-3.5 ml-auto" />
@@ -342,12 +370,13 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
         </Collapsible>
       )}
 
+      {/* Proposal link */}
       {sv.weightChangeProposalUrl && (
         <a
           href={sv.weightChangeProposalUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 text-xs text-primary hover:underline"
+          className="flex items-center gap-1 text-xs text-primary hover:opacity-80 transition-smooth"
         >
           <ExternalLink className="h-3 w-3" />
           View active weight-change proposal
@@ -362,9 +391,9 @@ const SVLockingCard = ({ sv }: { sv: SVLockingRecord }) => {
 const TierScheduleTable = () => {
   const rows = [
     { year: "Start (2026)", t1: "70%", t2: "45%", t3: "35%" },
-    { year: "+1 Year", t1: "65%", t2: "50%", t3: "N/A" },
-    { year: "+2 Years", t1: "60%", t2: "N/A", t3: "N/A" },
-    { year: "+3 Years", t1: "55%", t2: "N/A", t3: "N/A" },
+    { year: "+1 Year",      t1: "65%", t2: "50%", t3: "N/A" },
+    { year: "+2 Years",     t1: "60%", t2: "N/A", t3: "N/A" },
+    { year: "+3 Years",     t1: "55%", t2: "N/A", t3: "N/A" },
   ];
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
@@ -372,17 +401,17 @@ const TierScheduleTable = () => {
         <thead className="bg-muted/40">
           <tr>
             <th className="px-4 py-2 text-left font-semibold text-muted-foreground">Year</th>
-            <th className="px-4 py-2 text-center font-semibold text-emerald-400">Tier 1 (100%)</th>
-            <th className="px-4 py-2 text-center font-semibold text-amber-400">Tier 2 (60%)</th>
-            <th className="px-4 py-2 text-center font-semibold text-orange-400">Tier 3 (40%)</th>
+            <th className="px-4 py-2 text-center font-semibold text-primary">Tier 1 (100%)</th>
+            <th className="px-4 py-2 text-center font-semibold text-accent">Tier 2 (60%)</th>
+            <th className="px-4 py-2 text-center font-semibold text-warning">Tier 3 (40%)</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.year} className="border-t border-border/50">
-              <td className="px-4 py-2 font-medium">{r.year}</td>
-              <td className="px-4 py-2 text-center font-mono">{r.t1}</td>
-              <td className="px-4 py-2 text-center font-mono">{r.t2}</td>
+              <td className="px-4 py-2 font-medium text-foreground">{r.year}</td>
+              <td className="px-4 py-2 text-center font-mono text-primary">{r.t1}</td>
+              <td className="px-4 py-2 text-center font-mono text-accent">{r.t2}</td>
               <td className="px-4 py-2 text-center font-mono text-muted-foreground">{r.t3}</td>
             </tr>
           ))}
@@ -395,14 +424,14 @@ const TierScheduleTable = () => {
 // ─── Phase Banner ─────────────────────────────────────────────────────────────
 
 const Phase1Banner = () => (
-  <div className="flex items-start gap-3 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm">
-    <Info className="h-4 w-4 text-blue-400 shrink-0 mt-0.5" />
+  <div className="flex items-start gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 py-3 text-sm">
+    <Info className="h-4 w-4 text-accent shrink-0 mt-0.5" />
     <div className="space-y-0.5">
-      <p className="font-semibold text-blue-300">Phase 1 — Transitional Enforcement (Manual)</p>
-      <p className="text-blue-200/70">
-        Active from <span className="font-mono">{PHASE1_START}</span>. Locking is tracked via
-        disclosed wallets/custodians. SVs must report PartyIDs to{" "}
-        <a href="mailto:sv@canton.foundation" className="underline hover:text-blue-200">
+      <p className="font-semibold text-accent">Phase 1 — Transitional Enforcement (Manual)</p>
+      <p className="text-muted-foreground">
+        Active from <span className="font-mono text-foreground">{PHASE1_START}</span>. Locking is
+        tracked via disclosed wallets/custodians. SVs must report PartyIDs to{" "}
+        <a href="mailto:sv@canton.foundation" className="text-primary underline hover:opacity-80">
           sv@canton.foundation
         </a>
         . On-chain automation (Phase 2) expected 3–6 months later.
@@ -445,7 +474,7 @@ const FAQSection = () => (
     <h2 className="text-xl font-semibold">Frequently Asked Questions</h2>
     <div className="grid gap-3 md:grid-cols-2">
       {FAQ_ITEMS.map((item, i) => (
-        <Card key={i} className="p-4 space-y-1">
+        <Card key={i} className="p-4 space-y-1 glass-card">
           <p className="font-medium text-sm flex items-start gap-2">
             <CircleAlert className="h-4 w-4 text-primary shrink-0 mt-0.5" />
             {item.q}
@@ -460,7 +489,7 @@ const FAQSection = () => (
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 const EmptyState = () => (
-  <Card className="p-12 text-center border-dashed">
+  <Card className="p-12 text-center border-dashed glass-card">
     <Lock className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
     <h3 className="text-lg font-semibold mb-2">No SV Data Yet</h3>
     <p className="text-sm text-muted-foreground max-w-sm mx-auto">
@@ -479,25 +508,24 @@ const EmptyState = () => (
 const SVLocking = () => {
   const svData = SV_LOCKING_DATA;
 
-  const compliant = svData.filter((s) => s.daysUnderThreshold === null).length;
-  const atRisk = svData.filter(
-    (s) => s.daysUnderThreshold !== null && s.daysUnderThreshold < 30
-  ).length;
-  const critical = svData.filter(
-    (s) => s.daysUnderThreshold !== null && s.daysUnderThreshold >= 30
-  ).length;
+  const compliant  = svData.filter((s) => s.daysUnderThreshold === null).length;
+  const atRisk     = svData.filter((s) => s.daysUnderThreshold !== null && s.daysUnderThreshold < 30).length;
+  const critical   = svData.filter((s) => s.daysUnderThreshold !== null && s.daysUnderThreshold >= 30).length;
 
   return (
     <DashboardLayout>
       <TooltipProvider>
         <div className="space-y-8">
+
           {/* Page header */}
           <div className="flex items-start justify-between flex-wrap gap-4">
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <Lock className="h-8 w-8 text-primary" />
                 <h1 className="text-3xl font-bold">SV Locking</h1>
-                <Badge variant="outline" className="ml-2">CIP-0105</Badge>
+                <Badge variant="outline" className="ml-2 border-primary/30 text-primary bg-primary/10">
+                  CIP-0105
+                </Badge>
               </div>
               <p className="text-muted-foreground">
                 Super Validator locking & long-term commitment tracking
@@ -505,9 +533,9 @@ const SVLocking = () => {
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 cursor-default">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2 cursor-default border border-border/50">
                   <RefreshCw className="h-3 w-3" />
-                  Last updated: <span className="font-mono font-medium ml-1">{LAST_UPDATED}</span>
+                  Last updated: <span className="font-mono font-medium ml-1 text-foreground">{LAST_UPDATED}</span>
                 </div>
               </TooltipTrigger>
               <TooltipContent>
@@ -516,29 +544,32 @@ const SVLocking = () => {
             </Tooltip>
           </div>
 
+          {/* Phase 1 banner */}
           <Phase1Banner />
 
+          {/* Summary stats */}
           {svData.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Card className="p-4">
+              <Card className="p-4 glass-card">
                 <p className="text-xs text-muted-foreground mb-1">Total SVs</p>
-                <p className="text-2xl font-bold">{svData.length}</p>
+                <p className="text-2xl font-bold text-foreground">{svData.length}</p>
               </Card>
-              <Card className="p-4">
+              <Card className="p-4 glass-card">
                 <p className="text-xs text-muted-foreground mb-1">Compliant</p>
-                <p className="text-2xl font-bold text-emerald-400">{compliant}</p>
+                <p className="text-2xl font-bold text-primary">{compliant}</p>
               </Card>
-              <Card className="p-4">
+              <Card className="p-4 glass-card">
                 <p className="text-xs text-muted-foreground mb-1">At Risk</p>
-                <p className="text-2xl font-bold text-amber-400">{atRisk}</p>
+                <p className="text-2xl font-bold text-warning">{atRisk}</p>
               </Card>
-              <Card className="p-4">
+              <Card className="p-4 glass-card">
                 <p className="text-xs text-muted-foreground mb-1">Critical (&gt;30d)</p>
-                <p className="text-2xl font-bold text-red-400">{critical}</p>
+                <p className="text-2xl font-bold text-destructive">{critical}</p>
               </Card>
             </div>
           )}
 
+          {/* SV cards */}
           <section>
             <h2 className="text-xl font-semibold mb-4">Super Validator Status</h2>
             {svData.length === 0 ? (
@@ -552,6 +583,7 @@ const SVLocking = () => {
             )}
           </section>
 
+          {/* Tier schedule */}
           <section className="space-y-3">
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-semibold">Locking Tier Schedule</h2>
@@ -571,19 +603,21 @@ const SVLocking = () => {
             <TierScheduleTable />
           </section>
 
+          {/* FAQ */}
           <FAQSection />
 
-          <Card className="p-5 border-dashed">
+          {/* Contact */}
+          <Card className="p-5 glass-card">
             <div className="flex items-start gap-3">
               <Info className="h-5 w-5 text-primary shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="font-semibold">Report PartyIDs / Contact Foundation</p>
+                <p className="font-semibold text-foreground">Report PartyIDs / Contact Foundation</p>
                 <p className="text-sm text-muted-foreground">
                   SVs choosing to retain SV rewards weight must report all locking and
                   unlocking PartyIDs to{" "}
                   <a
                     href="mailto:sv@canton.foundation"
-                    className="text-primary underline hover:opacity-80"
+                    className="text-primary underline hover:opacity-80 transition-smooth"
                   >
                     sv@canton.foundation
                   </a>
