@@ -1,401 +1,272 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import {
-  Search,
-  Ticket,
-  Code,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  ChevronDown,
-  ChevronUp,
-  AlertTriangle,
-  ArrowUpDown,
-} from "lucide-react";
+import { Search, Award, Ticket, Code, Clock, Activity } from "lucide-react";
 import { PaginationControls } from "@/components/PaginationControls";
 import { DataSourcesFooter } from "@/components/DataSourcesFooter";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
 import { useValidatorLicenses, useTopValidatorsByFaucets } from "@/hooks/use-canton-scan-api";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const truncateParty = (party: string, head = 12, tail = 8) => {
-  if (!party || party.length <= head + tail + 3) return party || "—";
-  return `${party.substring(0, head)}…${party.substring(party.length - tail)}`;
-};
-
-const faucetHealth = (missed: number, collected: number) => {
-  if (collected === 0) return "unknown";
-  const missRate = missed / (missed + collected);
-  if (missRate === 0) return "perfect";
-  if (missRate < 0.05) return "good";
-  if (missRate < 0.15) return "warn";
-  return "poor";
-};
-
-const HEALTH_CONFIG = {
-  perfect: { label: "Perfect", class: "bg-primary/15 text-primary border-primary/30" },
-  good:    { label: "Good",    class: "bg-primary/10 text-primary border-primary/20" },
-  warn:    { label: "Warning", class: "bg-warning/15 text-warning border-warning/30" },
-  poor:    { label: "Poor",    class: "bg-destructive/15 text-destructive border-destructive/30" },
-  unknown: { label: "No Data", class: "bg-muted/40 text-muted-foreground border-border" },
-};
-
-type SortKey = "validator" | "collected" | "missed" | "missRate" | "version";
-type SortDir = "asc" | "desc";
-
-// ─── Merged record type ───────────────────────────────────────────────────────
-
-interface ValidatorRecord {
-  validator: string;
-  sponsor: string;
-  dso: string;
-  version: string;
-  contact: string;
-  lastUpdated: string;
-  firstRound: number | null;
-  lastRound: number | null;
-  missedCoupons: number;
-  collected: number;
-  missed: number;
-  raw: any;
-}
-
-// ─── Validator Card ───────────────────────────────────────────────────────────
-
-const ValidatorCard = ({ record }: { record: ValidatorRecord }) => {
-  const [open, setOpen] = useState(false);
-  const health = faucetHealth(record.missed, record.collected);
-  const cfg = HEALTH_CONFIG[health];
-  const missRate = record.collected + record.missed > 0
-    ? ((record.missed / (record.collected + record.missed)) * 100).toFixed(1)
-    : null;
-
-  return (
-    <Card className="glass-card px-4 py-3 space-y-3">
-      {/* Row 1: validator + health badge */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-xs text-muted-foreground mb-0.5">Validator</p>
-          <p className="font-mono text-xs text-foreground break-all leading-relaxed">
-            {record.validator || "—"}
-          </p>
-        </div>
-        <Badge variant="outline" className={`${cfg.class} border shrink-0 text-xs`}>
-          {health === "perfect" && <CheckCircle2 className="h-3 w-3 mr-1" />}
-          {health === "poor"    && <XCircle      className="h-3 w-3 mr-1" />}
-          {health === "warn"    && <AlertTriangle className="h-3 w-3 mr-1" />}
-          {cfg.label}
-        </Badge>
-      </div>
-
-      {/* Row 2: key stats grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        <div className="bg-muted/30 rounded-md px-2 py-1.5">
-          <p className="text-muted-foreground mb-0.5">Sponsor</p>
-          <p className="font-mono truncate" title={record.sponsor}>
-            {truncateParty(record.sponsor)}
-          </p>
-        </div>
-        <div className="bg-muted/30 rounded-md px-2 py-1.5">
-          <p className="text-muted-foreground mb-0.5">Rounds Collected</p>
-          <p className="font-semibold text-primary">{record.collected || "—"}</p>
-        </div>
-        <div className="bg-muted/30 rounded-md px-2 py-1.5">
-          <p className="text-muted-foreground mb-0.5">Rounds Missed</p>
-          <p className={`font-semibold ${record.missed > 0 ? "text-destructive" : "text-foreground"}`}>
-            {record.missed ?? "—"}
-          </p>
-        </div>
-        <div className="bg-muted/30 rounded-md px-2 py-1.5">
-          <p className="text-muted-foreground mb-0.5">Miss Rate</p>
-          <p className={`font-semibold ${
-            missRate === null ? "text-muted-foreground"
-            : parseFloat(missRate) > 15 ? "text-destructive"
-            : parseFloat(missRate) > 5  ? "text-warning"
-            : "text-primary"
-          }`}>
-            {missRate !== null ? `${missRate}%` : "—"}
-          </p>
-        </div>
-      </div>
-
-      {/* Row 3: version + last updated inline */}
-      <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-        {record.version && (
-          <span>
-            Version:{" "}
-            <span className="text-foreground font-mono">{record.version}</span>
-          </span>
-        )}
-        {record.contact && (
-          <span>
-            Contact:{" "}
-            <span className="text-foreground">{record.contact}</span>
-          </span>
-        )}
-        {record.lastUpdated && (
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {new Date(record.lastUpdated).toLocaleDateString()}
-          </span>
-        )}
-        {record.firstRound && (
-          <span>
-            Rounds:{" "}
-            <span className="text-foreground font-mono">
-              #{record.firstRound} → #{record.lastRound ?? "now"}
-            </span>
-          </span>
-        )}
-      </div>
-
-      {/* Raw JSON collapsible */}
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground h-7 px-2"
-          >
-            <Code className="h-3.5 w-3.5" />
-            Raw JSON
-            {open ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
-          </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <pre className="text-xs bg-muted/40 p-3 rounded-lg overflow-auto max-h-64 mt-1">
-            {JSON.stringify(record.raw, null, 2)}
-          </pre>
-        </CollapsibleContent>
-      </Collapsible>
-    </Card>
-  );
-};
-
-// ─── Sort button ──────────────────────────────────────────────────────────────
-
-const SortBtn = ({
-  label,
-  sortKey,
-  current,
-  dir,
-  onClick,
-}: {
-  label: string;
-  sortKey: SortKey;
-  current: SortKey;
-  dir: SortDir;
-  onClick: (k: SortKey) => void;
-}) => (
-  <button
-    onClick={() => onClick(sortKey)}
-    className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-smooth border ${
-      current === sortKey
-        ? "border-primary/40 bg-primary/10 text-primary"
-        : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
-    }`}
-  >
-    {label}
-    <ArrowUpDown className="h-3 w-3" />
-    {current === sortKey && (
-      <span className="text-[10px]">{dir === "asc" ? "↑" : "↓"}</span>
-    )}
-  </button>
-);
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
 const ValidatorLicenses = () => {
-  const [search, setSearch]       = useState("");
-  const [page, setPage]           = useState(1);
-  const [sortKey, setSortKey]     = useState<SortKey>("collected");
-  const [sortDir, setSortDir]     = useState<SortDir>("desc");
-  const pageSize = 50;
+  const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 100;
 
   const { data: licensesData, isLoading: licensesLoading } = useValidatorLicenses();
-  const { data: faucetData,   isLoading: faucetsLoading  } = useTopValidatorsByFaucets(1000);
+  const { data: faucetData, isLoading: faucetsLoading } = useTopValidatorsByFaucets(1000);
 
+  const licenses = licensesData || [];
+  const faucets = faucetData || [];
   const isLoading = licensesLoading || faucetsLoading;
-  const licenses  = licensesData || [];
-  const faucets   = faucetData   || [];
 
-  // Build faucet lookup map
-  const faucetMap = useMemo(() => {
-    const map = new Map<string, typeof faucets[0]>();
-    faucets.forEach((f) => { if (f.validator) map.set(f.validator, f); });
-    return map;
-  }, [faucets]);
-
-  // Merge licenses + faucet data into unified records
-  const records: ValidatorRecord[] = useMemo(() => {
-    return licenses.map((lic: any) => {
-      const validator   = lic.payload?.validator   || lic.validator   || "";
-      const sponsor     = lic.payload?.sponsor     || lic.sponsor     || "";
-      const dso         = lic.payload?.dso         || lic.dso         || "";
-      const faucetState = lic.payload?.faucetState || lic.faucetState;
-      const metadata    = lic.payload?.metadata    || lic.metadata;
-      const faucet      = faucetMap.get(validator);
-
-      return {
-        validator,
-        sponsor,
-        dso,
-        version:     metadata?.version      || "",
-        contact:     metadata?.contactPoint || "",
-        lastUpdated: metadata?.lastUpdatedAt || "",
-        firstRound:  faucetState?.firstReceivedFor?.number ?? faucet?.firstCollectedInRound ?? null,
-        lastRound:   faucetState?.lastReceivedFor?.number  ?? faucet?.lastCollectedInRound  ?? null,
-        missedCoupons: parseInt(faucetState?.numCouponsMissed ?? "0"),
-        collected:   faucet?.numRoundsCollected ?? 0,
-        missed:      faucet?.numRoundsMissed    ?? parseInt(faucetState?.numCouponsMissed ?? "0"),
-        raw:         lic,
-      };
-    });
-  }, [licenses, faucetMap]);
-
-  // Filter
-  const filtered = useMemo(() => {
-    if (!search) return records;
-    const q = search.toLowerCase();
-    return records.filter(
-      (r) =>
-        r.validator.toLowerCase().includes(q) ||
-        r.sponsor.toLowerCase().includes(q) ||
-        r.version.toLowerCase().includes(q)
-    );
-  }, [records, search]);
-
-  // Sort
-  const sorted = useMemo(() => {
-    return [...filtered].sort((a, b) => {
-      let av: any, bv: any;
-      if (sortKey === "validator") { av = a.validator; bv = b.validator; }
-      else if (sortKey === "collected") { av = a.collected; bv = b.collected; }
-      else if (sortKey === "missed")    { av = a.missed;    bv = b.missed;    }
-      else if (sortKey === "missRate") {
-        av = a.collected + a.missed > 0 ? a.missed / (a.collected + a.missed) : -1;
-        bv = b.collected + b.missed > 0 ? b.missed / (b.collected + b.missed) : -1;
-      }
-      else if (sortKey === "version") { av = a.version; bv = b.version; }
-      if (av < bv) return sortDir === "asc" ? -1 : 1;
-      if (av > bv) return sortDir === "asc" ?  1 : -1;
-      return 0;
-    });
-  }, [filtered, sortKey, sortDir]);
-
-  const paginated = sorted.slice((page - 1) * pageSize, page * pageSize);
-
-  const handleSort = (key: SortKey) => {
-    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("desc"); }
-    setPage(1);
+  const formatParty = (party: string) => {
+    if (!party || party.length <= 30) return party || "Unknown";
+    return `${party.substring(0, 15)}...${party.substring(party.length - 12)}`;
   };
 
-  // Summary stats
-  const totalCollected  = records.reduce((s, r) => s + r.collected, 0);
-  const totalMissed     = records.reduce((s, r) => s + r.missed, 0);
-  const overallMissRate = totalCollected + totalMissed > 0
-    ? ((totalMissed / (totalCollected + totalMissed)) * 100).toFixed(1)
-    : "—";
+  const filteredLicenses = licenses.filter((lic: any) => {
+    if (!searchTerm) return true;
+    const validator = lic.payload?.validator || lic.validator;
+    const sponsor = lic.payload?.sponsor || lic.sponsor;
+    return (
+      (validator?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+      (sponsor?.toLowerCase() || "").includes(searchTerm.toLowerCase())
+    );
+  });
+
+  const filteredFaucets = faucets.filter((f) => {
+    if (!searchTerm) return true;
+    return f.validator?.toLowerCase().includes(searchTerm.toLowerCase());
+  });
+
+  const paginateData = (data: any[]) => {
+    return data.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  };
 
   return (
     <DashboardLayout>
       <div className="space-y-6">
-
-        {/* Header */}
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <Ticket className="h-8 w-8 text-primary" />
-            <h1 className="text-3xl font-bold">Validator Licenses</h1>
+            <Award className="h-8 w-8 text-primary" />
+            <h1 className="text-3xl font-bold">Validator Licenses & Faucets</h1>
           </div>
-          <p className="text-muted-foreground">
-            Active validator licenses and faucet performance across the network.
-          </p>
+          <p className="text-muted-foreground">View active validator licenses and faucet activity on the network.</p>
         </div>
 
-        {/* Summary stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: "Total Validators", value: isLoading ? null : records.length, color: "text-foreground" },
-            { label: "Rounds Collected", value: isLoading ? null : totalCollected.toLocaleString(), color: "text-primary" },
-            { label: "Rounds Missed",    value: isLoading ? null : totalMissed.toLocaleString(),    color: "text-destructive" },
-            { label: "Overall Miss Rate",value: isLoading ? null : `${overallMissRate}%`,           color: totalMissed > 0 ? "text-warning" : "text-primary" },
-          ].map((s) => (
-            <Card key={s.label} className="p-4 glass-card">
-              <p className="text-xs text-muted-foreground mb-1">{s.label}</p>
-              {s.value === null
-                ? <Skeleton className="h-7 w-16" />
-                : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-              }
-            </Card>
-          ))}
-        </div>
-
-        {/* Search + sort controls */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
-            <Input
-              placeholder="Search validator, sponsor, or version…"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              className="pl-10"
-            />
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-muted-foreground">Sort:</span>
-            <SortBtn label="Collected"  sortKey="collected" current={sortKey} dir={sortDir} onClick={handleSort} />
-            <SortBtn label="Missed"     sortKey="missed"    current={sortKey} dir={sortDir} onClick={handleSort} />
-            <SortBtn label="Miss Rate"  sortKey="missRate"  current={sortKey} dir={sortDir} onClick={handleSort} />
-            <SortBtn label="Version"    sortKey="version"   current={sortKey} dir={sortDir} onClick={handleSort} />
-          </div>
-        </div>
-
-        {/* Results count */}
-        {!isLoading && (
-          <p className="text-xs text-muted-foreground">
-            Showing{" "}
-            <span className="text-foreground font-medium">{paginated.length}</span>{" "}
-            of{" "}
-            <span className="text-foreground font-medium">{sorted.length}</span>{" "}
-            validators
-            {search && ` matching "${search}"`}
-          </p>
-        )}
-
-        {/* Cards */}
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-28 w-full" />)}
-          </div>
-        ) : sorted.length === 0 ? (
-          <Card className="p-12 text-center glass-card border-dashed">
-            <Ticket className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-            <p className="text-muted-foreground">No validators found{search ? ` matching "${search}"` : ""}.</p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card className="p-6">
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Active Licenses</h3>
+            {isLoading ? (
+              <Skeleton className="h-8 w-24" />
+            ) : (
+              <p className="text-2xl font-bold">{licenses.length}</p>
+            )}
           </Card>
-        ) : (
-          <div className="space-y-2">
-            {paginated.map((record, i) => (
-              <ValidatorCard key={record.validator || i} record={record} />
-            ))}
-          </div>
-        )}
 
-        {/* Pagination */}
-        {!isLoading && sorted.length > pageSize && (
-          <PaginationControls
-            currentPage={page}
-            totalItems={sorted.length}
-            pageSize={pageSize}
-            onPageChange={setPage}
-          />
-        )}
+          <Card className="p-6">
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Validators with Faucets</h3>
+            {isLoading ? (
+              <Skeleton className="h-8 w-24" />
+            ) : (
+              <p className="text-2xl font-bold">{faucets.length}</p>
+            )}
+          </Card>
+        </div>
+
+        <Card className="p-6">
+          <div className="mb-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+              <Input
+                type="text"
+                placeholder="Search by validator..."
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="pl-10"
+              />
+            </div>
+          </div>
+
+          <Tabs defaultValue="licenses" className="w-full" onValueChange={() => setCurrentPage(1)}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="licenses" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">Licenses ({filteredLicenses.length})</TabsTrigger>
+              <TabsTrigger value="faucets" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">Faucet Activity ({filteredFaucets.length})</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="licenses" className="space-y-3 mt-4">
+              {isLoading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <Skeleton key={i} className="h-24 w-full" />
+                  ))}
+                </div>
+              ) : filteredLicenses.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">No validator licenses found</p>
+              ) : (
+                <>
+                  {paginateData(filteredLicenses).map((license: any, idx: number) => {
+                    const validator = license.payload?.validator || license.validator;
+                    const sponsor = license.payload?.sponsor || license.sponsor;
+                    const dso = license.payload?.dso || license.dso;
+                    const faucetState = license.payload?.faucetState || license.faucetState;
+                    const metadata = license.payload?.metadata || license.metadata;
+
+                    return (
+                      <Card key={idx} className="p-4 space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1 space-y-2">
+                            <div>
+                              <p className="text-sm font-semibold text-primary">Validator</p>
+                              <p className="text-xs font-mono break-all">{validator}</p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Sponsor</p>
+                                <p className="font-mono text-xs break-all">{formatParty(sponsor)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">DSO</p>
+                                <p className="font-mono text-xs break-all">{formatParty(dso || "N/A")}</p>
+                              </div>
+                            </div>
+
+                            {faucetState && (
+                              <div className="pt-2 border-t">
+                                <p className="text-xs font-semibold mb-2">Faucet State</p>
+                                <div className="grid grid-cols-3 gap-3 text-xs">
+                                  <div>
+                                    <p className="text-muted-foreground">First Round</p>
+                                    <p className="font-medium">{faucetState.firstReceivedFor?.number || "N/A"}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Last Round</p>
+                                    <p className="font-medium">{faucetState.lastReceivedFor?.number || "N/A"}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Missed Coupons</p>
+                                    <p className="font-medium">{faucetState.numCouponsMissed || "0"}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {metadata && (
+                              <div className="pt-2 border-t">
+                                <p className="text-xs font-semibold mb-2">Metadata</p>
+                                <div className="grid grid-cols-2 gap-3 text-xs">
+                                  <div>
+                                    <p className="text-muted-foreground">Version</p>
+                                    <p className="font-medium">{metadata.version || "N/A"}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Contact</p>
+                                    <p className="font-medium">{metadata.contactPoint || "Not provided"}</p>
+                                  </div>
+                                  {metadata.lastUpdatedAt && (
+                                    <div className="col-span-2">
+                                      <p className="text-muted-foreground">Last Updated</p>
+                                      <p className="font-medium flex items-center gap-1">
+                                        <Clock className="h-3 w-3" />
+                                        {new Date(metadata.lastUpdatedAt).toLocaleString()}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            <Collapsible className="pt-2 border-t">
+                              <CollapsibleTrigger asChild>
+                                <Button variant="ghost" size="sm" className="w-full justify-start">
+                                  <Code className="h-4 w-4 mr-2" />
+                                  Show Raw JSON
+                                </Button>
+                              </CollapsibleTrigger>
+                              <CollapsibleContent className="mt-2">
+                                <pre className="text-xs bg-muted p-3 rounded overflow-auto max-h-96">
+                                  {JSON.stringify(license, null, 2)}
+                                </pre>
+                              </CollapsibleContent>
+                            </Collapsible>
+                          </div>
+                          <Badge variant="default">Active</Badge>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                  <PaginationControls
+                    currentPage={currentPage}
+                    totalItems={filteredLicenses.length}
+                    pageSize={pageSize}
+                    onPageChange={setCurrentPage}
+                  />
+                </>
+              )}
+            </TabsContent>
+
+            <TabsContent value="faucets" className="space-y-3 mt-4">
+              {isLoading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <Skeleton key={i} className="h-24 w-full" />
+                  ))}
+                </div>
+              ) : filteredFaucets.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">No faucet activity found</p>
+              ) : (
+                <>
+                  {paginateData(filteredFaucets).map((faucet, idx: number) => (
+                    <Card key={idx} className="p-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Activity className="h-4 w-4 text-success" />
+                          <p className="text-sm font-medium">Validator: {formatParty(faucet.validator)}</p>
+                        </div>
+                        <Badge variant="secondary">
+                          {faucet.numRoundsCollected} rounds collected
+                        </Badge>
+                      </div>
+                      <div className="grid grid-cols-4 gap-3 text-xs">
+                        <div>
+                          <p className="text-muted-foreground">First Round</p>
+                          <p className="font-medium">{faucet.firstCollectedInRound}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Last Round</p>
+                          <p className="font-medium">{faucet.lastCollectedInRound}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Collected</p>
+                          <p className="font-medium text-success">{faucet.numRoundsCollected}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Missed</p>
+                          <p className="font-medium text-destructive">{faucet.numRoundsMissed}</p>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                  <PaginationControls
+                    currentPage={currentPage}
+                    totalItems={filteredFaucets.length}
+                    pageSize={pageSize}
+                    onPageChange={setCurrentPage}
+                  />
+                </>
+              )}
+            </TabsContent>
+          </Tabs>
+        </Card>
 
         <DataSourcesFooter
           snapshotId={undefined}
