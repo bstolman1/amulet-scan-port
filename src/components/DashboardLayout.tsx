@@ -19,6 +19,7 @@ import {
   ChevronDown,
   Radio,
   Layers,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 import { SyncInsightsIcon } from "./icons/SyncInsightsIcon";
@@ -60,6 +61,7 @@ const baseNavigationGroups: NavGroup[] = [
       { name: "Governance", href: "/governance", icon: Vote },
       { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
       { name: "Dev Fund", href: "/dev-fund", icon: Coins },
+      { name: "SV Locking", href: "/sv-locking", icon: Lock },
     ],
   },
   // {
