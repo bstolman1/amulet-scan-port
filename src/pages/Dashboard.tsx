@@ -8,11 +8,17 @@ const Dashboard = () => {
   const { data: latestRound } = useQuery({
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
+    refetchInterval: 30000,
   });
   const { data: dsoInfo } = useQuery({
     queryKey: ["dsoInfo"],
     queryFn: () => scanApi.fetchDsoInfo(),
     staleTime: 30000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
+    refetchInterval: 60000,
   });
   const {
     data: totalBalance,
@@ -21,8 +27,9 @@ const Dashboard = () => {
   } = useQuery({
     queryKey: ["totalBalance"],
     queryFn: () => scanApi.fetchTotalBalance(),
-    retry: 2,
-    retryDelay: 1000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
+    refetchInterval: 60000,
   });
   const { data: transactions } = useQuery({
     queryKey: ["recentTransactions"],
@@ -31,6 +38,9 @@ const Dashboard = () => {
         page_size: 5,
         sort_order: "desc",
       }),
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
+    refetchInterval: 30000,
   });
 
   const ccPrice = (() => {
