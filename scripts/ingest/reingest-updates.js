@@ -99,28 +99,23 @@ const client = axios.create({
 async function gsutilLs(gcsPath, opts = {}) {
   try {
     const { stdout } = await execAsync(
-      `gsutil ls -r "${gcsPath}" 2>/dev/null`,
+      `gsutil ls -r "${gcsPath}" 2>/dev/null || true`,
       { timeout: opts.timeout || 60000, maxBuffer: 50 * 1024 * 1024 }
     );
-    return stdout.trim().split('\n').filter(l => l && !l.endsWith(':'));
+    return stdout.trim().split('\n').filter(l => l && l.endsWith('.parquet'));
   } catch (err) {
-    if (err.stderr?.includes('CommandException') || err.stderr?.includes('No URLs matched') ||
-        err.message?.includes('CommandException') || err.message?.includes('No URLs matched')) {
-      return [];
-    }
-    throw err;
+    // Any gsutil ls failure means no files found (or transient error)
+    return [];
   }
 }
 
 async function gsutilRm(gcsPath) {
   try {
-    await execAsync(`gsutil -m rm -r "${gcsPath}" 2>/dev/null`, { timeout: 120000 });
+    await execAsync(`gsutil -m rm -r "${gcsPath}" 2>/dev/null || true`, { timeout: 120000 });
     return true;
   } catch (err) {
-    if (err.stderr?.includes('No URLs matched') || err.message?.includes('No URLs matched')) {
-      return false;
-    }
-    throw err;
+    // Treat any failure as non-fatal for cleanup
+    return false;
   }
 }
 
@@ -145,6 +140,23 @@ function dayPartitionPath(source, type, migrationId, year, month, day) {
   return `gs://${GCS_BUCKET}/raw/${source}/${type}/migration=${migrationId}/year=${year}/month=${month}/day=${day}/`;
 }
 
+// ─── Bulk GCS listing (one call per migration+source+type) ────────────────
+
+async function bulkListGCS(source, type, migrationId) {
+  const prefix = `gs://${GCS_BUCKET}/raw/${source}/${type}/migration=${migrationId}/`;
+  const files = await gsutilLs(prefix + '**/*.parquet');
+  // Parse day from each file path: .../year=YYYY/month=MM/day=DD/...
+  const byDay = {};
+  for (const f of files) {
+    const m = f.match(/year=(\d+)\/month=(\d+)\/day=(\d+)/);
+    if (m) {
+      const key = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+      byDay[key] = (byDay[key] || 0) + 1;
+    }
+  }
+  return byDay;
+}
+
 // ─── Audit: Check what exists ─────────────────────────────────────────────
 
 async function auditDateRange(dates, migrations) {
@@ -156,25 +168,28 @@ async function auditDateRange(dates, migrations) {
     console.log(`\n── ${source.toUpperCase()} ──`);
     for (const mig of migrations) {
       console.log(`  Migration ${mig}:`);
-      for (const { dateStr, year, month, day } of dates) {
-        const updatesPath = dayPartitionPath(source, 'updates', mig, year, month, day);
-        const eventsPath = dayPartitionPath(source, 'events', mig, year, month, day);
+      // Bulk list: 2 calls instead of 2 * numDays
+      const [updatesMap, eventsMap] = await Promise.all([
+        bulkListGCS(source, 'updates', mig),
+        bulkListGCS(source, 'events', mig),
+      ]);
 
-        const updatesFiles = await gsutilLs(updatesPath + '*.parquet');
-        const eventsFiles = await gsutilLs(eventsPath + '*.parquet');
-
-        const updatesCount = updatesFiles.filter(f => f.endsWith('.parquet')).length;
-        const eventsCount = eventsFiles.filter(f => f.endsWith('.parquet')).length;
+      let hasAny = false;
+      for (const { dateStr } of dates) {
+        const updatesCount = updatesMap[dateStr] || 0;
+        const eventsCount = eventsMap[dateStr] || 0;
 
         if (updatesCount > 0 || eventsCount > 0) {
+          hasAny = true;
           const status = updatesCount > 0 && eventsCount > 0 ? '✅' :
                          updatesCount > 0 && eventsCount === 0 ? '⚠️  EVENTS MISSING' :
                          '⚠️  UPDATES MISSING';
           console.log(`    ${dateStr}: ${status}  (${updatesCount} update files, ${eventsCount} event files)`);
-        } else {
+        } else if (VERBOSE) {
           console.log(`    ${dateStr}: ❌ NO DATA`);
         }
       }
+      if (!hasAny) console.log('    (no data in this date range)');
     }
   }
 }
@@ -186,18 +201,23 @@ async function checkBackfillOverlap(dates, migrations) {
   const overlaps = [];
 
   for (const mig of migrations) {
-    for (const { dateStr, year, month, day } of dates) {
-      const backfillUpdates = dayPartitionPath('backfill', 'updates', mig, year, month, day);
-      const backfillEvents = dayPartitionPath('backfill', 'events', mig, year, month, day);
+    const [bUpdatesMap, bEventsMap] = await Promise.all([
+      bulkListGCS('backfill', 'updates', mig),
+      bulkListGCS('backfill', 'events', mig),
+    ]);
+    const [uUpdatesMap, uEventsMap] = await Promise.all([
+      bulkListGCS('updates', 'updates', mig),
+      bulkListGCS('updates', 'events', mig),
+    ]);
 
-      const bUpdates = await gsutilLs(backfillUpdates + '*.parquet');
-      const bEvents = await gsutilLs(backfillEvents + '*.parquet');
+    for (const { dateStr } of dates) {
+      const backfillHas = (bUpdatesMap[dateStr] || 0) + (bEventsMap[dateStr] || 0);
+      const updatesHas = (uUpdatesMap[dateStr] || 0) + (uEventsMap[dateStr] || 0);
 
-      if (bUpdates.filter(f => f.endsWith('.parquet')).length > 0 ||
-          bEvents.filter(f => f.endsWith('.parquet')).length > 0) {
+      if (backfillHas > 0 && updatesHas > 0) {
         overlaps.push({ dateStr, migration: mig,
-          backfillUpdates: bUpdates.filter(f => f.endsWith('.parquet')).length,
-          backfillEvents: bEvents.filter(f => f.endsWith('.parquet')).length,
+          backfillUpdates: bUpdatesMap[dateStr] || 0,
+          backfillEvents: bEventsMap[dateStr] || 0,
         });
       }
     }
@@ -232,19 +252,23 @@ async function cleanUpdatesData(dates, migrations) {
   let totalDeleted = 0;
 
   for (const mig of migrations) {
-    for (const { dateStr, year, month, day } of dates) {
-      for (const type of ['updates', 'events']) {
-        const path = dayPartitionPath('updates', type, mig, year, month, day);
-        const files = await gsutilLs(path + '*.parquet');
-        const parquetCount = files.filter(f => f.endsWith('.parquet')).length;
+    // Bulk list to find which days have data
+    const [updatesMap, eventsMap] = await Promise.all([
+      bulkListGCS('updates', 'updates', mig),
+      bulkListGCS('updates', 'events', mig),
+    ]);
 
-        if (parquetCount > 0) {
+    for (const { dateStr, year, month, day } of dates) {
+      for (const [type, countMap] of [['updates', updatesMap], ['events', eventsMap]]) {
+        const count = countMap[dateStr] || 0;
+        if (count > 0) {
+          const gcsPath = dayPartitionPath('updates', type, mig, year, month, day);
           if (DRY_RUN) {
-            console.log(`   [DRY RUN] Would delete ${parquetCount} ${type} files at ${path}`);
+            console.log(`   [DRY RUN] Would delete ${count} ${type} files at ${gcsPath}`);
           } else {
-            console.log(`   Deleting ${parquetCount} ${type} files at ${path}...`);
-            await gsutilRm(path);
-            totalDeleted += parquetCount;
+            console.log(`   Deleting ${count} ${type} files at ${gcsPath}...`);
+            await gsutilRm(gcsPath);
+            totalDeleted += count;
           }
         }
       }
