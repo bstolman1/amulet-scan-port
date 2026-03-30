@@ -39,7 +39,7 @@ module.exports = {
       exp_backoff_restart_delay: 1000,
       
       // Memory management - lower limit since no ingestion
-      max_memory_restart: '1.5G',
+      max_memory_restart: '1536M',
       
       // Logging
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
