@@ -67,7 +67,24 @@ const POOL_SIZE = IS_TEST ? 1 : parseInt(process.env.DUCKDB_POOL_SIZE || '4', 10
 const POOL_TIMEOUT_MS = parseInt(process.env.DUCKDB_POOL_TIMEOUT_MS || '30000', 10);
 
 // Only create persistent db instance on Linux
-const db = IS_WINDOWS ? null : new duckdb.Database(DB_FILE);
+// Wrapped in try-catch so a DuckDB failure doesn't crash the entire server
+// (the scan proxy and other non-DuckDB routes should still work)
+let db = null;
+if (!IS_WINDOWS) {
+  try {
+    // Ensure parent directory exists before opening the database
+    const dbDir = path.dirname(DB_FILE);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+      console.log(`📁 Created DuckDB directory: ${dbDir}`);
+    }
+    db = new duckdb.Database(DB_FILE);
+  } catch (err) {
+    console.error(`❌ DuckDB initialization failed: ${err.message}`);
+    console.error(`   DB_FILE: ${DB_FILE}`);
+    console.error(`   The server will start without DuckDB — scan proxy and other routes will still work.`);
+  }
+}
 
 // Pool of connections
 const pool = [];
@@ -199,13 +216,19 @@ function initPool() {
     poolInitialized = true;
     return;
   }
-  
+
   if (poolInitialized) return;
-  
+
+  if (!db) {
+    console.warn('⚠️ DuckDB not available — skipping connection pool initialization');
+    poolInitialized = true;
+    return;
+  }
+
   for (let i = 0; i < POOL_SIZE; i++) {
     pool.push(createConnection(i));
   }
-  
+
   console.log(`🦆 DuckDB connection pool initialized: ${POOL_SIZE} connections`);
   poolInitialized = true;
 }
@@ -475,6 +498,9 @@ async function queryLinux(sql, params = []) {
  * Execute a query - automatically chooses strategy based on platform
  */
 export async function query(sql, params = []) {
+  if (!db && !IS_WINDOWS) {
+    throw new Error('DuckDB is not available — database failed to initialize on startup');
+  }
   if (IS_WINDOWS) {
     return queryWindows(sql, params);
   }
@@ -819,6 +845,10 @@ export function readParquet(globPattern) {
 // Initialize views for common queries
 // For large datasets, we skip view creation and use direct queries instead
 export async function initializeViews() {
+  if (!db && !IS_WINDOWS) {
+    console.warn('⚠️ Skipping view initialization — DuckDB not available');
+    return;
+  }
   // Use lazy counting with a cap to avoid memory issues
   const eventCount = countDataFiles('events', 10000);
   const updateCount = countDataFiles('updates', 10000);
