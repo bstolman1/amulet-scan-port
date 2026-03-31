@@ -98,13 +98,24 @@ const client = axios.create({
 
 async function gsutilLs(gcsPath, opts = {}) {
   try {
-    const { stdout } = await execAsync(
-      `gsutil ls -r "${gcsPath}" 2>/dev/null || true`,
+    // gsutil ls -r lists recursively. Don't suppress stderr so we can debug.
+    // Use '|| true' to prevent non-zero exit from throwing.
+    const { stdout, stderr } = await execAsync(
+      `gsutil ls -r "${gcsPath}" || true`,
       { timeout: opts.timeout || 60000, maxBuffer: 50 * 1024 * 1024 }
     );
-    return stdout.trim().split('\n').filter(l => l && l.endsWith('.parquet'));
+    if (VERBOSE && stderr && stderr.trim()) {
+      console.log(`      [gsutil stderr] ${stderr.trim().split('\n')[0]}`);
+    }
+    const lines = stdout.trim().split('\n').filter(l => l && l.endsWith('.parquet'));
+    if (VERBOSE && lines.length > 0) {
+      console.log(`      [gsutil] Found ${lines.length} parquet files at ${gcsPath}`);
+    }
+    return lines;
   } catch (err) {
-    // Any gsutil ls failure means no files found (or transient error)
+    if (VERBOSE) {
+      console.log(`      [gsutil error] ${err.message.split('\n')[0]}`);
+    }
     return [];
   }
 }
@@ -171,6 +182,48 @@ async function auditDateRange(dates, migrations) {
   console.log('\n' + '═'.repeat(80));
   console.log('📊 AUDIT: Checking existing data in GCS');
   console.log('═'.repeat(80));
+
+  // Probe: show actual top-level structure so we can verify paths
+  console.log('\n── GCS BUCKET PROBE ──');
+  try {
+    const { stdout } = await execAsync(
+      `gsutil ls "gs://${GCS_BUCKET}/raw/" || true`,
+      { timeout: 30000 }
+    );
+    console.log(`  gs://${GCS_BUCKET}/raw/ contains:`);
+    for (const line of stdout.trim().split('\n').filter(Boolean)) {
+      console.log(`    ${line}`);
+    }
+  } catch (e) {
+    console.log(`  [probe error] ${e.message.split('\n')[0]}`);
+  }
+
+  // Probe deeper: show one migration's structure
+  try {
+    const { stdout } = await execAsync(
+      `gsutil ls "gs://${GCS_BUCKET}/raw/backfill/" 2>&1 || true`,
+      { timeout: 30000 }
+    );
+    console.log(`\n  gs://${GCS_BUCKET}/raw/backfill/ contains:`);
+    for (const line of stdout.trim().split('\n').filter(Boolean).slice(0, 10)) {
+      console.log(`    ${line}`);
+    }
+  } catch (e) {
+    console.log(`  [probe error] ${e.message.split('\n')[0]}`);
+  }
+
+  try {
+    const { stdout } = await execAsync(
+      `gsutil ls "gs://${GCS_BUCKET}/raw/updates/" 2>&1 || true`,
+      { timeout: 30000 }
+    );
+    console.log(`\n  gs://${GCS_BUCKET}/raw/updates/ contains:`);
+    for (const line of stdout.trim().split('\n').filter(Boolean).slice(0, 10)) {
+      console.log(`    ${line}`);
+    }
+  } catch (e) {
+    console.log(`  [probe error] ${e.message.split('\n')[0]}`);
+  }
 
   for (const source of ['backfill', 'updates']) {
     console.log(`\n── ${source.toUpperCase()} ──`);
