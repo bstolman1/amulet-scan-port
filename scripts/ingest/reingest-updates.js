@@ -126,17 +126,24 @@ function dateRange(startStr, endStr) {
   const start = new Date(startStr + 'T00:00:00Z');
   const end = new Date(endStr + 'T00:00:00Z');
   for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    // Partition paths use UNPADDED numeric values (e.g. month=3, day=5)
+    // to match getUtcPartition() which returns raw integers
+    const year = d.getUTCFullYear();
+    const month = d.getUTCMonth() + 1;
+    const day = d.getUTCDate();
     dates.push({
-      dateStr: d.toISOString().split('T')[0],
-      year: d.getUTCFullYear(),
-      month: String(d.getUTCMonth() + 1).padStart(2, '0'),
-      day: String(d.getUTCDate()).padStart(2, '0'),
+      dateStr: `${year}-${month}-${day}`,  // unpadded key for matching bulkListGCS
+      displayStr: d.toISOString().split('T')[0],  // padded for display
+      year,
+      month,
+      day,
     });
   }
   return dates;
 }
 
 function dayPartitionPath(source, type, migrationId, year, month, day) {
+  // Partition paths use unpadded values to match getUtcPartition()
   return `gs://${GCS_BUCKET}/raw/${source}/${type}/migration=${migrationId}/year=${year}/month=${month}/day=${day}/`;
 }
 
@@ -145,12 +152,13 @@ function dayPartitionPath(source, type, migrationId, year, month, day) {
 async function bulkListGCS(source, type, migrationId) {
   const prefix = `gs://${GCS_BUCKET}/raw/${source}/${type}/migration=${migrationId}/`;
   const files = await gsutilLs(prefix + '**/*.parquet');
-  // Parse day from each file path: .../year=YYYY/month=MM/day=DD/...
+  // Parse day from each file path: .../year=YYYY/month=M/day=D/...
+  // Keys use unpadded values to match dateRange() dateStr format
   const byDay = {};
   for (const f of files) {
     const m = f.match(/year=(\d+)\/month=(\d+)\/day=(\d+)/);
     if (m) {
-      const key = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+      const key = `${parseInt(m[1])}-${parseInt(m[2])}-${parseInt(m[3])}`;
       byDay[key] = (byDay[key] || 0) + 1;
     }
   }
@@ -175,7 +183,7 @@ async function auditDateRange(dates, migrations) {
       ]);
 
       let hasAny = false;
-      for (const { dateStr } of dates) {
+      for (const { dateStr, displayStr } of dates) {
         const updatesCount = updatesMap[dateStr] || 0;
         const eventsCount = eventsMap[dateStr] || 0;
 
@@ -184,9 +192,9 @@ async function auditDateRange(dates, migrations) {
           const status = updatesCount > 0 && eventsCount > 0 ? '✅' :
                          updatesCount > 0 && eventsCount === 0 ? '⚠️  EVENTS MISSING' :
                          '⚠️  UPDATES MISSING';
-          console.log(`    ${dateStr}: ${status}  (${updatesCount} update files, ${eventsCount} event files)`);
+          console.log(`    ${displayStr}: ${status}  (${updatesCount} update files, ${eventsCount} event files)`);
         } else if (VERBOSE) {
-          console.log(`    ${dateStr}: ❌ NO DATA`);
+          console.log(`    ${displayStr}: ❌ NO DATA`);
         }
       }
       if (!hasAny) console.log('    (no data in this date range)');
@@ -210,12 +218,12 @@ async function checkBackfillOverlap(dates, migrations) {
       bulkListGCS('updates', 'events', mig),
     ]);
 
-    for (const { dateStr } of dates) {
+    for (const { dateStr, displayStr } of dates) {
       const backfillHas = (bUpdatesMap[dateStr] || 0) + (bEventsMap[dateStr] || 0);
       const updatesHas = (uUpdatesMap[dateStr] || 0) + (uEventsMap[dateStr] || 0);
 
       if (backfillHas > 0 && updatesHas > 0) {
-        overlaps.push({ dateStr, migration: mig,
+        overlaps.push({ dateStr: displayStr, migration: mig,
           backfillUpdates: bUpdatesMap[dateStr] || 0,
           backfillEvents: bEventsMap[dateStr] || 0,
         });
