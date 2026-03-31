@@ -39,7 +39,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import { execFile as execFileCb, exec as execCb } from 'child_process';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import axios from 'axios';
 import https from 'https';
 
@@ -98,24 +98,12 @@ const client = axios.create({
 
 async function gsutilLs(gcsPath, opts = {}) {
   try {
-    // gsutil ls -r lists recursively. Don't suppress stderr so we can debug.
-    // Use '|| true' to prevent non-zero exit from throwing.
-    const { stdout, stderr } = await execAsync(
-      `gsutil ls -r "${gcsPath}" || true`,
+    const { stdout } = await execAsync(
+      `gsutil ls -r "${gcsPath}" 2>/dev/null || true`,
       { timeout: opts.timeout || 60000, maxBuffer: 50 * 1024 * 1024 }
     );
-    if (VERBOSE && stderr && stderr.trim()) {
-      console.log(`      [gsutil stderr] ${stderr.trim().split('\n')[0]}`);
-    }
-    const lines = stdout.trim().split('\n').filter(l => l && l.endsWith('.parquet'));
-    if (VERBOSE && lines.length > 0) {
-      console.log(`      [gsutil] Found ${lines.length} parquet files at ${gcsPath}`);
-    }
-    return lines;
+    return stdout.trim().split('\n').filter(l => l && l.endsWith('.parquet'));
   } catch (err) {
-    if (VERBOSE) {
-      console.log(`      [gsutil error] ${err.message.split('\n')[0]}`);
-    }
     return [];
   }
 }
@@ -182,48 +170,6 @@ async function auditDateRange(dates, migrations) {
   console.log('\n' + '═'.repeat(80));
   console.log('📊 AUDIT: Checking existing data in GCS');
   console.log('═'.repeat(80));
-
-  // Probe: show actual top-level structure so we can verify paths
-  console.log('\n── GCS BUCKET PROBE ──');
-  try {
-    const { stdout } = await execAsync(
-      `gsutil ls "gs://${GCS_BUCKET}/raw/" || true`,
-      { timeout: 30000 }
-    );
-    console.log(`  gs://${GCS_BUCKET}/raw/ contains:`);
-    for (const line of stdout.trim().split('\n').filter(Boolean)) {
-      console.log(`    ${line}`);
-    }
-  } catch (e) {
-    console.log(`  [probe error] ${e.message.split('\n')[0]}`);
-  }
-
-  // Probe deeper: show one migration's structure
-  try {
-    const { stdout } = await execAsync(
-      `gsutil ls "gs://${GCS_BUCKET}/raw/backfill/" 2>&1 || true`,
-      { timeout: 30000 }
-    );
-    console.log(`\n  gs://${GCS_BUCKET}/raw/backfill/ contains:`);
-    for (const line of stdout.trim().split('\n').filter(Boolean).slice(0, 10)) {
-      console.log(`    ${line}`);
-    }
-  } catch (e) {
-    console.log(`  [probe error] ${e.message.split('\n')[0]}`);
-  }
-
-  try {
-    const { stdout } = await execAsync(
-      `gsutil ls "gs://${GCS_BUCKET}/raw/updates/" 2>&1 || true`,
-      { timeout: 30000 }
-    );
-    console.log(`\n  gs://${GCS_BUCKET}/raw/updates/ contains:`);
-    for (const line of stdout.trim().split('\n').filter(Boolean).slice(0, 10)) {
-      console.log(`    ${line}`);
-    }
-  } catch (e) {
-    console.log(`  [probe error] ${e.message.split('\n')[0]}`);
-  }
 
   for (const source of ['backfill', 'updates']) {
     console.log(`\n── ${source.toUpperCase()} ──`);
@@ -373,6 +319,72 @@ async function discoverMigrations() {
   return migrations;
 }
 
+// ─── Find backfill boundary ───────────────────────────────────────────────
+
+async function findBackfillBoundary(migrationId) {
+  // Strategy 1: Check local cursor files
+  const CURSOR_DIR = process.env.CURSOR_DIR || join(process.env.DATA_DIR || '/home/ben/ledger_data', 'cursors');
+  console.log(`   🔍 Looking for backfill cursors in ${CURSOR_DIR}...`);
+
+  let bestTime = null;
+  try {
+    if (existsSync(CURSOR_DIR)) {
+      const files = readdirSync(CURSOR_DIR).filter(f => f.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const cursor = JSON.parse(readFileSync(join(CURSOR_DIR, file), 'utf8'));
+          if (cursor.migration_id === migrationId || file.includes(`cursor-${migrationId}`)) {
+            const maxTime = cursor.max_time || cursor.last_confirmed_before;
+            if (maxTime && (!bestTime || new Date(maxTime) > new Date(bestTime))) {
+              bestTime = maxTime;
+              console.log(`   📍 Cursor ${file}: max_time=${maxTime}`);
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.log(`   ⚠️  Could not read local cursors: ${err.message}`);
+  }
+
+  // Strategy 2: Check GCS cursor backup
+  try {
+    const { stdout } = await execAsync(
+      `gsutil cat "gs://${GCS_BUCKET}/cursors/cursor-${migrationId}-*.json" 2>/dev/null || true`,
+      { timeout: 15000 }
+    );
+    if (stdout.trim()) {
+      try {
+        const cursor = JSON.parse(stdout.trim());
+        const maxTime = cursor.max_time || cursor.last_confirmed_before;
+        if (maxTime && (!bestTime || new Date(maxTime) > new Date(bestTime))) {
+          bestTime = maxTime;
+          console.log(`   📍 GCS cursor: max_time=${maxTime}`);
+        }
+      } catch {}
+    }
+  } catch {}
+
+  // Strategy 3: Check GCS live cursor
+  try {
+    const { stdout } = await execAsync(
+      `gsutil cat "gs://${GCS_BUCKET}/cursors/live-cursor.json" 2>/dev/null || true`,
+      { timeout: 15000 }
+    );
+    if (stdout.trim()) {
+      try {
+        const cursor = JSON.parse(stdout.trim());
+        const rt = cursor.record_time;
+        if (rt) {
+          console.log(`   📍 Live cursor: record_time=${rt}, migration=${cursor.migration_id}`);
+        }
+      } catch {}
+    }
+  } catch {}
+
+  return bestTime;
+}
+
 // ─── Fetch and re-ingest ──────────────────────────────────────────────────
 
 async function reingestDateRange(dates, migrations) {
@@ -390,9 +402,23 @@ async function reingestDateRange(dates, migrations) {
     parquetWriter.setMigrationId(mig);
     console.log(`\n── Migration ${mig} ──`);
 
+    // Find where backfill ends to avoid overlap
+    const backfillEnd = await findBackfillBoundary(mig);
+
     // Build the full time range for this re-ingestion
-    const rangeStart = START_DATE + 'T00:00:00.000000Z';
+    const rangeStartDefault = START_DATE + 'T00:00:00.000000Z';
     const rangeEnd = new Date(new Date(END_DATE + 'T00:00:00Z').getTime() + 86400000).toISOString();
+
+    // Use backfill cursor as start if available and within our range
+    let rangeStart = rangeStartDefault;
+    if (backfillEnd && new Date(backfillEnd) >= new Date(rangeStartDefault) &&
+        new Date(backfillEnd) < new Date(rangeEnd)) {
+      rangeStart = backfillEnd;
+      console.log(`   📍 Using backfill boundary as start: ${backfillEnd}`);
+      console.log(`      (prevents duplicate data with raw/backfill/)`);
+    } else {
+      console.log(`   📍 No backfill boundary found in range, using: ${rangeStartDefault}`);
+    }
 
     console.log(`   Time range: ${rangeStart} → ${rangeEnd}`);
 
@@ -403,6 +429,9 @@ async function reingestDateRange(dates, migrations) {
     let migUpdates = 0;
     let migEvents = 0;
     let consecutiveEmpty = 0;
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 10;
+    const FLUSH_EVERY = 50; // flush to disk every N batches
 
     while (true) {
       batchNum++;
@@ -416,15 +445,15 @@ async function reingestDateRange(dates, migrations) {
 
         const response = await client.post('/v2/updates', payload);
         const transactions = response.data?.transactions || [];
+        consecutiveErrors = 0;
 
         if (transactions.length === 0) {
           consecutiveEmpty++;
-          if (consecutiveEmpty >= 5) {
+          if (consecutiveEmpty >= 10) {
             console.log(`   ✅ Migration ${mig}: No more data (${consecutiveEmpty} empty responses)`);
             break;
           }
-          // Small delay before retry
-          await new Promise(r => setTimeout(r, 1000));
+          await new Promise(r => setTimeout(r, 2000));
           continue;
         }
         consecutiveEmpty = 0;
@@ -436,7 +465,6 @@ async function reingestDateRange(dates, migrations) {
         );
 
         if (new Date(lastRecordTime) > new Date(rangeEnd)) {
-          // Filter out transactions beyond our range
           const inRange = transactions.filter(tx =>
             new Date(tx.record_time) <= new Date(rangeEnd)
           );
@@ -444,8 +472,9 @@ async function reingestDateRange(dates, migrations) {
             console.log(`   ✅ Migration ${mig}: Reached end of date range`);
             break;
           }
-          await processAndWrite(inRange, mig);
-          migUpdates += inRange.length;
+          const result = await processAndWrite(inRange, mig);
+          migUpdates += result.updates;
+          migEvents += result.events;
           console.log(`   ✅ Migration ${mig}: Reached end of date range (partial batch: ${inRange.length})`);
           break;
         }
@@ -462,8 +491,16 @@ async function reingestDateRange(dates, migrations) {
         afterRecordTime = lastRecordTime;
         afterMigrationId = transactions[transactions.length - 1].migration_id ?? mig;
 
+        // Progress logging
         if (batchNum % 10 === 0) {
-          console.log(`   📥 Batch ${batchNum}: ${migUpdates.toLocaleString()} updates, ${migEvents.toLocaleString()} events | cursor=${afterRecordTime}`);
+          const cursorDate = afterRecordTime.split('T')[0];
+          console.log(`   📥 Batch ${batchNum}: ${migUpdates.toLocaleString()} updates, ${migEvents.toLocaleString()} events | date=${cursorDate} | cursor=${afterRecordTime}`);
+        }
+
+        // Periodic flush to ensure data reaches GCS
+        if (!DRY_RUN && batchNum % FLUSH_EVERY === 0) {
+          await parquetWriter.flushAll();
+          await parquetWriter.waitForWrites();
         }
 
       } catch (err) {
@@ -471,9 +508,14 @@ async function reingestDateRange(dates, migrations) {
           console.log(`   ℹ️  Migration ${mig}: 404 - no data for this migration in this range`);
           break;
         }
-        console.error(`   ❌ Batch ${batchNum} failed: ${err.message}`);
-        // Retry after delay
-        await new Promise(r => setTimeout(r, 5000));
+        consecutiveErrors++;
+        console.error(`   ❌ Batch ${batchNum} failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`);
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          throw new Error(`Too many consecutive errors (${consecutiveErrors}), aborting migration ${mig}. Last cursor: ${afterRecordTime}`);
+        }
+        // Exponential backoff: 2s, 4s, 8s, 16s, 32s
+        const delay = Math.min(2000 * Math.pow(2, consecutiveErrors - 1), 32000);
+        await new Promise(r => setTimeout(r, delay));
       }
     }
 
@@ -496,48 +538,57 @@ async function reingestDateRange(dates, migrations) {
 async function processAndWrite(transactions, migrationId) {
   const updates = [];
   const events = [];
+  const batchTimestamp = new Date();
 
   for (const item of transactions) {
     try {
+      const update = normalizeUpdate({ ...item, migration_id: migrationId }, { batchTimestamp });
+      updates.push(update);
+
       const isReassignment = !!item.reassignment;
-      const u = isReassignment ? item.reassignment : (item.transaction || item);
+      const u = item.transaction || item.reassignment || item;
 
-      const update = normalizeUpdate({ ...item, migration_id: migrationId });
-      if (update) updates.push(update);
+      const updateInfo = {
+        record_time:     u.record_time,
+        effective_at:    u.effective_at,
+        synchronizer_id: u.synchronizer_id,
+        source:          u.source     || null,
+        target:          u.target     || null,
+        unassign_id:     u.unassign_id || null,
+        submitter:       u.submitter  || null,
+        counter:         u.counter    ?? null,
+      };
 
-      // Extract events
-      const eventsById = u?.events_by_id || u?.eventsById || {};
-      const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
-      const flatEvents = flattenEventsInTreeOrder(eventsById, rootEventIds);
+      if (isReassignment) {
+        const ce = item.reassignment?.event?.created_event;
+        const ae = item.reassignment?.event?.archived_event;
 
-      for (const [eventId, evt] of flatEvents) {
-        try {
-          const createdEvent = evt?.created_event || evt?.CreatedEvent;
-          const archivedEvent = evt?.archived_event || evt?.ArchivedEvent;
-          const exercisedEvent = evt?.exercised_event || evt?.ExercisedEvent;
-          const eventData = createdEvent || archivedEvent || exercisedEvent;
+        if (ce) {
+          const ev = normalizeEvent(ce, update.update_id, migrationId, item, updateInfo, { batchTimestamp });
+          ev.event_type = 'reassign_create';
+          events.push(ev);
+        }
+        if (ae) {
+          const ev = normalizeEvent(ae, update.update_id, migrationId, item, updateInfo, { batchTimestamp });
+          ev.event_type = 'reassign_archive';
+          events.push(ev);
+        }
+      } else {
+        const eventsById   = u?.events_by_id  || u?.eventsById   || {};
+        const rootEventIds = u?.root_event_ids || u?.rootEventIds || [];
 
-          if (!eventData) continue;
+        const flattened = flattenEventsInTreeOrder(eventsById, rootEventIds);
+        for (const rawEvent of flattened) {
+          const ev = normalizeEvent(rawEvent, update.update_id, migrationId, rawEvent, updateInfo, { batchTimestamp });
 
-          const updateId = update?.update_id || u?.update_id;
-          const effectiveAt = update?.effective_at || u?.effective_at;
-          const synchronizerId = update?.synchronizer_id || u?.synchronizer_id;
-
-          const normalized = normalizeEvent(eventData, {
-            event_id: eventId,
-            update_id: updateId,
-            effective_at: effectiveAt,
-            migration_id: migrationId,
-            synchronizer_id: synchronizerId,
-            event_type_original: createdEvent ? 'created_event' :
-                                 archivedEvent ? 'archived_event' : 'exercised_event',
-          });
-
-          if (normalized) events.push(normalized);
-        } catch (err) {
-          if (VERBOSE) {
-            console.warn(`   ⚠️ Event ${eventId} failed: ${err.message}`);
+          const mapKeyId = rawEvent.event_id;
+          if (mapKeyId && ev.event_id && mapKeyId !== ev.event_id) {
+            ev.event_id = mapKeyId;
+          } else if (mapKeyId && !ev.event_id) {
+            ev.event_id = mapKeyId;
           }
+
+          events.push(ev);
         }
       }
     } catch (err) {
@@ -587,9 +638,16 @@ async function main() {
   }
 
   // Step 3: Check for backfill overlap
-  const overlapOk = await checkBackfillOverlap(dates, migrations);
-  if (!overlapOk) {
-    process.exit(1);
+  // When --clean is used, overlap is handled automatically by starting from
+  // the backfill boundary cursor (no duplicates). When not cleaning, warn.
+  if (!CLEAN) {
+    const overlapOk = await checkBackfillOverlap(dates, migrations);
+    if (!overlapOk) {
+      process.exit(1);
+    }
+  } else {
+    console.log('\n🔍 --clean mode: backfill overlap will be handled automatically');
+    console.log('   Re-ingestion will start from the backfill cursor boundary');
   }
 
   // Step 4: Clean existing bad data (if --clean)
