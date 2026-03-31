@@ -28,6 +28,9 @@
  *   # Re-ingest specific migration only
  *   node reingest-updates.js --start=2026-03-03 --end=2026-03-21 --migration=4 --clean
  *
+ *   # Resume from a specific cursor after interruption (e.g. disk full)
+ *   node reingest-updates.js --start=2026-03-03 --end=2026-03-30 --migration=4 --after=2026-03-03T18:12:09.953575Z
+ *
  *   # Check what exists in backfill vs updates for overlap detection
  *   node reingest-updates.js --start=2026-03-03 --end=2026-03-21 --audit-only
  *
@@ -67,6 +70,7 @@ function argVal(name) {
 const START_DATE = argVal('start');
 const END_DATE = argVal('end');
 const TARGET_MIGRATION = argVal('migration') ? parseInt(argVal('migration')) : null;
+const RESUME_AFTER = argVal('after'); // Resume from cursor, e.g. --after=2026-03-03T18:12:09.953575Z
 const DRY_RUN = args.includes('--dry-run');
 const CLEAN = args.includes('--clean');
 const AUDIT_ONLY = args.includes('--audit-only');
@@ -409,9 +413,13 @@ async function reingestDateRange(dates, migrations) {
     const rangeStartDefault = START_DATE + 'T00:00:00.000000Z';
     const rangeEnd = new Date(new Date(END_DATE + 'T00:00:00Z').getTime() + 86400000).toISOString();
 
-    // Use backfill cursor as start if available and within our range
+    // Use --after flag to resume from a specific cursor position
     let rangeStart = rangeStartDefault;
-    if (backfillEnd && new Date(backfillEnd) >= new Date(rangeStartDefault) &&
+    if (RESUME_AFTER) {
+      rangeStart = RESUME_AFTER;
+      console.log(`   📍 Resuming from --after cursor: ${RESUME_AFTER}`);
+      console.log(`      (skipping already-ingested data)`);
+    } else if (backfillEnd && new Date(backfillEnd) >= new Date(rangeStartDefault) &&
         new Date(backfillEnd) < new Date(rangeEnd)) {
       rangeStart = backfillEnd;
       console.log(`   📍 Using backfill boundary as start: ${backfillEnd}`);
@@ -616,6 +624,7 @@ async function main() {
   console.log(`   Scan URL:      ${SCAN_URL}`);
   console.log(`   Migration:     ${TARGET_MIGRATION !== null ? TARGET_MIGRATION : 'all'}`);
   console.log(`   Mode:          ${DRY_RUN ? 'DRY RUN' : AUDIT_ONLY ? 'AUDIT ONLY' : CLEAN ? 'CLEAN + RE-INGEST' : 'RE-INGEST ONLY'}`);
+  if (RESUME_AFTER) console.log(`   Resume after:  ${RESUME_AFTER}`);
   console.log(`   Batch size:    ${BATCH_SIZE}`);
   console.log('═'.repeat(80));
 
