@@ -89,9 +89,10 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
     });
   }, [validExchanges, sortKey, sortAsc]);
 
-  const maxVolume = useMemo(() => {
+  // Total volume across all exchanges for true % share
+  const totalVolume = useMemo(() => {
     if (!validExchanges.length) return 0;
-    return Math.max(...validExchanges.map((e) => safeNumber(e.volume, 0)));
+    return validExchanges.reduce((sum, e) => sum + safeNumber(e.volume, 0), 0);
   }, [validExchanges]);
 
   const handleSort = (key: SortKey) => {
@@ -191,7 +192,7 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
                   const change24h = exchange.change24h;
                   const isPositive = typeof change24h === "number" && Number.isFinite(change24h) ? change24h >= 0 : false;
                   const volume = safeNumber(exchange.volume, 0);
-                  const volumePercent = maxVolume > 0 ? (volume / maxVolume) * 100 : 0;
+                  const volumePercent = totalVolume > 0 ? (volume / totalVolume) * 100 : 0;
 
                   return (
                     <TableRow key={`${exchange.exchange}-${exchange.instrument}`}>
@@ -258,7 +259,7 @@ export function CCExchangeComparison({ enabled = true }: CCExchangeComparisonPro
                         <div className="flex items-center gap-3 min-w-[140px]">
                           <Progress value={volumePercent} className="h-2 flex-1" />
                           <span className="text-xs text-muted-foreground w-10 text-right shrink-0">
-                            {Number.isFinite(volumePercent) ? volumePercent.toFixed(0) : "0"}%
+                            {Number.isFinite(volumePercent) ? volumePercent.toFixed(1) : "0"}%
                           </span>
                         </div>
                       </TableCell>
