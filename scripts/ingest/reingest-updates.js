@@ -53,6 +53,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
 
+// ─── Memory-safe overrides for re-ingestion ──────────────────────────────
+// The default .env is tuned for the live pipeline on larger machines.
+// Re-ingestion is a long-running bulk process; prioritize stability over speed.
+if (!process.env.REINGEST_USE_DEFAULT_SETTINGS) {
+  process.env.PARQUET_WORKERS        = '6';
+  process.env.GCS_UPLOAD_CONCURRENCY = '16';
+  process.env.MAX_ROWS_PER_FILE      = '50000';
+  process.env.MIN_ROWS_PER_FILE      = '10000';
+}
+
 import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
 import * as parquetWriter from './write-parquet.js';
 
@@ -503,8 +513,8 @@ async function reingestDateRange(dates, migrations) {
     let migEvents = 0;
     let consecutiveEmpty = 0;
     let consecutiveErrors = 0;
-    const MAX_CONSECUTIVE_ERRORS = 10;
-    const FLUSH_EVERY = 50; // flush to disk every N batches
+    const MAX_CONSECUTIVE_ERRORS = 20; // Higher limit since failover resets at 3
+    const FLUSH_EVERY = 20; // flush to disk every N batches (lower = less memory pressure)
 
     while (true) {
       batchNum++;
