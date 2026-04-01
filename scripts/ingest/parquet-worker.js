@@ -223,7 +223,7 @@ async function processJob(job) {
           target_synchronizer: 'VARCHAR', unassign_id: 'VARCHAR', submitter: 'VARCHAR',
           payload: 'VARCHAR', contract_key: 'VARCHAR', exercise_result: 'VARCHAR', raw_event: 'VARCHAR',
           trace_context: 'VARCHAR'
-        }, union_by_name=true)`
+        }, union_by_name=true, maximum_object_size=67108864)`
       : `read_json_auto('${safeTempPath}', columns={
           update_id: 'VARCHAR', update_type: 'VARCHAR', synchronizer_id: 'VARCHAR', effective_at: 'VARCHAR',
           recorded_at: 'VARCHAR', record_time: 'VARCHAR', timestamp: 'VARCHAR', command_id: 'VARCHAR',
@@ -231,7 +231,7 @@ async function processJob(job) {
           event_count: 'INTEGER', root_event_ids: 'VARCHAR[]', source_synchronizer: 'VARCHAR',
           target_synchronizer: 'VARCHAR', unassign_id: 'VARCHAR', submitter: 'VARCHAR',
           reassignment_counter: 'BIGINT', trace_context: 'VARCHAR', update_data: 'VARCHAR'
-        }, union_by_name=true)`;
+        }, union_by_name=true, maximum_object_size=67108864)`;
 
     const sql = `
       COPY (SELECT * FROM ${readFn})
