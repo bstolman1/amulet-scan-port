@@ -152,7 +152,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
       endTime,
       decimals: 5,
     }),
-    [selectedExchange, exchangeConfig.instrument, twapInterval, startTime, endTime],
+    [selectedExchange, selectedInstrument, twapInterval, startTime, endTime],
   );
 
   const vwParams = useMemo(
@@ -362,7 +362,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                 <span className="text-3xl font-mono font-bold">${data.twap}</span>
                 <Badge variant="outline">
                   {mode === "single"
-                    ? `${exchangeConfig.label} · ${exchangeConfig.instrument.toUpperCase()}`
+                    ? `${exchangeConfig.label} · ${(selectedInstrument ?? "").toUpperCase()}`
                     : `${vwData?.exchanges_with_data || 0}/${vwData?.total_exchange_pairs || 0} CC pairs`}
                 </Badge>
                 {singleData?.candle_count && (
