@@ -80,6 +80,7 @@ const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
 
 const GCS_BUCKET = process.env.GCS_BUCKET;
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
+const ENDPOINT_ROTATE_AFTER_ERRORS = parseInt(process.env.ENDPOINT_ROTATE_AFTER_ERRORS) || 3;
 
 if (!START_DATE || !END_DATE) {
   console.error('Usage: node reingest-updates.js --start=YYYY-MM-DD --end=YYYY-MM-DD [--clean] [--dry-run] [--audit-only]');
@@ -92,11 +93,75 @@ if (!GCS_BUCKET) {
 }
 
 const INSECURE_TLS = process.env.INSECURE_TLS === 'true';
+const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000;
+
+// ─── Multi-node failover (mirrors fetch-updates.js) ─────────────────────
+const ALL_SCAN_ENDPOINTS = [
+  { name: 'Global-Synchronizer-Foundation',  url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
+  { name: 'Digital-Asset-1',                 url: 'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan' },
+  { name: 'Digital-Asset-2',                 url: 'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan' },
+  { name: 'Cumberland-1',                    url: 'https://scan.sv-1.global.canton.network.cumberland.io/api/scan' },
+  { name: 'Cumberland-2',                    url: 'https://scan.sv-2.global.canton.network.cumberland.io/api/scan' },
+  { name: 'Five-North-1',                    url: 'https://scan.sv-1.global.canton.network.fivenorth.io/api/scan' },
+  { name: 'Tradeweb-Markets-1',              url: 'https://scan.sv-1.global.canton.network.tradeweb.com/api/scan' },
+  { name: 'Proof-Group-1',                   url: 'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan' },
+  { name: 'Liberty-City-Ventures-1',         url: 'https://scan.sv-1.global.canton.network.lcv.mpch.io/api/scan' },
+  { name: 'MPC-Holding-Inc',                 url: 'https://scan.sv-1.global.canton.network.mpch.io/api/scan' },
+  { name: 'Orb-1-LP-1',                      url: 'https://scan.sv-1.global.canton.network.orb1lp.mpch.io/api/scan' },
+  { name: 'SV-Nodeops-Limited',              url: 'https://scan.sv.global.canton.network.sv-nodeops.com/api/scan' },
+  { name: 'C7-Technology-Services-Limited',  url: 'https://scan.sv-1.global.canton.network.c7.digital/api/scan' },
+];
+
+let activeScanUrl = SCAN_URL;
+let activeEndpointName = ALL_SCAN_ENDPOINTS.find(e => e.url === SCAN_URL)?.name || 'Custom';
+
 const client = axios.create({
-  baseURL: SCAN_URL,
-  timeout: parseInt(process.env.FETCH_TIMEOUT_MS) || 30000,
+  baseURL: activeScanUrl,
+  timeout: FETCH_TIMEOUT_MS,
   httpsAgent: new https.Agent({ rejectUnauthorized: !INSECURE_TLS }),
 });
+
+/**
+ * Probe all endpoints and switch to the fastest healthy one.
+ */
+async function tryFailover() {
+  const candidates = ALL_SCAN_ENDPOINTS.filter(ep => ep.url !== activeScanUrl);
+  if (candidates.length === 0) return false;
+
+  console.log(`   🔄 Probing ${candidates.length} alternative Scan endpoints...`);
+  const results = await Promise.allSettled(
+    candidates.map(async (ep) => {
+      const start = Date.now();
+      try {
+        const resp = await axios.get(`${ep.url}/v0/dso`, {
+          timeout: 10000,
+          httpsAgent: new https.Agent({ rejectUnauthorized: !INSECURE_TLS }),
+          headers: { Accept: 'application/json' },
+        });
+        if (resp.status >= 200 && resp.status < 300) {
+          return { name: ep.name, url: ep.url, latencyMs: Date.now() - start };
+        }
+        return null;
+      } catch { return null; }
+    })
+  );
+
+  const healthy = results
+    .filter(r => r.status === 'fulfilled' && r.value !== null)
+    .map(r => r.value)
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+
+  if (healthy.length > 0) {
+    const best = healthy[0];
+    console.log(`   ✅ Switching to ${best.name} (${best.latencyMs}ms) — ${healthy.length} healthy endpoints found`);
+    activeScanUrl = best.url;
+    activeEndpointName = best.name;
+    client.defaults.baseURL = best.url;
+    return true;
+  }
+  console.log(`   ⚠️  No healthy alternative endpoints found`);
+  return false;
+}
 
 // ─── GCS helpers ──────────────────────────────────────────────────────────
 
@@ -518,6 +583,17 @@ async function reingestDateRange(dates, migrations) {
         }
         consecutiveErrors++;
         console.error(`   ❌ Batch ${batchNum} failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`);
+
+        // Try failover to another SV node after ENDPOINT_ROTATE_AFTER_ERRORS consecutive errors
+        if (consecutiveErrors === ENDPOINT_ROTATE_AFTER_ERRORS) {
+          const switched = await tryFailover();
+          if (switched) {
+            console.log(`   🔄 Retrying with ${activeEndpointName}...`);
+            consecutiveErrors = 0; // Reset counter after successful failover
+            continue;
+          }
+        }
+
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
           throw new Error(`Too many consecutive errors (${consecutiveErrors}), aborting migration ${mig}. Last cursor: ${afterRecordTime}`);
         }
@@ -621,7 +697,7 @@ async function main() {
   console.log('═'.repeat(80));
   console.log(`   Date range:    ${START_DATE} → ${END_DATE}`);
   console.log(`   GCS bucket:    ${GCS_BUCKET}`);
-  console.log(`   Scan URL:      ${SCAN_URL}`);
+  console.log(`   Scan URL:      ${activeScanUrl} (${activeEndpointName})`);
   console.log(`   Migration:     ${TARGET_MIGRATION !== null ? TARGET_MIGRATION : 'all'}`);
   console.log(`   Mode:          ${DRY_RUN ? 'DRY RUN' : AUDIT_ONLY ? 'AUDIT ONLY' : CLEAN ? 'CLEAN + RE-INGEST' : 'RE-INGEST ONLY'}`);
   if (RESUME_AFTER) console.log(`   Resume after:  ${RESUME_AFTER}`);
