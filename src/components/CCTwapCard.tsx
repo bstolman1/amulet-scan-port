@@ -53,14 +53,21 @@ const PRESET_RANGES = [
 ];
 
 const EXCHANGES = [
-  { value: "krkn", label: "Kraken", instrument: "cc-usd" },
-  { value: "gate", label: "Gate.io", instrument: "cc-usdt" },
-  { value: "kcon", label: "KuCoin", instrument: "cc-usdt" },
-  { value: "mexc", label: "MEXC", instrument: "cc-usdt" },
-  { value: "bbsp", label: "Bybit", instrument: "cc-usdt" },
-  { value: "hitb", label: "HitBTC", instrument: "cc-usdt" },
-  { value: "cnex", label: "CoinEx", instrument: "cc-usdt" },
+  { value: "krkn", label: "Kraken",  instruments: ["cc-usd", "cc-usdt", "cc-usdc", "cc-eur"] },
+  { value: "gate", label: "Gate.io", instruments: ["cc-usdt"] },
+  { value: "kcon", label: "KuCoin",  instruments: ["cc-usdt"] },
+  { value: "mexc", label: "MEXC",    instruments: ["cc-usdt", "cc-usdc"] },
+  { value: "bbsp", label: "Bybit",   instruments: ["cc-usdt", "cc-usdc"] },
+  { value: "hitb", label: "HitBTC",  instruments: ["cc-usdt"] },
+  { value: "cnex", label: "CoinEx",  instruments: ["cc-usdt"] },
 ];
+
+const INSTRUMENT_LABELS: Record<string, string> = {
+  "cc-usd":  "CC/USD",
+  "cc-usdt": "CC/USDT",
+  "cc-usdc": "CC/USDC",
+  "cc-eur":  "CC/EUR",
+};
 
 interface CCTwapCardProps {
   enabled?: boolean;
@@ -92,14 +99,20 @@ const parseUTC = (val: string) => (val ? new Date(val + ":00Z") : null);
 export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
   const [mode, setMode] = useState<"single" | "vw">("single");
   const [selectedExchange, setSelectedExchange] = useState("krkn");
+  const [selectedInstrument, setSelectedInstrument] = useState("cc-usd");
   const [twapInterval, setTwapInterval] = useState("5m");
   const [activePreset, setActivePreset] = useState("24H");
   const [useCustomDates, setUseCustomDates] = useState(false);
+  const [customDays, setCustomDays] = useState("");
   const [startInput, setStartInput] = useState(() => toUTCInputValue(subHours(new Date(), 24)));
   const [endInput, setEndInput] = useState(() => toUTCInputValue(new Date()));
 
   const exchangeConfig =
     EXCHANGES.find((e) => e.value === selectedExchange) || EXCHANGES[0];
+  const availableInstruments = exchangeConfig.instruments;
+
+  const parsedCustomDays = parseFloat(customDays);
+  const customDaysValid = !isNaN(parsedCustomDays) && parsedCustomDays > 0;
 
   const { startTime, endTime } = useMemo(() => {
     if (useCustomDates) {
@@ -109,13 +122,20 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
         return { startTime: s.toISOString(), endTime: e.toISOString() };
       }
     }
+    if (customDays !== "" && customDaysValid) {
+      const now = new Date();
+      return {
+        startTime: subHours(now, parsedCustomDays * 24).toISOString(),
+        endTime: now.toISOString(),
+      };
+    }
     const preset = PRESET_RANGES.find((p) => p.label === activePreset);
     const now = new Date();
     return {
       startTime: subHours(now, preset?.hours || 24).toISOString(),
       endTime: now.toISOString(),
     };
-  }, [useCustomDates, startInput, endInput, activePreset]);
+  }, [useCustomDates, startInput, endInput, activePreset, customDays, customDaysValid, parsedCustomDays]);
 
   const customDateValid =
     !useCustomDates ||
@@ -126,7 +146,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
   const singleParams = useMemo(
     () => ({
       exchange: selectedExchange,
-      instrument: exchangeConfig.instrument,
+      instrument: selectedInstrument,
       interval: twapInterval,
       startTime,
       endTime,
@@ -185,7 +205,13 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
           {mode === "single" && (
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Exchange</label>
-              <Select value={selectedExchange} onValueChange={setSelectedExchange}>
+              <Select value={selectedExchange} onValueChange={(val) => {
+                    setSelectedExchange(val);
+                    const ex = EXCHANGES.find(e => e.value === val) || EXCHANGES[0];
+                    if (!ex.instruments.includes(selectedInstrument)) {
+                      setSelectedInstrument(ex.instruments[0]);
+                    }
+                  }}>
                 <SelectTrigger className="w-[140px]" style={{ backgroundColor: "#000", color: "#fff" }}>
                   <SelectValue />
                 </SelectTrigger>
@@ -198,6 +224,25 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                           CC
                         </Badge>
                       </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Pair — only in single mode */}
+          {mode === "single" && (
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Pair</label>
+              <Select value={selectedInstrument} onValueChange={setSelectedInstrument}>
+                <SelectTrigger className="w-[120px]" style={{ backgroundColor: "#000", color: "#fff" }}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableInstruments.map((inst) => (
+                    <SelectItem key={inst} value={inst}>
+                      {INSTRUMENT_LABELS[inst] ?? inst.toUpperCase()}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -231,7 +276,7 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
                     variant={activePreset === p.label ? "default" : "outline"}
                     size="sm"
                     className="px-2 h-9 text-xs"
-                    onClick={() => setActivePreset(p.label)}
+                    onClick={() => { setActivePreset(p.label); setCustomDays(""); }}
                   >
                     {p.label}
                   </Button>
@@ -239,6 +284,27 @@ export function CCTwapCard({ enabled = true }: CCTwapCardProps) {
               </div>
             </div>
           )}
+
+          {/* Type-in days */}
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Or type days</label>
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                min="0.1"
+                step="0.5"
+                placeholder="e.g. 5"
+                value={customDays}
+                onChange={(e) => {
+                  setCustomDays(e.target.value);
+                  if (e.target.value) setActivePreset("");
+                }}
+                className="w-[80px] text-sm"
+                style={{ backgroundColor: "#000", color: "#fff" }}
+              />
+              <span className="text-xs text-muted-foreground">days</span>
+            </div>
+          </div>
 
           {/* Custom date range */}
           {useCustomDates && (
