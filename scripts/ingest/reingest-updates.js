@@ -513,6 +513,8 @@ async function reingestDateRange(dates, migrations) {
     let migEvents = 0;
     let consecutiveEmpty = 0;
     let consecutiveErrors = 0;
+    let totalFailovers = 0;
+    let cooldowns = 0;
     const MAX_CONSECUTIVE_ERRORS = 20; // Higher limit since failover resets at 3
     const FLUSH_EVERY = 20; // flush to disk every N batches (lower = less memory pressure)
 
@@ -529,6 +531,8 @@ async function reingestDateRange(dates, migrations) {
         const response = await client.post('/v2/updates', payload);
         const transactions = response.data?.transactions || [];
         consecutiveErrors = 0;
+        totalFailovers = 0;
+        cooldowns = 0;
 
         if (transactions.length === 0) {
           consecutiveEmpty++;
@@ -595,17 +599,27 @@ async function reingestDateRange(dates, migrations) {
         console.error(`   ❌ Batch ${batchNum} failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`);
 
         // Try failover to another SV node after ENDPOINT_ROTATE_AFTER_ERRORS consecutive errors
-        if (consecutiveErrors === ENDPOINT_ROTATE_AFTER_ERRORS) {
+        if (consecutiveErrors % ENDPOINT_ROTATE_AFTER_ERRORS === 0 && totalFailovers < 5) {
           const switched = await tryFailover();
           if (switched) {
-            console.log(`   🔄 Retrying with ${activeEndpointName}...`);
-            consecutiveErrors = 0; // Reset counter after successful failover
-            continue;
+            totalFailovers++;
+            console.log(`   🔄 Retrying with ${activeEndpointName} (failover ${totalFailovers}/5)...`);
+            continue; // Don't reset counter — let it keep climbing toward MAX
           }
         }
 
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          throw new Error(`Too many consecutive errors (${consecutiveErrors}), aborting migration ${mig}. Last cursor: ${afterRecordTime}`);
+          cooldowns = (cooldowns || 0) + 1;
+          if (cooldowns > 6) {
+            throw new Error(`Too many consecutive errors after ${cooldowns} cooldowns, aborting migration ${mig}. Last cursor: ${afterRecordTime}`);
+          }
+          // Wait 5 minutes in case it's a temporary full-network outage
+          console.log(`   ⏳ All endpoints failing. Waiting 5 minutes before retry (cooldown ${cooldowns}/6)... Last cursor: ${afterRecordTime}`);
+          await new Promise(r => setTimeout(r, 300000));
+          consecutiveErrors = 0;
+          totalFailovers = 0;
+          console.log(`   🔄 Resuming after cooldown...`);
+          continue;
         }
         // Exponential backoff: 2s, 4s, 8s, 16s, 32s
         const delay = Math.min(2000 * Math.pow(2, consecutiveErrors - 1), 32000);
