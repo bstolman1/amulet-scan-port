@@ -68,6 +68,16 @@
  *         carried, not the locally-tracked migrationId.
  *         New: normalizeUpdate({ ...item, migration_id: migrationId })
  *              Consistent with fixed decodeInMainThread and decode-worker.js.
+ *
+ * FIX #13 Adaptive page_size / timeout for stuck cursors
+ *         When the same cursor times out repeatedly, the API is struggling with
+ *         a large response at that position. Every ENDPOINT_ROTATE_AFTER_ERRORS
+ *         consecutive timeout hits on the same cursor: page_size is halved
+ *         (min 1) and timeout is increased by 1.5x (max 3x base). On a
+ *         successful fetch with data, both reset to their configured defaults.
+ *         This lets the script break through "heavy" cursor positions (e.g.
+ *         large transactions at 2026-03-31T23:40:24) instead of retrying the
+ *         exact same failing request 100 times and exiting.
  */
 
 // CRITICAL: Load .env BEFORE any other imports that depend on env vars
@@ -249,6 +259,15 @@ let stallWatchdogInterval = null;
 let heartbeatInterval     = null;
 let currentCycleId        = 0;
 let gcsCursorBackupConsecutiveFailures = 0;
+
+// FIX #13: Adaptive fetch parameters for stuck cursors.
+// When the same cursor times out repeatedly, the API is likely struggling with
+// a large/complex response at that position. Progressively reduce page_size
+// and increase timeout to break through.
+let _adaptivePageSize    = BATCH_SIZE;     // current effective page_size
+let _adaptiveTimeoutMs   = FETCH_TIMEOUT_MS; // current effective timeout
+let _stuckCursor         = null;           // cursor value that is repeatedly failing
+let _stuckCursorHits     = 0;             // consecutive errors at the same cursor
 
 const CURSOR_DIR       = getCursorDir();
 const LIVE_CURSOR_FILE = path.join(CURSOR_DIR, 'live-cursor.json');
@@ -779,14 +798,18 @@ async function detectLatestMigration() {
 // ─── Fetch ─────────────────────────────────────────────────────────────────
 
 async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
+  // FIX #13: Use adaptive timeout/page_size when stuck at the same cursor
+  const effectiveTimeout  = _adaptiveTimeoutMs;
+  const effectivePageSize = _adaptivePageSize;
+
   const controller = new AbortController();
   const timeoutId  = setTimeout(() => {
     controller.abort();
-    log('warn', 'fetch_timeout', { migration: afterMigrationId, cursor: afterRecordTime, timeout_ms: FETCH_TIMEOUT_MS });
-  }, FETCH_TIMEOUT_MS);
+    log('warn', 'fetch_timeout', { migration: afterMigrationId, cursor: afterRecordTime, timeout_ms: effectiveTimeout, page_size: effectivePageSize });
+  }, effectiveTimeout);
 
   try {
-    const payload = { page_size: BATCH_SIZE, daml_value_encoding: 'compact_json' };
+    const payload = { page_size: effectivePageSize, daml_value_encoding: 'compact_json' };
 
     if (afterMigrationId !== null && afterRecordTime) {
       payload.after = { after_migration_id: afterMigrationId, after_record_time: afterRecordTime };
@@ -808,6 +831,7 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
         return sum + Object.keys(u?.events_by_id || u?.eventsById || {}).length;
       }, 0),
       apiLatencyMs: fetchLatencyMs,
+      page_size: effectivePageSize,
     });
 
     return {
@@ -827,7 +851,7 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
     };
   } catch (err) {
     if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
-      const e = new Error(`Fetch timed out after ${FETCH_TIMEOUT_MS}ms`);
+      const e = new Error(`Fetch timed out after ${effectiveTimeout}ms (page_size=${effectivePageSize})`);
       e.code  = 'FETCH_TIMEOUT';
       throw e;
     }
@@ -1269,6 +1293,22 @@ async function runIngestion() {
         sessionErrorCount = 0;
       }
 
+      // FIX #13: Reset adaptive parameters on successful fetch with data.
+      // The stuck cursor has been passed — restore normal page_size and timeout.
+      if (_adaptivePageSize !== BATCH_SIZE || _adaptiveTimeoutMs !== FETCH_TIMEOUT_MS) {
+        log('info', 'adaptive_params_reset', {
+          previousPageSize: _adaptivePageSize,
+          previousTimeoutMs: _adaptiveTimeoutMs,
+          restoredPageSize: BATCH_SIZE,
+          restoredTimeoutMs: FETCH_TIMEOUT_MS,
+        });
+        console.log(`🔧 Adaptive params reset: page_size → ${BATCH_SIZE}, timeout → ${FETCH_TIMEOUT_MS / 1000}s (cursor unstuck)`);
+        _adaptivePageSize  = BATCH_SIZE;
+        _adaptiveTimeoutMs = FETCH_TIMEOUT_MS;
+      }
+      _stuckCursor     = null;
+      _stuckCursorHits = 0;
+
       const processResult = await withTimeout(processUpdates(data.items), 60_000, 'processUpdates');
       const { updates, events, errors: decodeErrors } = processResult;
       totalUpdates += updates;
@@ -1345,6 +1385,41 @@ async function runIngestion() {
       const isTransient = isTimeout || err.response?.status === 503 || err.response?.status === 429 || err.response?.status >= 500;
 
       logError('fetch', err, { cycleId: currentCycleId, migration: afterMigrationId, cursor: afterRecordTime, error_count: sessionErrorCount, is_transient: isTransient });
+
+      // FIX #13: Adaptive page_size / timeout when stuck at the same cursor.
+      // If the API consistently times out for a cursor, the response at that
+      // position is likely very large. Halve page_size (min 1) and increase
+      // timeout (up to 3x) so we can break through without losing data.
+      if (isTimeout) {
+        if (_stuckCursor === afterRecordTime) {
+          _stuckCursorHits++;
+        } else {
+          _stuckCursor     = afterRecordTime;
+          _stuckCursorHits = 1;
+        }
+
+        // Every ENDPOINT_ROTATE_AFTER_ERRORS hits at the same cursor, halve page_size
+        if (_stuckCursorHits > 0 && _stuckCursorHits % ENDPOINT_ROTATE_AFTER_ERRORS === 0) {
+          const oldPageSize = _adaptivePageSize;
+          _adaptivePageSize = Math.max(1, Math.floor(_adaptivePageSize / 2));
+          // Increase timeout: 1.5x base per reduction step, capped at 3x base
+          _adaptiveTimeoutMs = Math.min(FETCH_TIMEOUT_MS * 3, Math.round(_adaptiveTimeoutMs * 1.5));
+          if (_adaptivePageSize !== oldPageSize) {
+            log('warn', 'adaptive_page_size_reduced', {
+              cursor: afterRecordTime,
+              stuckHits: _stuckCursorHits,
+              oldPageSize,
+              newPageSize: _adaptivePageSize,
+              newTimeoutMs: _adaptiveTimeoutMs,
+            });
+            console.log(
+              `🔧 Adaptive retry: page_size ${oldPageSize} → ${_adaptivePageSize}, ` +
+              `timeout ${Math.round(_adaptiveTimeoutMs / 1000)}s ` +
+              `(stuck at same cursor for ${_stuckCursorHits} errors)`
+            );
+          }
+        }
+      }
 
       if (isTransient) {
         // Rotate to a different endpoint after repeated failures on the same one
