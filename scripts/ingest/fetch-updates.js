@@ -107,6 +107,7 @@ import {
   logMetrics,
   logSummary,
 } from './structured-logger.js';
+import { alert, Severity, logAlertConfig } from './alert.js';
 import {
   findLatestFromGCS as findLatestFromGCSImported,
   scanGCSHivePartition as scanGCSHivePartitionImported,
@@ -482,6 +483,11 @@ async function backupCursorToGCS(cursor) {
         `GCS cursor backup failed ${gcsCursorBackupConsecutiveFailures} consecutive times. ` +
         `Cursor is NOT being persisted to cloud.`
       ));
+      alert(Severity.CRITICAL, 'gcs_cursor_backup_failed', 'GCS cursor backup failing repeatedly', {
+        'Consecutive Failures': gcsCursorBackupConsecutiveFailures,
+        'Error': err.message,
+        'GCS Path': gcsPath,
+      });
     }
   }
 }
@@ -857,6 +863,19 @@ async function fetchUpdates(afterMigrationId = null, afterRecordTime = null) {
     }
     if (err.response?.status === 404) return { items: [], lastMigrationId: null, lastRecordTime: null };
     if (err.response?.status >= 400 && err.response?.status < 500) {
+      // Auth/client errors need immediate visibility
+      alert(
+        err.response.status === 401 || err.response.status === 403 ? Severity.CRITICAL : Severity.WARNING,
+        `http_${err.response.status}`,
+        `API returned HTTP ${err.response.status}${err.response.status === 401 ? ' (Unauthorized)' : err.response.status === 403 ? ' (Forbidden)' : ''}`,
+        {
+          'Status': err.response.status,
+          'URL': activeScanUrl + '/v2/updates',
+          'Cursor': afterRecordTime,
+          'Migration': afterMigrationId,
+          'Response': typeof err.response.data === 'string' ? err.response.data.slice(0, 200) : JSON.stringify(err.response.data)?.slice(0, 200),
+        }
+      );
       console.error('\n' + '='.repeat(60));
       console.error(`🔐 ${err.response.status} ERROR - Full diagnostic info:`);
       console.error('='.repeat(60));
@@ -1050,6 +1069,10 @@ async function probeAllScanEndpoints() {
   if (healthyEndpoints.length === 0) {
     console.error(`\n🔴 FATAL: No Scan API endpoints are reachable! Check network/DNS.`);
     log('error', 'all_endpoints_unreachable', { probed: ALL_SCAN_ENDPOINTS.length });
+    alert(Severity.CRITICAL, 'all_endpoints_unreachable', 'All Scan API endpoints unreachable', {
+      'Endpoints Probed': ALL_SCAN_ENDPOINTS.length,
+      'Action': 'Check network, DNS, and endpoint health',
+    });
   } else {
     const activeReachable = healthyEndpoints.some(ep => ep.name === activeEndpointName);
     if (!activeReachable) {
@@ -1136,6 +1159,7 @@ async function runIngestion() {
   console.log('   BATCH_SIZE:', BATCH_SIZE);
   console.log('   POLL_INTERVAL:', POLL_INTERVAL, 'ms');
   console.log('   PAGINATION: FORWARD (after semantics, NOT before)');
+  logAlertConfig();
 
   await probeAllScanEndpoints();
 
@@ -1197,6 +1221,13 @@ async function runIngestion() {
     afterMigrationId = null;
   }
 
+  await alert(Severity.INFO, 'ingestion_started', 'Ingestion pipeline started', {
+    'Mode': modeLabel,
+    'Cursor': afterRecordTime || 'FRESH START',
+    'Migration': afterMigrationId ?? 'auto-detect',
+    'Scan URL': activeScanUrl,
+  });
+
   let totalUpdates    = 0;
   let totalEvents     = 0;
   let emptyPolls      = 0;
@@ -1227,6 +1258,14 @@ async function runIngestion() {
         inflight:        0,
         lastProgressTs:  new Date(lastProgressTimestamp).toISOString(),
         staleDurationMs: staleMs,
+      });
+      // Alert on stall — rate-limited so it won't spam every 30s
+      alert(Severity.WARNING, 'ingestion_stall', 'Ingestion stall detected — no progress', {
+        'Stale Duration': `${Math.round(staleMs / 1000)}s`,
+        'Cursor': afterRecordTime,
+        'Migration': afterMigrationId,
+        'Last Progress': new Date(lastProgressTimestamp).toISOString(),
+        'Error Count': sessionErrorCount,
       });
     }
   }, STALL_DETECTION_INTERVAL_MS);
@@ -1336,6 +1375,12 @@ async function runIngestion() {
           `❌ [fetch-updates] ${decodeErrors} tx(s) failed to decode in this batch. ` +
           `Cursor held at ${afterRecordTime}. Resolve errors to proceed.`
         );
+        await alert(Severity.CRITICAL, 'decode_failures', 'Decode errors blocking cursor advancement', {
+          'Decode Errors': decodeErrors,
+          'Batch Size': data.items.length,
+          'Cursor Held At': afterRecordTime,
+          'Migration': afterMigrationId,
+        });
         // Skip cursor advancement for this batch — outer loop will re-poll same position
         continue;
       }
@@ -1417,6 +1462,14 @@ async function runIngestion() {
               `timeout ${Math.round(_adaptiveTimeoutMs / 1000)}s ` +
               `(stuck at same cursor for ${_stuckCursorHits} errors)`
             );
+            // Alert once when adaptive kicks in (rate-limited)
+            alert(Severity.WARNING, 'cursor_stuck', 'Cursor stuck — reducing page size to break through', {
+              'Cursor': afterRecordTime,
+              'Stuck Hits': _stuckCursorHits,
+              'Page Size': `${oldPageSize} → ${_adaptivePageSize}`,
+              'Timeout': `${Math.round(_adaptiveTimeoutMs / 1000)}s`,
+              'Migration': afterMigrationId,
+            });
           }
         }
       }
@@ -1444,6 +1497,15 @@ async function runIngestion() {
         if (sessionErrorCount >= MAX_TRANSIENT_ERRORS) {
           logFatal('max_transient_errors', err, { error_count: sessionErrorCount, max: MAX_TRANSIENT_ERRORS, migration: afterMigrationId });
           console.error(`🔴 FATAL: ${sessionErrorCount} consecutive transient errors (max=${MAX_TRANSIENT_ERRORS}). Exiting for restart.`);
+          await alert(Severity.FATAL, 'max_transient_errors', 'Ingestion stopped: max transient errors reached', {
+            'Error': err.message,
+            'Error Count': sessionErrorCount,
+            'Cursor': afterRecordTime,
+            'Migration': afterMigrationId,
+            'Total Updates': totalUpdates,
+            'Total Events': totalEvents,
+            'Last Error Code': err.code || err.response?.status || 'unknown',
+          });
           throw err;
         }
 
@@ -1458,6 +1520,13 @@ async function runIngestion() {
       } else {
         if (sessionErrorCount >= 10) {
           logFatal('too_many_errors', err, { error_count: sessionErrorCount, migration: afterMigrationId });
+          await alert(Severity.FATAL, 'too_many_nontransient_errors', 'Ingestion stopped: repeated non-transient errors', {
+            'Error': err.message,
+            'Status': err.response?.status || 'N/A',
+            'Error Count': sessionErrorCount,
+            'Cursor': afterRecordTime,
+            'Migration': afterMigrationId,
+          });
           throw err;
         }
         log('info', 'cycle_reenter', { cycleId: currentCycleId, reason: 'non_transient_error_retry' });
@@ -1522,6 +1591,33 @@ async function shutdown() {
 
 process.on('SIGINT',  () => shutdown());
 process.on('SIGTERM', () => shutdown());
+
+// ─── Unhandled error safety net ───────────────────────────────────────────
+// Catch truly unexpected errors, alert, save cursor, then exit for restart.
+
+process.on('uncaughtException', async (err) => {
+  console.error('[uncaughtException]', err);
+  await alert(Severity.FATAL, 'uncaught_exception', 'Ingestion crashed: uncaught exception', {
+    'Error': err.message,
+    'Stack': err.stack?.split('\n').slice(0, 5).join('\n'),
+    'Cursor': _liveAfterRecordTime || 'unknown',
+    'Migration': _liveAfterMigrationId || 'unknown',
+  }).catch(() => {});
+  process.exit(1);
+});
+
+process.on('unhandledRejection', async (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  const stack = reason instanceof Error ? reason.stack?.split('\n').slice(0, 5).join('\n') : '';
+  console.error('[unhandledRejection]', reason);
+  await alert(Severity.FATAL, 'unhandled_rejection', 'Ingestion crashed: unhandled promise rejection', {
+    'Error': msg,
+    'Stack': stack,
+    'Cursor': _liveAfterRecordTime || 'unknown',
+    'Migration': _liveAfterMigrationId || 'unknown',
+  }).catch(() => {});
+  process.exit(1);
+});
 
 // ─── Entry point ───────────────────────────────────────────────────────────
 runIngestion().catch(err => {
