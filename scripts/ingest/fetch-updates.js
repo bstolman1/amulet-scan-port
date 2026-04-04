@@ -204,11 +204,25 @@ export function getTLSRejectUnauthorized() {
   return process.env.INSECURE_TLS !== 'true';
 }
 
-const client = axios.create({
-  baseURL:    activeScanUrl,
-  timeout:    FETCH_TIMEOUT_MS,
-  httpsAgent: new https.Agent({ rejectUnauthorized: getTLSRejectUnauthorized() }),
-});
+/**
+ * Create a fresh axios client. Called at startup and after endpoint failover
+ * to ensure stale TCP connections from a hung node don't block new requests.
+ */
+function createClient(baseURL) {
+  return axios.create({
+    baseURL,
+    timeout:    FETCH_TIMEOUT_MS,
+    httpsAgent: new https.Agent({
+      rejectUnauthorized: getTLSRejectUnauthorized(),
+      keepAlive: true,
+      keepAliveMsecs: 10000,
+      maxSockets: 4,
+      timeout: FETCH_TIMEOUT_MS,  // socket-level timeout
+    }),
+  });
+}
+
+let client = createClient(activeScanUrl);
 
 import { getBaseDataDir, getCursorDir, isGCSMode, logPathConfig, validateGCSBucket } from './path-utils.js';
 import { runPreflightChecks } from './gcs-preflight.js';
@@ -1334,14 +1348,20 @@ async function runIngestion() {
 
       if (isTransient) {
         // Rotate to a different endpoint after repeated failures on the same one
+        // Also recreate the HTTP client to drop stale TCP connections from hung nodes
         if (sessionErrorCount > 0 && sessionErrorCount % ENDPOINT_ROTATE_AFTER_ERRORS === 0) {
           const healthyEndpoints = (await probeAllScanEndpoints_fast());
           if (healthyEndpoints) {
             const oldName = ALL_SCAN_ENDPOINTS.find(e => e.url === activeScanUrl)?.name || 'Custom';
             activeScanUrl = healthyEndpoints.url;
-            client.defaults.baseURL = healthyEndpoints.url;
+            client = createClient(healthyEndpoints.url);
             log('warn', 'endpoint_rotated_on_error', { from: oldName, to: healthyEndpoints.name, error_count: sessionErrorCount });
-            console.log(`🔄 Rotated endpoint: ${oldName} → ${healthyEndpoints.name} (after ${sessionErrorCount} errors)`);
+            console.log(`🔄 Rotated endpoint: ${oldName} → ${healthyEndpoints.name} (after ${sessionErrorCount} errors, fresh connection)`);
+          } else {
+            // No healthy alternative — still recreate client to drop stuck connections
+            client = createClient(activeScanUrl);
+            log('warn', 'client_reset_no_alternatives', { url: activeScanUrl, error_count: sessionErrorCount });
+            console.log(`🔄 Reset HTTP client (no healthy alternatives, fresh connection to ${activeScanUrl})`);
           }
         }
 
