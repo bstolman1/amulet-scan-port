@@ -105,12 +105,11 @@ function countUnique(localDir, idColumn) {
 function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   ensureDir(outputDir);
 
-  // Two-pass approach that avoids sorting the full dataset:
+  // Two-pass approach:
   // Pass 1: Find duplicate IDs (tiny query — just IDs + count)
-  // Pass 2: Write all rows except duplicates, then separately write
-  //         deduplicated versions of just the duplicate rows.
-  // This keeps memory low because only the small dup set gets windowed.
-  const sqlFile = '/tmp/compact-query.sql';
+  // Pass 2: Write consolidated output
+  const sqlFile = path.join(outputDir, '_compact.sql');
+  const outFile = path.join(outputDir, 'compacted.parquet');
 
   // Pass 1: find dup IDs
   const dupSql = `SELECT ${idColumn} FROM read_parquet('${inputDir}/*.parquet') GROUP BY ${idColumn} HAVING count(*) > 1`;
@@ -128,52 +127,50 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   }
 
   if (dupIds.length === 0) {
-    // No dups — just consolidate files directly
-    const sql = `
-SET memory_limit='8GB';
-SET threads=2;
-SET preserve_insertion_order=false;
-COPY (SELECT * FROM read_parquet('${inputDir}/*.parquet'))
-TO '${outputDir}'
-(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true);
-`;
+    // No dups — just consolidate files into one
+    console.log(`  No dups, consolidating files...`);
+    const sql = [
+      "SET memory_limit='8GB';",
+      "SET threads=2;",
+      "SET preserve_insertion_order=false;",
+      `COPY (SELECT * FROM read_parquet('${inputDir}/*.parquet'))`,
+      `TO '${outFile}'`,
+      "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);",
+    ].join('\n');
     fs.writeFileSync(sqlFile, sql);
-    execSync(`duckdb -no-stdin < ${sqlFile}`, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 1_800_000,
-    });
   } else {
     // Build a filter list for the small number of dup IDs
     const idList = dupIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
     console.log(`  Found ${dupIds.length} duplicate ID(s), deduplicating...`);
 
-    const sql = `
-SET memory_limit='8GB';
-SET threads=2;
-SET preserve_insertion_order=false;
-COPY (
-  -- Non-duplicate rows: bulk passthrough (no sorting needed)
-  SELECT * FROM read_parquet('${inputDir}/*.parquet')
-  WHERE ${idColumn} NOT IN (${idList})
-  UNION ALL
-  -- Duplicate rows: keep latest recorded_at (tiny set, cheap window)
-  SELECT * EXCLUDE (_rn) FROM (
-    SELECT *, ROW_NUMBER() OVER (PARTITION BY ${idColumn} ORDER BY recorded_at DESC) as _rn
-    FROM read_parquet('${inputDir}/*.parquet')
-    WHERE ${idColumn} IN (${idList})
-  ) WHERE _rn = 1
-)
-TO '${outputDir}'
-(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true);
-`;
+    const sql = [
+      "SET memory_limit='8GB';",
+      "SET threads=2;",
+      "SET preserve_insertion_order=false;",
+      "COPY (",
+      `  SELECT * FROM read_parquet('${inputDir}/*.parquet')`,
+      `  WHERE ${idColumn} NOT IN (${idList})`,
+      "  UNION ALL",
+      "  SELECT * EXCLUDE (_rn) FROM (",
+      `    SELECT *, ROW_NUMBER() OVER (PARTITION BY ${idColumn} ORDER BY recorded_at DESC) as _rn`,
+      `    FROM read_parquet('${inputDir}/*.parquet')`,
+      `    WHERE ${idColumn} IN (${idList})`,
+      "  ) WHERE _rn = 1",
+      ")",
+      `TO '${outFile}'`,
+      "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);",
+    ].join('\n');
     fs.writeFileSync(sqlFile, sql);
-    execSync(`duckdb -no-stdin < ${sqlFile}`, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 1_800_000,
-    });
   }
+
+  execSync(`cat ${sqlFile} | duckdb`, {
+    encoding: 'utf8',
+    maxBuffer: 100 * 1024 * 1024,
+    timeout: 1_800_000, // 30 min
+  });
+
+  // Clean up the SQL file
+  try { fs.unlinkSync(sqlFile); } catch {}
 
   return fs.readdirSync(outputDir).filter(f => f.endsWith('.parquet'));
 }
