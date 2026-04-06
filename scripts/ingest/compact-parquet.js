@@ -105,25 +105,27 @@ function countUnique(localDir, idColumn) {
 function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   ensureDir(outputDir);
 
-  // Dedup via temporary table to avoid OOM on large sorts.
-  // Limit memory and threads so DuckDB spills to disk instead of crashing.
+  // Write a SQL script file so DuckDB processes SET commands before the query.
+  // Passing multiple statements via -c can cause SET to not take effect.
+  const sqlFile = '/tmp/compact-query.sql';
   const sql = `
-    SET memory_limit='4GB';
-    SET threads=2;
-    SET preserve_insertion_order=false;
-    SET temp_directory='/tmp/duckdb_tmp';
+SET memory_limit='16GB';
+SET threads=4;
+SET preserve_insertion_order=false;
+SET temp_directory='/tmp/duckdb_tmp';
 
-    COPY (
-      SELECT DISTINCT ON (${idColumn}) *
-      FROM read_parquet('${inputDir}/*.parquet')
-      ORDER BY ${idColumn}, recorded_at DESC
-    )
-    TO '${outputDir}'
-    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true)
-  `;
+COPY (
+  SELECT DISTINCT ON (${idColumn}) *
+  FROM read_parquet('${inputDir}/*.parquet')
+  ORDER BY ${idColumn}, recorded_at DESC
+)
+TO '${outputDir}'
+(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true);
+`;
 
   fs.mkdirSync('/tmp/duckdb_tmp', { recursive: true });
-  execSync(`duckdb -c "${sql}"`, {
+  fs.writeFileSync(sqlFile, sql);
+  execSync(`duckdb < ${sqlFile}`, {
     encoding: 'utf8',
     maxBuffer: 100 * 1024 * 1024,
     timeout: 1_800_000, // 30 min
