@@ -124,9 +124,13 @@ async function sendSlack(severity, title, details) {
   };
 
   try {
-    await axios.post(SLACK_WEBHOOK_URL, payload, { timeout: 10_000 });
+    const resp = await axios.post(SLACK_WEBHOOK_URL, payload, { timeout: 10_000 });
+    if (resp.status !== 200) {
+      console.error(`[alert] Slack returned HTTP ${resp.status}: ${resp.data}`);
+    }
   } catch (err) {
-    console.error(`[alert] Slack send failed: ${err.message}`);
+    const detail = err.code || err.response?.status || '';
+    console.error(`[alert] Slack send failed (${detail}): ${err.message}`);
   }
 }
 

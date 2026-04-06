@@ -90,6 +90,23 @@ import { execFile as execFileCb } from 'child_process';
 
 const execFileAsync = promisify(execFileCb);
 
+// FIX #14: Lazy-loaded GCS SDK for cursor backup/restore.
+// Replaces gsutil subprocess calls which depend on gcloud CLI auth that
+// expires and requires interactive re-authentication — breaking unattended
+// long-running scripts. The SDK uses Application Default Credentials (ADC)
+// which auto-refreshes from service account metadata, matching the auth
+// path used by gcs-upload-queue.js for data uploads.
+let _gcsStorage = null;
+let _gcsBucket  = null;
+
+async function getGCSBucket() {
+  if (_gcsBucket) return _gcsBucket;
+  const { Storage } = await import('@google-cloud/storage');
+  _gcsStorage = new Storage();
+  _gcsBucket  = _gcsStorage.bucket(process.env.GCS_BUCKET);
+  return _gcsBucket;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -356,28 +373,25 @@ function saveLiveCursorLocal(migId, afterRecordTime) {
 /**
  * Load cursor from GCS backup.
  *
- * FIX #1: Replaced execSync (blocked event loop for up to 15s) with execFileAsync.
- *   execFile (not exec) — no shell, no injection risk from GCS path strings.
- * FIX #11: Temp file written to CURSOR_DIR not /tmp.
- *   /tmp may be a separate filesystem on containers; cross-filesystem rename
- *   in atomicWriteFile fails silently. CURSOR_DIR keeps all cursor I/O on the
- *   same filesystem as the real cursor file.
+ * FIX #14: Uses @google-cloud/storage SDK instead of gsutil subprocess.
+ *   gsutil depends on gcloud CLI auth which expires and requires interactive
+ *   re-authentication. The SDK uses Application Default Credentials (service
+ *   account metadata on GCE/GKE, or GOOGLE_APPLICATION_CREDENTIALS env var)
+ *   which auto-refreshes without user interaction.
  */
 async function loadCursorFromGCS() {
   const GCS_BUCKET = process.env.GCS_BUCKET;
   if (!GCS_BUCKET) return null;
 
-  const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
-  // FIX #11: CURSOR_DIR not /tmp
-  const tmpPath = path.join(CURSOR_DIR, '.gcs-cursor-restore.json');
-
   try {
-    if (!fs.existsSync(CURSOR_DIR)) fs.mkdirSync(CURSOR_DIR, { recursive: true });
-    // FIX #1: execFileAsync — async, no shell, no injection
-    await execFileAsync('gsutil', ['-q', 'cp', gcsPath, tmpPath], { timeout: 15000 });
+    const bucket = await getGCSBucket();
+    const file   = bucket.file('cursors/live-cursor.json');
 
-    const content = fs.readFileSync(tmpPath, 'utf8').trim();
-    fs.unlinkSync(tmpPath);
+    const [exists] = await file.exists();
+    if (!exists) return null;
+
+    const [contents] = await file.download();
+    const content = contents.toString('utf8').trim();
     if (!content) return null;
 
     const data = JSON.parse(content);
@@ -393,8 +407,7 @@ async function loadCursorFromGCS() {
     console.log(`☁️ Restored cursor from GCS: migration=${data.migration_id}, time=${data.record_time}`);
     return data;
   } catch (err) {
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
-    if (!err.message?.includes('No such object') && !err.message?.includes('CommandException')) {
+    if (!err.message?.includes('No such object') && err.code !== 404) {
       console.warn(`⚠️ Could not load cursor from GCS: ${err.message}`);
     }
     return null;
@@ -439,10 +452,9 @@ async function saveLiveCursor(migId, afterRecordTime) {
 /**
  * Backup cursor to GCS.
  *
- * FIX #1: Replaced execSync (blocked event loop for up to 10s) with execFileAsync.
- *   execFile (not exec) — no shell injection from GCS path strings.
- * FIX #2: Now async — callers must await.
- * FIX #11: Temp file written to CURSOR_DIR not /tmp.
+ * FIX #14: Uses @google-cloud/storage SDK instead of gsutil subprocess.
+ *   Eliminates dependency on gcloud CLI auth which expires during long runs.
+ *   SDK uploads the JSON directly from memory — no temp files needed.
  */
 async function backupCursorToGCS(cursor) {
   const GCS_BUCKET = process.env.GCS_BUCKET;
@@ -452,16 +464,15 @@ async function backupCursorToGCS(cursor) {
   }
 
   const gcsPath = `gs://${GCS_BUCKET}/cursors/live-cursor.json`;
-  // FIX #11: CURSOR_DIR not /tmp
-  const tmpCursorPath = path.join(CURSOR_DIR, '.live-cursor-backup.json');
 
   try {
-    if (!fs.existsSync(CURSOR_DIR)) fs.mkdirSync(CURSOR_DIR, { recursive: true });
-    fs.writeFileSync(tmpCursorPath, JSON.stringify(cursor, null, 2));
+    const bucket = await getGCSBucket();
+    const file   = bucket.file('cursors/live-cursor.json');
 
-    // FIX #1: execFileAsync — async, no event loop block, no shell injection
-    await execFileAsync('gsutil', ['-q', 'cp', tmpCursorPath, gcsPath], { timeout: 15000 });
-    fs.unlinkSync(tmpCursorPath);
+    await file.save(JSON.stringify(cursor, null, 2), {
+      contentType: 'application/json',
+      resumable:   false, // small file, no need for resumable upload
+    });
 
     console.log(`  ☁️ Cursor backed up: ${gcsPath}`);
     gcsCursorBackupConsecutiveFailures = 0;
@@ -471,11 +482,8 @@ async function backupCursorToGCS(cursor) {
       recordTime: cursor.record_time,
     });
   } catch (err) {
-    try { if (fs.existsSync(tmpCursorPath)) fs.unlinkSync(tmpCursorPath); } catch {}
     gcsCursorBackupConsecutiveFailures++;
-    const stderr = err.stderr?.toString?.() || '';
     console.warn(`  ⚠️ Failed to backup cursor to GCS (${gcsCursorBackupConsecutiveFailures}/${GCS_CURSOR_BACKUP_MAX_FAILURES}): ${err.message}`);
-    if (stderr) console.warn(`     gsutil stderr: ${stderr.trim()}`);
     console.warn(`     Target path: ${gcsPath}`);
 
     if (gcsCursorBackupConsecutiveFailures >= GCS_CURSOR_BACKUP_MAX_FAILURES) {
