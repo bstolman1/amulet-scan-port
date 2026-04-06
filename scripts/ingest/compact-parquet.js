@@ -49,9 +49,7 @@ const TABLES = ['updates', 'events'];
 
 function cleanup(dir) {
   if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      fs.unlinkSync(path.join(dir, f));
-    }
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -107,23 +105,28 @@ function countUnique(localDir, idColumn) {
 function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   ensureDir(outputDir);
 
-  // Simple dedup: GROUP BY id, keep the row with the latest recorded_at.
-  // No window functions or global ORDER BY — much faster on large datasets.
-  // DuckDB's DISTINCT ON is equivalent to ROW_NUMBER() PARTITION BY but cheaper.
+  // Dedup via temporary table to avoid OOM on large sorts.
+  // Limit memory and threads so DuckDB spills to disk instead of crashing.
   const sql = `
+    SET memory_limit='4GB';
+    SET threads=2;
+    SET preserve_insertion_order=false;
+    SET temp_directory='/tmp/duckdb_tmp';
+
     COPY (
       SELECT DISTINCT ON (${idColumn}) *
       FROM read_parquet('${inputDir}/*.parquet')
       ORDER BY ${idColumn}, recorded_at DESC
     )
-    TO '${outputDir}/compacted.parquet'
+    TO '${outputDir}'
     (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true)
   `;
 
+  fs.mkdirSync('/tmp/duckdb_tmp', { recursive: true });
   execSync(`duckdb -c "${sql}"`, {
     encoding: 'utf8',
     maxBuffer: 100 * 1024 * 1024,
-    timeout: 1_800_000, // 30 min — large event tables need time
+    timeout: 1_800_000, // 30 min
   });
 
   return fs.readdirSync(outputDir).filter(f => f.endsWith('.parquet'));
