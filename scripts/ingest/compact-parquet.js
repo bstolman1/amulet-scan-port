@@ -269,8 +269,8 @@ async function compactDay(month, day) {
     const dupsBefore = totalBefore - uniqueBefore;
     console.log(`  Before: total=${totalBefore}  unique=${uniqueBefore}  dups=${dupsBefore}`);
 
-    if (dupsBefore === 0 && existingFiles.length <= FILE_THRESHOLD) {
-      console.log(`  No dups and file count OK (${existingFiles.length} <= ${FILE_THRESHOLD}), skipping.`);
+    if (dupsBefore === 0 && existingFiles.length <= FILE_THRESHOLD && totalBefore <= MAX_ROWS_PER_FILE) {
+      console.log(`  No dups, file count OK (${existingFiles.length} <= ${FILE_THRESHOLD}), rows OK (${totalBefore} <= ${MAX_ROWS_PER_FILE}), skipping.`);
       cleanup(TMP_DOWNLOAD);
       continue;
     }
