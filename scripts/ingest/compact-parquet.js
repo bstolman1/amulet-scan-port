@@ -24,7 +24,7 @@ import path from 'path';
 const GCS_BUCKET = process.env.GCS_BUCKET || 'canton-bucket';
 const MIGRATION = 4;
 const MAX_ROWS_PER_FILE = parseInt(process.env.MAX_ROWS_PER_FILE) || 100000;
-const FILE_THRESHOLD = 100; // auto-compact days with more files than this
+const FILE_THRESHOLD = 1000; // auto-compact days with more files than this
 const TMP_DOWNLOAD = '/tmp/compact-download';
 const TMP_OUTPUT = '/tmp/compact-output';
 
