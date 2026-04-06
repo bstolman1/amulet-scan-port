@@ -31,8 +31,15 @@ const TMP_OUTPUT = '/tmp/compact-output';
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const COMPACT_ALL = args.includes('--all');
+const SKIP_DUP_SCAN = args.includes('--skip-dup-scan');
 const specificMonth = args.find(a => a.startsWith('--month='))?.split('=')[1];
 const specificDay = args.find(a => a.startsWith('--day='))?.split('=')[1];
+// --days=3/6,3/10,3/30,4/4,4/5  — compact specific days without scanning
+const specificDays = args.find(a => a.startsWith('--days='))?.split('=')[1]
+  ?.split(',').map(d => {
+    const [m, dy] = d.split('/').map(Number);
+    return { month: m, day: dy };
+  }) || [];
 
 const storage = new Storage();
 const bucket = storage.bucket(GCS_BUCKET);
@@ -233,6 +240,18 @@ async function main() {
     return;
   }
 
+  if (specificDays.length > 0) {
+    console.log(`\nDays to compact (from --days flag):`);
+    for (const d of specificDays) {
+      console.log(`  month=${d.month}/day=${d.day}`);
+    }
+    for (const d of specificDays) {
+      await compactDay(d.month, d.day);
+    }
+    console.log('\nAll done.');
+    return;
+  }
+
   // Discover all day partitions
   const months = [3, 4];
   const toCompact = [];
@@ -263,7 +282,7 @@ async function main() {
   }
 
   // Also check for dups on days with normal file counts (quick scan)
-  if (!COMPACT_ALL) {
+  if (!COMPACT_ALL && !SKIP_DUP_SCAN) {
     for (const month of months) {
       for (let day = 1; day <= 31; day++) {
         if (toCompact.find(d => d.month === month && d.day === day)) continue;
