@@ -100,57 +100,24 @@ function countUnique(localDir, idColumn) {
 function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   ensureDir(outputDir);
 
-  // Get total unique rows to determine number of output files
-  const totalUnique = countUnique(inputDir, idColumn);
-  const numFiles = Math.max(1, Math.ceil(totalUnique / maxRowsPerFile));
-
-  // Use DuckDB to deduplicate and write consolidated files
-  // ROW_NUMBER() partitioned per file to split output across files
+  // Simple dedup: GROUP BY id, keep the row with the latest recorded_at.
+  // No window functions or global ORDER BY — much faster on large datasets.
+  // DuckDB's DISTINCT ON is equivalent to ROW_NUMBER() PARTITION BY but cheaper.
   const sql = `
     COPY (
-      SELECT * EXCLUDE (rn, file_num)
-      FROM (
-        SELECT *,
-          ROW_NUMBER() OVER (PARTITION BY ${idColumn} ORDER BY recorded_at DESC) as dedup_rn,
-          (ROW_NUMBER() OVER (ORDER BY record_time, ${idColumn}) - 1) / ${maxRowsPerFile} as file_num
-        FROM read_parquet('${inputDir}/*.parquet')
-      )
-      WHERE dedup_rn = 1
-      ORDER BY record_time, ${idColumn}
+      SELECT DISTINCT ON (${idColumn}) *
+      FROM read_parquet('${inputDir}/*.parquet')
+      ORDER BY ${idColumn}, recorded_at DESC
     )
     TO '${outputDir}/compacted.parquet'
-    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000)
+    (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true)
   `;
 
-  try {
-    execSync(`duckdb -c "${sql}"`, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 600_000, // 10 min
-    });
-  } catch (e) {
-    // DuckDB might use partitioned writes for large datasets; try PARTITION_BY approach
-    // Fall back to single-file write which always works
-    const sqlSimple = `
-      COPY (
-        SELECT * EXCLUDE (dedup_rn)
-        FROM (
-          SELECT *,
-            ROW_NUMBER() OVER (PARTITION BY ${idColumn} ORDER BY recorded_at DESC) as dedup_rn
-          FROM read_parquet('${inputDir}/*.parquet')
-        )
-        WHERE dedup_rn = 1
-        ORDER BY record_time, ${idColumn}
-      )
-      TO '${outputDir}/compacted.parquet'
-      (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000)
-    `;
-    execSync(`duckdb -c "${sqlSimple}"`, {
-      encoding: 'utf8',
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 600_000,
-    });
-  }
+  execSync(`duckdb -c "${sql}"`, {
+    encoding: 'utf8',
+    maxBuffer: 100 * 1024 * 1024,
+    timeout: 1_800_000, // 30 min — large event tables need time
+  });
 
   return fs.readdirSync(outputDir).filter(f => f.endsWith('.parquet'));
 }
