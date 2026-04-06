@@ -105,31 +105,65 @@ function countUnique(localDir, idColumn) {
 function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   ensureDir(outputDir);
 
-  // Write a SQL script file so DuckDB processes SET commands before the query.
-  // Passing multiple statements via -c can cause SET to not take effect.
+  // Two-phase dedup to avoid OOM on DISTINCT ON + ORDER BY:
+  // 1. Build a hash set of duplicate IDs (tiny — just the IDs)
+  // 2. For dups: keep only latest recorded_at via a small grouped query
+  // 3. For non-dups: pass through directly
+  // This avoids sorting the entire wide dataset in memory.
   const sqlFile = '/tmp/compact-query.sql';
+  const dbFile = '/tmp/compact-work.duckdb';
+
+  // Clean up any leftover DB file
+  try { fs.unlinkSync(dbFile); } catch {}
+  try { fs.unlinkSync(dbFile + '.wal'); } catch {}
+
   const sql = `
-SET memory_limit='16GB';
-SET threads=4;
+SET memory_limit='8GB';
+SET threads=2;
 SET preserve_insertion_order=false;
 SET temp_directory='/tmp/duckdb_tmp';
 
+-- Load all data into a temp table
+CREATE TABLE src AS SELECT *, ROW_NUMBER() OVER () as _rownum FROM read_parquet('${inputDir}/*.parquet');
+
+-- Find which IDs are duplicated
+CREATE TABLE dup_ids AS
+  SELECT ${idColumn} FROM src GROUP BY ${idColumn} HAVING count(*) > 1;
+
+-- For duplicated IDs: keep the one with the latest recorded_at
+CREATE TABLE deduped AS
+  SELECT s.* EXCLUDE(_rownum) FROM src s
+  INNER JOIN dup_ids d ON s.${idColumn} = d.${idColumn}
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.${idColumn} ORDER BY s.recorded_at DESC) = 1;
+
+-- Combine: non-duplicated rows (bulk) + deduped rows
 COPY (
-  SELECT DISTINCT ON (${idColumn}) *
-  FROM read_parquet('${inputDir}/*.parquet')
-  ORDER BY ${idColumn}, recorded_at DESC
+  SELECT * EXCLUDE(_rownum) FROM src
+  WHERE ${idColumn} NOT IN (SELECT ${idColumn} FROM dup_ids)
+  UNION ALL
+  SELECT * FROM deduped
 )
 TO '${outputDir}'
 (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000, PER_THREAD_OUTPUT true);
+
+DROP TABLE IF EXISTS src;
+DROP TABLE IF EXISTS dup_ids;
+DROP TABLE IF EXISTS deduped;
 `;
 
   fs.mkdirSync('/tmp/duckdb_tmp', { recursive: true });
   fs.writeFileSync(sqlFile, sql);
-  execSync(`duckdb < ${sqlFile}`, {
-    encoding: 'utf8',
-    maxBuffer: 100 * 1024 * 1024,
-    timeout: 1_800_000, // 30 min
-  });
+  try {
+    execSync(`duckdb ${dbFile} < ${sqlFile}`, {
+      encoding: 'utf8',
+      maxBuffer: 100 * 1024 * 1024,
+      timeout: 1_800_000, // 30 min
+    });
+  } finally {
+    // Clean up DB file
+    try { fs.unlinkSync(dbFile); } catch {}
+    try { fs.unlinkSync(dbFile + '.wal'); } catch {}
+  }
 
   return fs.readdirSync(outputDir).filter(f => f.endsWith('.parquet'));
 }
