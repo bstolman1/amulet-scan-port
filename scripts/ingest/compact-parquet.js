@@ -172,6 +172,36 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   // Clean up the SQL file
   try { fs.unlinkSync(sqlFile); } catch {}
 
+  // Split the single output file into chunks of maxRowsPerFile
+  const totalRows = countRows(outputDir);
+  if (totalRows > maxRowsPerFile) {
+    const numChunks = Math.ceil(totalRows / maxRowsPerFile);
+    console.log(`  Splitting into ${numChunks} files (${maxRowsPerFile} rows each)...`);
+    const splitSql = [
+      "SET memory_limit='8GB';",
+      "SET threads=2;",
+      "SET preserve_insertion_order=false;",
+    ];
+    for (let i = 0; i < numChunks; i++) {
+      const offset = i * maxRowsPerFile;
+      const chunkFile = path.join(outputDir, `part-${String(i).padStart(4, '0')}.parquet`);
+      splitSql.push(
+        `COPY (SELECT * FROM read_parquet('${outFile}') LIMIT ${maxRowsPerFile} OFFSET ${offset})`,
+        `TO '${chunkFile}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);`
+      );
+    }
+    const splitFile = path.join(outputDir, '_split.sql');
+    fs.writeFileSync(splitFile, splitSql.join('\n'));
+    execSync(`cat ${splitFile} | duckdb`, {
+      encoding: 'utf8',
+      maxBuffer: 100 * 1024 * 1024,
+      timeout: 1_800_000,
+    });
+    // Remove the single big file and the SQL file
+    fs.unlinkSync(outFile);
+    try { fs.unlinkSync(splitFile); } catch {}
+  }
+
   return fs.readdirSync(outputDir).filter(f => f.endsWith('.parquet'));
 }
 
