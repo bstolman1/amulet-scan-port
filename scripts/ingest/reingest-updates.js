@@ -14,6 +14,13 @@
  * 3. Uses the same Parquet writer pipeline as fetch-updates.js
  * 4. Deduplicates within each batch using update_id
  * 5. Dry-run mode to preview what would happen
+ * 6. Persistent cursor: progress is saved to disk after every flush cycle.
+ *    On restart (crash, SIGINT, SIGTERM), re-running the same command
+ *    auto-resumes from where it stopped — no manual --after needed.
+ * 7. Graceful shutdown: SIGINT/SIGTERM flushes buffered data to GCS and
+ *    saves the cursor before exiting.
+ * 8. GCS drain: parquetWriter.shutdown() is called on completion to ensure
+ *    all async GCS uploads finish before the process exits.
  *
  * Usage:
  *   # Preview what would be re-ingested (dry run)
@@ -42,9 +49,10 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import { execFile as execFileCb, exec as execCb } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'fs';
 import axios from 'axios';
 import https from 'https';
+import { atomicWriteFile } from './atomic-cursor.js';
 
 const execFileAsync = promisify(execFileCb);
 const execAsync = promisify(execCb);
@@ -91,6 +99,57 @@ const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
 const GCS_BUCKET = process.env.GCS_BUCKET;
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const ENDPOINT_ROTATE_AFTER_ERRORS = parseInt(process.env.ENDPOINT_ROTATE_AFTER_ERRORS) || 3;
+const FLUSH_EVERY = 20; // flush to disk every N batches
+
+// ─── Persistent reingest cursor ──────────────────────────────────────────
+// Prevents duplicates on restart: on crash, the cursor records exactly where
+// we stopped so re-running the same command auto-resumes from that point.
+// Cursor file is keyed to (start, end, migration) so concurrent reingest
+// runs for different ranges don't collide.
+
+const CURSOR_DIR = process.env.CURSOR_DIR || join(process.env.DATA_DIR || '/var/lib/ledger_raw', 'cursors');
+
+function reingestCursorPath(migrationId) {
+  const s = START_DATE.replace(/-/g, '');
+  const e = END_DATE.replace(/-/g, '');
+  return join(CURSOR_DIR, `reingest-${migrationId}-${s}-${e}.json`);
+}
+
+function loadReingestCursor(migrationId) {
+  const p = reingestCursorPath(migrationId);
+  if (!existsSync(p)) return null;
+  try {
+    const data = JSON.parse(readFileSync(p, 'utf8'));
+    if (data.start_date !== START_DATE || data.end_date !== END_DATE) return null;
+    if (data.migration_id !== migrationId) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveReingestCursor(migrationId, afterRecordTime, afterMigrationId, stats) {
+  mkdirSync(CURSOR_DIR, { recursive: true });
+  atomicWriteFile(reingestCursorPath(migrationId), {
+    migration_id:       migrationId,
+    after_record_time:  afterRecordTime,
+    after_migration_id: afterMigrationId,
+    start_date:         START_DATE,
+    end_date:           END_DATE,
+    updates_written:    stats.updates,
+    events_written:     stats.events,
+    batches_processed:  stats.batches,
+    updated_at:         new Date().toISOString(),
+  });
+}
+
+function deleteReingestCursor(migrationId) {
+  const p = reingestCursorPath(migrationId);
+  try { unlinkSync(p); } catch {}
+}
+
+// Track in-flight state for graceful shutdown
+let _shutdownState = null;
 
 if (!START_DATE || !END_DATE) {
   console.error('Usage: node reingest-updates.js --start=YYYY-MM-DD --end=YYYY-MM-DD [--clean] [--dry-run] [--audit-only]');
@@ -488,9 +547,21 @@ async function reingestDateRange(dates, migrations) {
     const rangeStartDefault = START_DATE + 'T00:00:00.000000Z';
     const rangeEnd = new Date(new Date(END_DATE + 'T00:00:00Z').getTime() + 86400000).toISOString();
 
-    // Use --after flag to resume from a specific cursor position
+    // Resume priority: saved cursor > --after flag > backfill boundary > start date
     let rangeStart = rangeStartDefault;
-    if (RESUME_AFTER) {
+    let migUpdates = 0;
+    let migEvents = 0;
+    let batchNum = 0;
+
+    const savedCursor = loadReingestCursor(mig);
+    if (savedCursor && savedCursor.after_record_time) {
+      rangeStart = savedCursor.after_record_time;
+      migUpdates = savedCursor.updates_written || 0;
+      migEvents = savedCursor.events_written || 0;
+      batchNum = savedCursor.batches_processed || 0;
+      console.log(`   📍 Resuming from saved cursor: ${savedCursor.after_record_time}`);
+      console.log(`      (${migUpdates.toLocaleString()} updates, ${migEvents.toLocaleString()} events already written in previous run)`);
+    } else if (RESUME_AFTER) {
       rangeStart = RESUME_AFTER;
       console.log(`   📍 Resuming from --after cursor: ${RESUME_AFTER}`);
       console.log(`      (skipping already-ingested data)`);
@@ -507,16 +578,15 @@ async function reingestDateRange(dates, migrations) {
 
     // Use the v2/updates API with after semantics to walk forward through the range
     let afterRecordTime = rangeStart;
-    let afterMigrationId = mig;
-    let batchNum = 0;
-    let migUpdates = 0;
-    let migEvents = 0;
+    let afterMigrationId = savedCursor?.after_migration_id ?? mig;
     let consecutiveEmpty = 0;
     let consecutiveErrors = 0;
     let totalFailovers = 0;
     let cooldowns = 0;
-    const MAX_CONSECUTIVE_ERRORS = 20; // Higher limit since failover resets at 3
-    const FLUSH_EVERY = 20; // flush to disk every N batches (lower = less memory pressure)
+    const MAX_CONSECUTIVE_ERRORS = 20;
+
+    // Expose state for graceful shutdown
+    _shutdownState = { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum };
 
     while (true) {
       batchNum++;
@@ -562,6 +632,8 @@ async function reingestDateRange(dates, migrations) {
           const result = await processAndWrite(inRange, mig);
           migUpdates += result.updates;
           migEvents += result.events;
+          // Flush + save cursor for the final partial batch
+          await flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum);
           console.log(`   ✅ Migration ${mig}: Reached end of date range (partial batch: ${inRange.length})`);
           break;
         }
@@ -574,9 +646,12 @@ async function reingestDateRange(dates, migrations) {
           migUpdates += transactions.length;
         }
 
-        // Advance cursor
+        // Advance cursor in memory
         afterRecordTime = lastRecordTime;
         afterMigrationId = transactions[transactions.length - 1].migration_id ?? mig;
+
+        // Update shutdown state
+        _shutdownState = { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum };
 
         // Progress logging
         if (batchNum % 10 === 0) {
@@ -584,10 +659,13 @@ async function reingestDateRange(dates, migrations) {
           console.log(`   📥 Batch ${batchNum}: ${migUpdates.toLocaleString()} updates, ${migEvents.toLocaleString()} events | date=${cursorDate} | cursor=${afterRecordTime}`);
         }
 
-        // Periodic flush to ensure data reaches GCS
+        // Periodic flush: write data to GCS, then save cursor.
+        // Cursor is saved AFTER data is confirmed written — this guarantees
+        // the cursor never advances past actually-persisted data. On crash,
+        // worst case: up to FLUSH_EVERY batches get re-fetched (harmless dups
+        // at the cursor boundary), but no data is skipped.
         if (!DRY_RUN && batchNum % FLUSH_EVERY === 0) {
-          await parquetWriter.flushAll();
-          await parquetWriter.waitForWrites();
+          await flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum);
         }
 
       } catch (err) {
@@ -627,20 +705,41 @@ async function reingestDateRange(dates, migrations) {
       }
     }
 
+    // Final flush for this migration
+    if (!DRY_RUN) {
+      await flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum);
+    }
+
     totalUpdates += migUpdates;
     totalEvents += migEvents;
     console.log(`   Migration ${mig} complete: ${migUpdates.toLocaleString()} updates, ${migEvents.toLocaleString()} events`);
+
+    // Migration finished — remove cursor so re-running doesn't skip
+    deleteReingestCursor(mig);
+    console.log(`   Cursor cleared (migration ${mig} fully ingested)`);
   }
 
-  // Flush remaining buffered data
+  _shutdownState = null;
+
+  // Shut down the writer (flushes + drains GCS upload queue)
   if (!DRY_RUN) {
-    console.log('\n⏳ Flushing remaining buffered data...');
-    await parquetWriter.flushAll();
-    await parquetWriter.waitForWrites();
-    console.log('   ✅ All data flushed.');
+    console.log('\n⏳ Shutting down writer (draining GCS uploads)...');
+    await parquetWriter.shutdown();
+    console.log('   ✅ All data flushed and uploaded.');
   }
 
   return { totalUpdates, totalEvents };
+}
+
+/**
+ * Flush buffered data to Parquet + GCS, then save the cursor.
+ * Cursor is saved AFTER the data is persisted so restarts never
+ * advance past data that hasn't actually been uploaded.
+ */
+async function flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, updates, events, batches) {
+  await parquetWriter.flushAll();
+  await parquetWriter.waitForWrites();
+  saveReingestCursor(mig, afterRecordTime, afterMigrationId, { updates, events, batches });
 }
 
 async function processAndWrite(transactions, migrationId) {
@@ -785,8 +884,55 @@ async function main() {
   await auditDateRange(dates, migrations);
 }
 
-main().catch(err => {
+// ─── Graceful shutdown ───────────────────────────────────────────────────
+// On SIGINT/SIGTERM: flush buffered data, drain GCS uploads, save cursor,
+// then exit. On restart the cursor auto-resumes from where we stopped.
+
+let _isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (_isShuttingDown) return;
+  _isShuttingDown = true;
+  console.log(`\n⚠️  ${signal} received — shutting down gracefully...`);
+
+  try {
+    // Flush whatever is buffered
+    await parquetWriter.flushAll();
+    await parquetWriter.waitForWrites();
+
+    // Save cursor so restart resumes from here
+    if (_shutdownState) {
+      const { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum } = _shutdownState;
+      saveReingestCursor(mig, afterRecordTime, afterMigrationId,
+        { updates: migUpdates, events: migEvents, batches: batchNum });
+      console.log(`   Cursor saved: migration=${mig}, cursor=${afterRecordTime}`);
+      console.log(`   Re-run the same command to resume automatically.`);
+    }
+
+    // Drain GCS upload queue
+    await parquetWriter.shutdown();
+    console.log('   Shutdown complete.');
+  } catch (err) {
+    console.error(`   Shutdown error: ${err.message}`);
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+main().catch(async (err) => {
   console.error(`\n❌ FATAL: ${err.message}`);
   if (VERBOSE) console.error(err.stack);
+
+  // Save cursor even on fatal errors so progress isn't lost
+  if (_shutdownState && !_isShuttingDown) {
+    try {
+      const { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum } = _shutdownState;
+      saveReingestCursor(mig, afterRecordTime, afterMigrationId,
+        { updates: migUpdates, events: migEvents, batches: batchNum });
+      console.error(`   Cursor saved at ${afterRecordTime} — re-run to resume.`);
+    } catch {}
+  }
   process.exit(1);
 });

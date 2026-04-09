@@ -1414,10 +1414,13 @@ async function runIngestion() {
 
       log('info', 'cursor_advanced', { newCursor: afterRecordTime, migration: afterMigrationId, batchCount });
 
-      if (afterRecordTime && batchCount % 5 === 0) {
+      // Save cursor after EVERY batch to minimise the duplicate window on
+      // crash/restart. Previously saved every 5 batches (500 records gap);
+      // atomicWriteFile is fast enough that per-batch saves are negligible.
+      if (afterRecordTime) {
         // FIX #2: await the now-async saveLiveCursor
         await saveLiveCursor(afterMigrationId, afterRecordTime);
-        // FIX #4: keep shutdown-cursor tracking in sync on every periodic save
+        // FIX #4: keep shutdown-cursor tracking in sync on every save
         _liveAfterMigrationId = afterMigrationId;
         _liveAfterRecordTime  = afterRecordTime;
       }
