@@ -10,10 +10,20 @@
  * 5. Deletes the old files from GCS
  *
  * Usage:
- *   node compact-parquet.js                    # Auto-detect: compact days with dups or >100 files
- *   node compact-parquet.js --month=3 --day=10 # Compact a specific day
- *   node compact-parquet.js --dry-run           # Show what would be done without changing anything
- *   node compact-parquet.js --all               # Compact all days (March+April 2026)
+ *   node compact-parquet.js                        # Auto-detect: compact days with dups or >100 files
+ *   node compact-parquet.js --month=3 --day=10     # Compact a specific day
+ *   node compact-parquet.js --days=3/6,3/10,4/4    # Compact a list of days
+ *   node compact-parquet.js --dry-run              # Show what would be done without changing anything
+ *   node compact-parquet.js --all                  # Compact all days (March+April 2026)
+ *   node compact-parquet.js --inspect --days=3/10  # List files + per-file row counts (no changes)
+ *
+ * Correctness guarantees:
+ * - Pass 1 dup-ID detection failures are fatal (not silently swallowed).
+ * - If count(*) - count(DISTINCT id) disagrees with GROUP BY HAVING count(*)>1,
+ *   the compaction aborts for that table (inconsistency check).
+ * - Post-compaction the output is re-checked for duplicates before any upload.
+ * - Output file names include a per-run ID, so re-running compaction on the
+ *   same day cannot clobber its own new files during the delete-old-files step.
  */
 
 import { Storage } from '@google-cloud/storage';
@@ -32,6 +42,7 @@ const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const COMPACT_ALL = args.includes('--all');
 const SKIP_DUP_SCAN = args.includes('--skip-dup-scan');
+const INSPECT = args.includes('--inspect');
 const specificMonth = args.find(a => a.startsWith('--month='))?.split('=')[1];
 const specificDay = args.find(a => a.startsWith('--day='))?.split('=')[1];
 // --days=3/6,3/10,3/30,4/4,4/5  — compact specific days without scanning
@@ -40,6 +51,13 @@ const specificDays = args.find(a => a.startsWith('--days='))?.split('=')[1]
     const [m, dy] = d.split('/').map(Number);
     return { month: m, day: dy };
   }) || [];
+
+// Unique per-run prefix to guarantee output file names can't collide with
+// files from a previous compaction run. Without this, running compaction
+// twice on the same day would upload part-0000.parquet (overwriting the
+// previous part-0000.parquet) and then delete it again as part of the
+// "existing files" cleanup — wiping the new data.
+const RUN_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const storage = new Storage();
 const bucket = storage.bucket(GCS_BUCKET);
@@ -102,7 +120,7 @@ function countUnique(localDir, idColumn) {
   }
 }
 
-function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
+function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile, expectedDupCount) {
   ensureDir(outputDir);
 
   // Two-pass approach:
@@ -111,19 +129,46 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   const sqlFile = path.join(outputDir, '_compact.sql');
   const outFile = path.join(outputDir, 'compacted.parquet');
 
-  // Pass 1: find dup IDs
-  const dupSql = `SELECT ${idColumn} FROM read_parquet('${inputDir}/*.parquet') GROUP BY ${idColumn} HAVING count(*) > 1`;
-  let dupIds;
-  try {
-    const result = execSync(`duckdb -csv -c "${dupSql}"`, {
-      encoding: 'utf8',
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 300_000,
-    }).trim();
-    const lines = result.split('\n').slice(1); // skip header
-    dupIds = lines.filter(l => l.trim());
-  } catch {
-    dupIds = [];
+  // Pass 1: find dup IDs.
+  // Write the query to a SQL file and pipe it in, so we get predictable
+  // DuckDB settings (memory_limit) and the query never hits the shell
+  // command-line. Errors must propagate — silently swallowing them and
+  // falling into the "no dups" path was the root cause of compacted output
+  // still containing duplicates.
+  const dupSqlFile = path.join(outputDir, '_find_dups.sql');
+  const dupOutFile = path.join(outputDir, '_dup_ids.csv');
+  const dupSql = [
+    "SET memory_limit='8GB';",
+    "SET threads=2;",
+    "SET preserve_insertion_order=false;",
+    `COPY (SELECT ${idColumn} FROM read_parquet('${inputDir}/*.parquet') GROUP BY ${idColumn} HAVING count(*) > 1) TO '${dupOutFile}' (FORMAT CSV, HEADER false);`,
+  ].join('\n');
+  fs.writeFileSync(dupSqlFile, dupSql);
+  execSync(`cat ${dupSqlFile} | duckdb`, {
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 600_000, // 10 min
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  try { fs.unlinkSync(dupSqlFile); } catch {}
+
+  let dupIds = [];
+  if (fs.existsSync(dupOutFile)) {
+    const raw = fs.readFileSync(dupOutFile, 'utf8').trim();
+    if (raw) {
+      dupIds = raw.split('\n').filter(l => l.trim());
+    }
+    try { fs.unlinkSync(dupOutFile); } catch {}
+  }
+
+  // Consistency check: if the caller detected dups via countRows-countUnique
+  // but Pass 1 returns zero dup IDs, something is wrong. Fail loud rather
+  // than silently consolidating and losing the dedup guarantee.
+  if (expectedDupCount > 0 && dupIds.length === 0) {
+    throw new Error(
+      `Dup detection mismatch: expected >0 duplicate IDs (saw ${expectedDupCount} dup rows via count(*)-count(DISTINCT)) ` +
+      `but Pass 1 GROUP BY HAVING count(*)>1 returned 0 IDs. Aborting to avoid writing unchanged data.`
+    );
   }
 
   if (dupIds.length === 0) {
@@ -172,7 +217,9 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
   // Clean up the SQL file
   try { fs.unlinkSync(sqlFile); } catch {}
 
-  // Split the single output file into chunks of maxRowsPerFile
+  // Split the single output file into chunks of maxRowsPerFile.
+  // countRows reads ONLY the single compacted.parquet at this point — no
+  // other .parquet files exist in outputDir yet.
   const totalRows = countRows(outputDir);
   if (totalRows > maxRowsPerFile) {
     const numChunks = Math.ceil(totalRows / maxRowsPerFile);
@@ -184,7 +231,7 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
     ];
     for (let i = 0; i < numChunks; i++) {
       const offset = i * maxRowsPerFile;
-      const chunkFile = path.join(outputDir, `part-${String(i).padStart(4, '0')}.parquet`);
+      const chunkFile = path.join(outputDir, `compact-${RUN_ID}-${String(i).padStart(4, '0')}.parquet`);
       splitSql.push(
         `COPY (SELECT * FROM read_parquet('${outFile}') LIMIT ${maxRowsPerFile} OFFSET ${offset})`,
         `TO '${chunkFile}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);`
@@ -200,6 +247,12 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile) {
     // Remove the single big file and the SQL file
     fs.unlinkSync(outFile);
     try { fs.unlinkSync(splitFile); } catch {}
+  } else {
+    // Small dataset fits in a single file — rename from the generic
+    // 'compacted.parquet' to a unique name so a future re-run can't collide
+    // with it on upload/delete.
+    const uniqueFile = path.join(outputDir, `compact-${RUN_ID}-0000.parquet`);
+    fs.renameSync(outFile, uniqueFile);
   }
 
   return fs.readdirSync(outputDir).filter(f => f.endsWith('.parquet'));
@@ -221,6 +274,57 @@ async function deleteGCSFiles(gcsFiles) {
     if (i + 100 < gcsFiles.length) {
       process.stdout.write(`  deleted ${i + 100}/${gcsFiles.length}\r`);
     }
+  }
+}
+
+async function inspectDay(month, day) {
+  const dayLabel = `month=${month}/day=${day}`;
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`Inspecting ${dayLabel}`);
+  console.log('='.repeat(60));
+
+  for (const table of TABLES) {
+    const idColumn = table === 'updates' ? 'update_id' : 'event_id';
+    const gcsPrefix = `raw/updates/${table}/migration=${MIGRATION}/year=2026/month=${month}/day=${day}/`;
+
+    console.log(`\n  --- ${table} ---`);
+
+    const existingFiles = await listFiles(gcsPrefix);
+    if (existingFiles.length === 0) {
+      console.log(`  No files found.`);
+      continue;
+    }
+
+    console.log(`  Found ${existingFiles.length} files in GCS:`);
+    for (const name of existingFiles) {
+      console.log(`    ${path.basename(name)}`);
+    }
+
+    // Download and analyze
+    cleanup(TMP_DOWNLOAD);
+    ensureDir(TMP_DOWNLOAD);
+    await downloadFiles(existingFiles, TMP_DOWNLOAD);
+
+    const totalRows = countRows(TMP_DOWNLOAD);
+    const uniqueRows = countUnique(TMP_DOWNLOAD, idColumn);
+    const dups = totalRows - uniqueRows;
+    console.log(`  total=${totalRows}  unique=${uniqueRows}  dups=${dups}${dups > 0 ? ' <<<' : ''}`);
+
+    // Per-file row count breakdown
+    console.log(`  Per-file row counts:`);
+    for (const name of existingFiles) {
+      const local = path.join(TMP_DOWNLOAD, path.basename(name));
+      try {
+        const sql = `SELECT count(*) FROM read_parquet('${local}')`;
+        const result = execSync(`duckdb -csv -c "${sql}"`, { encoding: 'utf8' }).trim();
+        const count = parseInt(result.split('\n')[1]);
+        console.log(`    ${path.basename(name).padEnd(50)} ${count}`);
+      } catch {
+        console.log(`    ${path.basename(name).padEnd(50)} ERROR`);
+      }
+    }
+
+    cleanup(TMP_DOWNLOAD);
   }
 }
 
@@ -278,12 +382,32 @@ async function compactDay(month, day) {
     // Compact
     console.log(`  Compacting (dedup + consolidate)...`);
     cleanup(TMP_OUTPUT);
-    const outputFiles = compactWithDuckDB(TMP_DOWNLOAD, TMP_OUTPUT, idColumn, MAX_ROWS_PER_FILE);
+    let outputFiles;
+    try {
+      outputFiles = compactWithDuckDB(TMP_DOWNLOAD, TMP_OUTPUT, idColumn, MAX_ROWS_PER_FILE, dupsBefore);
+    } catch (err) {
+      console.error(`  ERROR: compactWithDuckDB failed: ${err.message}`);
+      cleanup(TMP_DOWNLOAD);
+      cleanup(TMP_OUTPUT);
+      continue;
+    }
     const totalAfter = countRows(TMP_OUTPUT);
-    console.log(`  After:  total=${totalAfter}  files=${outputFiles.length}  (removed ${dupsBefore} dups, ${existingFiles.length} → ${outputFiles.length} files)`);
+    const uniqueAfter = countUnique(TMP_OUTPUT, idColumn);
+    const dupsAfter = totalAfter - uniqueAfter;
+    console.log(`  After:  total=${totalAfter}  unique=${uniqueAfter}  dups=${dupsAfter}  files=${outputFiles.length}  (${existingFiles.length} → ${outputFiles.length} files)`);
 
     if (totalAfter !== uniqueBefore) {
       console.error(`  ERROR: Row count mismatch! Expected ${uniqueBefore}, got ${totalAfter}. Aborting this table.`);
+      cleanup(TMP_DOWNLOAD);
+      cleanup(TMP_OUTPUT);
+      continue;
+    }
+
+    // Post-compaction dup verification. Even if total row counts match,
+    // paranoia: make sure the output is actually deduplicated before we
+    // replace the existing GCS files.
+    if (dupsAfter !== 0) {
+      console.error(`  ERROR: Output still has ${dupsAfter} duplicate row(s) after compaction. Aborting this table.`);
       cleanup(TMP_DOWNLOAD);
       cleanup(TMP_OUTPUT);
       continue;
@@ -307,8 +431,24 @@ async function compactDay(month, day) {
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`GCS Parquet Compaction${DRY_RUN ? ' (DRY RUN)' : ''}`);
-  console.log(`Bucket: ${GCS_BUCKET}  Migration: ${MIGRATION}  Max rows/file: ${MAX_ROWS_PER_FILE}`);
+  console.log(`GCS Parquet Compaction${DRY_RUN ? ' (DRY RUN)' : ''}${INSPECT ? ' (INSPECT)' : ''}`);
+  console.log(`Bucket: ${GCS_BUCKET}  Migration: ${MIGRATION}  Max rows/file: ${MAX_ROWS_PER_FILE}  Run: ${RUN_ID}`);
+
+  // --inspect mode: list files + per-file row counts, no compaction
+  if (INSPECT) {
+    if (specificDays.length === 0 && !(specificMonth && specificDay)) {
+      console.error('--inspect requires --days=... or --month= --day=');
+      process.exit(1);
+    }
+    if (specificMonth && specificDay) {
+      await inspectDay(parseInt(specificMonth), parseInt(specificDay));
+    }
+    for (const d of specificDays) {
+      await inspectDay(d.month, d.day);
+    }
+    console.log('\nDone.');
+    return;
+  }
 
   if (specificMonth && specificDay) {
     await compactDay(parseInt(specificMonth), parseInt(specificDay));
