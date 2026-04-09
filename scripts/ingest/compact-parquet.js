@@ -241,16 +241,27 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile, expect
   if (totalRows > maxRowsPerFile) {
     const numChunks = Math.ceil(totalRows / maxRowsPerFile);
     console.log(`  Splitting into ${numChunks} files (${maxRowsPerFile} rows each)...`);
+    // Sort once into a temp table, then slice deterministic windows.
+    // Without ORDER BY, LIMIT/OFFSET under parallel scans is
+    // non-deterministic — different COPY statements can see different
+    // row orderings, causing chunks to overlap (dups) and have gaps
+    // (data loss). Using a sorted materialized table guarantees each
+    // row appears in exactly one chunk.
+    const sortedFile = path.join(outputDir, '_sorted.parquet');
     const splitSql = [
       "SET memory_limit='8GB';",
       "SET threads=2;",
-      "SET preserve_insertion_order=false;",
+      "SET temp_directory='/tmp/duckdb_tmp';",
+      `COPY (SELECT * FROM read_parquet('${outFile}') ORDER BY ${idColumn})`,
+      `TO '${sortedFile}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);`,
+      // Now read the sorted file with preserve_insertion_order=true (default)
+      // so LIMIT/OFFSET windows are deterministic.
     ];
     for (let i = 0; i < numChunks; i++) {
       const offset = i * maxRowsPerFile;
       const chunkFile = path.join(outputDir, `compact-${RUN_ID}-${String(i).padStart(4, '0')}.parquet`);
       splitSql.push(
-        `COPY (SELECT * FROM read_parquet('${outFile}') LIMIT ${maxRowsPerFile} OFFSET ${offset})`,
+        `COPY (SELECT * FROM read_parquet('${sortedFile}') LIMIT ${maxRowsPerFile} OFFSET ${offset})`,
         `TO '${chunkFile}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);`
       );
     }
@@ -261,8 +272,9 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile, expect
       maxBuffer: 100 * 1024 * 1024,
       timeout: 1_800_000,
     });
-    // Remove the single big file and the SQL file
+    // Remove intermediate files
     fs.unlinkSync(outFile);
+    try { fs.unlinkSync(sortedFile); } catch {}
     try { fs.unlinkSync(splitFile); } catch {}
   } else {
     // Small dataset fits in a single file — rename from the generic
