@@ -279,28 +279,17 @@ async function deleteGCSFiles(gcsFiles) {
 
 async function inspectDay(month, day) {
   const dayLabel = `month=${month}/day=${day}`;
-  console.log(`\n${'='.repeat(60)}`);
-  console.log(`Inspecting ${dayLabel}`);
-  console.log('='.repeat(60));
 
   for (const table of TABLES) {
     const idColumn = table === 'updates' ? 'update_id' : 'event_id';
     const gcsPrefix = `raw/updates/${table}/migration=${MIGRATION}/year=2026/month=${month}/day=${day}/`;
 
-    console.log(`\n  --- ${table} ---`);
-
     const existingFiles = await listFiles(gcsPrefix);
     if (existingFiles.length === 0) {
-      console.log(`  No files found.`);
+      console.log(`${dayLabel} ${table.padEnd(7)}  (no files)`);
       continue;
     }
 
-    console.log(`  Found ${existingFiles.length} files in GCS:`);
-    for (const name of existingFiles) {
-      console.log(`    ${path.basename(name)}`);
-    }
-
-    // Download and analyze
     cleanup(TMP_DOWNLOAD);
     ensureDir(TMP_DOWNLOAD);
     await downloadFiles(existingFiles, TMP_DOWNLOAD);
@@ -308,20 +297,24 @@ async function inspectDay(month, day) {
     const totalRows = countRows(TMP_DOWNLOAD);
     const uniqueRows = countUnique(TMP_DOWNLOAD, idColumn);
     const dups = totalRows - uniqueRows;
-    console.log(`  total=${totalRows}  unique=${uniqueRows}  dups=${dups}${dups > 0 ? ' <<<' : ''}`);
+    const flag = dups > 0 ? ' <<<' : '';
+    console.log(
+      `${dayLabel} ${table.padEnd(7)}  files=${String(existingFiles.length).padEnd(4)} ` +
+      `total=${String(totalRows).padEnd(10)} unique=${String(uniqueRows).padEnd(10)} dups=${dups}${flag}`
+    );
 
-    // Per-file row count breakdown
-    console.log(`  Per-file row counts:`);
+    // Per-file row counts, one line each
     for (const name of existingFiles) {
       const local = path.join(TMP_DOWNLOAD, path.basename(name));
+      let count;
       try {
         const sql = `SELECT count(*) FROM read_parquet('${local}')`;
         const result = execSync(`duckdb -csv -c "${sql}"`, { encoding: 'utf8' }).trim();
-        const count = parseInt(result.split('\n')[1]);
-        console.log(`    ${path.basename(name).padEnd(50)} ${count}`);
+        count = String(parseInt(result.split('\n')[1])).padStart(10);
       } catch {
-        console.log(`    ${path.basename(name).padEnd(50)} ERROR`);
+        count = '     ERROR';
       }
+      console.log(`  ${count}  ${path.basename(name)}`);
     }
 
     cleanup(TMP_DOWNLOAD);
@@ -431,10 +424,9 @@ async function compactDay(month, day) {
 // ─── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`GCS Parquet Compaction${DRY_RUN ? ' (DRY RUN)' : ''}${INSPECT ? ' (INSPECT)' : ''}`);
-  console.log(`Bucket: ${GCS_BUCKET}  Migration: ${MIGRATION}  Max rows/file: ${MAX_ROWS_PER_FILE}  Run: ${RUN_ID}`);
-
-  // --inspect mode: list files + per-file row counts, no compaction
+  // --inspect mode: list files + per-file row counts, no compaction.
+  // Keep output minimal: one summary line per (day, table) then one line
+  // per file with row count.
   if (INSPECT) {
     if (specificDays.length === 0 && !(specificMonth && specificDay)) {
       console.error('--inspect requires --days=... or --month= --day=');
@@ -446,9 +438,11 @@ async function main() {
     for (const d of specificDays) {
       await inspectDay(d.month, d.day);
     }
-    console.log('\nDone.');
     return;
   }
+
+  console.log(`GCS Parquet Compaction${DRY_RUN ? ' (DRY RUN)' : ''}`);
+  console.log(`Bucket: ${GCS_BUCKET}  Migration: ${MIGRATION}  Max rows/file: ${MAX_ROWS_PER_FILE}  Run: ${RUN_ID}`);
 
   if (specificMonth && specificDay) {
     await compactDay(parseInt(specificMonth), parseInt(specificDay));
