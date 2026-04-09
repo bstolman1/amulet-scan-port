@@ -103,7 +103,7 @@ const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
 const GCS_BUCKET = process.env.GCS_BUCKET;
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const ENDPOINT_ROTATE_AFTER_ERRORS = parseInt(process.env.ENDPOINT_ROTATE_AFTER_ERRORS) || 3;
-const FLUSH_EVERY = 20; // flush to disk every N batches
+const FLUSH_EVERY = 5; // flush + save cursor every N batches
 
 // ─── Persistent reingest cursor ──────────────────────────────────────────
 // Prevents duplicates on restart: on crash, the cursor records exactly where
@@ -746,13 +746,25 @@ async function reingestDateRange(dates, migrations) {
 }
 
 /**
- * Flush buffered data to Parquet + GCS, then save the cursor.
- * Cursor is saved AFTER the data is persisted so restarts never
- * advance past data that hasn't actually been uploaded.
+ * Flush buffered data to Parquet, wait for GCS uploads, then save cursor.
+ *
+ * Order is critical for crash safety:
+ *   1. flushAll()       → writes buffered records to local Parquet files
+ *   2. waitForWrites()  → waits for Parquet file creation to finish
+ *   3. waitForUploads() → waits for GCS upload queue to drain
+ *   4. saveCursor()     → persists the position AFTER data is in GCS
+ *
+ * If we crash between 1–3, cursor is behind data → restart re-fetches
+ * some records that are already in GCS → small dups (dedup handles it).
+ * If we crash after 4, cursor matches data → clean resume.
+ *
+ * The WRONG order (save cursor before upload confirms) would risk gaps:
+ * cursor could advance past data that never made it to GCS.
  */
 async function flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, updates, events, batches) {
   await parquetWriter.flushAll();
   await parquetWriter.waitForWrites();
+  await parquetWriter.waitForUploads();
   saveReingestCursor(mig, afterRecordTime, afterMigrationId, { updates, events, batches });
 }
 
@@ -918,9 +930,10 @@ async function gracefulShutdown(signal) {
   console.log(`\n⚠️  ${signal} received — shutting down gracefully...`);
 
   try {
-    // Flush whatever is buffered
+    // Flush whatever is buffered and wait for GCS uploads
     await parquetWriter.flushAll();
     await parquetWriter.waitForWrites();
+    await parquetWriter.waitForUploads();
 
     // Save cursor so restart resumes from here
     if (_shutdownState) {

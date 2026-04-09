@@ -806,6 +806,19 @@ export async function waitForWrites() {
   }
 }
 
+/**
+ * Wait for all in-flight GCS uploads to complete.
+ * Call after waitForWrites() to ensure data is actually in GCS
+ * before advancing a cursor. waitForWrites() only waits for local
+ * Parquet file creation — the async GCS upload queue may still have
+ * items in flight.
+ */
+export async function waitForUploads() {
+  if (getGCSMode()) {
+    await drainUploads();
+  }
+}
+
 export async function shutdown() {
   await flushAll();
   await waitForWrites();
