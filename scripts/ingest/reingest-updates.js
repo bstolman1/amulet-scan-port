@@ -26,8 +26,11 @@
  *   # Preview what would be re-ingested (dry run)
  *   node reingest-updates.js --start=2026-03-03 --end=2026-03-21 --dry-run
  *
- *   # Re-ingest March 3-21 data, cleaning bad data first
+ *   # Re-ingest March 3-21 data, cleaning existing updates data first
  *   node reingest-updates.js --start=2026-03-03 --end=2026-03-21 --clean
+ *
+ *   # Full clean re-ingest: also remove partial backfill data, start from scratch
+ *   node reingest-updates.js --start=2026-03-03 --end=2026-04-09 --migration=4 --clean-backfill
  *
  *   # Re-ingest only March 20-21 (missing events)
  *   node reingest-updates.js --start=2026-03-20 --end=2026-03-21 --clean
@@ -91,6 +94,7 @@ const TARGET_MIGRATION = argVal('migration') ? parseInt(argVal('migration')) : n
 const RESUME_AFTER = argVal('after'); // Resume from cursor, e.g. --after=2026-03-03T18:12:09.953575Z
 const DRY_RUN = args.includes('--dry-run');
 const CLEAN = args.includes('--clean');
+const CLEAN_BACKFILL = args.includes('--clean-backfill');
 const AUDIT_ONLY = args.includes('--audit-only');
 const VERBOSE = args.includes('--verbose') || args.includes('-v');
 const FORCE = args.includes('--force');
@@ -393,27 +397,35 @@ async function checkBackfillOverlap(dates, migrations) {
 // ─── Clean existing bad data ──────────────────────────────────────────────
 
 async function cleanUpdatesData(dates, migrations) {
-  console.log('\n🗑️  CLEANING existing updates data for target date range...');
+  // Sources to clean: always 'updates', and optionally 'backfill' when
+  // --clean-backfill is given (e.g. to remove partial backfill data before
+  // a full re-ingestion that replaces it).
+  const sourcesToClean = ['updates'];
+  if (CLEAN_BACKFILL) sourcesToClean.push('backfill');
+
+  console.log(`\n🗑️  CLEANING existing data for target date range (sources: ${sourcesToClean.join(', ')})...`);
   let totalDeleted = 0;
 
-  for (const mig of migrations) {
-    // Bulk list to find which days have data
-    const [updatesMap, eventsMap] = await Promise.all([
-      bulkListGCS('updates', 'updates', mig),
-      bulkListGCS('updates', 'events', mig),
-    ]);
+  for (const source of sourcesToClean) {
+    for (const mig of migrations) {
+      // Bulk list to find which days have data
+      const [updatesMap, eventsMap] = await Promise.all([
+        bulkListGCS(source, 'updates', mig),
+        bulkListGCS(source, 'events', mig),
+      ]);
 
-    for (const { dateStr, year, month, day } of dates) {
-      for (const [type, countMap] of [['updates', updatesMap], ['events', eventsMap]]) {
-        const count = countMap[dateStr] || 0;
-        if (count > 0) {
-          const gcsPath = dayPartitionPath('updates', type, mig, year, month, day);
-          if (DRY_RUN) {
-            console.log(`   [DRY RUN] Would delete ${count} ${type} files at ${gcsPath}`);
-          } else {
-            console.log(`   Deleting ${count} ${type} files at ${gcsPath}...`);
-            await gsutilRm(gcsPath);
-            totalDeleted += count;
+      for (const { dateStr, year, month, day } of dates) {
+        for (const [type, countMap] of [['updates', updatesMap], ['events', eventsMap]]) {
+          const count = countMap[dateStr] || 0;
+          if (count > 0) {
+            const gcsPath = dayPartitionPath(source, type, mig, year, month, day);
+            if (DRY_RUN) {
+              console.log(`   [DRY RUN] Would delete ${count} ${source}/${type} files at ${gcsPath}`);
+            } else {
+              console.log(`   Deleting ${count} ${source}/${type} files at ${gcsPath}...`);
+              await gsutilRm(gcsPath);
+              totalDeleted += count;
+            }
           }
         }
       }
@@ -540,8 +552,10 @@ async function reingestDateRange(dates, migrations) {
     parquetWriter.setMigrationId(mig);
     console.log(`\n── Migration ${mig} ──`);
 
-    // Find where backfill ends to avoid overlap
-    const backfillEnd = await findBackfillBoundary(mig);
+    // Find where backfill ends to avoid overlap.
+    // Skip when --clean-backfill is used: the backfill data for this range
+    // has been (or will be) deleted, so there's no boundary to honour.
+    const backfillEnd = CLEAN_BACKFILL ? null : await findBackfillBoundary(mig);
 
     // Build the full time range for this re-ingestion
     const rangeStartDefault = START_DATE + 'T00:00:00.000000Z';
@@ -571,7 +585,7 @@ async function reingestDateRange(dates, migrations) {
       console.log(`   📍 Using backfill boundary as start: ${backfillEnd}`);
       console.log(`      (prevents duplicate data with raw/backfill/)`);
     } else {
-      console.log(`   📍 No backfill boundary found in range, using: ${rangeStartDefault}`);
+      console.log(`   📍 Starting from beginning of range: ${rangeStartDefault}`);
     }
 
     console.log(`   Time range: ${rangeStart} → ${rangeEnd}`);
@@ -822,7 +836,8 @@ async function main() {
   console.log(`   GCS bucket:    ${GCS_BUCKET}`);
   console.log(`   Scan URL:      ${activeScanUrl} (${activeEndpointName})`);
   console.log(`   Migration:     ${TARGET_MIGRATION !== null ? TARGET_MIGRATION : 'all'}`);
-  console.log(`   Mode:          ${DRY_RUN ? 'DRY RUN' : AUDIT_ONLY ? 'AUDIT ONLY' : CLEAN ? 'CLEAN + RE-INGEST' : 'RE-INGEST ONLY'}`);
+  const modeStr = DRY_RUN ? 'DRY RUN' : AUDIT_ONLY ? 'AUDIT ONLY' : CLEAN_BACKFILL ? 'CLEAN ALL (incl. backfill) + RE-INGEST' : CLEAN ? 'CLEAN + RE-INGEST' : 'RE-INGEST ONLY';
+  console.log(`   Mode:          ${modeStr}`);
   if (RESUME_AFTER) console.log(`   Resume after:  ${RESUME_AFTER}`);
   console.log(`   Batch size:    ${BATCH_SIZE}`);
   console.log('═'.repeat(80));
@@ -846,9 +861,12 @@ async function main() {
   }
 
   // Step 3: Check for backfill overlap
-  // When --clean is used, overlap is handled automatically by starting from
-  // the backfill boundary cursor (no duplicates). When not cleaning, warn.
-  if (!CLEAN) {
+  // When --clean-backfill is used, backfill data is deleted so no overlap.
+  // When --clean is used (without --clean-backfill), overlap is handled by
+  // starting from the backfill boundary cursor.
+  if (CLEAN_BACKFILL) {
+    console.log('\n🔍 --clean-backfill: backfill data will be deleted, no overlap possible');
+  } else if (!CLEAN) {
     const overlapOk = await checkBackfillOverlap(dates, migrations);
     if (!overlapOk) {
       process.exit(1);
@@ -858,9 +876,13 @@ async function main() {
     console.log('   Re-ingestion will start from the backfill cursor boundary');
   }
 
-  // Step 4: Clean existing bad data (if --clean)
-  if (CLEAN) {
+  // Step 4: Clean existing bad data (if --clean or --clean-backfill)
+  if (CLEAN || CLEAN_BACKFILL) {
     await cleanUpdatesData(dates, migrations);
+    // Also clear any saved reingest cursor so we start truly fresh
+    for (const mig of migrations) {
+      deleteReingestCursor(mig);
+    }
   }
 
   if (DRY_RUN) {
