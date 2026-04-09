@@ -124,82 +124,96 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile, expect
   ensureDir(outputDir);
 
   // Two-pass approach:
-  // Pass 1: Find duplicate IDs (tiny query — just IDs + count)
-  // Pass 2: Write consolidated output
+  // Pass 1: Find duplicate IDs, write to CSV.
+  // Pass 2: Load dup IDs into a temp table and rewrite the Parquet data
+  //         with dup rows collapsed via a window function.
+  //
+  // Why a temp table instead of a WHERE id IN ('a','b',...) literal list?
+  // For wide event tables we routinely see >1M duplicate IDs per day.
+  // Inlining them as SQL literals produces a >100MB SQL string and either
+  // OOMs the DuckDB parser or takes forever. Loading them into a temp
+  // table lets DuckDB use an efficient hash semi-join.
   const sqlFile = path.join(outputDir, '_compact.sql');
   const outFile = path.join(outputDir, 'compacted.parquet');
-
-  // Pass 1: find dup IDs.
-  // Write the query to a SQL file and pipe it in, so we get predictable
-  // DuckDB settings (memory_limit) and the query never hits the shell
-  // command-line. Errors must propagate — silently swallowing them and
-  // falling into the "no dups" path was the root cause of compacted output
-  // still containing duplicates.
   const dupSqlFile = path.join(outputDir, '_find_dups.sql');
   const dupOutFile = path.join(outputDir, '_dup_ids.csv');
+  const dupCountFile = path.join(outputDir, '_dup_count.csv');
+
+  // Pass 1: find dup IDs. Write them to a CSV file (not captured through
+  // stdout) so output size is not limited by maxBuffer. Errors propagate —
+  // silently swallowing them and falling into the "no dups" path was the
+  // root cause of compacted output still containing duplicates.
   const dupSql = [
     "SET memory_limit='8GB';",
     "SET threads=2;",
     "SET preserve_insertion_order=false;",
+    "SET temp_directory='/tmp/duckdb_tmp';",
     `COPY (SELECT ${idColumn} FROM read_parquet('${inputDir}/*.parquet') GROUP BY ${idColumn} HAVING count(*) > 1) TO '${dupOutFile}' (FORMAT CSV, HEADER false);`,
+    `COPY (SELECT count(*) FROM read_csv('${dupOutFile}', header=false)) TO '${dupCountFile}' (FORMAT CSV, HEADER false);`,
   ].join('\n');
+  fs.mkdirSync('/tmp/duckdb_tmp', { recursive: true });
   fs.writeFileSync(dupSqlFile, dupSql);
   execSync(`cat ${dupSqlFile} | duckdb`, {
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
-    timeout: 600_000, // 10 min
+    timeout: 1_800_000, // 30 min
     stdio: ['pipe', 'pipe', 'inherit'],
   });
   try { fs.unlinkSync(dupSqlFile); } catch {}
 
-  let dupIds = [];
-  if (fs.existsSync(dupOutFile)) {
-    const raw = fs.readFileSync(dupOutFile, 'utf8').trim();
-    if (raw) {
-      dupIds = raw.split('\n').filter(l => l.trim());
-    }
-    try { fs.unlinkSync(dupOutFile); } catch {}
+  // Read just the dup count (not the IDs themselves — those stay on disk)
+  let dupIdCount = 0;
+  if (fs.existsSync(dupCountFile)) {
+    const raw = fs.readFileSync(dupCountFile, 'utf8').trim();
+    dupIdCount = parseInt(raw) || 0;
+    try { fs.unlinkSync(dupCountFile); } catch {}
   }
 
   // Consistency check: if the caller detected dups via countRows-countUnique
   // but Pass 1 returns zero dup IDs, something is wrong. Fail loud rather
   // than silently consolidating and losing the dedup guarantee.
-  if (expectedDupCount > 0 && dupIds.length === 0) {
+  if (expectedDupCount > 0 && dupIdCount === 0) {
     throw new Error(
       `Dup detection mismatch: expected >0 duplicate IDs (saw ${expectedDupCount} dup rows via count(*)-count(DISTINCT)) ` +
       `but Pass 1 GROUP BY HAVING count(*)>1 returned 0 IDs. Aborting to avoid writing unchanged data.`
     );
   }
 
-  if (dupIds.length === 0) {
+  if (dupIdCount === 0) {
     // No dups — just consolidate files into one
     console.log(`  No dups, consolidating files...`);
+    try { fs.unlinkSync(dupOutFile); } catch {}
     const sql = [
       "SET memory_limit='8GB';",
       "SET threads=2;",
       "SET preserve_insertion_order=false;",
+      "SET temp_directory='/tmp/duckdb_tmp';",
       `COPY (SELECT * FROM read_parquet('${inputDir}/*.parquet'))`,
       `TO '${outFile}'`,
       "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 25000);",
     ].join('\n');
     fs.writeFileSync(sqlFile, sql);
   } else {
-    // Build a filter list for the small number of dup IDs
-    const idList = dupIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
-    console.log(`  Found ${dupIds.length} duplicate ID(s), deduplicating...`);
-
+    console.log(`  Found ${dupIdCount} duplicate ID(s), deduplicating via temp table...`);
     const sql = [
       "SET memory_limit='8GB';",
       "SET threads=2;",
       "SET preserve_insertion_order=false;",
+      "SET temp_directory='/tmp/duckdb_tmp';",
+      // Load dup IDs into a temp table. DuckDB can then use a hash
+      // semi-join instead of parsing a giant IN-list literal.
+      "CREATE TEMPORARY TABLE dup_id_set (id VARCHAR);",
+      `COPY dup_id_set FROM '${dupOutFile}' (FORMAT CSV, HEADER FALSE);`,
       "COPY (",
+      "  -- Non-duplicate rows: bulk pass-through via hash anti-join",
       `  SELECT * FROM read_parquet('${inputDir}/*.parquet')`,
-      `  WHERE ${idColumn} NOT IN (${idList})`,
+      `  WHERE ${idColumn} NOT IN (SELECT id FROM dup_id_set)`,
       "  UNION ALL",
+      "  -- Duplicate rows: collapse to the latest recorded_at per id",
       "  SELECT * EXCLUDE (_rn) FROM (",
       `    SELECT *, ROW_NUMBER() OVER (PARTITION BY ${idColumn} ORDER BY recorded_at DESC) as _rn`,
       `    FROM read_parquet('${inputDir}/*.parquet')`,
-      `    WHERE ${idColumn} IN (${idList})`,
+      `    WHERE ${idColumn} IN (SELECT id FROM dup_id_set)`,
       "  ) WHERE _rn = 1",
       ")",
       `TO '${outFile}'`,
@@ -214,8 +228,11 @@ function compactWithDuckDB(inputDir, outputDir, idColumn, maxRowsPerFile, expect
     timeout: 1_800_000, // 30 min
   });
 
-  // Clean up the SQL file
+  // Clean up the SQL + dup-id files. countRows below uses a
+  // `*.parquet` glob so these stray files are harmless, but keep
+  // the output dir tidy.
   try { fs.unlinkSync(sqlFile); } catch {}
+  try { fs.unlinkSync(dupOutFile); } catch {}
 
   // Split the single output file into chunks of maxRowsPerFile.
   // countRows reads ONLY the single compacted.parquet at this point — no
@@ -298,23 +315,29 @@ async function inspectDay(month, day) {
     const uniqueRows = countUnique(TMP_DOWNLOAD, idColumn);
     const dups = totalRows - uniqueRows;
     const flag = dups > 0 ? ' <<<' : '';
+
+    // Group files by naming pattern (e.g. "part-*.parquet",
+    // "compact-<runid>-*.parquet", "updates-*-*.parquet") so we don't
+    // print hundreds of uniform filenames.
+    const patternGroups = new Map();
+    for (const name of existingFiles) {
+      const base = path.basename(name);
+      // Collapse trailing numeric/hex/timestamp segments into *.
+      // Examples:
+      //   part-0000.parquet              → part-*.parquet
+      //   compact-17123-ab12cd-0000.pq   → compact-*.parquet
+      //   updates-17123-a1b2.parquet     → updates-*.parquet
+      const pattern = base.replace(/^([a-z]+)[-_].*\.parquet$/i, '$1-*.parquet');
+      if (!patternGroups.has(pattern)) patternGroups.set(pattern, []);
+      patternGroups.get(pattern).push(base);
+    }
+
     console.log(
       `${dayLabel} ${table.padEnd(7)}  files=${String(existingFiles.length).padEnd(4)} ` +
       `total=${String(totalRows).padEnd(10)} unique=${String(uniqueRows).padEnd(10)} dups=${dups}${flag}`
     );
-
-    // Per-file row counts, one line each
-    for (const name of existingFiles) {
-      const local = path.join(TMP_DOWNLOAD, path.basename(name));
-      let count;
-      try {
-        const sql = `SELECT count(*) FROM read_parquet('${local}')`;
-        const result = execSync(`duckdb -csv -c "${sql}"`, { encoding: 'utf8' }).trim();
-        count = String(parseInt(result.split('\n')[1])).padStart(10);
-      } catch {
-        count = '     ERROR';
-      }
-      console.log(`  ${count}  ${path.basename(name)}`);
+    for (const [pattern, names] of patternGroups) {
+      console.log(`    ${pattern.padEnd(28)} x${names.length}`);
     }
 
     cleanup(TMP_DOWNLOAD);
