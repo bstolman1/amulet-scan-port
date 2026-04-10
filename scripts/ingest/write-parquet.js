@@ -336,7 +336,7 @@ function uploadToGCSIfEnabled(localPath, partition, fileName) {
  * Map update record to flat structure for Parquet.
  * FIX #7: uses module-level helpers instead of per-call closures.
  */
-function mapUpdateRecord(r) {
+export function mapUpdateRecord(r) {
   return {
     update_id:             String(r.update_id ?? r.id ?? ''),
     update_type:           String(r.update_type ?? r.type ?? ''),
@@ -366,7 +366,7 @@ function mapUpdateRecord(r) {
  * Map event record to flat structure for Parquet.
  * FIX #7: uses module-level helpers instead of per-call closures.
  */
-function mapEventRecord(r) {
+export function mapEventRecord(r) {
   return {
     event_id:              String(r.event_id ?? r.id ?? ''),
     update_id:             String(r.update_id ?? ''),
