@@ -8,19 +8,25 @@
  * Designed to fix gaps and corrupted data in the updates partition without
  * touching the backfill partition or introducing duplicates.
  *
- * SAFETY FEATURES:
+ * SAFETY FEATURES — EXACTLY-ONCE SEMANTICS:
  * 1. Verifies the target date range does NOT overlap with backfill data
  * 2. Optionally deletes existing bad data in the target range before writing
- * 3. Uses the same Parquet writer pipeline as fetch-updates.js
- * 4. Deduplicates within each batch using update_id
+ * 3. DETERMINISTIC FILENAMES: Each batch writes Parquet files with filenames
+ *    derived from sha256(cursorPosition + partition). Same cursor → same API
+ *    response → same records → same filename → GCS overwrite (not new file)
+ *    → zero duplicates. No downstream dedup needed.
+ * 4. PER-BATCH WRITES: Each API batch is written to Parquet and uploaded to
+ *    GCS synchronously before the cursor advances. No async buffering.
  * 5. Dry-run mode to preview what would happen
- * 6. Persistent cursor: progress is saved to disk after every flush cycle.
+ * 6. Persistent cursor: progress is saved to disk after every batch.
  *    On restart (crash, SIGINT, SIGTERM), re-running the same command
  *    auto-resumes from where it stopped — no manual --after needed.
- * 7. Graceful shutdown: SIGINT/SIGTERM flushes buffered data to GCS and
- *    saves the cursor before exiting.
- * 8. GCS drain: parquetWriter.shutdown() is called on completion to ensure
- *    all async GCS uploads finish before the process exits.
+ * 7. Graceful shutdown: SIGINT/SIGTERM saves the cursor before exiting.
+ *    Since each batch is fully written to GCS before cursor advances,
+ *    no buffered data can be lost.
+ * 8. ZERO GAPS: Cursor is saved AFTER successful GCS upload. If crash
+ *    occurs mid-batch, restart re-fetches the same batch → same deterministic
+ *    filename → overwrites in GCS → no gap, no dup.
  *
  * Usage:
  *   # Preview what would be re-ingested (dry run)
@@ -55,6 +61,7 @@ import { execFile as execFileCb, exec as execCb } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'fs';
 import axios from 'axios';
 import https from 'https';
+import { createHash } from 'crypto';
 import { atomicWriteFile } from './atomic-cursor.js';
 
 const execFileAsync = promisify(execFileCb);
@@ -64,18 +71,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '.env') });
 
-// ─── Memory-safe overrides for re-ingestion ──────────────────────────────
-// The default .env is tuned for the live pipeline on larger machines.
-// Re-ingestion is a long-running bulk process; prioritize stability over speed.
-if (!process.env.REINGEST_USE_DEFAULT_SETTINGS) {
-  process.env.PARQUET_WORKERS        = '6';
-  process.env.GCS_UPLOAD_CONCURRENCY = '16';
-  process.env.MAX_ROWS_PER_FILE      = '50000';
-  process.env.MIN_ROWS_PER_FILE      = '10000';
-}
-
-import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder } from './data-schema.js';
-import * as parquetWriter from './write-parquet.js';
+import { normalizeUpdate, normalizeEvent, flattenEventsInTreeOrder, groupByPartition } from './data-schema.js';
+import { mapUpdateRecord, mapEventRecord } from './write-parquet.js';
 
 // ─── CLI args ─────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -103,7 +100,6 @@ const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
 const GCS_BUCKET = process.env.GCS_BUCKET;
 const SCAN_URL = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 const ENDPOINT_ROTATE_AFTER_ERRORS = parseInt(process.env.ENDPOINT_ROTATE_AFTER_ERRORS) || 3;
-const FLUSH_EVERY = 20; // flush to disk every N batches
 
 // ─── Persistent reingest cursor ──────────────────────────────────────────
 // Prevents duplicates on restart: on crash, the cursor records exactly where
@@ -535,6 +531,137 @@ async function findBackfillBoundary(migrationId) {
   return bestTime;
 }
 
+// ─── Deterministic write path (exactly-once semantics) ───────────────────
+// Instead of buffering records across batches and writing with random filenames
+// (which creates duplicates on restart), this path writes each API batch directly
+// to GCS with deterministic filenames derived from the cursor position.
+//
+// Guarantees:
+//   Same cursor position → same API response → same records → same filename
+//   → GCS overwrite (not new file) → zero duplicates
+//   Cursor saved AFTER GCS upload → zero gaps
+
+// DuckDB SQL path escaper — doubles single quotes to prevent SQL injection
+function sqlStr(rawPath) {
+  return rawPath.replace(/'/g, "''");
+}
+
+// DuckDB column definitions — must match write-parquet.js writeToParquetCLI exactly
+const UPDATES_DUCKDB_COLUMNS = [
+  "update_id: 'VARCHAR'", "update_type: 'VARCHAR'", "synchronizer_id: 'VARCHAR'",
+  "effective_at: 'VARCHAR'", "recorded_at: 'VARCHAR'", "record_time: 'VARCHAR'",
+  "timestamp: 'VARCHAR'", "command_id: 'VARCHAR'", "workflow_id: 'VARCHAR'", "kind: 'VARCHAR'",
+  "migration_id: 'BIGINT'", '"offset": \'BIGINT\'', "event_count: 'INTEGER'",
+  "root_event_ids: 'VARCHAR[]'", "source_synchronizer: 'VARCHAR'",
+  "target_synchronizer: 'VARCHAR'", "unassign_id: 'VARCHAR'", "submitter: 'VARCHAR'",
+  "reassignment_counter: 'BIGINT'", "trace_context: 'VARCHAR'", "update_data: 'VARCHAR'",
+].join(', ');
+
+const EVENTS_DUCKDB_COLUMNS = [
+  "event_id: 'VARCHAR'", "update_id: 'VARCHAR'", "event_type: 'VARCHAR'",
+  "event_type_original: 'VARCHAR'", "synchronizer_id: 'VARCHAR'", "effective_at: 'VARCHAR'",
+  "recorded_at: 'VARCHAR'", "created_at_ts: 'VARCHAR'", "timestamp: 'VARCHAR'",
+  "contract_id: 'VARCHAR'", "template_id: 'VARCHAR'", "package_name: 'VARCHAR'",
+  "migration_id: 'BIGINT'", "signatories: 'VARCHAR[]'", "observers: 'VARCHAR[]'",
+  "acting_parties: 'VARCHAR[]'", "witness_parties: 'VARCHAR[]'", "child_event_ids: 'VARCHAR[]'",
+  "consuming: 'BOOLEAN'", "reassignment_counter: 'BIGINT'", "choice: 'VARCHAR'",
+  "interface_id: 'VARCHAR'", "source_synchronizer: 'VARCHAR'", "target_synchronizer: 'VARCHAR'",
+  "unassign_id: 'VARCHAR'", "submitter: 'VARCHAR'", "payload: 'VARCHAR'",
+  "contract_key: 'VARCHAR'", "exercise_result: 'VARCHAR'", "raw_event: 'VARCHAR'",
+  "trace_context: 'VARCHAR'",
+].join(', ');
+
+const REINGEST_TMP_DIR = '/tmp/reingest';
+
+/**
+ * Deterministic filename based on cursor position and partition.
+ * Same cursor → same data → same filename → GCS overwrite → no dup.
+ *
+ * @param {string} type            - 'updates' or 'events'
+ * @param {string} afterRecordTime - Cursor position that produced this batch
+ * @param {string} partition       - Partition path (e.g. 'updates/updates/migration=4/year=2026/month=3/day=5')
+ * @returns {string} Deterministic filename like 'updates-ri-a1b2c3d4e5f6a7b8.parquet'
+ */
+function deterministicFileName(type, afterRecordTime, partition) {
+  const hash = createHash('sha256')
+    .update(`${afterRecordTime}|${partition}`)
+    .digest('hex')
+    .slice(0, 16);
+  return `${type}-ri-${hash}.parquet`;
+}
+
+/**
+ * Write a single partition's records to Parquet and upload to GCS.
+ * Uses DuckDB CLI for JSONL→Parquet conversion with strict memory limits.
+ */
+async function writePartitionToGCS(records, type, partition, afterRecordTime) {
+  const mapFn = type === 'updates' ? mapUpdateRecord : mapEventRecord;
+  const mapped = records.map(mapFn);
+  const fileName = deterministicFileName(type, afterRecordTime, partition);
+
+  mkdirSync(REINGEST_TMP_DIR, { recursive: true });
+  const jsonlPath   = join(REINGEST_TMP_DIR, fileName.replace('.parquet', '.jsonl'));
+  const parquetPath = join(REINGEST_TMP_DIR, fileName);
+  const sqlFilePath = join(REINGEST_TMP_DIR, fileName.replace('.parquet', '.sql'));
+
+  try {
+    // 1. Write JSONL
+    writeFileSync(jsonlPath, mapped.map(r => JSON.stringify(r)).join('\n') + '\n');
+
+    // 2. Convert JSONL → Parquet via DuckDB CLI (memory-limited for constrained VMs)
+    const columns = type === 'events' ? EVENTS_DUCKDB_COLUMNS : UPDATES_DUCKDB_COLUMNS;
+    const sql = [
+      "SET memory_limit='256MB';",
+      "SET threads=1;",
+      `COPY (SELECT * FROM read_json_auto('${sqlStr(jsonlPath)}', columns={${columns}}, union_by_name=true, maximum_object_size=67108864))`,
+      `TO '${sqlStr(parquetPath)}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`,
+    ].join('\n');
+    writeFileSync(sqlFilePath, sql);
+
+    await execAsync(`duckdb :memory: < "${sqlFilePath}"`, {
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    // 3. Upload to GCS (deterministic path → overwrite = idempotent, zero dups)
+    const gcsPath = `gs://${GCS_BUCKET}/raw/${partition}/${fileName}`;
+    await execAsync(`gsutil -q cp "${parquetPath}" "${gcsPath}"`, { timeout: 120000 });
+
+    console.log(`   📤 ${type}: ${records.length} records → ${partition}/${fileName}`);
+  } finally {
+    // Clean up temp files regardless of outcome
+    for (const p of [jsonlPath, parquetPath, sqlFilePath]) {
+      try { if (existsSync(p)) unlinkSync(p); } catch {}
+    }
+  }
+}
+
+/**
+ * Write a full API batch (updates + events) to GCS with deterministic filenames.
+ * Each partition is written and uploaded serially to minimize memory on constrained VMs.
+ *
+ * @param {object[]} updates        - Normalized update records
+ * @param {object[]} events         - Normalized event records
+ * @param {number}   migrationId    - Migration ID for partitioning
+ * @param {string}   afterRecordTime - Cursor position that produced this batch
+ */
+async function writeBatchToGCS(updates, events, migrationId, afterRecordTime) {
+  // Write updates partitioned by effective_at day
+  if (updates.length > 0) {
+    const groups = groupByPartition(updates, 'updates', 'updates', migrationId);
+    for (const [partition, records] of Object.entries(groups)) {
+      await writePartitionToGCS(records, 'updates', partition, afterRecordTime);
+    }
+  }
+  // Write events partitioned by effective_at day
+  if (events.length > 0) {
+    const groups = groupByPartition(events, 'events', 'updates', migrationId);
+    for (const [partition, records] of Object.entries(groups)) {
+      await writePartitionToGCS(records, 'events', partition, afterRecordTime);
+    }
+  }
+}
+
 // ─── Fetch and re-ingest ──────────────────────────────────────────────────
 
 async function reingestDateRange(dates, migrations) {
@@ -542,14 +669,10 @@ async function reingestDateRange(dates, migrations) {
   console.log(`📥 RE-INGESTING: ${START_DATE} to ${END_DATE}`);
   console.log('═'.repeat(80));
 
-  // Set writer to 'updates' source (writes to raw/updates/)
-  parquetWriter.setDataSource('updates');
-
   let totalUpdates = 0;
   let totalEvents = 0;
 
   for (const mig of migrations) {
-    parquetWriter.setMigrationId(mig);
     console.log(`\n── Migration ${mig} ──`);
 
     // Find where backfill ends to avoid overlap.
@@ -643,17 +766,16 @@ async function reingestDateRange(dates, migrations) {
             console.log(`   ✅ Migration ${mig}: Reached end of date range`);
             break;
           }
-          const result = await processAndWrite(inRange, mig);
+          const result = await processAndWrite(inRange, mig, afterRecordTime);
           migUpdates += result.updates;
           migEvents += result.events;
-          // Flush + save cursor for the final partial batch
-          await flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum);
+          saveReingestCursor(mig, afterRecordTime, afterMigrationId, { updates: migUpdates, events: migEvents, batches: batchNum });
           console.log(`   ✅ Migration ${mig}: Reached end of date range (partial batch: ${inRange.length})`);
           break;
         }
 
         if (!DRY_RUN) {
-          const result = await processAndWrite(transactions, mig);
+          const result = await processAndWrite(transactions, mig, afterRecordTime);
           migUpdates += result.updates;
           migEvents += result.events;
         } else {
@@ -667,19 +789,18 @@ async function reingestDateRange(dates, migrations) {
         // Update shutdown state
         _shutdownState = { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum };
 
+        // Save cursor after every batch — data is already in GCS (written
+        // synchronously by writeBatchToGCS before cursor advances).
+        // On crash, worst case: re-fetch one batch → same deterministic
+        // filename → GCS overwrite → zero dups, zero gaps.
+        if (!DRY_RUN) {
+          saveReingestCursor(mig, afterRecordTime, afterMigrationId, { updates: migUpdates, events: migEvents, batches: batchNum });
+        }
+
         // Progress logging
         if (batchNum % 10 === 0) {
           const cursorDate = afterRecordTime.split('T')[0];
           console.log(`   📥 Batch ${batchNum}: ${migUpdates.toLocaleString()} updates, ${migEvents.toLocaleString()} events | date=${cursorDate} | cursor=${afterRecordTime}`);
-        }
-
-        // Periodic flush: write data to GCS, then save cursor.
-        // Cursor is saved AFTER data is confirmed written — this guarantees
-        // the cursor never advances past actually-persisted data. On crash,
-        // worst case: up to FLUSH_EVERY batches get re-fetched (harmless dups
-        // at the cursor boundary), but no data is skipped.
-        if (!DRY_RUN && batchNum % FLUSH_EVERY === 0) {
-          await flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum);
         }
 
       } catch (err) {
@@ -719,9 +840,9 @@ async function reingestDateRange(dates, migrations) {
       }
     }
 
-    // Final flush for this migration
+    // Final cursor save for this migration
     if (!DRY_RUN) {
-      await flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum);
+      saveReingestCursor(mig, afterRecordTime, afterMigrationId, { updates: migUpdates, events: migEvents, batches: batchNum });
     }
 
     totalUpdates += migUpdates;
@@ -734,29 +855,17 @@ async function reingestDateRange(dates, migrations) {
   }
 
   _shutdownState = null;
-
-  // Shut down the writer (flushes + drains GCS upload queue)
-  if (!DRY_RUN) {
-    console.log('\n⏳ Shutting down writer (draining GCS uploads)...');
-    await parquetWriter.shutdown();
-    console.log('   ✅ All data flushed and uploaded.');
-  }
-
   return { totalUpdates, totalEvents };
 }
 
 /**
- * Flush buffered data to Parquet + GCS, then save the cursor.
- * Cursor is saved AFTER the data is persisted so restarts never
- * advance past data that hasn't actually been uploaded.
+ * Normalize an API batch and write directly to GCS with deterministic filenames.
+ *
+ * @param {object[]} transactions    - Raw API response transactions
+ * @param {number}   migrationId     - Migration ID
+ * @param {string}   afterRecordTime - Cursor position that produced this batch (for deterministic filename)
  */
-async function flushAndSaveCursor(mig, afterRecordTime, afterMigrationId, updates, events, batches) {
-  await parquetWriter.flushAll();
-  await parquetWriter.waitForWrites();
-  saveReingestCursor(mig, afterRecordTime, afterMigrationId, { updates, events, batches });
-}
-
-async function processAndWrite(transactions, migrationId) {
+async function processAndWrite(transactions, migrationId, afterRecordTime) {
   const updates = [];
   const events = [];
   const batchTimestamp = new Date();
@@ -818,8 +927,12 @@ async function processAndWrite(transactions, migrationId) {
     }
   }
 
-  if (updates.length > 0) await parquetWriter.bufferUpdates(updates);
-  if (events.length > 0) await parquetWriter.bufferEvents(events);
+  // Write directly to GCS with deterministic filenames — no buffering.
+  // writeBatchToGCS completes synchronously (all uploads confirmed)
+  // before this function returns, so the cursor can safely advance.
+  if (!DRY_RUN) {
+    await writeBatchToGCS(updates, events, migrationId, afterRecordTime);
+  }
 
   return { updates: updates.length, events: events.length };
 }
@@ -907,8 +1020,9 @@ async function main() {
 }
 
 // ─── Graceful shutdown ───────────────────────────────────────────────────
-// On SIGINT/SIGTERM: flush buffered data, drain GCS uploads, save cursor,
-// then exit. On restart the cursor auto-resumes from where we stopped.
+// On SIGINT/SIGTERM: save cursor, then exit. No buffered data to flush since
+// each batch writes directly to GCS before the cursor advances.
+// On restart the cursor auto-resumes from where we stopped.
 
 let _isShuttingDown = false;
 
@@ -918,11 +1032,8 @@ async function gracefulShutdown(signal) {
   console.log(`\n⚠️  ${signal} received — shutting down gracefully...`);
 
   try {
-    // Flush whatever is buffered
-    await parquetWriter.flushAll();
-    await parquetWriter.waitForWrites();
-
-    // Save cursor so restart resumes from here
+    // No buffered data to flush — each batch writes directly to GCS
+    // before the cursor advances. Just save cursor for clean resume.
     if (_shutdownState) {
       const { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum } = _shutdownState;
       saveReingestCursor(mig, afterRecordTime, afterMigrationId,
@@ -930,9 +1041,6 @@ async function gracefulShutdown(signal) {
       console.log(`   Cursor saved: migration=${mig}, cursor=${afterRecordTime}`);
       console.log(`   Re-run the same command to resume automatically.`);
     }
-
-    // Drain GCS upload queue
-    await parquetWriter.shutdown();
     console.log('   Shutdown complete.');
   } catch (err) {
     console.error(`   Shutdown error: ${err.message}`);
