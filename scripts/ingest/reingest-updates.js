@@ -573,6 +573,26 @@ const EVENTS_DUCKDB_COLUMNS = [
 
 const REINGEST_TMP_DIR = '/tmp/reingest';
 
+// ─── GCS SDK client (uses VM service account / ADC, not gsutil user creds) ──
+let _gcsStorage = null;
+let _gcsBucket = null;
+
+async function getGCSBucket() {
+  if (_gcsBucket) return _gcsBucket;
+  const { Storage } = await import('@google-cloud/storage');
+  _gcsStorage = new Storage();
+  _gcsBucket = _gcsStorage.bucket(GCS_BUCKET);
+  return _gcsBucket;
+}
+
+async function uploadFileToGCS(localPath, gcsObjectPath) {
+  const bucket = await getGCSBucket();
+  await bucket.upload(localPath, {
+    destination: gcsObjectPath,
+    metadata: { contentType: 'application/octet-stream' },
+  });
+}
+
 /**
  * Deterministic filename based on cursor position and partition.
  * Same cursor → same data → same filename → GCS overwrite → no dup.
@@ -623,9 +643,10 @@ async function writePartitionToGCS(records, type, partition, afterRecordTime) {
       maxBuffer: 10 * 1024 * 1024,
     });
 
-    // 3. Upload to GCS (deterministic path → overwrite = idempotent, zero dups)
-    const gcsPath = `gs://${GCS_BUCKET}/raw/${partition}/${fileName}`;
-    await execAsync(`gsutil -q cp "${parquetPath}" "${gcsPath}"`, { timeout: 120000 });
+    // 3. Upload to GCS via SDK (deterministic path → overwrite = idempotent, zero dups)
+    //    Uses VM service account / ADC — not gsutil user credentials.
+    const gcsObjectPath = `raw/${partition}/${fileName}`;
+    await uploadFileToGCS(parquetPath, gcsObjectPath);
 
     console.log(`   📤 ${type}: ${records.length} records → ${partition}/${fileName}`);
   } finally {
