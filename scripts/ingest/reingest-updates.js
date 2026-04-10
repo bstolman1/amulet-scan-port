@@ -967,14 +967,29 @@ async function processAndWrite(transactions, migrationId, afterRecordTime) {
     }
   }
 
+  // Filter out stragglers with effective_at before the re-ingestion start date.
+  // These records have record_time within our cursor range but effective_at in an
+  // earlier period — they already exist in the backfill/earlier data for that date.
+  // Writing them here would create partial out-of-range partitions (e.g. March 2
+  // files when re-ingesting from March 3).
+  const rangeStartDate = new Date(START_DATE + 'T00:00:00Z');
+  const filteredUpdates = updates.filter(u => u.effective_at >= rangeStartDate);
+  const filteredEvents  = events.filter(e => e.effective_at >= rangeStartDate);
+
+  const droppedUpdates = updates.length - filteredUpdates.length;
+  const droppedEvents  = events.length - filteredEvents.length;
+  if (droppedUpdates > 0 || droppedEvents > 0) {
+    console.log(`   ⏭️  Filtered ${droppedUpdates} updates + ${droppedEvents} events with effective_at before ${START_DATE}`);
+  }
+
   // Write directly to GCS with deterministic filenames — no buffering.
   // writeBatchToGCS completes synchronously (all uploads confirmed)
   // before this function returns, so the cursor can safely advance.
   if (!DRY_RUN) {
-    await writeBatchToGCS(updates, events, migrationId, afterRecordTime);
+    await writeBatchToGCS(filteredUpdates, filteredEvents, migrationId, afterRecordTime);
   }
 
-  return { updates: updates.length, events: events.length };
+  return { updates: filteredUpdates.length, events: filteredEvents.length };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────
