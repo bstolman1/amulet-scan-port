@@ -232,27 +232,46 @@ async function tryFailover() {
   return false;
 }
 
-// ─── GCS helpers ──────────────────────────────────────────────────────────
+// ─── GCS helpers (SDK-based — gsutil silently fails when auth expires) ────
 
-async function gsutilLs(gcsPath, opts = {}) {
+/**
+ * List .parquet files under a GCS prefix using the SDK.
+ * Returns array of full GCS paths like 'raw/updates/updates/migration=4/year=2026/month=3/day=3/file.parquet'
+ */
+async function gcsListParquet(prefix) {
   try {
-    const { stdout } = await execAsync(
-      `gsutil ls -r "${gcsPath}" 2>/dev/null || true`,
-      { timeout: opts.timeout || 60000, maxBuffer: 50 * 1024 * 1024 }
-    );
-    return stdout.trim().split('\n').filter(l => l && l.endsWith('.parquet'));
+    const bucket = await getGCSBucket();
+    // prefix should NOT include gs://bucket/ — just the object path prefix
+    const cleanPrefix = prefix
+      .replace(`gs://${GCS_BUCKET}/`, '')
+      .replace(/^\/*/, '');
+    const [files] = await bucket.getFiles({ prefix: cleanPrefix });
+    return files
+      .map(f => f.name)
+      .filter(name => name.endsWith('.parquet'));
   } catch (err) {
+    console.error(`   ❌ GCS list failed for ${prefix}: ${err.message}`);
     return [];
   }
 }
 
-async function gsutilRm(gcsPath) {
+/**
+ * Delete all objects under a GCS prefix using the SDK.
+ * Returns number of files deleted.
+ */
+async function gcsDeletePrefix(prefix) {
   try {
-    await execAsync(`gsutil -m rm -r "${gcsPath}" 2>/dev/null || true`, { timeout: 120000 });
-    return true;
+    const bucket = await getGCSBucket();
+    const cleanPrefix = prefix
+      .replace(`gs://${GCS_BUCKET}/`, '')
+      .replace(/^\/*/, '');
+    const [files] = await bucket.getFiles({ prefix: cleanPrefix });
+    if (files.length === 0) return 0;
+    await Promise.all(files.map(f => f.delete()));
+    return files.length;
   } catch (err) {
-    // Treat any failure as non-fatal for cleanup
-    return false;
+    console.error(`   ❌ GCS delete failed for ${prefix}: ${err.message}`);
+    return 0;
   }
 }
 
@@ -287,8 +306,8 @@ function dayPartitionPath(source, type, migrationId, year, month, day) {
 // ─── Bulk GCS listing (one call per migration+source+type) ────────────────
 
 async function bulkListGCS(source, type, migrationId) {
-  const prefix = `gs://${GCS_BUCKET}/raw/${source}/${type}/migration=${migrationId}/`;
-  const files = await gsutilLs(prefix + '**/*.parquet');
+  const prefix = `raw/${source}/${type}/migration=${migrationId}/`;
+  const files = await gcsListParquet(prefix);
   // Parse day from each file path: .../year=YYYY/month=M/day=D/...
   // Keys use unpadded values to match dateRange() dateStr format
   const byDay = {};
@@ -414,13 +433,13 @@ async function cleanUpdatesData(dates, migrations) {
         for (const [type, countMap] of [['updates', updatesMap], ['events', eventsMap]]) {
           const count = countMap[dateStr] || 0;
           if (count > 0) {
-            const gcsPath = dayPartitionPath(source, type, mig, year, month, day);
+            const gcsPrefix = `raw/${source}/${type}/migration=${mig}/year=${year}/month=${month}/day=${day}/`;
             if (DRY_RUN) {
-              console.log(`   [DRY RUN] Would delete ${count} ${source}/${type} files at ${gcsPath}`);
+              console.log(`   [DRY RUN] Would delete ${count} ${source}/${type} files at ${gcsPrefix}`);
             } else {
-              console.log(`   Deleting ${count} ${source}/${type} files at ${gcsPath}...`);
-              await gsutilRm(gcsPath);
-              totalDeleted += count;
+              console.log(`   Deleting ${count} ${source}/${type} files at ${gcsPrefix}...`);
+              const deleted = await gcsDeletePrefix(gcsPrefix);
+              totalDeleted += deleted;
             }
           }
         }
