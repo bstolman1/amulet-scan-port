@@ -324,6 +324,20 @@ export interface ScanInfo {
   svName: string;
 }
 
+export interface SvNodeStatus {
+  name: string;
+  url: string;
+  online: boolean;
+  version: string | null;
+  latency: number | null;
+  error?: string;
+}
+
+export interface SvNodeStatusResponse {
+  sv_statuses: SvNodeStatus[];
+  checked_at: string;
+}
+
 export interface ValidatorLicensesResponse {
   validator_licenses: Contract[];
   next_page_token?: number;
@@ -722,6 +736,11 @@ export const scanApi = {
   // GET /v0/scans
   async fetchScans(): Promise<ScansResponse> {
     return scanGet("/v0/scans");
+  },
+
+  // GET /_sv-node-status - probe all known SV scan endpoints
+  async fetchSvNodeStatus(): Promise<SvNodeStatusResponse> {
+    return scanGet("/_sv-node-status");
   },
 
   // GET /v0/admin/validator/licenses

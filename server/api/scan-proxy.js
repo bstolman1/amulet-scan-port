@@ -68,6 +68,75 @@ router.post('/_endpoint', (req, res) => {
   }
 });
 
+// GET /_sv-node-status - Probe all known SV scan endpoints for version/health info
+router.get('/_sv-node-status', async (req, res) => {
+  const endpoints = getAllEndpoints();
+  console.log(`[Scan Proxy] SV node status check for ${endpoints.length} endpoints`);
+
+  const results = await Promise.allSettled(
+    endpoints.map(async (ep) => {
+      const versionUrl = `${ep.url}/version`;
+      const start = Date.now();
+      try {
+        const hostname = extractHostname(ep.url);
+        const dispatcher = hostname ? createDispatcher(hostname) : undefined;
+
+        const resp = await fetch(versionUrl, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            ...(hostname ? { Host: hostname } : {}),
+          },
+          ...(dispatcher ? { dispatcher } : {}),
+          signal: AbortSignal.timeout(10000),
+        });
+
+        const latency = Date.now() - start;
+
+        if (!resp.ok) {
+          return { name: ep.name, url: ep.url, online: false, version: null, latency };
+        }
+
+        const text = await readBodyWithLimit(resp, 64 * 1024);
+        const data = JSON.parse(text);
+        return {
+          name: ep.name,
+          url: ep.url,
+          online: true,
+          version: data.version || null,
+          latency,
+        };
+      } catch (err) {
+        return {
+          name: ep.name,
+          url: ep.url,
+          online: false,
+          version: null,
+          latency: Date.now() - start,
+          error: err.message,
+        };
+      }
+    })
+  );
+
+  const statuses = results.map((r, i) =>
+    r.status === 'fulfilled'
+      ? r.value
+      : {
+          name: endpoints[i].name,
+          url: endpoints[i].url,
+          online: false,
+          version: null,
+          latency: null,
+        }
+  );
+
+  const onlineCount = statuses.filter(s => s.online).length;
+  console.log(`[Scan Proxy] SV status: ${onlineCount}/${statuses.length} online`);
+
+  res.json({ sv_statuses: statuses, checked_at: new Date().toISOString() });
+});
+
 /**
  * Best-of-all-SVs handler for dev fund coupons.
  * Queries all healthy endpoints in parallel, returns the largest result set.
