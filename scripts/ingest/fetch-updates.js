@@ -224,9 +224,16 @@ const DUCKDB_SPILL_DIR = path.join(LIVE_TMP_DIR, 'duckdb_spill');
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
 // this, the partition's records are split into multiple Parquet chunks
 // (deterministic byte-based greedy packing). Sized to leave comfortable
-// headroom under the 256 MiB DuckDB memory limit even for rows with wide
-// `payload` / `raw_event` / `update_data` VARCHARs.
-const MAX_JSONL_BYTES_PER_CHUNK = 32 * 1024 * 1024; // 32 MiB
+// headroom under the 256 MiB DuckDB memory limit: DuckDB's working-set
+// inflation on wide VARCHAR rows is roughly 3-4x the source JSONL, so
+// 20 MiB JSONL → ~60-80 MiB RAM + writer buffers + engine overhead
+// stays well under 244 MiB.
+const MAX_JSONL_BYTES_PER_CHUNK = 20 * 1024 * 1024; // 20 MiB
+
+// Largest single JSON object DuckDB will accept. Must be ≥ the biggest
+// individual record we ever see — a single oversized record gets its own
+// chunk, and that chunk's one line has to fit inside this buffer.
+const DUCKDB_MAX_OBJECT_SIZE = 48 * 1024 * 1024; // 48 MiB
 
 /**
  * Deterministic filename based on cursor position and partition.
@@ -254,7 +261,9 @@ function deterministicFileName(type, afterRecordTime, partition, chunkIdx = 0, c
  *   * preserve_insertion_order=false — streams rows without holding the
  *     whole input in RAM just to preserve order
  *   * temp_directory — lets DuckDB spill to disk when memory is tight
- *   * maximum_object_size=16 MiB — single-object read buffer (was 64 MiB)
+ *   * maximum_object_size=48 MiB — single-JSON-object read buffer (was 64
+ *     MiB). Must be ≥ the biggest individual record we see, so an
+ *     oversized line gets its own chunk that still fits.
  *   * ROW_GROUP_SIZE 5000 — more frequent row-group flushes
  */
 async function jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type) {
@@ -265,7 +274,7 @@ async function jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type
     "SET threads=1;",
     "SET preserve_insertion_order=false;",
     `SET temp_directory='${sqlStr(DUCKDB_SPILL_DIR)}';`,
-    `COPY (SELECT * FROM read_json_auto('${sqlStr(jsonlPath)}', columns={${columns}}, union_by_name=true, maximum_object_size=16777216))`,
+    `COPY (SELECT * FROM read_json_auto('${sqlStr(jsonlPath)}', columns={${columns}}, union_by_name=true, maximum_object_size=${DUCKDB_MAX_OBJECT_SIZE}))`,
     `TO '${sqlStr(parquetPath)}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 5000);`,
   ].join('\n');
   fs.writeFileSync(sqlFilePath, sql);
@@ -319,6 +328,15 @@ async function writePartitionToGCS(records, type, partition, afterRecordTime) {
 
   const chunkRanges = chunkLinesByBytes(lines);
   const chunkCount = chunkRanges.length;
+
+  if (chunkCount > 1) {
+    let totalBytes = 0;
+    for (const line of lines) totalBytes += Buffer.byteLength(line, 'utf8') + 1;
+    log('info', 'partition_chunked', {
+      type, partition, records: records.length, chunks: chunkCount,
+      jsonl_mib: +(totalBytes / (1024 * 1024)).toFixed(1),
+    });
+  }
 
   fs.mkdirSync(LIVE_TMP_DIR, { recursive: true });
 
