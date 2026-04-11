@@ -216,63 +216,145 @@ const EVENTS_DUCKDB_COLUMNS = [
 
 const LIVE_TMP_DIR = '/tmp/live-ingest';
 
+// DuckDB temp directory for spilling intermediate state to disk when the
+// in-memory 256 MiB cap is tight. Without this, `:memory:` databases can't
+// spill and a wide batch will OOM the COPY.
+const DUCKDB_SPILL_DIR = path.join(LIVE_TMP_DIR, 'duckdb_spill');
+
+// Maximum JSONL payload size handed to a single DuckDB invocation. Above
+// this, the partition's records are split into multiple Parquet chunks
+// (deterministic byte-based greedy packing). Sized to leave comfortable
+// headroom under the 256 MiB DuckDB memory limit even for rows with wide
+// `payload` / `raw_event` / `update_data` VARCHARs.
+const MAX_JSONL_BYTES_PER_CHUNK = 32 * 1024 * 1024; // 32 MiB
+
 /**
  * Deterministic filename based on cursor position and partition.
  * Same cursor → same data → same filename → GCS overwrite → no dup.
  * Uses 'live' prefix to distinguish from reingest files ('ri').
+ *
+ * When a single-partition batch exceeds MAX_JSONL_BYTES_PER_CHUNK, it is
+ * split into multiple Parquet chunks. Each chunk gets a `-c{i}of{N}`
+ * suffix. Because the chunk decision is a pure function of the input
+ * records' serialized bytes, the split is reproducible across retries.
  */
-function deterministicFileName(type, afterRecordTime, partition) {
+function deterministicFileName(type, afterRecordTime, partition, chunkIdx = 0, chunkCount = 1) {
   const hash = createHash('sha256')
     .update(`${afterRecordTime}|${partition}`)
     .digest('hex')
     .slice(0, 16);
-  return `${type}-live-${hash}.parquet`;
+  return chunkCount > 1
+    ? `${type}-live-${hash}-c${chunkIdx}of${chunkCount}.parquet`
+    : `${type}-live-${hash}.parquet`;
+}
+
+/**
+ * Run DuckDB CLI to convert a single JSONL file to a single Parquet file.
+ * Memory knobs tuned for the 256 MiB cap on constrained VMs:
+ *   * preserve_insertion_order=false — streams rows without holding the
+ *     whole input in RAM just to preserve order
+ *   * temp_directory — lets DuckDB spill to disk when memory is tight
+ *   * maximum_object_size=16 MiB — single-object read buffer (was 64 MiB)
+ *   * ROW_GROUP_SIZE 5000 — more frequent row-group flushes
+ */
+async function jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type) {
+  const columns = type === 'events' ? EVENTS_DUCKDB_COLUMNS : UPDATES_DUCKDB_COLUMNS;
+  fs.mkdirSync(DUCKDB_SPILL_DIR, { recursive: true });
+  const sql = [
+    "SET memory_limit='256MB';",
+    "SET threads=1;",
+    "SET preserve_insertion_order=false;",
+    `SET temp_directory='${sqlStr(DUCKDB_SPILL_DIR)}';`,
+    `COPY (SELECT * FROM read_json_auto('${sqlStr(jsonlPath)}', columns={${columns}}, union_by_name=true, maximum_object_size=16777216))`,
+    `TO '${sqlStr(parquetPath)}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 5000);`,
+  ].join('\n');
+  fs.writeFileSync(sqlFilePath, sql);
+
+  await execAsync(`duckdb :memory: < "${sqlFilePath}"`, {
+    timeout: 180000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+}
+
+/**
+ * Greedy byte-based deterministic chunker. Same input → same chunks → same
+ * filenames → GCS overwrite semantics preserved across retries.
+ */
+function chunkLinesByBytes(lines) {
+  const ranges = [];
+  let chunkStart = 0;
+  let chunkBytes = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const lineBytes = Buffer.byteLength(lines[i], 'utf8') + 1; // +1 for '\n'
+    if (chunkBytes > 0 && chunkBytes + lineBytes > MAX_JSONL_BYTES_PER_CHUNK) {
+      ranges.push({ start: chunkStart, end: i });
+      chunkStart = i;
+      chunkBytes = 0;
+    }
+    chunkBytes += lineBytes;
+  }
+  if (chunkStart < lines.length) {
+    ranges.push({ start: chunkStart, end: lines.length });
+  }
+  return ranges;
 }
 
 /**
  * Write a single partition's records to Parquet and upload to GCS.
- * Uses DuckDB CLI for JSONL→Parquet conversion with strict memory limits.
+ *
+ * For small partitions this writes one file (legacy single-file naming).
+ * For large partitions whose serialized JSONL would exceed
+ * MAX_JSONL_BYTES_PER_CHUNK, the records are split into N byte-balanced
+ * chunks and written as N Parquet files — each through its own DuckDB
+ * invocation, so each stays well under the 256 MiB memory cap.
+ *
+ * Exactly-once semantics are preserved because the chunk count and chunk
+ * boundaries are a pure function of the input records' serialized bytes.
  */
 async function writePartitionToGCS(records, type, partition, afterRecordTime) {
+  if (records.length === 0) return;
+
   const mapped = records.map(type === 'updates' ? mapUpdateRecord : mapEventRecord);
-  const fileName = deterministicFileName(type, afterRecordTime, partition);
+  const lines = mapped.map(r => JSON.stringify(r));
+
+  const chunkRanges = chunkLinesByBytes(lines);
+  const chunkCount = chunkRanges.length;
 
   fs.mkdirSync(LIVE_TMP_DIR, { recursive: true });
-  const jsonlPath   = path.join(LIVE_TMP_DIR, fileName.replace('.parquet', '.jsonl'));
-  const parquetPath = path.join(LIVE_TMP_DIR, fileName);
-  const sqlFilePath = path.join(LIVE_TMP_DIR, fileName.replace('.parquet', '.sql'));
 
-  try {
-    // 1. Write JSONL
-    fs.writeFileSync(jsonlPath, mapped.map(r => JSON.stringify(r)).join('\n') + '\n');
+  for (let chunkIdx = 0; chunkIdx < chunkRanges.length; chunkIdx++) {
+    const { start, end } = chunkRanges[chunkIdx];
+    const chunkLines = lines.slice(start, end);
+    const chunkRecordCount = end - start;
 
-    // 2. Convert JSONL → Parquet via DuckDB CLI (memory-limited for constrained VMs)
-    const columns = type === 'events' ? EVENTS_DUCKDB_COLUMNS : UPDATES_DUCKDB_COLUMNS;
-    const sql = [
-      "SET memory_limit='256MB';",
-      "SET threads=1;",
-      `COPY (SELECT * FROM read_json_auto('${sqlStr(jsonlPath)}', columns={${columns}}, union_by_name=true, maximum_object_size=67108864))`,
-      `TO '${sqlStr(parquetPath)}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000);`,
-    ].join('\n');
-    fs.writeFileSync(sqlFilePath, sql);
+    const fileName    = deterministicFileName(type, afterRecordTime, partition, chunkIdx, chunkCount);
+    const jsonlPath   = path.join(LIVE_TMP_DIR, fileName.replace('.parquet', '.jsonl'));
+    const parquetPath = path.join(LIVE_TMP_DIR, fileName);
+    const sqlFilePath = path.join(LIVE_TMP_DIR, fileName.replace('.parquet', '.sql'));
 
-    await execAsync(`duckdb :memory: < "${sqlFilePath}"`, {
-      timeout: 120000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    try {
+      // 1. Write this chunk's JSONL slice
+      fs.writeFileSync(jsonlPath, chunkLines.join('\n') + '\n');
 
-    // 3. Upload to GCS via SDK (deterministic path → overwrite = idempotent, zero dups)
-    const gcsObjectPath = `raw/${partition}/${fileName}`;
-    const bucket = await getGCSBucket();
-    await bucket.upload(parquetPath, {
-      destination: gcsObjectPath,
-      metadata: { contentType: 'application/octet-stream' },
-    });
+      // 2. Convert JSONL → Parquet via memory-tuned DuckDB CLI
+      await jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type);
 
-    log('info', 'parquet_uploaded', { type, records: records.length, partition, fileName });
-  } finally {
-    for (const p of [jsonlPath, parquetPath, sqlFilePath]) {
-      try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+      // 3. Upload to GCS via SDK (deterministic path → overwrite = idempotent, zero dups)
+      const gcsObjectPath = `raw/${partition}/${fileName}`;
+      const bucket = await getGCSBucket();
+      await bucket.upload(parquetPath, {
+        destination: gcsObjectPath,
+        metadata: { contentType: 'application/octet-stream' },
+      });
+
+      log('info', 'parquet_uploaded', {
+        type, records: chunkRecordCount, partition, fileName,
+        ...(chunkCount > 1 ? { chunk: chunkIdx + 1, chunks: chunkCount } : {}),
+      });
+    } finally {
+      for (const p of [jsonlPath, parquetPath, sqlFilePath]) {
+        try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+      }
     }
   }
 }
