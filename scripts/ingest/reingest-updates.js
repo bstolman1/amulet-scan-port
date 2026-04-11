@@ -164,6 +164,15 @@ if (!GCS_BUCKET) {
 const INSECURE_TLS = process.env.INSECURE_TLS === 'true';
 const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 30000;
 
+// Adaptive fetch parameters for stuck cursors (mirrors fetch-updates.js FIX #13).
+// When the same cursor times out repeatedly, the API is likely struggling with
+// a large/complex response at that position. Progressively reduce page_size
+// and increase timeout to break through.
+let _adaptivePageSize  = BATCH_SIZE;       // current effective page_size
+let _adaptiveTimeoutMs = FETCH_TIMEOUT_MS; // current effective timeout
+let _stuckCursor       = null;             // cursor value that is repeatedly failing
+let _stuckCursorHits   = 0;                // consecutive errors at the same cursor
+
 // ─── Multi-node failover (mirrors fetch-updates.js) ─────────────────────
 const ALL_SCAN_ENDPOINTS = [
   { name: 'Global-Synchronizer-Foundation',  url: 'https://scan.sv-1.global.canton.network.sync.global/api/scan' },
@@ -230,6 +239,109 @@ async function tryFailover() {
   }
   console.log(`   ⚠️  No healthy alternative endpoints found`);
   return false;
+}
+
+/**
+ * Probe all configured endpoints once at startup and switch to the fastest healthy
+ * one if the configured endpoint is unreachable. Mirrors fetch-updates.js
+ * probeAllScanEndpoints — prevents starting the run on a dead endpoint.
+ */
+async function probeAllScanEndpoints() {
+  console.log(`\n🔍 Probing ${ALL_SCAN_ENDPOINTS.length} Scan API endpoints (GET /v0/dso)...`);
+  const results = await Promise.allSettled(
+    ALL_SCAN_ENDPOINTS.map(async (ep) => {
+      const start = Date.now();
+      try {
+        const resp = await axios.get(`${ep.url}/v0/dso`, {
+          timeout: 10000,
+          httpsAgent: new https.Agent({ rejectUnauthorized: !INSECURE_TLS }),
+          headers: { Accept: 'application/json' },
+        });
+        if (resp.status >= 200 && resp.status < 300) {
+          return { name: ep.name, url: ep.url, healthy: true, latencyMs: Date.now() - start };
+        }
+        return { name: ep.name, url: ep.url, healthy: false, latencyMs: Date.now() - start };
+      } catch (err) {
+        return { name: ep.name, url: ep.url, healthy: false, error: err.code || err.message, latencyMs: Date.now() - start };
+      }
+    })
+  );
+
+  const healthy = results
+    .filter(r => r.status === 'fulfilled' && r.value.healthy)
+    .map(r => r.value)
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+
+  for (const r of results) {
+    const ep = r.status === 'fulfilled' ? r.value : { name: '?', healthy: false, error: 'rejected', latencyMs: 0 };
+    const icon = ep.healthy ? '✅' : '❌';
+    const active = ep.name === activeEndpointName ? ' ← ACTIVE' : '';
+    const detail = ep.healthy ? `${ep.latencyMs}ms` : `${ep.error || 'unhealthy'} (${ep.latencyMs}ms)`;
+    console.log(`   ${icon}  ${ep.name} — ${detail}${active}`);
+  }
+  console.log(`   ${healthy.length}/${ALL_SCAN_ENDPOINTS.length} endpoints reachable`);
+
+  if (healthy.length === 0) {
+    console.error(`\n🔴 No Scan API endpoints are reachable! Check network/DNS.`);
+    return;
+  }
+  // If active endpoint is not healthy, auto-failover to fastest reachable
+  const activeHealthy = healthy.some(ep => ep.url === activeScanUrl);
+  if (!activeHealthy) {
+    const best = healthy[0];
+    console.log(`\n⚠️  Active endpoint "${activeEndpointName}" is NOT reachable.`);
+    console.log(`   🔄 Auto-failover to ${best.name} (${best.latencyMs}ms)`);
+    activeScanUrl = best.url;
+    activeEndpointName = best.name;
+    client.defaults.baseURL = best.url;
+  }
+}
+
+/**
+ * Fetch a batch from the Scan API with AbortController-based timeout.
+ * Uses the adaptive page_size and timeout for stuck cursors.
+ * Returns { items, lastMigrationId, lastRecordTime }.
+ * Throws an Error with code 'FETCH_TIMEOUT' on abort.
+ *
+ * Mirrors fetch-updates.js fetchUpdates() — this gives reingest the same
+ * abort-on-timeout safety as the live pipeline (axios timeout alone is
+ * unreliable when the server holds the connection open).
+ */
+async function fetchUpdatesAPI(afterMigrationId, afterRecordTime) {
+  const effectiveTimeout  = _adaptiveTimeoutMs;
+  const effectivePageSize = _adaptivePageSize;
+
+  const controller = new AbortController();
+  const timeoutId  = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  try {
+    const payload = {
+      page_size: effectivePageSize,
+      daml_value_encoding: 'compact_json',
+      after: { after_migration_id: afterMigrationId, after_record_time: afterRecordTime },
+    };
+
+    const response = await client.post('/v2/updates', payload, { signal: controller.signal });
+    const transactions = response.data?.transactions || [];
+
+    return {
+      items:           transactions,
+      lastMigrationId: transactions.length > 0 ? transactions[transactions.length - 1].migration_id : null,
+      // Use MAX record_time across the batch (consistent with fetch-updates.js)
+      lastRecordTime: transactions.length > 0
+        ? transactions.reduce((max, tx) => tx.record_time > max ? tx.record_time : max, transactions[0].record_time)
+        : null,
+    };
+  } catch (err) {
+    if (err.name === 'AbortError' || err.code === 'ERR_CANCELED') {
+      const e = new Error(`Fetch timed out after ${effectiveTimeout}ms (page_size=${effectivePageSize})`);
+      e.code = 'FETCH_TIMEOUT';
+      throw e;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // ─── GCS helpers (SDK-based — gsutil silently fails when auth expires) ────
@@ -769,17 +881,24 @@ async function reingestDateRange(dates, migrations) {
       batchNum++;
 
       try {
-        const payload = {
-          page_size: BATCH_SIZE,
-          daml_value_encoding: 'compact_json',
-          after: { after_migration_id: afterMigrationId, after_record_time: afterRecordTime },
-        };
-
-        const response = await client.post('/v2/updates', payload);
-        const transactions = response.data?.transactions || [];
+        // Use AbortController-based fetch with adaptive page_size/timeout
+        const data = await fetchUpdatesAPI(afterMigrationId, afterRecordTime);
+        const transactions = data.items;
         consecutiveErrors = 0;
         totalFailovers = 0;
         cooldowns = 0;
+
+        // Reset adaptive params on successful fetch with data — the stuck cursor
+        // has been passed, so restore normal page_size and timeout.
+        if (transactions.length > 0) {
+          if (_adaptivePageSize !== BATCH_SIZE || _adaptiveTimeoutMs !== FETCH_TIMEOUT_MS) {
+            console.log(`   🔧 Adaptive params reset: page_size → ${BATCH_SIZE}, timeout → ${FETCH_TIMEOUT_MS / 1000}s (cursor unstuck)`);
+            _adaptivePageSize  = BATCH_SIZE;
+            _adaptiveTimeoutMs = FETCH_TIMEOUT_MS;
+          }
+          _stuckCursor     = null;
+          _stuckCursorHits = 0;
+        }
 
         if (transactions.length === 0) {
           consecutiveEmpty++;
@@ -792,11 +911,8 @@ async function reingestDateRange(dates, migrations) {
         }
         consecutiveEmpty = 0;
 
-        // Check if we've gone past our end date
-        const lastRecordTime = transactions.reduce((max, tx) =>
-          tx.record_time > max ? tx.record_time : max,
-          transactions[0].record_time
-        );
+        // Last record_time across batch (already computed by fetchUpdatesAPI)
+        const lastRecordTime = data.lastRecordTime;
 
         if (new Date(lastRecordTime) > new Date(rangeEnd)) {
           const inRange = transactions.filter(tx =>
@@ -850,6 +966,37 @@ async function reingestDateRange(dates, migrations) {
         }
         consecutiveErrors++;
         console.error(`   ❌ Batch ${batchNum} failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`);
+
+        // Adaptive page_size / timeout when stuck at the same cursor (FIX #13).
+        // If the API consistently times out for a cursor, the response at that
+        // position is likely very large. Halve page_size (min 1) and increase
+        // timeout (up to 3x base) to break through.
+        const isTimeout = err.code === 'FETCH_TIMEOUT'
+          || err.code === 'ECONNABORTED'
+          || err.code === 'ETIMEDOUT'
+          || err.code === 'ECONNRESET'
+          || err.message?.includes('timeout');
+
+        if (isTimeout) {
+          if (_stuckCursor === afterRecordTime) {
+            _stuckCursorHits++;
+          } else {
+            _stuckCursor     = afterRecordTime;
+            _stuckCursorHits = 1;
+          }
+          if (_stuckCursorHits > 0 && _stuckCursorHits % ENDPOINT_ROTATE_AFTER_ERRORS === 0) {
+            const oldPageSize = _adaptivePageSize;
+            _adaptivePageSize  = Math.max(1, Math.floor(_adaptivePageSize / 2));
+            _adaptiveTimeoutMs = Math.min(FETCH_TIMEOUT_MS * 3, Math.round(_adaptiveTimeoutMs * 1.5));
+            if (_adaptivePageSize !== oldPageSize) {
+              console.log(
+                `   🔧 Adaptive retry: page_size ${oldPageSize} → ${_adaptivePageSize}, ` +
+                `timeout ${Math.round(_adaptiveTimeoutMs / 1000)}s ` +
+                `(stuck at same cursor for ${_stuckCursorHits} errors)`
+              );
+            }
+          }
+        }
 
         // Try failover to another SV node after ENDPOINT_ROTATE_AFTER_ERRORS consecutive errors
         if (consecutiveErrors % ENDPOINT_ROTATE_AFTER_ERRORS === 0 && totalFailovers < 5) {
@@ -1013,6 +1160,10 @@ async function main() {
   const dates = dateRange(START_DATE, END_DATE);
   console.log(`   Days in range: ${dates.length}`);
 
+  // Step 0: Probe all Scan endpoints; auto-failover if active is unreachable.
+  // Mirrors fetch-updates.js — prevents starting the run on a dead endpoint.
+  await probeAllScanEndpoints();
+
   // Step 1: Discover migrations
   const migrations = await discoverMigrations();
   if (migrations.length === 0) {
@@ -1105,6 +1256,35 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// ─── Unhandled error safety net ───────────────────────────────────────────
+// Catch truly unexpected errors, save the cursor, then exit. Mirrors
+// fetch-updates.js — prevents an uncaught error from losing in-flight progress.
+process.on('uncaughtException', (err) => {
+  console.error('\n[uncaughtException]', err);
+  if (_shutdownState && !_isShuttingDown) {
+    try {
+      const { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum } = _shutdownState;
+      saveReingestCursor(mig, afterRecordTime, afterMigrationId,
+        { updates: migUpdates, events: migEvents, batches: batchNum });
+      console.error(`   Cursor saved at ${afterRecordTime} — re-run to resume.`);
+    } catch {}
+  }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('\n[unhandledRejection]', reason);
+  if (_shutdownState && !_isShuttingDown) {
+    try {
+      const { mig, afterRecordTime, afterMigrationId, migUpdates, migEvents, batchNum } = _shutdownState;
+      saveReingestCursor(mig, afterRecordTime, afterMigrationId,
+        { updates: migUpdates, events: migEvents, batches: batchNum });
+      console.error(`   Cursor saved at ${afterRecordTime} — re-run to resume.`);
+    } catch {}
+  }
+  process.exit(1);
+});
 
 main().catch(async (err) => {
   console.error(`\n❌ FATAL: ${err.message}`);
