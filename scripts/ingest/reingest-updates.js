@@ -1292,6 +1292,48 @@ async function main() {
     process.exit(1);
   }
 
+  // Safety guard: refuse to destroy in-progress data on a resume run.
+  //
+  // `--clean` / `--clean-backfill` wipe every Parquet file under the target
+  // date range and delete the saved reingest cursor. That is the correct
+  // behaviour for the FIRST run of a fresh ingestion, but on a resume run
+  // it silently destroys the cumulative progress of the previous run
+  // (potentially days of GCS writes).
+  //
+  // A saved cursor is a strong signal that "a prior run wrote data to GCS
+  // under this exact (start, end, migration) key". If one exists, we refuse
+  // `--clean` / `--clean-backfill` unless the user passes `--force` to
+  // confirm they really do mean to wipe and restart.
+  if ((CLEAN || CLEAN_BACKFILL) && !FORCE) {
+    const existingCursors = [];
+    for (const mig of migrations) {
+      const cur = loadReingestCursor(mig);
+      if (cur) existingCursors.push({ mig, cursor: cur });
+    }
+    if (existingCursors.length > 0) {
+      console.error('\n' + '═'.repeat(80));
+      console.error('❌ SAFETY GUARD: --clean / --clean-backfill is destructive on a resume run');
+      console.error('═'.repeat(80));
+      console.error('   A saved reingest cursor already exists for this (start, end, migration):');
+      for (const { mig, cursor } of existingCursors) {
+        console.error(`     migration=${mig}:  cursor=${cursor.after_record_time}`);
+        console.error(`                    already written: ${(cursor.updates_written || 0).toLocaleString()} updates, ${(cursor.events_written || 0).toLocaleString()} events, ${(cursor.batches_processed || 0).toLocaleString()} batches`);
+      }
+      console.error('');
+      console.error('   Proceeding with --clean / --clean-backfill would delete all data previously');
+      console.error('   written by this resume key AND remove the cursor — destroying the prior run.');
+      console.error('');
+      console.error('   What you probably want:');
+      console.error('     • TO RESUME: re-run the same command WITHOUT --clean / --clean-backfill.');
+      console.error('       The script will pick up automatically from the saved cursor.');
+      console.error('');
+      console.error('   If you really do want to wipe everything and start from scratch:');
+      console.error('     • Add --force to bypass this guard.');
+      console.error('═'.repeat(80));
+      process.exit(1);
+    }
+  }
+
   // Step 2: Audit what exists
   await auditDateRange(dates, migrations);
 
