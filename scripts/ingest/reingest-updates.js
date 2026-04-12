@@ -711,12 +711,17 @@ const DUCKDB_SPILL_DIR = join(REINGEST_TMP_DIR, 'duckdb_spill');
 
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
 // this, the partition's records are split into multiple Parquet chunks
-// (deterministic byte-based greedy packing). Sized to leave comfortable
-// headroom under the 256 MiB DuckDB memory limit: DuckDB's working-set
-// inflation on wide VARCHAR rows is roughly 3-4x the source JSONL, so
-// 20 MiB JSONL → ~60-80 MiB RAM + writer buffers + engine overhead
-// stays well under 244 MiB.
-const MAX_JSONL_BYTES_PER_CHUNK = 20 * 1024 * 1024; // 20 MiB
+// (deterministic byte-based greedy packing).
+//
+// Threshold sizing: observed typical batches are ~34-38 MiB for updates
+// and ~75-85 MiB for events. The OOM we were chasing was a ~111 MiB
+// outlier (derived from 205.7 MiB peak − 64 MiB max_obj_size buffer −
+// 30 MiB engine base). With max_obj_size lowered to 48 MiB and
+// preserve_insertion_order=false + small ROW_GROUP_SIZE letting row
+// groups stream, a 100 MiB chunk peaks around 48+100+30+20 ≈ 200 MiB —
+// well under the 244 MiB effective cap. So chunking only fires for
+// genuinely-outlier batches (>100 MiB), not every normal one.
+const MAX_JSONL_BYTES_PER_CHUNK = 100 * 1024 * 1024; // 100 MiB
 
 // Largest single JSON object DuckDB will accept. Must be ≥ the biggest
 // individual record we ever see — a single oversized record gets its own
@@ -1290,6 +1295,48 @@ async function main() {
   if (migrations.length === 0) {
     console.error('❌ No migrations found');
     process.exit(1);
+  }
+
+  // Safety guard: refuse to destroy in-progress data on a resume run.
+  //
+  // `--clean` / `--clean-backfill` wipe every Parquet file under the target
+  // date range and delete the saved reingest cursor. That is the correct
+  // behaviour for the FIRST run of a fresh ingestion, but on a resume run
+  // it silently destroys the cumulative progress of the previous run
+  // (potentially days of GCS writes).
+  //
+  // A saved cursor is a strong signal that "a prior run wrote data to GCS
+  // under this exact (start, end, migration) key". If one exists, we refuse
+  // `--clean` / `--clean-backfill` unless the user passes `--force` to
+  // confirm they really do mean to wipe and restart.
+  if ((CLEAN || CLEAN_BACKFILL) && !FORCE) {
+    const existingCursors = [];
+    for (const mig of migrations) {
+      const cur = loadReingestCursor(mig);
+      if (cur) existingCursors.push({ mig, cursor: cur });
+    }
+    if (existingCursors.length > 0) {
+      console.error('\n' + '═'.repeat(80));
+      console.error('❌ SAFETY GUARD: --clean / --clean-backfill is destructive on a resume run');
+      console.error('═'.repeat(80));
+      console.error('   A saved reingest cursor already exists for this (start, end, migration):');
+      for (const { mig, cursor } of existingCursors) {
+        console.error(`     migration=${mig}:  cursor=${cursor.after_record_time}`);
+        console.error(`                    already written: ${(cursor.updates_written || 0).toLocaleString()} updates, ${(cursor.events_written || 0).toLocaleString()} events, ${(cursor.batches_processed || 0).toLocaleString()} batches`);
+      }
+      console.error('');
+      console.error('   Proceeding with --clean / --clean-backfill would delete all data previously');
+      console.error('   written by this resume key AND remove the cursor — destroying the prior run.');
+      console.error('');
+      console.error('   What you probably want:');
+      console.error('     • TO RESUME: re-run the same command WITHOUT --clean / --clean-backfill.');
+      console.error('       The script will pick up automatically from the saved cursor.');
+      console.error('');
+      console.error('   If you really do want to wipe everything and start from scratch:');
+      console.error('     • Add --force to bypass this guard.');
+      console.error('═'.repeat(80));
+      process.exit(1);
+    }
   }
 
   // Step 2: Audit what exists
