@@ -222,13 +222,12 @@ const LIVE_TMP_DIR = '/tmp/live-ingest';
 const DUCKDB_SPILL_DIR = path.join(LIVE_TMP_DIR, 'duckdb_spill');
 
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
-// this, the partition's records are split into multiple Parquet chunks
-// (deterministic byte-based greedy packing). Sized to leave comfortable
-// headroom under the 256 MiB DuckDB memory limit: DuckDB's working-set
-// inflation on wide VARCHAR rows is roughly 3-4x the source JSONL, so
-// 20 MiB JSONL → ~60-80 MiB RAM + writer buffers + engine overhead
-// stays well under 244 MiB.
-const MAX_JSONL_BYTES_PER_CHUNK = 20 * 1024 * 1024; // 20 MiB
+// this, the partition's records are split into multiple Parquet chunks.
+// Tuned to leave typical batches (≤100 MiB JSONL) as a single file while
+// still splitting pathological wide batches that would otherwise OOM
+// the 256 MiB DuckDB memory_limit. See reingest-updates.js for the
+// full budget calculation.
+const MAX_JSONL_BYTES_PER_CHUNK = 100 * 1024 * 1024; // 100 MiB
 
 // Largest single JSON object DuckDB will accept. Must be ≥ the biggest
 // individual record we ever see — a single oversized record gets its own

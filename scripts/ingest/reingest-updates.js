@@ -711,12 +711,17 @@ const DUCKDB_SPILL_DIR = join(REINGEST_TMP_DIR, 'duckdb_spill');
 
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
 // this, the partition's records are split into multiple Parquet chunks
-// (deterministic byte-based greedy packing). Sized to leave comfortable
-// headroom under the 256 MiB DuckDB memory limit: DuckDB's working-set
-// inflation on wide VARCHAR rows is roughly 3-4x the source JSONL, so
-// 20 MiB JSONL → ~60-80 MiB RAM + writer buffers + engine overhead
-// stays well under 244 MiB.
-const MAX_JSONL_BYTES_PER_CHUNK = 20 * 1024 * 1024; // 20 MiB
+// (deterministic byte-based greedy packing).
+//
+// Threshold sizing: observed typical batches are ~34-38 MiB for updates
+// and ~75-85 MiB for events. The OOM we were chasing was a ~111 MiB
+// outlier (derived from 205.7 MiB peak − 64 MiB max_obj_size buffer −
+// 30 MiB engine base). With max_obj_size lowered to 48 MiB and
+// preserve_insertion_order=false + small ROW_GROUP_SIZE letting row
+// groups stream, a 100 MiB chunk peaks around 48+100+30+20 ≈ 200 MiB —
+// well under the 244 MiB effective cap. So chunking only fires for
+// genuinely-outlier batches (>100 MiB), not every normal one.
+const MAX_JSONL_BYTES_PER_CHUNK = 100 * 1024 * 1024; // 100 MiB
 
 // Largest single JSON object DuckDB will accept. Must be ≥ the biggest
 // individual record we ever see — a single oversized record gets its own
