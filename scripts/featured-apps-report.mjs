@@ -46,59 +46,39 @@ const THRESHOLDS = {
 
 // ─── HTTP helpers ───────────────────────────────────────────────────────────
 
-async function scanGet(path) {
-  const url = `${SCAN_BASE}/${path}`;
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`GET ${path} → ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json();
-}
-
-async function scanPost(path, body) {
-  const url = `${SCAN_BASE}/${path}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json();
-}
-
-/** POST with automatic fallback to other SV endpoints on 5xx errors. */
-async function scanPostWithFallback(path, body) {
+/** Make a request with automatic fallback across SV endpoints on 5xx errors. */
+async function scanRequest(method, path, body = null) {
+  let lastErr = null;
   for (const base of SCAN_FALLBACKS) {
     try {
       const url = `${base}/${path}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const opts = {
+        method,
+        headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(30_000),
-      });
+      };
+      if (body && (method === 'POST' || method === 'PUT')) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(url, opts);
       if (res.ok) return res.json();
+      const text = await res.text().catch(() => '');
       if (res.status < 500) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
+        throw new Error(`${method} ${path} → ${res.status}: ${text.slice(0, 200)}`);
       }
       // 5xx — try next endpoint
+      lastErr = new Error(`${method} ${path} → ${res.status} from ${base}`);
     } catch (e) {
-      if (!e.message?.includes('→')) throw e; // network error, not HTTP — stop
-      // HTTP 5xx — continue to next fallback
+      lastErr = e;
+      // If it's a client error (4xx) we already threw above, so this is network/5xx — continue
     }
   }
-  throw new Error(`POST ${path} → all ${SCAN_FALLBACKS.length} endpoints returned 5xx`);
+  throw lastErr || new Error(`${method} ${path} → all endpoints failed`);
 }
+
+function scanGet(path) { return scanRequest('GET', path); }
+function scanPost(path, body) { return scanRequest('POST', path, body); }
 
 // ─── Parsing helpers ────────────────────────────────────────────────────────
 
@@ -223,7 +203,7 @@ async function fetchRoundDates(roundNumbers) {
   for (let b = 0; b < batches.length; b += CONCURRENCY) {
     const chunk = batches.slice(b, b + CONCURRENCY);
     const results = await Promise.all(
-      chunk.map(batch => scanPostWithFallback('v0/round-totals', batch).catch(e => {
+      chunk.map(batch => scanPost('v0/round-totals', batch).catch(e => {
         console.error(`    ⚠ round-totals ${batch.start_round}-${batch.end_round}: ${e.message}`);
         return { entries: [] };
       }))
