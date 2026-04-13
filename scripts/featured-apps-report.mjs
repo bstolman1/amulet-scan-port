@@ -192,7 +192,7 @@ async function fetchRoundDates(roundNumbers) {
       chunk.map(batch => scanPost('v0/round-totals', batch).catch(e => {
         console.error(`    ⚠ round-totals ${batch.start_round}-${batch.end_round}: ${e.message}`);
         return { entries: [] };
-      })))
+      }))
     );
     for (const rt of results) {
       for (const e of (rt.entries || [])) {
