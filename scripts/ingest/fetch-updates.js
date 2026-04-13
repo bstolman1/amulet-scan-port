@@ -217,15 +217,15 @@ const EVENTS_DUCKDB_COLUMNS = [
 const LIVE_TMP_DIR = '/tmp/live-ingest';
 
 // DuckDB temp directory for spilling intermediate state to disk when the
-// in-memory 256 MiB cap is tight. Without this, `:memory:` databases can't
-// spill and a wide batch will OOM the COPY.
+// in-memory 180 MiB limit is reached. Without this, `:memory:` databases
+// can't spill and a wide batch will OOM the COPY.
 const DUCKDB_SPILL_DIR = path.join(LIVE_TMP_DIR, 'duckdb_spill');
 
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
 // this, the partition's records are split into multiple Parquet chunks.
 // Tuned to leave typical batches (≤100 MiB JSONL) as a single file while
 // still splitting pathological wide batches that would otherwise OOM
-// the 256 MiB DuckDB memory_limit. See reingest-updates.js for the
+// DuckDB on memory-constrained VMs. See reingest-updates.js for the
 // full budget calculation.
 const MAX_JSONL_BYTES_PER_CHUNK = 100 * 1024 * 1024; // 100 MiB
 
@@ -256,7 +256,7 @@ function deterministicFileName(type, afterRecordTime, partition, chunkIdx = 0, c
 
 /**
  * Run DuckDB CLI to convert a single JSONL file to a single Parquet file.
- * Memory knobs tuned for the 256 MiB cap on constrained VMs:
+ * Memory knobs tuned for ~244 MiB OS cap on constrained VMs:
  *   * preserve_insertion_order=false — streams rows without holding the
  *     whole input in RAM just to preserve order
  *   * temp_directory — lets DuckDB spill to disk when memory is tight
@@ -269,7 +269,7 @@ async function jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type
   const columns = type === 'events' ? EVENTS_DUCKDB_COLUMNS : UPDATES_DUCKDB_COLUMNS;
   fs.mkdirSync(DUCKDB_SPILL_DIR, { recursive: true });
   const sql = [
-    "SET memory_limit='256MB';",
+    "SET memory_limit='180MB';",
     "SET threads=1;",
     "SET preserve_insertion_order=false;",
     `SET temp_directory='${sqlStr(DUCKDB_SPILL_DIR)}';`,
@@ -314,7 +314,7 @@ function chunkLinesByBytes(lines) {
  * For large partitions whose serialized JSONL would exceed
  * MAX_JSONL_BYTES_PER_CHUNK, the records are split into N byte-balanced
  * chunks and written as N Parquet files — each through its own DuckDB
- * invocation, so each stays well under the 256 MiB memory cap.
+ * invocation, so each stays well under the ~244 MiB OS memory cap.
  *
  * Exactly-once semantics are preserved because the chunk count and chunk
  * boundaries are a pure function of the input records' serialized bytes.
