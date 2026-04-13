@@ -216,22 +216,17 @@ const EVENTS_DUCKDB_COLUMNS = [
 
 const LIVE_TMP_DIR = '/tmp/live-ingest';
 
-// DuckDB temp directory for spilling intermediate state to disk when the
-// in-memory 200 MB limit is reached. Without this, `:memory:` databases
-// can't spill and a wide batch will OOM the COPY.
+// DuckDB temp directory for spilling intermediate state to disk if needed.
 const DUCKDB_SPILL_DIR = path.join(LIVE_TMP_DIR, 'duckdb_spill');
 
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
 // this, the partition's records are split into multiple Parquet chunks.
-// At 50 MiB, typical update batches (34-38 MiB) pass unsplit; event
-// batches (75-85 MiB) split into 2 chunks. See reingest-updates.js for
-// the full budget calculation.
-const MAX_JSONL_BYTES_PER_CHUNK = 50 * 1024 * 1024; // 50 MiB
+// With 31 GiB VM RAM and memory_limit='2GB', set high so chunking only
+// fires for truly extraordinary batches. See reingest-updates.js for details.
+const MAX_JSONL_BYTES_PER_CHUNK = 512 * 1024 * 1024; // 512 MiB
 
-// Largest single JSON object DuckDB will accept. Must be ≥ the biggest
-// individual record we ever see — a single oversized record gets its own
-// chunk, and that chunk's one line has to fit inside this buffer.
-const DUCKDB_MAX_OBJECT_SIZE = 48 * 1024 * 1024; // 48 MiB
+// Largest single JSON object DuckDB will accept. Restored to DuckDB's default.
+const DUCKDB_MAX_OBJECT_SIZE = 64 * 1024 * 1024; // 64 MiB
 
 /**
  * Deterministic filename based on cursor position and partition.
@@ -255,20 +250,14 @@ function deterministicFileName(type, afterRecordTime, partition, chunkIdx = 0, c
 
 /**
  * Run DuckDB CLI to convert a single JSONL file to a single Parquet file.
- * Memory knobs tuned for ~244 MiB OS cap on constrained VMs:
- *   * preserve_insertion_order=false — streams rows without holding the
- *     whole input in RAM just to preserve order
- *   * temp_directory — lets DuckDB spill to disk when memory is tight
- *   * maximum_object_size=48 MiB — single-JSON-object read buffer (was 64
- *     MiB). Must be ≥ the biggest individual record we see, so an
- *     oversized line gets its own chunk that still fits.
- *   * ROW_GROUP_SIZE 5000 — more frequent row-group flushes
+ * Memory knobs: memory_limit='2GB' (VM has 31 GiB), threads=1,
+ * preserve_insertion_order=false, ROW_GROUP_SIZE 5000.
  */
 async function jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type) {
   const columns = type === 'events' ? EVENTS_DUCKDB_COLUMNS : UPDATES_DUCKDB_COLUMNS;
   fs.mkdirSync(DUCKDB_SPILL_DIR, { recursive: true });
   const sql = [
-    "SET memory_limit='200MB';",
+    "SET memory_limit='2GB';",
     "SET threads=1;",
     "SET preserve_insertion_order=false;",
     `SET temp_directory='${sqlStr(DUCKDB_SPILL_DIR)}';`,
@@ -313,7 +302,7 @@ function chunkLinesByBytes(lines) {
  * For large partitions whose serialized JSONL would exceed
  * MAX_JSONL_BYTES_PER_CHUNK, the records are split into N byte-balanced
  * chunks and written as N Parquet files — each through its own DuckDB
- * invocation, so each stays well under the ~244 MiB OS memory cap.
+ * invocation, so each stays within the 2 GB DuckDB memory limit.
  *
  * Exactly-once semantics are preserved because the chunk count and chunk
  * boundaries are a pure function of the input records' serialized bytes.
