@@ -62,6 +62,7 @@ const baseNavigationGroups: NavGroup[] = [
       { name: "Governance Flow", href: "/governance-flow", icon: GitBranch },
       { name: "Dev Fund", href: "/dev-fund", icon: Coins },
       { name: "SV Locking", href: "/sv-locking", icon: Lock },
+      { name: "FA Report", href: "/featured-apps-report", icon: Award },
     ],
   },
   // {

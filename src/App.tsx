@@ -39,6 +39,7 @@ import SVLocking from "./pages/SVLocking";
 // Services
 import ANS from "./pages/ANS";
 import Apps from "./pages/Apps";
+import FeaturedAppsReport from "./pages/FeaturedAppsReport";
 import Subscriptions from "./pages/Subscriptions";
 
 // Rules & Config
@@ -129,6 +130,7 @@ const App = () => (
             {/* Services */}
             <Route path="/ans" element={<ANS />} />
             <Route path="/apps" element={<Apps />} />
+            <Route path="/featured-apps-report" element={<FeaturedAppsReport />} />
             <Route path="/subscriptions" element={<Subscriptions />} />
             
             {/* Rules & Config */}
