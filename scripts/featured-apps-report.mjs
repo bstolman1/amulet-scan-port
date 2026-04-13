@@ -13,6 +13,7 @@
  *   node scripts/featured-apps-report.mjs
  *   node scripts/featured-apps-report.mjs --json          # output raw JSON
  *   node scripts/featured-apps-report.mjs --csv           # output CSV
+ *   node scripts/featured-apps-report.mjs --debug         # dump sample data structures
  *   SCAN_URL=https://scan.sv-1.global.canton.network.sync.global/api/scan node scripts/featured-apps-report.mjs
  */
 
@@ -55,6 +56,52 @@ async function scanPost(path, body) {
     throw new Error(`POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json();
+}
+
+/**
+ * Parse a Canton/DAML timestamp value into an ISO string.
+ * Handles: plain strings, { microsecondsSinceEpoch }, { seconds, nanos }, numbers.
+ */
+function parseTimestamp(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const d = new Date(value);
+    return isNaN(d) ? null : d.toISOString();
+  }
+  if (typeof value === 'number') {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === 'object') {
+    if (value.microsecondsSinceEpoch != null) {
+      const micros = Number(value.microsecondsSinceEpoch);
+      if (!isNaN(micros)) return new Date(micros / 1000).toISOString();
+    }
+    if (value.seconds != null) {
+      const s = Number(value.seconds);
+      const n = value.nanos ? Number(value.nanos) : 0;
+      if (!isNaN(s)) return new Date(s * 1000 + Math.floor(n / 1e6)).toISOString();
+    }
+    if (value.unixtime != null) {
+      const s = Number(value.unixtime);
+      if (!isNaN(s)) return new Date(s * 1000).toISOString();
+    }
+    if (typeof value.value === 'string') return parseTimestamp(value.value);
+    if (typeof value.timestamp === 'string') return parseTimestamp(value.timestamp);
+  }
+  return null;
+}
+
+/**
+ * Deep-search a JSON value for a key, returning the first match found.
+ */
+function deepFind(obj, key) {
+  if (!obj || typeof obj !== 'object') return undefined;
+  if (key in obj) return obj[key];
+  for (const v of Object.values(obj)) {
+    const found = deepFind(v, key);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 function fmtCC(n) {
@@ -139,57 +186,113 @@ async function main() {
   }
 
   // 3. Build lookup: provider → approval date from vote results
+  //
+  // Vote result structure (from Canton Scan API):
+  //   request.action.tag = "ARC_DsoRules"
+  //   request.action.value.dsoAction.tag = "SRARC_GrantFeaturedAppRight"
+  //   request.action.value.dsoAction.value.provider = "mainnet:app::122..."
+  //   completed_at = string | { microsecondsSinceEpoch: "..." } | { seconds, nanos }
+  //   outcome.tag = "VRO_Accepted" | "VRO_Rejected" | "VRO_Expired"
+
+  if (flags.has('--debug') && voteResults.length > 0) {
+    console.error('\n  [DEBUG] Sample vote result (first accepted):');
+    const sample = voteResults.find(vr => vr.outcome?.tag === 'VRO_Accepted') || voteResults[0];
+    console.error(JSON.stringify(sample, null, 2).split('\n').map(l => '    ' + l).join('\n'));
+    console.error();
+  }
+
   const approvalByProvider = new Map();
+  let vrAccepted = 0;
+  let vrProviderFound = 0;
   for (const vr of voteResults) {
     try {
-      const action = vr.request?.action;
       if (vr.outcome?.tag !== 'VRO_Accepted') continue;
+      vrAccepted++;
 
-      let provider = null;
-      if (action?.value?.provider) {
-        provider = action.value.provider;
-      } else if (action?.value?.dsoAction?.value?.provider) {
-        provider = action.value.dsoAction.value.provider;
-      } else if (typeof action?.value === 'object') {
-        const m = JSON.stringify(action.value).match(/"provider"\s*:\s*"([^"]+)"/);
-        if (m) provider = m[1];
-      }
+      const action = vr.request?.action;
+      const actionValue = action?.value;
 
-      if (provider && vr.completed_at) {
-        const existing = approvalByProvider.get(provider);
-        if (!existing || new Date(vr.completed_at) < new Date(existing)) {
-          approvalByProvider.set(provider, vr.completed_at);
-        }
+      // Drill into the nested action structure to find the provider
+      let provider =
+        actionValue?.dsoAction?.value?.provider ||  // Most common path
+        actionValue?.provider ||                     // Direct path
+        actionValue?.amuletRulesAction?.value?.provider ||
+        deepFind(actionValue, 'provider');           // Fallback: deep search
+
+      if (!provider) continue;
+      vrProviderFound++;
+
+      // Parse completed_at which may be a DAML timestamp object
+      const completedAt =
+        parseTimestamp(vr.completed_at) ||
+        parseTimestamp(vr.completedAt) ||
+        parseTimestamp(vr.request?.completed_at);
+
+      if (!completedAt) continue;
+
+      // Keep earliest approval per provider
+      const existing = approvalByProvider.get(provider);
+      if (!existing || new Date(completedAt) < new Date(existing)) {
+        approvalByProvider.set(provider, completedAt);
       }
     } catch { /* skip */ }
   }
 
-  console.error(`  Approval dates matched: ${approvalByProvider.size}`);
+  console.error(`  Vote results accepted: ${vrAccepted}, provider extracted: ${vrProviderFound}`);
+  console.error(`  Approval dates matched to providers: ${approvalByProvider.size}`);
 
-  // 4. Try round-party-totals for milestone tracking
+  // 4. Try round-party-totals for milestone tracking (batched in 50-round chunks)
+  //    We sample evenly across the full range to get milestone estimates.
   const milestonesByProvider = new Map();
+  const RPT_BATCH = 50; // API max per request
+  const RPT_SAMPLE_BATCHES = 40; // Sample up to 40 batches (~2000 rounds)
   if (latestRound > 0) {
     try {
-      const rpt = await scanPost('v0/round-party-totals', {
-        start_round: 0,
-        end_round: latestRound,
-      });
-      const entries = rpt.entries || [];
-      console.error(`  Round-party-totals entries: ${entries.length}`);
-      const sorted = [...entries].sort((a, b) => a.closed_round - b.closed_round);
-      for (const e of sorted) {
-        const cum = parseFloat(e.cumulative_app_rewards || '0');
-        if (!milestonesByProvider.has(e.party)) {
-          milestonesByProvider.set(e.party, { m10: null, m25: null });
-        }
-        const ms = milestonesByProvider.get(e.party);
-        if (cum >= THRESHOLDS.MILESTONE_10M && !ms.m10) {
-          ms.m10 = { round: e.closed_round, date: e.closed_round_effective_at, amount: cum };
-        }
-        if (cum >= THRESHOLDS.MILESTONE_25M && !ms.m25) {
-          ms.m25 = { round: e.closed_round, date: e.closed_round_effective_at, amount: cum };
+      // Spread sample batches evenly across the full round range
+      const step = Math.max(1, Math.floor(latestRound / RPT_SAMPLE_BATCHES));
+      const batches = [];
+      for (let start = 0; start < latestRound; start += step) {
+        const end = Math.min(start + RPT_BATCH - 1, latestRound);
+        batches.push({ start_round: start, end_round: end });
+      }
+      // Always include the most recent 50 rounds
+      batches.push({ start_round: Math.max(0, latestRound - RPT_BATCH + 1), end_round: latestRound });
+
+      console.error(`  Fetching round-party-totals: ${batches.length} batches (sampled)...`);
+      let totalEntries = 0;
+
+      // Fetch in parallel with concurrency limit
+      const CONCURRENCY = 5;
+      for (let i = 0; i < batches.length; i += CONCURRENCY) {
+        const chunk = batches.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          chunk.map(b =>
+            scanPost('v0/round-party-totals', b).catch(() => ({ entries: [] }))
+          )
+        );
+        for (const rpt of results) {
+          const entries = rpt.entries || [];
+          totalEntries += entries.length;
+          for (const e of entries) {
+            const cum = parseFloat(e.cumulative_app_rewards || '0');
+            const party = e.party;
+            if (!party || cum === 0) continue;
+
+            if (!milestonesByProvider.has(party)) {
+              milestonesByProvider.set(party, { m10: null, m25: null });
+            }
+            const ms = milestonesByProvider.get(party);
+            const roundDate = e.closed_round_effective_at || null;
+            if (cum >= THRESHOLDS.MILESTONE_10M && (!ms.m10 || e.closed_round < ms.m10.round)) {
+              ms.m10 = { round: e.closed_round, date: roundDate, amount: cum };
+            }
+            if (cum >= THRESHOLDS.MILESTONE_25M && (!ms.m25 || e.closed_round < ms.m25.round)) {
+              ms.m25 = { round: e.closed_round, date: roundDate, amount: cum };
+            }
+          }
         }
       }
+      console.error(`  Round-party-totals: ${totalEntries} entries from ${batches.length} batches`);
     } catch (e) {
       console.error(`  ⚠ round-party-totals unavailable: ${e.message}`);
     }
