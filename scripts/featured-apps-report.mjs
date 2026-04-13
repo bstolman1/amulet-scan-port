@@ -189,7 +189,10 @@ async function fetchRoundDates(roundNumbers) {
   for (let b = 0; b < batches.length; b += CONCURRENCY) {
     const chunk = batches.slice(b, b + CONCURRENCY);
     const results = await Promise.all(
-      chunk.map(batch => scanPost('v0/round-totals', batch).catch(() => ({ entries: [] })))
+      chunk.map(batch => scanPost('v0/round-totals', batch).catch(e => {
+        console.error(`    ⚠ round-totals ${batch.start_round}-${batch.end_round}: ${e.message}`);
+        return { entries: [] };
+      })))
     );
     for (const rt of results) {
       for (const e of (rt.entries || [])) {
@@ -215,7 +218,7 @@ async function main() {
 
   // ── Phase 1: Fetch core data sources in parallel ──────────────────────────
 
-  const [featuredAppsData, latestRoundData, voteResultsData, topProvidersRaw, ansEntriesData] =
+  const [featuredAppsData, latestRoundData, voteResultsData, topProvidersRaw] =
     await Promise.all([
       scanGet('v0/featured-apps').catch(e => { console.error(`  ⚠ featured-apps: ${e.message}`); return { featured_apps: [] }; }),
       scanGet('v0/round-of-latest-data').catch(e => { console.error(`  ⚠ latest-round: ${e.message}`); return { round: 0 }; }),
@@ -227,7 +230,6 @@ async function main() {
           return scanGet(`v0/top-providers-by-app-rewards?round=${latest.round}&limit=1000`);
         } catch (e) { console.error(`  ⚠ top-providers: ${e.message}`); return { providersAndRewards: [] }; }
       })(),
-      scanGet('v0/ans-entries?page_size=1000').catch(e => { console.error(`  ⚠ ans-entries: ${e.message}`); return { entries: [] }; }),
     ]);
 
   const featuredApps = featuredAppsData.featured_apps || [];
@@ -290,77 +292,7 @@ async function main() {
   }
 
   console.error(`  Vote results accepted: ${vrAccepted}, provider extracted: ${vrProviderFound}`);
-  console.error(`  Approval dates matched: ${approvalByProvider.size}`);
-
-  // ── Build provider → human-readable name (best effort, multiple sources) ──
-
-  const nameByProvider = new Map();
-
-  // Source 1: ANS entries — party ID → registered name
-  const ansEntries = ansEntriesData.entries || [];
-  for (const entry of ansEntries) {
-    if (entry.user && entry.name) {
-      nameByProvider.set(entry.user, entry.name);
-    }
-  }
-  console.error(`  ANS names: ${nameByProvider.size}`);
-
-  // Source 2: Vote result reason body — extract app name from the description
-  //   e.g. "Cancore requests approval to feature Cancore App on MainNet."
-  //   e.g. "Featured App Vote Proposal on MainNet: Temple"
-  //   The requester field in votes is also useful (e.g. "Five-North-1")
-  const nameFromVotes = new Map();
-  for (const vr of voteResults) {
-    try {
-      if (vr.outcome?.tag !== 'VRO_Accepted') continue;
-      const actionValue = vr.request?.action?.value;
-      const provider =
-        actionValue?.dsoAction?.value?.provider ||
-        actionValue?.provider ||
-        deepFind(actionValue, 'provider');
-      if (!provider) continue;
-      if (nameByProvider.has(provider)) continue; // ANS already has a name
-
-      const body = vr.request?.reason?.body || '';
-      const url = vr.request?.reason?.url || '';
-
-      // Try to extract a name from the reason body
-      let name = null;
-
-      // "... feature X App on MainNet" / "... feature X on MainNet"
-      const featureMatch = body.match(/feature\s+(.+?)(?:\s+App)?\s+on\s+(?:Main|Test)Net/i);
-      if (featureMatch) name = featureMatch[1].trim();
-
-      // "... approval to feature X." / "Featured App ... for X"
-      if (!name) {
-        const forMatch = body.match(/(?:featured\s+app(?:lication)?|app\s+rights)\s+(?:status\s+)?for\s+(.+?)(?:\.|$)/i);
-        if (forMatch) name = forMatch[1].trim();
-      }
-
-      // "X requests approval" at start of body
-      if (!name) {
-        const reqMatch = body.match(/^([A-Z][\w\s.-]+?)\s+requests?\s+approval/i);
-        if (reqMatch) name = reqMatch[1].trim();
-      }
-
-      // From the URL subject in tokenomics-announce posts
-      if (!name && url) {
-        const urlMatch = url.match(/message\/(\d+)/);
-        // Can't fetch, but the body is usually descriptive enough
-      }
-
-      if (name && name.length > 1 && name.length < 80) {
-        nameFromVotes.set(provider, name);
-      }
-    } catch { /* skip */ }
-  }
-
-  // Merge vote-derived names (only where ANS didn't have one)
-  for (const [provider, name] of nameFromVotes) {
-    if (!nameByProvider.has(provider)) nameByProvider.set(provider, name);
-  }
-
-  console.error(`  Human-readable names resolved: ${nameByProvider.size}\n`);
+  console.error(`  Approval dates matched: ${approvalByProvider.size}\n`);
 
   // ── Phase 2: Coarse sampling to identify milestone ranges ─────────────────
   //
@@ -495,11 +427,7 @@ async function main() {
     .map(app => {
       const payload = app.payload || app;
       const provider = payload.provider || app.provider || '';
-      // Name resolution priority: ANS/vote-derived name > payload appName > provider short ID
-      const resolvedName = nameByProvider.get(provider);
-      const payloadName = payload.appName || payload.app_name || payload.name;
-      const providerShort = provider.split('::')[0];
-      const appName = resolvedName || payloadName || providerShort || 'Unknown';
+      const appName = payload.appName || payload.app_name || payload.name || provider.split('::')[0] || 'Unknown';
       const cum = rewardsByProvider.get(provider) || 0;
       const approval = approvalByProvider.get(provider) || null;
       const daysSinceApproval = approval ? Math.floor((now - new Date(approval)) / 86_400_000) : null;
@@ -516,7 +444,6 @@ async function main() {
       return {
         appName,
         provider,
-        providerShort: provider.split('::')[0],
         approvalDate: approval,
         daysSinceApproval,
         cumulativeCC: cum,
@@ -551,12 +478,11 @@ async function main() {
   // ── Output: CSV ───────────────────────────────────────────────────────────
 
   if (wantCsv) {
-    console.log('Rank,App Name,Provider (short),Approval Date,Days as FA,Cumulative CC,>=10M,>=25M,Can Lock Day1,10M Date,Days to 10M,25M Date,Days to 25M');
+    console.log('Rank,App Name,Approval Date,Days as FA,Cumulative CC,>=10M,>=25M,Can Lock Day1,10M Date,Days to 10M,25M Date,Days to 25M');
     rows.forEach((r, i) => {
       console.log([
         i + 1,
         `"${r.appName}"`,
-        `"${r.providerShort}"`,
         r.approvalDate ? fmtDate(r.approvalDate) : '',
         r.daysSinceApproval ?? '',
         r.cumulativeCC.toFixed(2),
@@ -607,9 +533,8 @@ async function main() {
   console.log(thinLine);
 
   const hdr =
-    pad('#', 4) +
-    pad('App Name', 28) +
-    pad('Provider', 20) +
+    pad('#', 5) +
+    pad('App Name', 32) +
     pad('FA Approved', 13) +
     pad('Days FA', 8, 'right') +
     pad('Cumulative CC', 16, 'right') +
@@ -631,9 +556,8 @@ async function main() {
     const dt25m = r.milestone25m.date;
 
     const row =
-      pad(String(i + 1), 4) +
-      pad(r.appName.slice(0, 26), 28) +
-      pad(r.providerShort.slice(0, 18), 20) +
+      pad(String(i + 1), 5) +
+      pad(r.appName.slice(0, 30), 32) +
       pad(fmtDate(r.approvalDate), 13) +
       pad(r.daysSinceApproval !== null ? `${r.daysSinceApproval}d` : '--', 8, 'right') +
       pad(fmtCC(r.cumulativeCC), 16, 'right') +
