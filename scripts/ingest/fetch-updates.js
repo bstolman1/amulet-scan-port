@@ -217,17 +217,16 @@ const EVENTS_DUCKDB_COLUMNS = [
 const LIVE_TMP_DIR = '/tmp/live-ingest';
 
 // DuckDB temp directory for spilling intermediate state to disk when the
-// in-memory 180 MiB limit is reached. Without this, `:memory:` databases
+// in-memory 200 MB limit is reached. Without this, `:memory:` databases
 // can't spill and a wide batch will OOM the COPY.
 const DUCKDB_SPILL_DIR = path.join(LIVE_TMP_DIR, 'duckdb_spill');
 
 // Maximum JSONL payload size handed to a single DuckDB invocation. Above
 // this, the partition's records are split into multiple Parquet chunks.
-// Tuned to leave typical batches (≤100 MiB JSONL) as a single file while
-// still splitting pathological wide batches that would otherwise OOM
-// DuckDB on memory-constrained VMs. See reingest-updates.js for the
-// full budget calculation.
-const MAX_JSONL_BYTES_PER_CHUNK = 100 * 1024 * 1024; // 100 MiB
+// At 50 MiB, typical update batches (34-38 MiB) pass unsplit; event
+// batches (75-85 MiB) split into 2 chunks. See reingest-updates.js for
+// the full budget calculation.
+const MAX_JSONL_BYTES_PER_CHUNK = 50 * 1024 * 1024; // 50 MiB
 
 // Largest single JSON object DuckDB will accept. Must be ≥ the biggest
 // individual record we ever see — a single oversized record gets its own
@@ -269,7 +268,7 @@ async function jsonlToParquetViaDuckDB(jsonlPath, parquetPath, sqlFilePath, type
   const columns = type === 'events' ? EVENTS_DUCKDB_COLUMNS : UPDATES_DUCKDB_COLUMNS;
   fs.mkdirSync(DUCKDB_SPILL_DIR, { recursive: true });
   const sql = [
-    "SET memory_limit='180MB';",
+    "SET memory_limit='200MB';",
     "SET threads=1;",
     "SET preserve_insertion_order=false;",
     `SET temp_directory='${sqlStr(DUCKDB_SPILL_DIR)}';`,
