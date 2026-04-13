@@ -29,6 +29,15 @@ const SCAN_BASE =
   process.env.SCAN_URL ||
   'https://scan.sv-1.global.canton.network.sync.global/api/scan';
 
+// Fallback SV endpoints for retrying on 503/5xx errors
+const SCAN_FALLBACKS = [
+  SCAN_BASE,
+  'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan',
+  'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan',
+  'https://scan.sv-1.global.canton.network.cumberland.io/api/scan',
+  'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan',
+];
+
 const THRESHOLDS = {
   LOCK_AMOUNT: 25_000_000,
   MILESTONE_10M: 10_000_000,
@@ -64,6 +73,31 @@ async function scanPost(path, body) {
     throw new Error(`POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json();
+}
+
+/** POST with automatic fallback to other SV endpoints on 5xx errors. */
+async function scanPostWithFallback(path, body) {
+  for (const base of SCAN_FALLBACKS) {
+    try {
+      const url = `${base}/${path}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.ok) return res.json();
+      if (res.status < 500) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
+      }
+      // 5xx — try next endpoint
+    } catch (e) {
+      if (!e.message?.includes('→')) throw e; // network error, not HTTP — stop
+      // HTTP 5xx — continue to next fallback
+    }
+  }
+  throw new Error(`POST ${path} → all ${SCAN_FALLBACKS.length} endpoints returned 5xx`);
 }
 
 // ─── Parsing helpers ────────────────────────────────────────────────────────
@@ -189,7 +223,7 @@ async function fetchRoundDates(roundNumbers) {
   for (let b = 0; b < batches.length; b += CONCURRENCY) {
     const chunk = batches.slice(b, b + CONCURRENCY);
     const results = await Promise.all(
-      chunk.map(batch => scanPost('v0/round-totals', batch).catch(e => {
+      chunk.map(batch => scanPostWithFallback('v0/round-totals', batch).catch(e => {
         console.error(`    ⚠ round-totals ${batch.start_round}-${batch.end_round}: ${e.message}`);
         return { entries: [] };
       }))
