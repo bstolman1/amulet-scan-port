@@ -25,16 +25,19 @@
  *   POST /v0/round-party-totals                 → per-party cumulative CC at a round
  */
 
+// NOTE: The sync.global SV has been observed returning truncated data
+// (only ~229 top providers vs ~1000 from other SVs). Digital Asset's SV
+// consistently returns complete data, so it's the preferred default.
 const SCAN_BASE =
   process.env.SCAN_URL ||
-  'https://scan.sv-1.global.canton.network.sync.global/api/scan';
+  'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan';
 
 // Fallback SV endpoints for retrying on 503/5xx errors
 const SCAN_FALLBACKS = [
   SCAN_BASE,
-  'https://scan.sv-1.global.canton.network.digitalasset.com/api/scan',
   'https://scan.sv-2.global.canton.network.digitalasset.com/api/scan',
   'https://scan.sv-1.global.canton.network.cumberland.io/api/scan',
+  'https://scan.sv-1.global.canton.network.sync.global/api/scan',
   'https://scan.sv-1.global.canton.network.proofgroup.xyz/api/scan',
 ];
 
