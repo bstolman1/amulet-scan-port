@@ -434,6 +434,48 @@ async function main() {
   const roundDateMap = await fetchRoundDates(roundsNeedingDates);
   console.error(`  Dates resolved: ${roundDateMap.size}\n`);
 
+  // ── Phase 4b: Fetch pre-FA cumulative CC per provider ─────────────────────
+  //
+  // For each FA with an approval date, query their cumulative_app_rewards
+  // at the round closest to their FA approval date. This separates:
+  //   Pre-FA CC  = rewards earned as a regular provider (no FA multiplier)
+  //   Post-FA CC = rewards earned with FA status (mostly from the ~10x multiplier)
+  //
+  // We estimate the approval round from the approval date using a constant
+  // ~10min/round cadence (600s). Then getCumulativeAtRound searches a window.
+
+  const SECONDS_PER_ROUND = 600;
+  const nowMs = Date.now();
+
+  const preFaComputations = [];
+  for (const [provider, approvalDate] of approvalByProvider) {
+    const currentCum = rewardsByProvider.get(provider) || 0;
+    if (currentCum < 1) continue; // skip FAs with no rewards
+    const secondsAgo = (nowMs - new Date(approvalDate).getTime()) / 1000;
+    const approvalRound = Math.max(0, latestRound - Math.floor(secondsAgo / SECONDS_PER_ROUND));
+    preFaComputations.push({ provider, approvalRound });
+  }
+
+  console.error(`  Phase 4: Querying pre-FA cumulative CC for ${preFaComputations.length} FAs...`);
+  const preFaCCByProvider = new Map();
+  const PREFA_CONCURRENCY = 5;
+  for (let i = 0; i < preFaComputations.length; i += PREFA_CONCURRENCY) {
+    const batch = preFaComputations.slice(i, i + PREFA_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async ({ provider, approvalRound }) => {
+        // Look backward from the approval round for the last entry that shows
+        // this provider's cumulative rewards. Use 50-round window (API max).
+        const result = await getCumulativeAtRound(provider, approvalRound, 50);
+        return { provider, preFa: result?.cumCC ?? 0 };
+      })
+    );
+    for (const r of results) preFaCCByProvider.set(r.provider, r.preFa);
+    if ((i + PREFA_CONCURRENCY) % 30 === 0 || i + PREFA_CONCURRENCY >= preFaComputations.length) {
+      console.error(`    ...${Math.min(i + PREFA_CONCURRENCY, preFaComputations.length)}/${preFaComputations.length} done`);
+    }
+  }
+  console.error();
+
   // ── Phase 5: Assemble report rows ─────────────────────────────────────────
 
   const now = new Date();
@@ -455,12 +497,18 @@ async function main() {
       const daysTo10m = approval && date10m ? daysBetween(approval, date10m) : null;
       const daysTo25m = approval && date25m ? daysBetween(approval, date25m) : null;
 
+      // Pre-FA / Post-FA breakdown (only if we have an approval date)
+      const preFaCC = approval ? (preFaCCByProvider.get(provider) ?? null) : null;
+      const postFaCC = (preFaCC !== null) ? Math.max(0, cum - preFaCC) : null;
+
       return {
         appName,
         provider,
         approvalDate: approval,
         daysSinceApproval,
         cumulativeCC: cum,
+        preFaCC,
+        postFaCC,
         hasReached10m: cum >= THRESHOLDS.MILESTONE_10M,
         hasReached25m: cum >= THRESHOLDS.MILESTONE_25M,
         canLockDay1: cum >= THRESHOLDS.LOCK_AMOUNT,
@@ -492,7 +540,7 @@ async function main() {
   // ── Output: CSV ───────────────────────────────────────────────────────────
 
   if (wantCsv) {
-    console.log('Rank,App Name,Approval Date,Days as FA,Cumulative CC,>=10M,>=25M,Can Lock Day1,10M Date,Days to 10M,25M Date,Days to 25M');
+    console.log('Rank,App Name,Approval Date,Days as FA,Cumulative CC,Pre-FA CC,Post-FA CC,>=10M,>=25M,Can Lock Day1,10M Date,Days to 10M,25M Date,Days to 25M');
     rows.forEach((r, i) => {
       console.log([
         i + 1,
@@ -500,6 +548,8 @@ async function main() {
         r.approvalDate ? fmtDate(r.approvalDate) : '',
         r.daysSinceApproval ?? '',
         r.cumulativeCC.toFixed(2),
+        r.preFaCC !== null ? r.preFaCC.toFixed(2) : '',
+        r.postFaCC !== null ? r.postFaCC.toFixed(2) : '',
         r.hasReached10m ? 'Y' : 'N',
         r.hasReached25m ? 'Y' : 'N',
         r.canLockDay1 ? 'Y' : 'N',
@@ -514,7 +564,7 @@ async function main() {
 
   // ── Output: Text report ───────────────────────────────────────────────────
 
-  const W = 130;
+  const W = 155;
   const line = '═'.repeat(W);
   const thinLine = '─'.repeat(W);
 
@@ -548,10 +598,12 @@ async function main() {
 
   const hdr =
     pad('#', 5) +
-    pad('App Name', 32) +
+    pad('App Name', 30) +
     pad('FA Approved', 13) +
     pad('Days FA', 8, 'right') +
-    pad('Cumulative CC', 16, 'right') +
+    pad('Cumul. CC', 12, 'right') +
+    pad('Pre-FA CC', 12, 'right') +
+    pad('Post-FA CC', 12, 'right') +
     pad('10M Date', 12, 'right') +
     pad('Days→10M', 10, 'right') +
     pad('25M Date', 12, 'right') +
@@ -571,10 +623,12 @@ async function main() {
 
     const row =
       pad(String(i + 1), 5) +
-      pad(r.appName.slice(0, 30), 32) +
+      pad(r.appName.slice(0, 28), 30) +
       pad(fmtDate(r.approvalDate), 13) +
       pad(r.daysSinceApproval !== null ? `${r.daysSinceApproval}d` : '--', 8, 'right') +
-      pad(fmtCC(r.cumulativeCC), 16, 'right') +
+      pad(fmtCC(r.cumulativeCC), 12, 'right') +
+      pad(r.preFaCC !== null ? fmtCC(r.preFaCC) : '--', 12, 'right') +
+      pad(r.postFaCC !== null ? fmtCC(r.postFaCC) : '--', 12, 'right') +
       pad(dt10m ? fmtDate(dt10m) : (r.hasReached10m ? '~' : '--'), 12, 'right') +
       pad(d10m !== null ? `${d10m}d` : (r.hasReached10m ? '~' : '--'), 10, 'right') +
       pad(dt25m ? fmtDate(dt25m) : (r.hasReached25m ? '~' : '--'), 12, 'right') +
@@ -591,6 +645,8 @@ async function main() {
   console.log(`  * FA approval dates: ${approvalByProvider.size > 0 ? `${approvalByProvider.size} found` : 'NOT available'} from on-chain GrantFeaturedAppRight vote results.`);
   console.log(`  * Milestone timing: Binary-searched ${searches.length} milestones, resolved ${roundDateMap.size} round dates.`);
   console.log('  * "Cumulative CC" = total app rewards mined by the provider party since launch.');
+  console.log('  * "Pre-FA CC"  = cumulative CC at the round closest to FA approval date (no FA multiplier).');
+  console.log('  * "Post-FA CC" = Cumulative - Pre-FA; includes ~10x FA bonus on coupons earned after approval.');
   console.log('  * "Lock Ready" = provider has accrued >= 25M CC and could lock on Day 1.');
   console.log('  * "Days→10M/25M" = days from FA approval to reaching that CC milestone.');
   console.log('  * "~" = milestone reached but exact date could not be pinpointed.');
