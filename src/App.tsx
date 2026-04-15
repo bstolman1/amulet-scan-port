@@ -50,7 +50,6 @@ import TransferCounters from "./pages/TransferCounters";
 // Statistics
 import Stats from "./pages/Stats";
 import MemberTraffic from "./pages/MemberTraffic";
-import SvStatus from "./pages/SvStatus";
 
 // Party details
 import Party from "./pages/Party";
@@ -140,7 +139,6 @@ const App = () => (
             {/* Statistics */}
             <Route path="/stats" element={<Stats />} />
             <Route path="/member-traffic" element={<MemberTraffic />} />
-            <Route path="/sv-status" element={<SvStatus />} />
             
             {/* Party details */}
             <Route path="/party/:partyId" element={<Party />} />
