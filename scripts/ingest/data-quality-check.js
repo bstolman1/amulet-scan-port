@@ -417,25 +417,23 @@ function dateToKey(dateStr) {
   return `${y}/${m}/${d}`;
 }
 
-// Parquet filenames observed in this codebase carry timestamps:
-//   updates_2026-02-02T15-30-00.000000Z.parquet   (live)
-//   updates-1771189136334-77bd2ac9.parquet        (backfill, epoch-ms)
-//   updates-ri-<sha>.parquet                      (reingest, deterministic — no timestamp)
+// Parquet filenames carry different kinds of timestamps depending on source:
+//   LIVE:      updates_2026-02-02T15-30-00.000000Z.parquet   (ISO — is record_time)
+//   BACKFILL:  updates-1771189136334-77bd2ac9.parquet        (epoch-ms — is FETCH time)
+//   REINGEST:  updates-ri-<sha>.parquet                       (deterministic — no time)
+//
+// Only the ISO form corresponds to the underlying data's ledger time. Using
+// the backfill fetch-time stamps for gap detection produces spurious warnings
+// at every shard boundary (backfill fetches a day's data in discontiguous
+// wall-clock batches, but contiguous ledger-time ranges), so we deliberately
+// ignore them. This matches `audit-gcs-gaps.js`.
 function parseFileTime(path) {
   const name = path.split('/').pop() || '';
-  // ISO-style
   const iso = name.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})\.(\d+)Z/);
   if (iso) {
     const [, date, hh, mm, ss, frac] = iso;
     const t = new Date(`${date}T${hh}:${mm}:${ss}.${frac.slice(0, 3)}Z`).getTime();
     if (!isNaN(t)) return t;
-  }
-  // epoch-ms after "updates-" or "events-"
-  const ep = name.match(/^(?:updates|events)-(\d{10,14})-/);
-  if (ep) {
-    const t = parseInt(ep[1], 10);
-    if (t > 1_000_000_000_000) return t;         // ms
-    if (t > 1_000_000_000) return t * 1000;      // seconds → ms
   }
   return null;
 }
