@@ -319,13 +319,26 @@ function ensureSpillDir() {
 }
 
 function duckdbPrelude() {
+  const keyId  = process.env.GCS_HMAC_KEY_ID;
+  const secret = process.env.GCS_HMAC_SECRET;
+  if (!keyId || !secret) {
+    throw new Error(
+      'DuckDB GCS auth requires HMAC keys. Set GCS_HMAC_KEY_ID and GCS_HMAC_SECRET ' +
+      'in the environment (e.g. `source ~/.gcs_hmac_env`) before running row-level checks. ' +
+      'Create keys once with: gcloud storage hmac create <vm-service-account-email>'
+    );
+  }
+  // Escape single quotes defensively (HMAC secrets are base64 so this is
+  // typically a no-op, but guards against future key rotations that pick
+  // up a quote.)
+  const esc = s => s.replace(/'/g, "''");
   return [
     `SET memory_limit='${DUCKDB_MEMORY}';`,
     `SET threads=${DUCKDB_THREADS};`,
     `SET preserve_insertion_order=false;`,
     `SET temp_directory='${DUCKDB_SPILL_DIR}';`,
     `INSTALL httpfs; LOAD httpfs;`,
-    `CREATE OR REPLACE SECRET dq_gcs (TYPE GCS, PROVIDER CONFIG);`,
+    `CREATE OR REPLACE SECRET dq_gcs (TYPE GCS, KEY_ID '${esc(keyId)}', SECRET '${esc(secret)}');`,
   ].join(' ');
 }
 
