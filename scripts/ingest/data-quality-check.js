@@ -208,13 +208,28 @@ function addFinding(severity, check, scope, detail, counts = {}) {
 
 function sh(cmd, { timeout = 120000, maxBuffer = 256 * 1024 * 1024 } = {}) {
   try {
-    return execSync(cmd, { stdio: 'pipe', timeout, maxBuffer }).toString();
+    // NB: we deliberately do NOT redirect stderr to /dev/null or append
+    // `|| true` — an auth failure from gsutil is silent otherwise and
+    // every check just reports "no data found".
+    return execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'], timeout, maxBuffer }).toString();
   } catch (err) {
-    const msg = (err.stderr?.toString() || err.message || '').toLowerCase();
-    if (msg.includes('commandexception') || msg.includes('no urls matched') || msg.includes('matched no objects')) {
+    const stderr = (err.stderr?.toString() || '');
+    const msg = (stderr + ' ' + (err.message || '')).toLowerCase();
+    // "No URLs matched" / "matched no objects" is the normal "prefix empty"
+    // signal and must stay silent. Everything else (auth, network, quota) is
+    // loud — callers should not continue as if the data is missing.
+    if (msg.includes('no urls matched') || msg.includes('matched no objects')) {
       return '';
     }
-    throw err;
+    if (msg.includes('reauthentication required') || msg.includes('your credentials are invalid') ||
+        msg.includes('accessdeniedexception') || msg.includes('401 anonymous') ||
+        msg.includes('login required')) {
+      throw new Error(
+        `gsutil auth failed — run \`gcloud auth application-default login\` ` +
+        `(or \`gcloud auth login\` on the VM) and retry.\n  ${stderr.trim().split('\n')[0] || err.message}`
+      );
+    }
+    throw new Error(`gsutil error: ${stderr.trim().split('\n').slice(-3).join(' | ') || err.message}`);
   }
 }
 
@@ -223,6 +238,14 @@ function checkPrereqs() {
   catch { throw new Error('gsutil not found in PATH — install Google Cloud SDK and run `gcloud auth application-default login`.'); }
   try { execSync('duckdb --version', { stdio: 'pipe' }); }
   catch { throw new Error('duckdb CLI not found in PATH — install duckdb.'); }
+  // Probe bucket auth — if creds are stale, fail here instead of silently
+  // reporting "no migrations found" for every prefix.
+  try {
+    execSync(`gsutil ls "gs://${BUCKET}/" > /dev/null`, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+  } catch (err) {
+    const stderr = (err.stderr?.toString() || err.message || '').trim().split('\n').slice(0, 3).join(' | ');
+    throw new Error(`gsutil cannot list gs://${BUCKET}/ — ${stderr}\n  Try: gcloud auth application-default login`);
+  }
 }
 
 function checkFreeTmpGB() {
@@ -240,7 +263,7 @@ function liveIngestRunning() {
 }
 
 function gsutilLsFlat(prefix) {
-  const out = sh(`gsutil ls "${prefix}" 2>/dev/null || true`);
+  const out = sh(`gsutil ls "${prefix}"`);
   return out.split('\n').map(s => s.trim()).filter(Boolean);
 }
 
@@ -249,7 +272,7 @@ function gsutilLsFlat(prefix) {
  * Returns Map<"Y/M/D", [gs://... paths]>.
  */
 function bulkListParquet(prefix) {
-  const out = sh(`gsutil ls -r "${prefix}" 2>/dev/null || true`, { timeout: 180000 });
+  const out = sh(`gsutil ls -r "${prefix}"`, { timeout: 180000 });
   if (!out) return new Map();
   const index = new Map();
   for (const line of out.split('\n')) {
@@ -268,7 +291,7 @@ function bulkListParquet(prefix) {
  * Long-listing (name + byte size) for tiny-file detection. Parsed from `gsutil ls -l`.
  */
 function bulkListParquetWithSize(prefix) {
-  const out = sh(`gsutil ls -l "${prefix}**/*.parquet" 2>/dev/null || true`, { timeout: 180000 });
+  const out = sh(`gsutil ls -l "${prefix}**/*.parquet"`, { timeout: 180000 });
   if (!out) return [];
   const files = [];
   for (const line of out.split('\n')) {
@@ -951,7 +974,7 @@ async function checkACS() {
   }
 
   // Collect all snapshot directories (hold .parquet files and optional _COMPLETE marker)
-  const sample = sh(`gsutil ls -r "${basePrefix}" 2>/dev/null || true`, { timeout: 120000 });
+  const sample = sh(`gsutil ls -r "${basePrefix}"`, { timeout: 120000 });
   const snapshotDirs = new Set();
   const completeMarkers = new Set();
   for (const line of sample.split('\n')) {
