@@ -764,7 +764,7 @@ async function checkUpdatesDay(source, migration, date) {
     });
     return { rows: total, distinct };
   } catch (err) {
-    addFinding(SEVERITY.ERROR, 'query', scope, `updates query failed: ${err.message.slice(0, 240)}`);
+    addFinding(SEVERITY.ERROR, 'query', scope, `updates query failed: ${err.message.slice(0, 800)}`);
     return { rows: 0, distinct: 0, error: err.message };
   }
 }
@@ -773,7 +773,7 @@ async function checkUpdatesDay(source, migration, date) {
  * Per-day events query: counts, nulls, partition mismatch, dup event_id,
  * orphan events (optional), event_count consistency (optional).
  */
-async function checkEventsDay(source, migration, date) {
+async function checkEventsDay(source, migration, date, updatesIndex = null) {
   const glob = dayGlob(source, 'events', migration, date);
   const { y, m, d } = parseYMD(date);
   const scope = `${source}/events/migration=${migration} ${date}`;
@@ -807,7 +807,7 @@ async function checkEventsDay(source, migration, date) {
     const rows = await duckdb(sql, { label: `evt ${scope}` });
     baseStats = rows[0] || {};
   } catch (err) {
-    addFinding(SEVERITY.ERROR, 'query', scope, `events query failed: ${err.message.slice(0, 240)}`);
+    addFinding(SEVERITY.ERROR, 'query', scope, `events query failed: ${err.message.slice(0, 800)}`);
     return { rows: 0, distinct: 0, error: err.message };
   }
 
@@ -844,9 +844,22 @@ async function checkEventsDay(source, migration, date) {
   if (OPTS.checks.includes('orphans') || OPTS.checks.includes('event_count')) {
     const prev = addDays(date, -1);
     const next = addDays(date, +1);
-    const updatesGlobs = [prev, date, next].map(dt => dayGlob(source, 'updates', migration, dt));
-    // Some of those globs may not have data — read_parquet([...]) ignores missing.
-    const sqlJoin = `
+    // Filter to days that ACTUALLY have updates parquet files — DuckDB's
+    // read_parquet errors hard if any glob in its list matches zero files,
+    // which would otherwise blow up at migration boundaries.
+    const candidateDates = [prev, date, next];
+    const availableDates = updatesIndex
+      ? candidateDates.filter(dt => {
+          const { y, m, d } = parseYMD(dt);
+          return updatesIndex.has(`${y}/${m}/${d}`);
+        })
+      : candidateDates; // no index available — fall back to old behavior
+    if (availableDates.length === 0) {
+      addFinding(SEVERITY.INFO, 'orphans', scope,
+        'no updates in ±1 day window — cannot compute orphans/event_count');
+    } else {
+      const updatesGlobs = availableDates.map(dt => dayGlob(source, 'updates', migration, dt));
+      const sqlJoin = `
       WITH evt AS (
         SELECT event_id, update_id
         FROM read_parquet('${glob}', union_by_name=true)
@@ -866,21 +879,22 @@ async function checkEventsDay(source, migration, date) {
         (SELECT COUNT(*) FROM evt_grouped e JOIN upd u USING (update_id)
            WHERE u.event_count IS NOT NULL AND u.event_count <> e.observed_events) AS event_count_mismatch
     `;
-    try {
-      const rows = await duckdb(sqlJoin, { label: `orph ${scope}` });
-      const r = rows[0] || {};
-      if (OPTS.checks.includes('orphans') && Number(r.orphan_update_ids || 0) > 0) {
-        addFinding(SEVERITY.ERROR, 'orphans', scope,
-          `${r.orphan_update_ids} distinct update_id(s) in events with no matching update in ±1 day window`,
-          { orphan_update_ids: Number(r.orphan_update_ids) });
+      try {
+        const rows = await duckdb(sqlJoin, { label: `orph ${scope}` });
+        const r = rows[0] || {};
+        if (OPTS.checks.includes('orphans') && Number(r.orphan_update_ids || 0) > 0) {
+          addFinding(SEVERITY.ERROR, 'orphans', scope,
+            `${r.orphan_update_ids} distinct update_id(s) in events with no matching update in ±1 day window`,
+            { orphan_update_ids: Number(r.orphan_update_ids) });
+        }
+        if (OPTS.checks.includes('event_count') && Number(r.event_count_mismatch || 0) > 0) {
+          addFinding(SEVERITY.WARN, 'event_count', scope,
+            `${r.event_count_mismatch} update(s) have events.count <> updates.event_count`,
+            { mismatched: Number(r.event_count_mismatch) });
+        }
+      } catch (err) {
+        addFinding(SEVERITY.WARN, 'orphans', scope, `join query failed: ${err.message.slice(0, 600)}`);
       }
-      if (OPTS.checks.includes('event_count') && Number(r.event_count_mismatch || 0) > 0) {
-        addFinding(SEVERITY.WARN, 'event_count', scope,
-          `${r.event_count_mismatch} update(s) have events.count <> updates.event_count`,
-          { mismatched: Number(r.event_count_mismatch) });
-      }
-    } catch (err) {
-      addFinding(SEVERITY.WARN, 'orphans', scope, `join query failed: ${err.message.slice(0, 200)}`);
     }
   }
 
@@ -1261,9 +1275,15 @@ async function main() {
         if (eligible.length === 0) continue;
 
         console.log(`─── ROW-LEVEL: ${k} over ${eligible.length} day(s), concurrency=${OPTS.concurrency} ───`);
+        // For events, the orphan/event_count join needs the corresponding
+        // updates-side index so it can filter the ±1 day globs down to days
+        // that actually have files (otherwise DuckDB errors on missing glob).
+        const updatesIndexForJoin = type === 'events'
+          ? indexes.get(`${source}/updates/${migration}`)
+          : null;
         const fn = type === 'updates'
           ? (date) => checkUpdatesDay(source, migration, date)
-          : (date) => checkEventsDay(source, migration, date);
+          : (date) => checkEventsDay(source, migration, date, updatesIndexForJoin);
         await mapLimit(eligible, OPTS.concurrency, fn);
       }
     }
