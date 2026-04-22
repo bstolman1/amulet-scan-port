@@ -120,8 +120,12 @@ canton-bucket/raw/
 
 **Choice:** When the script is interrupted mid-day:
 1. Identify the last **complete day** (script moved past it to the next day)
-2. Delete all data for the **partial day** from GCS
+2. **Delete ALL data for the partial day from GCS — BOTH `updates/` and `events/` partitions.** This step is load-bearing (see warning below).
 3. Resume with `--after=<end-of-last-complete-day>` (e.g., `--after=2026-03-10T23:59:59.999999Z`)
+
+> ⚠️ **Step 2 is not optional.** If you skip it and pass `--after=<end-of-partial-day>` instead, the reingest will jump past the partial day entirely, leaving whatever made it to GCS (e.g. updates but no events) as a permanent asymmetric gap. This is exactly the failure mode that produced the **2026-04-02 M4 events gap** — updates landed for the full day, the operator resumed via `--after=2026-04-02T23:59:59.999999Z`, and events for April-2 never got written.
+>
+> As of `reingest-updates.js` post-April-2026-fix, passing `--after` now runs a **safe-resume check**: the script lists every day between `START_DATE` and the `--after` cutoff, per (source, migration), and refuses to start if any day has asymmetric state (updates without events, or vice versa). Either execute step 2 to make the partial day empty, or — if the partial day only has updates and you don't want to re-fetch from Scan API — rematerialize the missing events from the existing `update_data` column with `rematerialize-events-from-updates.js`. Override with `--unsafe-resume` only if you're absolutely sure; it leaves a visible flag in shell history and logs.
 
 **Reason:** This guarantees zero duplicates and zero gaps. We sacrifice at most one day of progress but avoid the complexity of identifying exactly which parquet files were uploaded after the last cursor report. The "delete partial day, re-do from day boundary" approach is simple, deterministic, and safe.
 
@@ -173,6 +177,36 @@ canton-bucket/raw/
 - **Swap:** Prevents OOM killer from crashing the VM when memory spikes temporarily
 - **File descriptors:** Default 1024 is too low for parquet workers + concurrent GCS uploads
 - **Ownership:** Scripts run as `josefin` but data directories owned by `ben`; permission mismatches caused silent failures (cursor not saved, temp files not writable)
+
+### Decision 14: Post-April-2026 Data-Quality Hardening
+
+**Context:** A routine data-quality sweep on `2026-04-21` surfaced that `raw/updates/events/migration=4/year=2026/month=4/day=2/` was entirely empty despite `updates/` having a full day's 1,187,664 rows. Forensics showed the April-16 reingest run wrote April-2 updates but not events, then the operator used `--after=2026-04-02T23:59:59.999999Z` per Decision #7 — without deleting the partial day first — and the gap became permanent. Same failure class as the March 20-21 gap. Three new safeguards were introduced.
+
+**New tools and guards:**
+
+| Change | What it does |
+|---|---|
+| `rematerialize-events-from-updates.js` | Rebuilds missing events from the canonical `update_data` column in existing updates parquets. No Scan API dependency, idempotent filenames (`events-remat-<sha16>.parquet`, distinct from `-live-` and `-ri-` namespaces), post-upload `COUNT(*) == SUM(event_count)` oracle check. Default is dry-run; `--execute` to commit. |
+| `reingest-updates.js --after` safe-resume guard | When `--after` is passed, the script now lists every day in `[START_DATE, afterDate]` per (source, migration) and aborts if any day has asymmetric state. The remediation output includes the exact `gsutil rm` commands AND the rematerialization command. Override with `--unsafe-resume` (pejorative name, leaves a trail). |
+| `data-quality-check.js` `alignment` check | Promoted partition asymmetry from a generic `structural` warning to a dedicated `alignment` check category with per-day ERROR findings that include the remediation command inline. `--quick` now runs `structural,alignment` (both metadata-only). |
+
+**Reason:** Exactly-once design is only meaningful if its invariants are enforceable. The runbook's "delete partial day" step was implicit and skippable; now the tool refuses to proceed without it. Rematerialization closes the other half — when the API round-trip is unnecessary (the canonical data is already in GCS), we should never re-fetch, because every re-fetch is another chance to introduce a gap.
+
+**Operational workflow going forward:**
+
+```bash
+# weekly data-quality pass — catches any new asymmetry within minutes
+npm run dq:quick -- --output=dq-weekly.json
+
+# if alignment flags a day: rematerialize, no Scan API traffic
+source ~/.gcs_hmac_env
+node rematerialize-events-from-updates.js --migration=N --date=YYYY-MM-DD --execute
+
+# if orphan events (updates missing): targeted reingest, but MUST delete
+# the orphan events first or the safe-resume guard will block
+gsutil -m rm "gs://canton-bucket/raw/updates/events/migration=N/year=Y/month=M/day=D/**"
+node reingest-updates.js --start=YYYY-MM-DD --end=YYYY-MM-DD --migration=N --clean
+```
 
 ---
 

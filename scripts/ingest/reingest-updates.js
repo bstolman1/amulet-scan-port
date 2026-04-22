@@ -95,6 +95,13 @@ const CLEAN_BACKFILL = args.includes('--clean-backfill');
 const AUDIT_ONLY = args.includes('--audit-only');
 const VERBOSE = args.includes('--verbose') || args.includes('-v');
 const FORCE = args.includes('--force');
+// --unsafe-resume: override the default safe-resume check when --after is used.
+// The default (safe) behavior refuses to start if any day between START_DATE
+// and the --after cursor has asymmetric GCS state (updates without events, or
+// vice versa). That asymmetry caused the 2026-04-02 gap: a prior run left a
+// partial day and the operator then --after'd past it per Decision #7 without
+// running step 2 ("delete partial day"). The hard stop prevents recurrence.
+const UNSAFE_RESUME = args.includes('--unsafe-resume');
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE) || 1000;
 
 const GCS_BUCKET = process.env.GCS_BUCKET;
@@ -468,6 +475,97 @@ async function auditDateRange(dates, migrations) {
       if (!hasAny) console.log('    (no data in this date range)');
     }
   }
+}
+
+// ─── Safe-resume validator ────────────────────────────────────────────────
+//
+// Enforced whenever --after is set. Ensures that every day in the range
+// [START_DATE, afterDate] has symmetric state (updates and events present
+// together, or both absent) before the resume skips past them. Prevents the
+// 2026-04-02 M4 failure mode: a prior run left a day with updates written
+// but events missing, and the operator resumed past it via --after without
+// executing step 2 of the runbook ("delete partial day from GCS").
+//
+// The check is per (source, migration). Any day with asymmetric state in the
+// pre-cursor range fails the run unless the operator explicitly passes
+// --unsafe-resume (named pejoratively so it leaves a clear shell-history
+// trail).
+
+async function validateSafeResume(dates, migrations, resumeAfterISO) {
+  const cutoffDate = resumeAfterISO.slice(0, 10); // YYYY-MM-DD part of --after cursor
+  const preCursorDates = dates.filter(d => d.displayStr <= cutoffDate);
+
+  if (preCursorDates.length === 0) {
+    // --after is before the whole range; nothing to validate.
+    return;
+  }
+
+  console.log('\n' + '═'.repeat(80));
+  console.log(`🛡️  SAFE-RESUME CHECK: validating days before --after cursor (${cutoffDate})`);
+  console.log('═'.repeat(80));
+
+  const partial = []; // { source, mig, date, updatesCount, eventsCount }
+
+  for (const source of ['updates', 'backfill']) {
+    for (const mig of migrations) {
+      const [updatesMap, eventsMap] = await Promise.all([
+        bulkListGCS(source, 'updates', mig),
+        bulkListGCS(source, 'events', mig),
+      ]);
+      for (const d of preCursorDates) {
+        const u = updatesMap[d.dateStr] || 0;
+        const e = eventsMap[d.dateStr]  || 0;
+        // Symmetric: both non-zero, or both zero. Anything else is partial.
+        if ((u > 0) !== (e > 0)) {
+          partial.push({
+            source,
+            migration: mig,
+            date: d.displayStr,
+            updatesCount: u,
+            eventsCount: e,
+          });
+        }
+      }
+    }
+  }
+
+  if (partial.length === 0) {
+    console.log(`✅ All ${preCursorDates.length} day(s) before ${cutoffDate} are symmetric.`);
+    return;
+  }
+
+  console.error('\n❌ REFUSING TO RESUME — partial day(s) detected before the --after cursor:\n');
+  console.error('  source    mig  date         updates  events');
+  console.error('  ──────    ───  ──────────   ───────  ──────');
+  for (const p of partial) {
+    console.error(`  ${p.source.padEnd(9)} ${String(p.migration).padEnd(3)}  ${p.date}  ` +
+                  `${String(p.updatesCount).padStart(7)}  ${String(p.eventsCount).padStart(6)}`);
+  }
+  console.error('\nThese days have updates without events (or vice versa). Resuming with --after');
+  console.error('would skip past them, leaving the gap permanent. Two options to recover:');
+  console.error('');
+  console.error('  (a) RECOMMENDED: delete the partial days and retry without --after,');
+  console.error('      allowing the resume to actually process them:');
+  console.error('');
+  for (const p of partial) {
+    const yr = p.date.slice(0, 4), mo = parseInt(p.date.slice(5, 7), 10), da = parseInt(p.date.slice(8, 10), 10);
+    console.error(`      gsutil -m rm "gs://${GCS_BUCKET}/raw/${p.source}/updates/migration=${p.migration}/year=${yr}/month=${mo}/day=${da}/**"`);
+    console.error(`      gsutil -m rm "gs://${GCS_BUCKET}/raw/${p.source}/events/migration=${p.migration}/year=${yr}/month=${mo}/day=${da}/**"`);
+  }
+  console.error('');
+  console.error('  (b) If events are already missing (not just the partial run), rematerialize');
+  console.error('      them from update_data without re-fetching from Scan API:');
+  console.error('');
+  for (const p of partial) {
+    if (p.updatesCount > 0 && p.eventsCount === 0) {
+      console.error(`      node rematerialize-events-from-updates.js --migration=${p.migration} --date=${p.date} --source=${p.source} --execute`);
+    }
+  }
+  console.error('');
+  console.error('  (c) Override (not recommended) — skip past the partial days anyway:');
+  console.error('      add --unsafe-resume to your current command.');
+  console.error('');
+  process.exit(4);
 }
 
 // ─── Check for backfill overlap ───────────────────────────────────────────
@@ -1349,6 +1447,16 @@ async function main() {
     for (const mig of migrations) {
       deleteReingestCursor(mig);
     }
+  }
+
+  // Step 4.5: Safe-resume check — refuse to run if --after would skip over
+  // a day that still has partial state in GCS (updates-without-events or
+  // events-without-updates). Opt out with --unsafe-resume.
+  if (RESUME_AFTER && !UNSAFE_RESUME) {
+    await validateSafeResume(dates, migrations, RESUME_AFTER);
+  } else if (RESUME_AFTER && UNSAFE_RESUME) {
+    console.warn('\n⚠️  --unsafe-resume set — skipping safe-resume check. ' +
+                 'Any pre-cursor partial days will remain permanently incomplete.');
   }
 
   if (DRY_RUN) {

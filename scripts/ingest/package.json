@@ -27,7 +27,9 @@
     "validate:gcs": "node verify-gcs-parquet.js",
     "dq": "node --max-old-space-size=4096 data-quality-check.js",
     "dq:quick": "node data-quality-check.js --quick",
-    "dq:structural": "node data-quality-check.js --checks=structural"
+    "dq:structural": "node data-quality-check.js --checks=structural",
+    "dq:alignment": "node data-quality-check.js --checks=alignment",
+    "remat:events": "node --max-old-space-size=8192 rematerialize-events-from-updates.js"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.0.0",
