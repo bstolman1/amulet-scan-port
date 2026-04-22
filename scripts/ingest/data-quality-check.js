@@ -66,14 +66,24 @@ dotenv.config({ path: join(__dirname, '.env') });
 
 const BUCKET = process.env.GCS_BUCKET || 'canton-bucket';
 
-// DuckDB tuning — safe envelope for 31 GiB VM, leaves room for OS + Node + live ingest
-const DUCKDB_MEMORY    = process.env.DQ_DUCKDB_MEMORY || '6GB';
+// DuckDB tuning — safe envelope for 31 GiB VM, leaves room for OS + Node + live ingest.
+//
+// 10 GB memory_limit: a COUNT(DISTINCT update_id) over ~1.2M values across
+//   12k parquet files (e.g. the April-16 M4 reingest day) needs a ~1-2 GB
+//   hash set; giving DuckDB 10 GB keeps that in RAM without heavy spill.
+//   At --concurrency=2 that's 20 GB peak DuckDB + ~2 GB ingest = 22 GB / 31.
+//   At --concurrency=4 that's 40 GB peak — use only when live ingest is off
+//   AND the VM isn't tight. Override via DQ_DUCKDB_MEMORY.
+// 15-min per-query timeout: empirically a heavy day (12k files, 1.2M rows,
+//   full aggregate bundle with partition checks + TRY_CAST) takes ~4-5 min
+//   on this VM. 15 min gives 3× headroom.
+const DUCKDB_MEMORY    = process.env.DQ_DUCKDB_MEMORY || '10GB';
 const DUCKDB_THREADS   = parseInt(process.env.DQ_DUCKDB_THREADS || '2', 10);
 const DUCKDB_SPILL_DIR = process.env.DQ_SPILL_DIR || '/tmp/duckdb_dq_spill';
 const DUCKDB_MAX_OBJ   = 67108864;  // 64 MB — matches ingest
 
 // Per-query timeout and retry
-const QUERY_TIMEOUT_MS = parseInt(process.env.DQ_QUERY_TIMEOUT_MS || '300000', 10);  // 5 min
+const QUERY_TIMEOUT_MS = parseInt(process.env.DQ_QUERY_TIMEOUT_MS || '900000', 10);  // 15 min
 const QUERY_MAX_RETRIES = 2;
 
 // Disk safety — abort if less than this free on /tmp before row-level checks
@@ -384,13 +394,22 @@ async function duckdb(query, { label = 'query', timeout = QUERY_TIMEOUT_MS } = {
       const stdout = err.stdout?.toString().trim() || '';
       const signal = err.signal || '';
       const code   = err.code != null ? err.code : '';
-      const diag =
-        (stderr ? `stderr: ${stderr}` : '') +
-        (stdout ? `\nstdout: ${stdout}` : '') +
-        (signal ? `\nsignal: ${signal}` : '') +
-        (code !== '' ? `\nexit: ${code}` : '') ||
-        `no stderr/stdout — ${err.message || 'unknown'}`;
-      const transient = /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
+      // execFile SIGTERMs the child when its `timeout` is exceeded AND
+      // reports err.signal='SIGTERM' with empty stderr (DuckDB doesn't get
+      // a chance to print anything). Make that explicit instead of the
+      // misleading "Command failed: ..." wrapper.
+      const timedOut = signal === 'SIGTERM' && !stderr;
+      const diag = timedOut
+        ? `query timed out after ${Math.round(timeout/1000)}s (SIGTERM). ` +
+          `Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.`
+        : (
+            (stderr ? `stderr: ${stderr}` : '') +
+            (stdout ? `\nstdout: ${stdout}` : '') +
+            (signal ? `\nsignal: ${signal}` : '') +
+            (code !== '' ? `\nexit: ${code}` : '') ||
+            `no stderr/stdout — ${err.message || 'unknown'}`
+          );
+      const transient = timedOut || /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
       if (attempt < QUERY_MAX_RETRIES && transient) {
         const backoff = 1000 * Math.pow(2, attempt);
         console.warn(`   ⏳ [${label}] retry ${attempt + 1}/${QUERY_MAX_RETRIES} after ${backoff}ms: ${(stderr || err.message).slice(0, 180)}`);
