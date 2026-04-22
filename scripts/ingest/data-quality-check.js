@@ -376,15 +376,28 @@ async function duckdb(query, { label = 'query', timeout = QUERY_TIMEOUT_MS } = {
     } catch (err) {
       try { unlinkSync(outFile); } catch {}
       lastErr = err;
-      const msg = (err.stderr?.toString() || err.message || '');
-      const transient = /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(msg);
+      // execFile's default err.message is "Command failed: <full cmd line>"
+      // which is useless — the actual DuckDB error is in err.stderr (and
+      // sometimes err.stdout). Preserve all three so we can actually
+      // diagnose OOM / timeout / SQL errors.
+      const stderr = err.stderr?.toString().trim() || '';
+      const stdout = err.stdout?.toString().trim() || '';
+      const signal = err.signal || '';
+      const code   = err.code != null ? err.code : '';
+      const diag =
+        (stderr ? `stderr: ${stderr}` : '') +
+        (stdout ? `\nstdout: ${stdout}` : '') +
+        (signal ? `\nsignal: ${signal}` : '') +
+        (code !== '' ? `\nexit: ${code}` : '') ||
+        `no stderr/stdout — ${err.message || 'unknown'}`;
+      const transient = /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
       if (attempt < QUERY_MAX_RETRIES && transient) {
         const backoff = 1000 * Math.pow(2, attempt);
-        console.warn(`   ⏳ [${label}] retry ${attempt + 1}/${QUERY_MAX_RETRIES} after ${backoff}ms: ${msg.slice(0, 120)}`);
+        console.warn(`   ⏳ [${label}] retry ${attempt + 1}/${QUERY_MAX_RETRIES} after ${backoff}ms: ${(stderr || err.message).slice(0, 180)}`);
         await new Promise(r => setTimeout(r, backoff));
         continue;
       }
-      throw new Error(`DuckDB [${label}] failed: ${msg.slice(0, 500)}`);
+      throw new Error(`DuckDB [${label}] failed — ${diag.slice(0, 1500)}`);
     }
   }
   throw lastErr;
