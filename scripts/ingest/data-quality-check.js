@@ -258,7 +258,10 @@ function checkFreeTmpGB() {
 
 function liveIngestRunning() {
   try {
-    const out = execSync("pgrep -fa 'fetch-updates.js|fetch-backfill.js|reingest-updates.js' || true", { stdio: 'pipe' }).toString();
+    // `grep -v pgrep` drops pgrep's self-match (the shell command itself
+    // contains the pattern strings, so pgrep would otherwise match its own
+    // invocation as a "running ingest process").
+    const out = execSync("pgrep -fa 'fetch-updates.js|fetch-backfill.js|reingest-updates.js' | grep -v pgrep || true", { stdio: 'pipe' }).toString();
     return out.trim().split('\n').filter(Boolean);
   } catch { return []; }
 }
@@ -1145,8 +1148,11 @@ async function main() {
   checkPrereqs();
   ensureSpillDir();
 
-  // Disk guard — only enforced when row-level checks are enabled
-  const heavyChecks = OPTS.checks.some(c => c !== 'structural');
+  // Heavy checks = anything that actually issues DuckDB queries against GCS.
+  // `structural` and `alignment` are metadata-only (gsutil ls) and don't
+  // compete with the live ingest for /tmp, RAM, or egress bandwidth.
+  const METADATA_ONLY = new Set(['structural', 'alignment']);
+  const heavyChecks = OPTS.checks.some(c => !METADATA_ONLY.has(c));
   if (heavyChecks) {
     const free = checkFreeTmpGB();
     if (free !== null && free < MIN_FREE_TMP_GB) {
