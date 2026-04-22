@@ -673,7 +673,8 @@ async function checkUpdatesDay(source, migration, date) {
       MAX(record_time) AS max_record_time,
       MIN("offset") AS min_offset,
       MAX("offset") AS max_offset,
-      COUNT(DISTINCT "offset") AS distinct_offset
+      COUNT(DISTINCT "offset") AS distinct_offset,
+      SUM(CASE WHEN "offset" IS NULL THEN 1 ELSE 0 END) AS null_offset
     FROM src
   `;
 
@@ -735,13 +736,20 @@ async function checkUpdatesDay(source, migration, date) {
       }
     }
 
-    // Offset monotonicity: distinct offsets should equal row count (offsets are unique per ledger).
+    // Offset uniqueness: ledger offsets are supposed to be unique per update.
+    // But the Canton Scan API sometimes omits the offset for backfill ranges
+    // (the column ends up all-null), so `distinct=0` just means "offset was
+    // never populated here" — which is caught separately by the `nulls` check
+    // if it matters. We only flag true duplicate populated offsets here.
     if (OPTS.checks.includes('offsets') && total > 0) {
       const distOff = Number(r.distinct_offset || 0);
-      if (distOff !== total) {
+      const nullOff = Number(r.null_offset || 0);
+      const populated = total - nullOff;
+      if (distOff > 0 && distOff < populated) {
         addFinding(SEVERITY.WARN, 'offsets', scope,
-          `distinct(offset)=${distOff} != row_count=${total} (duplicate or null offsets)`,
-          { distinct_offset: distOff, rows: total });
+          `${populated - distOff} duplicate offset row(s) — ` +
+          `distinct(offset)=${distOff} but ${populated} populated rows`,
+          { distinct_offset: distOff, populated_rows: populated, null_rows: nullOff });
       }
     }
 
@@ -845,7 +853,7 @@ async function checkEventsDay(source, migration, date) {
       ),
       upd AS (
         SELECT update_id, event_count
-        FROM read_parquet(${updatesGlobs.map(g => `'${g}'`).join(', ')}, union_by_name=true)
+        FROM read_parquet([${updatesGlobs.map(g => `'${g}'`).join(', ')}], union_by_name=true)
       ),
       evt_grouped AS (
         SELECT update_id, COUNT(*) AS observed_events
