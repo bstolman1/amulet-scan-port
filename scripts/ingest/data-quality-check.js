@@ -643,13 +643,20 @@ async function checkUpdatesDay(source, migration, date) {
       COUNT(DISTINCT update_id) AS distinct_update_id,
       ${nullExprs},
       SUM(CASE WHEN migration_id IS NOT NULL AND migration_id <> ${migration} THEN 1 ELSE 0 END) AS mig_mismatch,
+      -- effective_at is stored as VARCHAR ISO-8601 (see write-parquet.js:449),
+      -- so we extract date parts via substr instead of strftime() which errors
+      -- on non-timestamp input.
       SUM(CASE WHEN effective_at IS NOT NULL AND (
-            CAST(strftime(effective_at, '%Y') AS INT) <> ${y} OR
-            CAST(strftime(effective_at, '%m') AS INT) <> ${m} OR
-            CAST(strftime(effective_at, '%d') AS INT) <> ${d}
+            CAST(substr(effective_at, 1, 4) AS INT) <> ${y} OR
+            CAST(substr(effective_at, 6, 2) AS INT) <> ${m} OR
+            CAST(substr(effective_at, 9, 2) AS INT) <> ${d}
           ) THEN 1 ELSE 0 END) AS partition_mismatch,
-      SUM(CASE WHEN record_time IS NOT NULL AND effective_at IS NOT NULL
-                 AND record_time < effective_at - INTERVAL 1 DAY THEN 1 ELSE 0 END) AS time_backwards,
+      -- TRY_CAST returns NULL on bad input rather than erroring the whole query.
+      SUM(CASE WHEN TRY_CAST(record_time AS TIMESTAMP) IS NOT NULL
+                 AND TRY_CAST(effective_at AS TIMESTAMP) IS NOT NULL
+                 AND TRY_CAST(record_time AS TIMESTAMP) < TRY_CAST(effective_at AS TIMESTAMP) - INTERVAL 1 DAY
+               THEN 1 ELSE 0 END) AS time_backwards,
+      -- VARCHAR MIN/MAX is lexicographic which equals chronological for ISO strings.
       MIN(record_time) AS min_record_time,
       MAX(record_time) AS max_record_time,
       MIN("offset") AS min_offset,
@@ -765,10 +772,12 @@ async function checkEventsDay(source, migration, date) {
       COUNT(DISTINCT update_id) AS distinct_update_id,
       ${nullExprs},
       SUM(CASE WHEN migration_id IS NOT NULL AND migration_id <> ${migration} THEN 1 ELSE 0 END) AS mig_mismatch,
+      -- effective_at is stored as VARCHAR ISO-8601; use substr to extract
+      -- date parts (strftime errors on VARCHAR input).
       SUM(CASE WHEN effective_at IS NOT NULL AND (
-            CAST(strftime(effective_at, '%Y') AS INT) <> ${y} OR
-            CAST(strftime(effective_at, '%m') AS INT) <> ${m} OR
-            CAST(strftime(effective_at, '%d') AS INT) <> ${d}
+            CAST(substr(effective_at, 1, 4) AS INT) <> ${y} OR
+            CAST(substr(effective_at, 6, 2) AS INT) <> ${m} OR
+            CAST(substr(effective_at, 9, 2) AS INT) <> ${d}
           ) THEN 1 ELSE 0 END) AS partition_mismatch
     FROM src
   `;
