@@ -312,12 +312,19 @@ function preflight() {
   }
 
   // 3) Concurrent ingest guard — refuse to step on an in-flight fetch-updates.js
-  const running = sh(`pgrep -fa 'fetch-updates.js|reingest-updates.js' || true`)
+  //    or reingest-updates.js. `grep -v pgrep` drops pgrep's self-match (the
+  //    shell command itself contains the pattern strings and matches).
+  const running = sh(`pgrep -fa 'fetch-updates.js|reingest-updates.js' | grep -v pgrep || true`)
     .split('\n').filter(Boolean);
   if (running.length > 0 && !OPTS.force) {
-    console.error('\nERROR: ingestion process(es) running — would race on GCS writes:');
+    console.error('\nERROR: ingestion process(es) running — would share /tmp, RAM, and GCS egress:');
     running.slice(0, 5).forEach(l => console.error(`  ${l}`));
-    console.error('\nStop them (or pass --force) before running a rematerialization.');
+    console.error(`\nThese processes write to DIFFERENT partitions than the target (day=${DAY}),`);
+    console.error(`and event-remat filenames never collide with -live-/-ri-, so there is no`);
+    console.error(`correctness risk. But concurrent DuckDB jobs compete for resources.`);
+    console.error('\nOptions:');
+    console.error('  (a) SAFEST: pause the live ingest, run this, restart live ingest');
+    console.error('  (b) Proceed with --force (accepts the resource contention risk)');
     process.exit(3);
   }
 }
