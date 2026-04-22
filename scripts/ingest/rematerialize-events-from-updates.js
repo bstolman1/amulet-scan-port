@@ -335,6 +335,39 @@ function preflight() {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Run a DuckDB query that returns a single JSON array, via COPY TO file.
+ *
+ * We cannot use `duckdb -json -c "setup; select ..."` and parse stdout
+ * because multi-statement runs emit ONE JSON array per result-producing
+ * statement (e.g. CREATE SECRET returns [{"Success":true}] before the
+ * actual SELECT result), which doesn't parse as a single JSON value.
+ * Writing the result to a temp file sidesteps the issue entirely and
+ * mirrors the pattern streamUpdatesFromGCS already uses.
+ */
+async function duckdbQueryToJson(sql, label) {
+  const outFile = join(TMP_ROOT, `query-${label}-${Date.now()}.json`);
+  const wrappedSql = [
+    `SET memory_limit='${DUCKDB_MEMORY}';`,
+    `SET threads=${DUCKDB_THREADS};`,
+    `SET preserve_insertion_order=false;`,
+    `SET temp_directory='${sqlStr(DUCKDB_SPILL)}';`,
+    `SET enable_progress_bar=false;`,
+    `INSTALL httpfs; LOAD httpfs;`,
+    `CREATE OR REPLACE SECRET s (TYPE GCS, KEY_ID '${sqlStr(HMAC_KEY_ID)}', SECRET '${sqlStr(HMAC_SECRET)}');`,
+    `COPY (${sql}) TO '${sqlStr(outFile)}' (FORMAT JSON, ARRAY TRUE);`,
+  ].join(' ');
+  try {
+    await execFile('duckdb', ['-c', wrappedSql], { maxBuffer: 16 * 1024 * 1024, timeout: 600000 });
+  } catch (err) {
+    throw new Error(`DuckDB query [${label}] failed: ${(err.stderr?.toString() || err.message).slice(0, 500)}`);
+  }
+  const { readFileSync } = await import('fs');
+  const text = readFileSync(outFile, 'utf8').trim();
+  try { unlinkSync(outFile); } catch {}
+  return text ? JSON.parse(text) : [];
+}
+
+/**
  * Compute an oracle for post-extraction verification.
  *
  * Caveat: normalizeUpdate sets `event_count = Object.keys(events_by_id).length`,
@@ -346,20 +379,17 @@ function preflight() {
  */
 async function queryExpectedEvents() {
   const glob = `${sourceUpdatesPrefix()}*.parquet`;
-  const sql = [
-    `SET memory_limit='${DUCKDB_MEMORY}'; SET threads=${DUCKDB_THREADS};`,
-    `SET preserve_insertion_order=false; SET temp_directory='${sqlStr(DUCKDB_SPILL)}';`,
-    `INSTALL httpfs; LOAD httpfs;`,
-    `CREATE OR REPLACE SECRET s (TYPE GCS, KEY_ID '${sqlStr(HMAC_KEY_ID)}', SECRET '${sqlStr(HMAC_SECRET)}');`,
-    `SELECT`,
-    `  COUNT(*)::BIGINT AS updates_count,`,
-    `  COUNT_IF(update_type = 'reassignment')::BIGINT AS reassignments,`,
-    `  COUNT_IF(update_type = 'transaction')::BIGINT  AS transactions,`,
-    `  SUM(event_count)::BIGINT AS sum_event_count`,
-    `FROM read_parquet('${sqlStr(glob)}', union_by_name=true);`,
-  ].join(' ');
-  const { stdout } = await execFile('duckdb', ['-json', '-c', sql], { maxBuffer: 16 * 1024 * 1024, timeout: 600000 });
-  const rows = JSON.parse(stdout.trim() || '[]');
+  const rows = await duckdbQueryToJson(
+    [
+      `SELECT`,
+      `  COUNT(*)::BIGINT AS updates_count,`,
+      `  COUNT_IF(update_type = 'reassignment')::BIGINT AS reassignments,`,
+      `  COUNT_IF(update_type = 'transaction')::BIGINT  AS transactions,`,
+      `  SUM(event_count)::BIGINT AS sum_event_count`,
+      `FROM read_parquet('${sqlStr(glob)}', union_by_name=true)`,
+    ].join(' '),
+    'oracle'
+  );
   const r = rows[0] || {};
   const updatesCount   = Number(r.updates_count    || 0);
   const reassignments  = Number(r.reassignments    || 0);
@@ -369,9 +399,6 @@ async function queryExpectedEvents() {
     updates_count:   updatesCount,
     transactions,
     reassignments,
-    // Range bounds: min is the floor (event_count only); max is the ceiling
-    // (floor + 2 events per reassignment). The actual value depends on each
-    // reassignment carrying 1 vs 2 events in practice.
     expected_events_min: sumEventCount,
     expected_events_max: sumEventCount + 2 * reassignments,
   };
@@ -703,22 +730,18 @@ async function verifyWrittenEvents() {
   }
 
   const globs = [...partitions].map(p => `'gs://${BUCKET}/raw/${p}/*.parquet'`).join(', ');
-  const sql = [
-    `SET memory_limit='${DUCKDB_MEMORY}'; SET threads=${DUCKDB_THREADS};`,
-    `SET preserve_insertion_order=false; SET temp_directory='${sqlStr(DUCKDB_SPILL)}';`,
-    `INSTALL httpfs; LOAD httpfs;`,
-    `CREATE OR REPLACE SECRET s (TYPE GCS, KEY_ID '${sqlStr(HMAC_KEY_ID)}', SECRET '${sqlStr(HMAC_SECRET)}');`,
-    `SELECT`,
-    `  COUNT(*)::BIGINT AS rows,`,
-    `  COUNT(DISTINCT event_id)::BIGINT AS distinct_event_id,`,
-    `  COUNT(DISTINCT update_id)::BIGINT AS distinct_update_id,`,
-    `  SUM(CASE WHEN event_id IS NULL THEN 1 ELSE 0 END)::BIGINT AS null_event_id,`,
-    `  SUM(CASE WHEN update_id IS NULL THEN 1 ELSE 0 END)::BIGINT AS null_update_id`,
-    `FROM read_parquet([${globs}], union_by_name=true);`,
-  ].join(' ');
-
-  const { stdout } = await execFile('duckdb', ['-json', '-c', sql], { maxBuffer: 16 * 1024 * 1024, timeout: 600000 });
-  const rows = JSON.parse(stdout.trim() || '[]');
+  const rows = await duckdbQueryToJson(
+    [
+      `SELECT`,
+      `  COUNT(*)::BIGINT AS rows,`,
+      `  COUNT(DISTINCT event_id)::BIGINT AS distinct_event_id,`,
+      `  COUNT(DISTINCT update_id)::BIGINT AS distinct_update_id,`,
+      `  SUM(CASE WHEN event_id IS NULL THEN 1 ELSE 0 END)::BIGINT AS null_event_id,`,
+      `  SUM(CASE WHEN update_id IS NULL THEN 1 ELSE 0 END)::BIGINT AS null_update_id`,
+      `FROM read_parquet([${globs}], union_by_name=true)`,
+    ].join(' '),
+    'post-verify'
+  );
   return rows[0] || {};
 }
 
