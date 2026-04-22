@@ -50,7 +50,7 @@
 
 import { execSync, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, writeFileSync, statfsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, statfsSync, readFileSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
@@ -348,21 +348,33 @@ function duckdbPrelude() {
 
 /**
  * Run a DuckDB query, return parsed JSON rows.
+ *
+ * Routes through `COPY (...) TO '<file>' (FORMAT JSON, ARRAY TRUE)` rather
+ * than `duckdb -json -c "...; SELECT"`. The `-json` mode emits one JSON
+ * array per result-producing statement, so a multi-statement run (SET... +
+ * INSTALL + LOAD + CREATE SECRET + SELECT) produces several arrays
+ * concatenated on stdout, which JSON.parse can't handle.  The COPY pattern
+ * writes only the SELECT result to the file. Same fix applied to the
+ * rematerializer.
+ *
  * Retries once on transient errors (network / timeout).
  */
 async function duckdb(query, { label = 'query', timeout = QUERY_TIMEOUT_MS } = {}) {
-  const full = `${duckdbPrelude()} ${query}`;
+  const cleanQuery = query.trim().replace(/;\s*$/, '');
   let lastErr;
   for (let attempt = 0; attempt <= QUERY_MAX_RETRIES; attempt++) {
+    const outFile = join(
+      DUCKDB_SPILL_DIR,
+      `dq-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
+    );
+    const wrapped = `${duckdbPrelude()} COPY (${cleanQuery}) TO '${outFile.replace(/'/g, "''")}' (FORMAT JSON, ARRAY TRUE);`;
     try {
-      const { stdout } = await execFile('duckdb', ['-json', '-c', full], {
-        maxBuffer: 128 * 1024 * 1024,
-        timeout,
-      });
-      const text = stdout.trim();
-      if (!text) return [];
-      return JSON.parse(text);
+      await execFile('duckdb', ['-c', wrapped], { maxBuffer: 16 * 1024 * 1024, timeout });
+      const text = readFileSync(outFile, 'utf8').trim();
+      try { unlinkSync(outFile); } catch {}
+      return text ? JSON.parse(text) : [];
     } catch (err) {
+      try { unlinkSync(outFile); } catch {}
       lastErr = err;
       const msg = (err.stderr?.toString() || err.message || '');
       const transient = /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(msg);
