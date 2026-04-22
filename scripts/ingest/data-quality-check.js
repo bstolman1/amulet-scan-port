@@ -39,7 +39,7 @@
  *
  * Usage examples:
  *   node data-quality-check.js                                # all checks, all data
- *   node data-quality-check.js --quick                        # structural only
+ *   node data-quality-check.js --quick                        # metadata-only: structural + alignment
  *   node data-quality-check.js --migration=3 --source=backfill
  *   node data-quality-check.js --start=2026-03-01 --end=2026-04-01
  *   node data-quality-check.js --checks=structural,dups,nulls
@@ -93,7 +93,8 @@ const ACS_CRITICAL_COLS     = ['contract_id', 'template_id', 'migration_id'];
 
 // All check names, in run order
 const ALL_CHECKS = [
-  'structural',    // gaps/alignment/empty/tiny
+  'structural',    // gaps/empty/tiny (filename metadata only)
+  'alignment',     // per-day asymmetry: updates without events, or events without updates
   'nulls',         // null rates in critical cols
   'dups',          // per-day dup update_id / event_id
   'partition',     // effective_at / migration_id vs partition path
@@ -126,7 +127,7 @@ const OPTS = {
   migration:      argVal('migration') !== null ? parseInt(argVal('migration'), 10) : null,
   start:          argVal('start'),
   end:            argVal('end'),
-  checks:         (argVal('checks', hasFlag('quick') ? 'structural' : 'all'))
+  checks:         (argVal('checks', hasFlag('quick') ? 'structural,alignment' : 'all'))
                     .split(',').map(s => s.trim()).filter(Boolean),
   concurrency:    parseInt(argVal('concurrency', '4'), 10),
   sampleDays:     argVal('sample-days') !== null ? parseInt(argVal('sample-days'), 10) : null,
@@ -155,7 +156,7 @@ Flags:
   --start=YYYY-MM-DD              (default: earliest observed)
   --end=YYYY-MM-DD                (default: latest observed)
   --checks=a,b,c                  (default: all — see list below)
-  --quick                         shorthand for --checks=structural
+  --quick                         shorthand for --checks=structural,alignment (metadata-only, minutes)
   --sample-days=N                 random-sample N days per migration/source (row-level only)
   --concurrency=N                 parallel DuckDB queries (default: 4)
   --cross-day-dups=updates|events opt-in full-migration dedup (heavy, hours)
@@ -571,20 +572,40 @@ function checkAlignment(source, migration, updatesIndex, eventsIndex) {
   const eOnly = [...eDays].filter(k => !uDays.has(k)).sort();
 
   if (uOnly.length === 0 && eOnly.length === 0) {
-    addFinding(SEVERITY.INFO, 'structural', scope,
+    addFinding(SEVERITY.INFO, 'alignment', scope,
       `updates↔events aligned (${uDays.size} days)`);
-  } else {
-    if (uOnly.length > 0) {
-      addFinding(SEVERITY.ERROR, 'structural', scope,
-        `${uOnly.length} day(s) in updates but NOT events: ${uOnly.slice(0, 5).map(keyToDate).join(', ')}${uOnly.length > 5 ? '…' : ''}`,
-        { updates_only_days: uOnly.length });
-    }
-    if (eOnly.length > 0) {
-      addFinding(SEVERITY.ERROR, 'structural', scope,
-        `${eOnly.length} day(s) in events but NOT updates: ${eOnly.slice(0, 5).map(keyToDate).join(', ')}${eOnly.length > 5 ? '…' : ''}`,
-        { events_only_days: eOnly.length });
-    }
+    return;
   }
+
+  // Per-day asymmetric findings. This is the 2026-04-02 class of bug:
+  // updates written but events never uploaded (or vice versa). Each day
+  // gets its own ERROR with file counts and a remediation hint so the
+  // finding is directly actionable.
+  for (const key of uOnly) {
+    const date = keyToDate(key);
+    const updatesCount = updatesIndex.get(key)?.length || 0;
+    addFinding(SEVERITY.ERROR, 'alignment', `${scope} ${date}`,
+      `updates=${updatesCount} files but events=0 — events were never written, ` +
+      `partially uploaded, or deleted after write. Rematerialize with: ` +
+      `node rematerialize-events-from-updates.js --migration=${migration} --date=${date} --source=${source} --execute`,
+      { updates_files: updatesCount, events_files: 0, asymmetry: 'events_missing' });
+  }
+  for (const key of eOnly) {
+    const date = keyToDate(key);
+    const eventsCount = eventsIndex.get(key)?.length || 0;
+    addFinding(SEVERITY.ERROR, 'alignment', `${scope} ${date}`,
+      `events=${eventsCount} files but updates=0 — orphan events. Parent updates are ` +
+      `missing; cannot be rematerialized from update_data. Requires a targeted reingest ` +
+      `of this date after deleting the orphan events.`,
+      { updates_files: 0, events_files: eventsCount, asymmetry: 'updates_missing' });
+  }
+
+  // Summary line so the operator sees the shape of the problem at a glance.
+  addFinding(SEVERITY.WARN, 'alignment', scope,
+    `${uOnly.length + eOnly.length} asymmetric day(s) ` +
+    `(${uOnly.length} updates-only, ${eOnly.length} events-only, out of ` +
+    `${uDays.size + eOnly.length} total)`,
+    { updates_only_days: uOnly.length, events_only_days: eOnly.length });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1213,8 +1234,10 @@ async function main() {
     }
   }
 
-  // Updates↔events alignment (per source, per migration)
-  if (OPTS.checks.includes('structural')) {
+  // Updates↔events alignment (per source, per migration) — the class of check
+  // that catches gaps like 2026-04-02 (updates present, events missing).
+  if (OPTS.checks.includes('alignment')) {
+    console.log('\n─── ALIGNMENT: updates ↔ events ───');
     for (const source of sources) {
       const migs = new Set();
       for (const k of indexes.keys()) {
