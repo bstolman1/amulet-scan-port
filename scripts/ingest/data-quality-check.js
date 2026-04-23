@@ -441,8 +441,11 @@ async function duckdb(query, { label = 'query', timeout = QUERY_TIMEOUT_MS } = {
               (code !== '' ? `\nexit: ${code}` : '') ||
               `no stderr/stdout — ${err.message || 'unknown'}`
             );
-        const transient = timedOut || /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
-        if (attempt < QUERY_MAX_RETRIES && transient) {
+        const transient = /ECONNRESET|503|500|temporarily|reset by peer|connection|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
+        // Note: timeouts are NOT transient. A query that hit SIGTERM at the
+        // timeout will do the same on retry with the same timeout — the first
+        // sample run wasted 60 min retrying a doomed orphan-join twice.
+        if (attempt < QUERY_MAX_RETRIES && transient && !timedOut) {
           const backoff = 1000 * Math.pow(2, attempt);
           console.warn(`   ⏳ [${label}] retry ${attempt + 1}/${QUERY_MAX_RETRIES} after ${backoff}ms: ${(stderr || err.message).slice(0, 180)}`);
           await new Promise(r => setTimeout(r, backoff));
@@ -840,7 +843,7 @@ async function checkUpdatesDay(source, migration, date) {
  * Per-day events query: counts, nulls, partition mismatch, dup event_id,
  * orphan events (optional), event_count consistency (optional).
  */
-async function checkEventsDay(source, migration, date, updatesIndex = null) {
+async function checkEventsDay(source, migration, date, updatesIndex = null, eventsIndex = null) {
   const glob = dayGlob(source, 'events', migration, date);
   const { y, m, d } = parseYMD(date);
   const scope = `${source}/events/migration=${migration} ${date}`;
@@ -924,6 +927,30 @@ async function checkEventsDay(source, migration, date, updatesIndex = null) {
     if (availableDates.length === 0) {
       addFinding(SEVERITY.INFO, 'orphans', scope,
         'no updates in ±1 day window — cannot compute orphans/event_count');
+    } else if ((() => {
+      // File-count gate — the orphan join is I/O-bound on GCS httpfs, reading
+      // every parquet across (events day) + (updates ±1 days). If the total
+      // is above the threshold the query won't finish inside the timeout
+      // regardless of memory. Flag INFO and move on rather than burning the
+      // timeout. Override threshold via DQ_ORPHAN_MAX_FILES.
+      const threshold = parseInt(process.env.DQ_ORPHAN_MAX_FILES || '15000', 10);
+      const { y: ey, m: em, d: ed } = parseYMD(date);
+      const eventsDayFiles = eventsIndex?.get(`${ey}/${em}/${ed}`)?.length || 0;
+      const updatesFiles = availableDates.reduce((sum, dt) => {
+        const { y, m, d } = parseYMD(dt);
+        return sum + (updatesIndex?.get(`${y}/${m}/${d}`)?.length || 0);
+      }, 0);
+      const total = eventsDayFiles + updatesFiles;
+      if (total > threshold) {
+        addFinding(SEVERITY.INFO, 'orphans', scope,
+          `skipped orphan/event_count join — ${total} files across events day + ` +
+          `±1-day updates exceeds DQ_ORPHAN_MAX_FILES=${threshold}. ` +
+          `Run with a higher threshold or investigate this day separately.`);
+        return true;  // skip — the outer `else if` treats this branch as taken
+      }
+      return false;
+    })()) {
+      // (skipped by file-count gate above — no-op)
     } else {
       const updatesGlobs = availableDates.map(dt => dayGlob(source, 'updates', migration, dt));
       const sqlJoin = `
@@ -1346,12 +1373,17 @@ async function main() {
         // For events, the orphan/event_count join needs the corresponding
         // updates-side index so it can filter the ±1 day globs down to days
         // that actually have files (otherwise DuckDB errors on missing glob).
+        // It also uses the events-side index for the file-count gate that
+        // skips the join entirely on very large days.
         const updatesIndexForJoin = type === 'events'
           ? indexes.get(`${source}/updates/${migration}`)
           : null;
+        const eventsIndexForJoin = type === 'events'
+          ? indexes.get(`${source}/events/${migration}`)
+          : null;
         const fn = type === 'updates'
           ? (date) => checkUpdatesDay(source, migration, date)
-          : (date) => checkEventsDay(source, migration, date, updatesIndexForJoin);
+          : (date) => checkEventsDay(source, migration, date, updatesIndexForJoin, eventsIndexForJoin);
         await mapLimit(eligible, OPTS.concurrency, fn);
       }
     }
