@@ -371,57 +371,90 @@ function duckdbPrelude() {
  *
  * Retries once on transient errors (network / timeout).
  */
+// Progress tracker — each duckdb() call adds itself to `inFlight` so the
+// heartbeat can report what's still running. The periodic ticker
+// (startProgressTicker) prints a line every HEARTBEAT_INTERVAL_MS with the
+// count of in-flight queries and the longest-running one, so operators can
+// tell a multi-minute DuckDB query apart from a hang.
+const inFlight = new Map();  // key: unique id → { label, startedAt }
+const HEARTBEAT_INTERVAL_MS = parseInt(process.env.DQ_HEARTBEAT_INTERVAL_MS || '60000', 10);
+let heartbeatTimer = null;
+
+function startProgressTicker() {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(() => {
+    if (inFlight.size === 0) return;
+    const now = Date.now();
+    let longest = null;
+    for (const [, v] of inFlight) {
+      if (!longest || v.startedAt < longest.startedAt) longest = v;
+    }
+    const longestS = Math.round((now - longest.startedAt) / 1000);
+    console.log(
+      `   ⏱️  ${inFlight.size} query(ies) running; ` +
+      `longest [${longest.label}] ${longestS}s`
+    );
+  }, HEARTBEAT_INTERVAL_MS);
+  // Don't keep the process alive just for the ticker
+  if (heartbeatTimer.unref) heartbeatTimer.unref();
+}
+function stopProgressTicker() {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+}
+
 async function duckdb(query, { label = 'query', timeout = QUERY_TIMEOUT_MS } = {}) {
   const cleanQuery = query.trim().replace(/;\s*$/, '');
-  let lastErr;
-  for (let attempt = 0; attempt <= QUERY_MAX_RETRIES; attempt++) {
-    const outFile = join(
-      DUCKDB_SPILL_DIR,
-      `dq-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`
-    );
-    const wrapped = `${duckdbPrelude()} COPY (${cleanQuery}) TO '${outFile.replace(/'/g, "''")}' (FORMAT JSON, ARRAY TRUE);`;
-    try {
-      await execFile('duckdb', ['-c', wrapped], { maxBuffer: 16 * 1024 * 1024, timeout });
-      const text = readFileSync(outFile, 'utf8').trim();
-      try { unlinkSync(outFile); } catch {}
-      return text ? JSON.parse(text) : [];
-    } catch (err) {
-      try { unlinkSync(outFile); } catch {}
-      lastErr = err;
-      // execFile's default err.message is "Command failed: <full cmd line>"
-      // which is useless — the actual DuckDB error is in err.stderr (and
-      // sometimes err.stdout). Preserve all three so we can actually
-      // diagnose OOM / timeout / SQL errors.
-      const stderr = err.stderr?.toString().trim() || '';
-      const stdout = err.stdout?.toString().trim() || '';
-      const signal = err.signal || '';
-      const code   = err.code != null ? err.code : '';
-      // execFile SIGTERMs the child when its `timeout` is exceeded AND
-      // reports err.signal='SIGTERM' with empty stderr (DuckDB doesn't get
-      // a chance to print anything). Make that explicit instead of the
-      // misleading "Command failed: ..." wrapper.
-      const timedOut = signal === 'SIGTERM' && !stderr;
-      const diag = timedOut
-        ? `query timed out after ${Math.round(timeout/1000)}s (SIGTERM). ` +
-          `Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.`
-        : (
-            (stderr ? `stderr: ${stderr}` : '') +
-            (stdout ? `\nstdout: ${stdout}` : '') +
-            (signal ? `\nsignal: ${signal}` : '') +
-            (code !== '' ? `\nexit: ${code}` : '') ||
-            `no stderr/stdout — ${err.message || 'unknown'}`
-          );
-      const transient = timedOut || /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
-      if (attempt < QUERY_MAX_RETRIES && transient) {
-        const backoff = 1000 * Math.pow(2, attempt);
-        console.warn(`   ⏳ [${label}] retry ${attempt + 1}/${QUERY_MAX_RETRIES} after ${backoff}ms: ${(stderr || err.message).slice(0, 180)}`);
-        await new Promise(r => setTimeout(r, backoff));
-        continue;
-      }
-      throw new Error(`DuckDB [${label}] failed — ${diag.slice(0, 1500)}`);
-    }
+  const qid = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  inFlight.set(qid, { label, startedAt: Date.now() });
+  if (process.env.DQ_LOG_QUERY_START === '1') {
+    console.log(`   ▶ [${label}] started`);
   }
-  throw lastErr;
+  let lastErr;
+  try {
+    for (let attempt = 0; attempt <= QUERY_MAX_RETRIES; attempt++) {
+      const outFile = join(DUCKDB_SPILL_DIR, `dq-${qid}-a${attempt}.json`);
+      const wrapped = `${duckdbPrelude()} COPY (${cleanQuery}) TO '${outFile.replace(/'/g, "''")}' (FORMAT JSON, ARRAY TRUE);`;
+      try {
+        await execFile('duckdb', ['-c', wrapped], { maxBuffer: 16 * 1024 * 1024, timeout });
+        const text = readFileSync(outFile, 'utf8').trim();
+        try { unlinkSync(outFile); } catch {}
+        const elapsedS = Math.round((Date.now() - inFlight.get(qid).startedAt) / 1000);
+        if (elapsedS >= 30 || process.env.DQ_LOG_QUERY_END === '1') {
+          console.log(`   ✓ [${label}] done in ${elapsedS}s`);
+        }
+        return text ? JSON.parse(text) : [];
+      } catch (err) {
+        try { unlinkSync(outFile); } catch {}
+        lastErr = err;
+        const stderr = err.stderr?.toString().trim() || '';
+        const stdout = err.stdout?.toString().trim() || '';
+        const signal = err.signal || '';
+        const code   = err.code != null ? err.code : '';
+        const timedOut = signal === 'SIGTERM' && !stderr;
+        const diag = timedOut
+          ? `query timed out after ${Math.round(timeout/1000)}s (SIGTERM). ` +
+            `Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.`
+          : (
+              (stderr ? `stderr: ${stderr}` : '') +
+              (stdout ? `\nstdout: ${stdout}` : '') +
+              (signal ? `\nsignal: ${signal}` : '') +
+              (code !== '' ? `\nexit: ${code}` : '') ||
+              `no stderr/stdout — ${err.message || 'unknown'}`
+            );
+        const transient = timedOut || /timed out|ECONNRESET|503|500|temporarily|reset by peer|http/i.test(stderr + ' ' + stdout + ' ' + err.message);
+        if (attempt < QUERY_MAX_RETRIES && transient) {
+          const backoff = 1000 * Math.pow(2, attempt);
+          console.warn(`   ⏳ [${label}] retry ${attempt + 1}/${QUERY_MAX_RETRIES} after ${backoff}ms: ${(stderr || err.message).slice(0, 180)}`);
+          await new Promise(r => setTimeout(r, backoff));
+          continue;
+        }
+        throw new Error(`DuckDB [${label}] failed — ${diag.slice(0, 1500)}`);
+      }
+    }
+    throw lastErr;
+  } finally {
+    inFlight.delete(qid);
+  }
 }
 
 // Simple promise-pool for bounded concurrency
@@ -1224,6 +1257,7 @@ async function main() {
   // Prereqs
   checkPrereqs();
   ensureSpillDir();
+  startProgressTicker();
 
   // Heavy checks = anything that actually issues DuckDB queries against GCS.
   // `structural` and `alignment` are metadata-only (gsutil ls) and don't
@@ -1372,6 +1406,7 @@ async function main() {
     await checkACS();
   }
 
+  stopProgressTicker();
   REPORT.finished_at = new Date().toISOString();
   summarize();
 
