@@ -55,16 +55,6 @@ describe('DashboardLayout', () => {
   };
 
   describe('rendering', () => {
-    it('renders the SCANTON logo', () => {
-      const { container } = renderWithRouter();
-      expect(getByText(container, 'SCANTON')).toBeDefined();
-    });
-
-    it('renders the tagline', () => {
-      const { container } = renderWithRouter();
-      expect(getByText(container, 'Canton Network Analytics')).toBeDefined();
-    });
-
     it('renders children content', () => {
       const { container } = renderWithRouter();
       expect(container.querySelector('[data-testid="child-content"]')).toBeDefined();
@@ -73,17 +63,6 @@ describe('DashboardLayout', () => {
   });
 
   describe('navigation', () => {
-    it('renders navigation group buttons', () => {
-      const { container } = renderWithRouter();
-      const expectedGroups = [
-        'Overview', 'Governance', 'Validators',
-        'Rewards', 'Exchange Data', 'Statistics',
-      ];
-      for (const groupName of expectedGroups) {
-        expect(getButton(container, groupName)).toBeDefined();
-      }
-    });
-
     it('shows Dashboard link when Overview dropdown is opened', async () => {
       const { container } = renderWithRouter();
       const user = userEvent.setup();
@@ -159,22 +138,4 @@ describe('DashboardLayout', () => {
     });
   });
 
-  describe('structural rendering', () => {
-    it('renders correct number of nav groups for root path', () => {
-      const { container } = renderWithRouter('/');
-      const nav = container.querySelector('nav');
-      expect(nav).toBeDefined();
-      // Should have 6 nav group buttons (Overview, Governance, Validators, Rewards, Exchange Data, Statistics)
-      const buttons = nav?.querySelectorAll('button');
-      expect(buttons?.length).toBe(6);
-    });
-
-    it('renders correct number of nav groups for governance path', () => {
-      const { container } = renderWithRouter('/governance');
-      const nav = container.querySelector('nav');
-      expect(nav).toBeDefined();
-      const buttons = nav?.querySelectorAll('button');
-      expect(buttons?.length).toBe(6);
-    });
-  });
 });

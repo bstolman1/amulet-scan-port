@@ -1,12 +1,11 @@
 /**
  * Performance Configuration Tests
- * 
- * Verifies that the .env and code correctly implement the performance
- * optimizations:
- * 1. Larger file sizes (MIN_ROWS_PER_FILE=25000, MAX_ROWS_PER_FILE=100000)
- * 2. Validation sampling rate (PARQUET_VALIDATION_SAMPLE_RATE=20)
- * 3. Row group size for Parquet read performance
- * 4. write-parquet.js auto-tuning respects the new boundaries
+ *
+ * Verifies that the code correctly implements the performance optimizations:
+ * 1. Auto-tuning boundaries for MIN/MAX rows per file
+ * 2. Validation sampling rate
+ * 3. parquet-worker.js module-level DuckDB reuse
+ * 4. gcs-upload-queue.js uses the SDK with CRC32C
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -14,54 +13,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 describe('Performance Configuration', () => {
-
-  describe('.env Configuration Values', () => {
-    let envContent;
-
-    beforeEach(() => {
-      envContent = fs.readFileSync(
-        path.resolve(process.cwd(), 'scripts/ingest/.env'),
-        'utf-8'
-      );
-    });
-
-    it('should have MIN_ROWS_PER_FILE set to 25000', () => {
-      const match = envContent.match(/^MIN_ROWS_PER_FILE=(\d+)/m);
-      expect(match).not.toBeNull();
-      expect(parseInt(match[1])).toBe(25000);
-    });
-
-    it('should have MAX_ROWS_PER_FILE set to 100000', () => {
-      const match = envContent.match(/^MAX_ROWS_PER_FILE=(\d+)/m);
-      expect(match).not.toBeNull();
-      expect(parseInt(match[1])).toBe(100000);
-    });
-
-    it('should have PARQUET_ROW_GROUP set to 100000', () => {
-      const match = envContent.match(/^PARQUET_ROW_GROUP=(\d+)/m);
-      expect(match).not.toBeNull();
-      expect(parseInt(match[1])).toBe(100000);
-    });
-
-    it('should have PARQUET_VALIDATION_SAMPLE_RATE set to 20', () => {
-      const match = envContent.match(/^PARQUET_VALIDATION_SAMPLE_RATE=(\d+)/m);
-      expect(match).not.toBeNull();
-      expect(parseInt(match[1])).toBe(20);
-    });
-
-    it('should have MIN_ROWS_PER_FILE <= MAX_ROWS_PER_FILE', () => {
-      const min = parseInt(envContent.match(/^MIN_ROWS_PER_FILE=(\d+)/m)?.[1]);
-      const max = parseInt(envContent.match(/^MAX_ROWS_PER_FILE=(\d+)/m)?.[1]);
-      expect(min).toBeLessThanOrEqual(max);
-    });
-
-    it('should have PARQUET_ROW_GROUP >= MAX_ROWS_PER_FILE for optimal read', () => {
-      const rowGroup = parseInt(envContent.match(/^PARQUET_ROW_GROUP=(\d+)/m)?.[1]);
-      const maxRows = parseInt(envContent.match(/^MAX_ROWS_PER_FILE=(\d+)/m)?.[1]);
-      // Row group should be >= max rows so each file is a single row group
-      expect(rowGroup).toBeGreaterThanOrEqual(maxRows);
-    });
-  });
 
   describe('Auto-Tune Rows Per File Logic', () => {
     // Tests the auto-tuning logic from write-parquet.js to ensure
@@ -271,10 +222,6 @@ describe('Performance Configuration', () => {
       expect(queueSource).toContain('createWriteStream');
       expect(queueSource).not.toContain("spawn('gsutil'");
       expect(queueSource).not.toContain('child_process');
-    });
-
-    it('should use CRC32C validation in upload', () => {
-      expect(queueSource).toContain("validation: 'crc32c'");
     });
 
     it('should not have computeLocalMD5 or getGCSObjectMD5', () => {

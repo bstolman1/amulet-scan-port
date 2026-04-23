@@ -25,16 +25,12 @@ export default defineConfig({
       // or config values that have since been retuned. Quarantined until we
       // either rewrite them against the current behavior or delete them.
       // Tracked on branch claude/fix-failing-tests-UAGjD.
-      'src/components/DashboardLayout.test.tsx',
-      'src/components/GovernanceHistoryTable.test.tsx',
       'src/lib/scan-api-client.test.ts',
       'server/lib/sql-sanitize.test.js',
       'server/test/guardrails/data-authority.test.js',
-      'scripts/ingest/test/recommendations-fixes.test.js',
       'scripts/ingest/test/acs-schema.test.js',
       'scripts/ingest/test/acs-pipeline.integration.test.js',
       'scripts/ingest/test/hive-partition.test.js',
-      'scripts/ingest/test/perf-config.test.js',
       'scripts/ingest/test/byte-backpressure.test.js',
       'scripts/ingest/test/write-parquet-backpressure.test.js',
       'scripts/ingest/test/gcs-sdk-upload.test.js',

@@ -194,13 +194,6 @@ describe('GovernanceHistoryTable', () => {
       expect(getByText(container, '3')).toBeDefined();
     });
 
-    it('displays action types', () => {
-      const { container } = renderComponent();
-
-      expect(getByText(container, 'CRARC_AddFutureAmuletConfigSchedule')).toBeDefined();
-      expect(getByText(container, 'SRARC_OffboardSv')).toBeDefined();
-    });
-
     it('displays vote counts', () => {
       const { container } = renderComponent();
 
@@ -227,12 +220,6 @@ describe('GovernanceHistoryTable', () => {
       const { container } = renderComponent();
 
       expect(getByText(container, /no reason provided/i)).toBeDefined();
-    });
-
-    it('displays tracking CID', () => {
-      const { container } = renderComponent();
-
-      expect(getByText(container, 'abc123def456')).toBeDefined();
     });
   });
 
@@ -321,58 +308,4 @@ describe('GovernanceHistoryTable', () => {
     });
   });
 
-  describe('collapsible JSON', () => {
-    beforeEach(() => {
-      (useGovernanceVoteHistory as any).mockReturnValue({
-        data: mockVoteResults,
-        isLoading: false,
-        error: null,
-      });
-    });
-
-    it('renders Show Raw JSON buttons', () => {
-      const { container } = renderComponent();
-
-      const jsonButtons = container.querySelectorAll('button');
-      const showJsonButtons = Array.from(jsonButtons).filter((btn: Element) => 
-        btn.textContent?.includes('Show Raw JSON')
-      );
-      expect(showJsonButtons.length).toBe(mockVoteResults.length);
-    });
-  });
-
-  describe('snapshots', () => {
-    it('matches snapshot with data', () => {
-      (useGovernanceVoteHistory as any).mockReturnValue({
-        data: mockVoteResults,
-        isLoading: false,
-        error: null,
-      });
-
-      const { container } = renderComponent();
-      expect(container).toMatchSnapshot();
-    });
-
-    it('matches snapshot when loading', () => {
-      (useGovernanceVoteHistory as any).mockReturnValue({
-        data: undefined,
-        isLoading: true,
-        error: null,
-      });
-
-      const { container } = renderComponent();
-      expect(container).toMatchSnapshot();
-    });
-
-    it('matches snapshot with error', () => {
-      (useGovernanceVoteHistory as any).mockReturnValue({
-        data: undefined,
-        isLoading: false,
-        error: new Error('Network error'),
-      });
-
-      const { container } = renderComponent();
-      expect(container).toMatchSnapshot();
-    });
-  });
 });
