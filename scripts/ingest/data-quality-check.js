@@ -68,22 +68,24 @@ const BUCKET = process.env.GCS_BUCKET || 'canton-bucket';
 
 // DuckDB tuning — safe envelope for 31 GiB VM, leaves room for OS + Node + live ingest.
 //
-// 10 GB memory_limit: a COUNT(DISTINCT update_id) over ~1.2M values across
-//   12k parquet files (e.g. the April-16 M4 reingest day) needs a ~1-2 GB
-//   hash set; giving DuckDB 10 GB keeps that in RAM without heavy spill.
-//   At --concurrency=2 that's 20 GB peak DuckDB + ~2 GB ingest = 22 GB / 31.
-//   At --concurrency=4 that's 40 GB peak — use only when live ingest is off
-//   AND the VM isn't tight. Override via DQ_DUCKDB_MEMORY.
-// 15-min per-query timeout: empirically a heavy day (12k files, 1.2M rows,
-//   full aggregate bundle with partition checks + TRY_CAST) takes ~4-5 min
-//   on this VM. 15 min gives 3× headroom.
-const DUCKDB_MEMORY    = process.env.DQ_DUCKDB_MEMORY || '10GB';
+// 12 GB memory_limit: a full-day COUNT(DISTINCT) over ~1.2M values on 12k
+//   parquet files needed ~12 GB to avoid heavy spill. The orphan/event_count
+//   join reads ~3 days of updates + 1 day of events (~3x the data) and is
+//   even more memory-hungry. 12 GB handles most days without spilling.
+//   At --concurrency=2: 24 GB peak DuckDB + ~2 GB ingest/Node/OS = 26 GB / 31.
+//   At --concurrency=4: 48 GB peak — too much; only use with --concurrency=1/2.
+//   Override via DQ_DUCKDB_MEMORY.
+// 30-min per-query timeout: empirically a heavy DAY-level aggregate is
+//   ~5 min, the ORPHAN-join is ~15 min on the largest days. 30 min gives
+//   2× headroom on the heavy tail without dragging out clean days
+//   (retry doesn't kick in until the timeout fires).
+const DUCKDB_MEMORY    = process.env.DQ_DUCKDB_MEMORY || '12GB';
 const DUCKDB_THREADS   = parseInt(process.env.DQ_DUCKDB_THREADS || '2', 10);
 const DUCKDB_SPILL_DIR = process.env.DQ_SPILL_DIR || '/tmp/duckdb_dq_spill';
 const DUCKDB_MAX_OBJ   = 67108864;  // 64 MB — matches ingest
 
 // Per-query timeout and retry
-const QUERY_TIMEOUT_MS = parseInt(process.env.DQ_QUERY_TIMEOUT_MS || '900000', 10);  // 15 min
+const QUERY_TIMEOUT_MS = parseInt(process.env.DQ_QUERY_TIMEOUT_MS || '1800000', 10);  // 30 min
 const QUERY_MAX_RETRIES = 2;
 
 // Disk safety — abort if less than this free on /tmp before row-level checks
