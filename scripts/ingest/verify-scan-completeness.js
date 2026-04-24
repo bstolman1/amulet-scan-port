@@ -404,22 +404,48 @@ async function scanCountForDay(migrationId, dateStr) {
 
 function sqlStr(s) { return String(s).replace(/'/g, "''"); }
 
-function gcsCountSQL(migrationId, dateStr) {
-  const prev = addDays(dateStr, -1);
-  const next = addDays(dateStr, +1);
-  const globs = [prev, dateStr, next].map(dt => {
+// Enumerate which day-partition globs ACTUALLY have files. Avoids DuckDB's
+// "No files found" error when one of the candidate globs is empty (e.g. the
+// `updates/updates/` path doesn't exist in Dec 2025 because live ingest
+// hadn't started yet). Cheap — 6 gsutil ls calls, ~2-3 s total per day.
+function listExistingGlobs(migrationId, dateStr) {
+  const candidates = [];
+  for (const offset of [-1, 0, 1]) {
+    const dt = addDays(dateStr, offset);
     const { y, m, d } = parseYMD(dt);
-    return [
-      `gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`,
-      `gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`,
-    ];
-  }).flat();
-  const { dayStart, dayEnd } = dayBoundsISO(dateStr);
+    candidates.push(`gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+    candidates.push(`gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+  }
+  const existing = [];
+  for (const glob of candidates) {
+    try {
+      const out = execSync(`gsutil ls "${glob}" 2>/dev/null || true`, {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 30000,
+        maxBuffer: 32 * 1024 * 1024,
+      }).toString();
+      if (out.split('\n').some(l => l.trim().endsWith('.parquet'))) {
+        existing.push(glob);
+      }
+    } catch { /* treat as empty */ }
+  }
+  return existing;
+}
 
-  // We need to handle the case where one or more globs match zero files.
-  // Strategy: try the widest first; if DuckDB errors, we fall back to a
-  // narrower glob probe handled in gcsCountForDay.
-  return `
+async function gcsCountForDay(migrationId, dateStr) {
+  if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
+
+  const globs = listExistingGlobs(migrationId, dateStr);
+  if (globs.length === 0) {
+    // Genuinely no files for this day in GCS — return 0, let the comparison
+    // surface it as DRIFT (if Scan has rows) or MATCH (if Scan also empty).
+    return 0;
+  }
+
+  const { dayStart, dayEnd } = dayBoundsISO(dateStr);
+  const outFile = join(TMP_DIR, `vsc-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
+
+  const sql = `
     WITH src AS (
       SELECT DISTINCT update_id
       FROM read_parquet([${globs.map(g => `'${g}'`).join(', ')}], union_by_name=true)
@@ -429,63 +455,27 @@ function gcsCountSQL(migrationId, dateStr) {
     )
     SELECT COUNT(*)::BIGINT AS gcs_count FROM src
   `;
-}
+  const wrapped = [
+    `SET memory_limit='${DUCKDB_MEMORY}';`,
+    `SET threads=${DUCKDB_THREADS};`,
+    `SET preserve_insertion_order=false;`,
+    `SET temp_directory='${sqlStr(join(TMP_DIR, 'spill'))}';`,
+    `INSTALL httpfs; LOAD httpfs;`,
+    `CREATE OR REPLACE SECRET s (TYPE GCS, KEY_ID '${sqlStr(HMAC_KEY_ID)}', SECRET '${sqlStr(HMAC_SECRET)}');`,
+    `COPY (${sql}) TO '${sqlStr(outFile)}' (FORMAT JSON, ARRAY TRUE);`,
+  ].join(' ');
 
-async function gcsCountForDay(migrationId, dateStr) {
-  if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
-  const outFile = join(TMP_DIR, `vsc-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
-
-  // Probe which of the candidate globs actually have files (via DuckDB `glob`
-  // function is awkward; easier to try progressively narrower lists on error).
-  const candidateSets = [
-    // All 6 globs first — catches drift from ±1 day
-    gcsCountSQL(migrationId, dateStr),
-    // Fallback: just the target day (no drift window)
-    (() => {
-      const { y, m, d } = parseYMD(dateStr);
-      const globs = [
-        `gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`,
-        `gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`,
-      ];
-      const { dayStart, dayEnd } = dayBoundsISO(dateStr);
-      return `
-        WITH src AS (
-          SELECT DISTINCT update_id
-          FROM read_parquet([${globs.map(g => `'${g}'`).join(', ')}], union_by_name=true)
-          WHERE record_time >= '${sqlStr(dayStart)}'
-            AND record_time <  '${sqlStr(dayEnd)}'
-            AND migration_id = ${migrationId}
-        )
-        SELECT COUNT(*)::BIGINT AS gcs_count FROM src
-      `;
-    })(),
-  ];
-
-  for (const sql of candidateSets) {
-    const wrapped = [
-      `SET memory_limit='${DUCKDB_MEMORY}';`,
-      `SET threads=${DUCKDB_THREADS};`,
-      `SET preserve_insertion_order=false;`,
-      `SET temp_directory='${sqlStr(join(TMP_DIR, 'spill'))}';`,
-      `INSTALL httpfs; LOAD httpfs;`,
-      `CREATE OR REPLACE SECRET s (TYPE GCS, KEY_ID '${sqlStr(HMAC_KEY_ID)}', SECRET '${sqlStr(HMAC_SECRET)}');`,
-      `COPY (${sql}) TO '${sqlStr(outFile)}' (FORMAT JSON, ARRAY TRUE);`,
-    ].join(' ');
-    try {
-      await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: 600_000 });
-      const text = readFileSync(outFile, 'utf8').trim();
-      try { unlinkSync(outFile); } catch {}
-      const rows = text ? JSON.parse(text) : [];
-      return Number(rows[0]?.gcs_count || 0);
-    } catch (err) {
-      try { unlinkSync(outFile); } catch {}
-      // If "no files matched", try the narrower set; otherwise rethrow
-      const stderr = err.stderr?.toString() || '';
-      if (/no files found|No files found/i.test(stderr)) continue;
-      throw new Error(`GCS count failed for ${dateStr} m=${migrationId}: ${stderr.slice(0, 400) || err.message}`);
-    }
+  try {
+    await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: 900_000 });
+    const text = readFileSync(outFile, 'utf8').trim();
+    try { unlinkSync(outFile); } catch {}
+    const rows = text ? JSON.parse(text) : [];
+    return Number(rows[0]?.gcs_count || 0);
+  } catch (err) {
+    try { unlinkSync(outFile); } catch {}
+    const stderr = err.stderr?.toString() || '';
+    throw new Error(`GCS count failed for ${dateStr} m=${migrationId}: ${stderr.slice(0, 400) || err.message}`);
   }
-  return 0; // fell through — no files at all for that day
 }
 
 // ─────────────────────────────────────────────────────────────
