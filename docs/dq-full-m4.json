@@ -1,0 +1,6705 @@
+{
+  "started_at": "2026-04-23T22:08:08.213Z",
+  "finished_at": "2026-04-24T07:06:20.466Z",
+  "bucket": "canton-bucket",
+  "options": {
+    "source": "all",
+    "migration": 4,
+    "start": null,
+    "end": null,
+    "checks": [
+      "structural",
+      "alignment",
+      "nulls",
+      "dups",
+      "partition",
+      "orphans",
+      "event_count",
+      "timestamps",
+      "offsets",
+      "boundary",
+      "acs"
+    ],
+    "concurrency": 2,
+    "sampleDays": null,
+    "output": "dq-full-m4.json",
+    "crossDayDups": null,
+    "dryRun": false,
+    "verbose": false,
+    "force": false,
+    "help": false,
+    "skipAcs": false,
+    "quick": false
+  },
+  "env": {
+    "duckdb_memory": "12GB",
+    "duckdb_threads": 2,
+    "spill_dir": "/tmp/duckdb_dq_spill"
+  },
+  "partitions_scanned": 268,
+  "findings": [
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-10",
+      "detail": "72295 duplicate offset row(s) — distinct(offset)=1 but 72296 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 72296,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-11",
+      "detail": "443743 duplicate offset row(s) — distinct(offset)=1 but 443744 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 443744,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-12",
+      "detail": "506338 duplicate offset row(s) — distinct(offset)=1 but 506339 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 506339,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-13",
+      "detail": "490249 duplicate offset row(s) — distinct(offset)=1 but 490250 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 490250,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-14",
+      "detail": "487793 duplicate offset row(s) — distinct(offset)=1 but 487794 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 487794,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-15",
+      "detail": "534754 duplicate offset row(s) — distinct(offset)=1 but 534755 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 534755,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2025-12-16",
+      "detail": "114812 duplicate update_id row(s) (total=715009, distinct=600197)",
+      "counts": {
+        "total": 715009,
+        "distinct": 600197,
+        "duplicates": 114812
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-16",
+      "detail": "715008 duplicate offset row(s) — distinct(offset)=1 but 715009 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 715009,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2025-12-17",
+      "detail": "324188 duplicate update_id row(s) (total=852723, distinct=528535)",
+      "counts": {
+        "total": 852723,
+        "distinct": 528535,
+        "duplicates": 324188
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-17",
+      "detail": "852722 duplicate offset row(s) — distinct(offset)=1 but 852723 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 852723,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-18",
+      "detail": "498466 duplicate offset row(s) — distinct(offset)=1 but 498467 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 498467,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-19",
+      "detail": "571435 duplicate offset row(s) — distinct(offset)=1 but 571436 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 571436,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-20",
+      "detail": "638840 duplicate offset row(s) — distinct(offset)=1 but 638841 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 638841,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-22",
+      "detail": "558900 duplicate offset row(s) — distinct(offset)=1 but 558901 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 558901,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-21",
+      "detail": "676218 duplicate offset row(s) — distinct(offset)=1 but 676219 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 676219,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2025-12-23",
+      "detail": "174780 duplicate update_id row(s) (total=812645, distinct=637865)",
+      "counts": {
+        "total": 812645,
+        "distinct": 637865,
+        "duplicates": 174780
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-23",
+      "detail": "812644 duplicate offset row(s) — distinct(offset)=1 but 812645 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 812645,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2025-12-24",
+      "detail": "278220 duplicate update_id row(s) (total=932526, distinct=654306)",
+      "counts": {
+        "total": 932526,
+        "distinct": 654306,
+        "duplicates": 278220
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-24",
+      "detail": "932525 duplicate offset row(s) — distinct(offset)=1 but 932526 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 932526,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-26",
+      "detail": "604876 duplicate offset row(s) — distinct(offset)=1 but 604877 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 604877,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-25",
+      "detail": "679234 duplicate offset row(s) — distinct(offset)=1 but 679235 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 679235,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-27",
+      "detail": "549123 duplicate offset row(s) — distinct(offset)=1 but 549124 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 549124,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-28",
+      "detail": "623508 duplicate offset row(s) — distinct(offset)=1 but 623509 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 623509,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-29",
+      "detail": "644162 duplicate offset row(s) — distinct(offset)=1 but 644163 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 644163,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2025-12-30",
+      "detail": "240781 duplicate update_id row(s) (total=845589, distinct=604808)",
+      "counts": {
+        "total": 845589,
+        "distinct": 604808,
+        "duplicates": 240781
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-30",
+      "detail": "845588 duplicate offset row(s) — distinct(offset)=1 but 845589 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 845589,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2025-12-31",
+      "detail": "129219 duplicate update_id row(s) (total=609325, distinct=480106)",
+      "counts": {
+        "total": 609325,
+        "distinct": 480106,
+        "duplicates": 129219
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2025-12-31",
+      "detail": "609324 duplicate offset row(s) — distinct(offset)=1 but 609325 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 609325,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-01",
+      "detail": "522602 duplicate offset row(s) — distinct(offset)=1 but 522603 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 522603,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-02",
+      "detail": "486517 duplicate offset row(s) — distinct(offset)=1 but 486518 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 486518,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-03",
+      "detail": "523264 duplicate offset row(s) — distinct(offset)=1 but 523265 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 523265,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-04",
+      "detail": "514534 duplicate offset row(s) — distinct(offset)=1 but 514535 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 514535,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-05",
+      "detail": "565123 duplicate offset row(s) — distinct(offset)=1 but 565124 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 565124,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-01-07",
+      "detail": "70781 duplicate update_id row(s) (total=598346, distinct=527565)",
+      "counts": {
+        "total": 598346,
+        "distinct": 527565,
+        "duplicates": 70781
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-07",
+      "detail": "598345 duplicate offset row(s) — distinct(offset)=1 but 598346 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 598346,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-08",
+      "detail": "549827 duplicate offset row(s) — distinct(offset)=1 but 549828 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 549828,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-09",
+      "detail": "634686 duplicate offset row(s) — distinct(offset)=1 but 634687 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 634687,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-01-06",
+      "detail": "311219 duplicate update_id row(s) (total=864072, distinct=552853)",
+      "counts": {
+        "total": 864072,
+        "distinct": 552853,
+        "duplicates": 311219
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-06",
+      "detail": "864071 duplicate offset row(s) — distinct(offset)=1 but 864072 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 864072,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-10",
+      "detail": "715994 duplicate offset row(s) — distinct(offset)=1 but 715995 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 715995,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-11",
+      "detail": "819627 duplicate offset row(s) — distinct(offset)=1 but 819628 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 819628,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-12",
+      "detail": "781106 duplicate offset row(s) — distinct(offset)=1 but 781107 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 781107,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-14",
+      "detail": "780910 duplicate offset row(s) — distinct(offset)=1 but 780911 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 780911,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-01-13",
+      "detail": "336000 duplicate update_id row(s) (total=1137184, distinct=801184)",
+      "counts": {
+        "total": 1137184,
+        "distinct": 801184,
+        "duplicates": 336000
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-13",
+      "detail": "1137183 duplicate offset row(s) — distinct(offset)=1 but 1137184 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1137184,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-15",
+      "detail": "761422 duplicate offset row(s) — distinct(offset)=1 but 761423 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 761423,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-16",
+      "detail": "716735 duplicate offset row(s) — distinct(offset)=1 but 716736 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 716736,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-17",
+      "detail": "767100 duplicate offset row(s) — distinct(offset)=1 but 767101 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 767101,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-18",
+      "detail": "683493 duplicate offset row(s) — distinct(offset)=1 but 683494 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 683494,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-19",
+      "detail": "735199 duplicate offset row(s) — distinct(offset)=1 but 735200 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 735200,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-21",
+      "detail": "741524 duplicate offset row(s) — distinct(offset)=1 but 741525 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 741525,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-01-20",
+      "detail": "309000 duplicate update_id row(s) (total=1072033, distinct=763033)",
+      "counts": {
+        "total": 1072033,
+        "distinct": 763033,
+        "duplicates": 309000
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-20",
+      "detail": "1072032 duplicate offset row(s) — distinct(offset)=1 but 1072033 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1072033,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-22",
+      "detail": "735112 duplicate offset row(s) — distinct(offset)=1 but 735113 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 735113,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-23",
+      "detail": "757500 duplicate offset row(s) — distinct(offset)=1 but 757501 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 757501,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-24",
+      "detail": "752023 duplicate offset row(s) — distinct(offset)=1 but 752024 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 752024,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-25",
+      "detail": "755263 duplicate offset row(s) — distinct(offset)=1 but 755264 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 755264,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-26",
+      "detail": "793678 duplicate offset row(s) — distinct(offset)=1 but 793679 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 793679,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-28",
+      "detail": "869881 duplicate offset row(s) — distinct(offset)=1 but 869882 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 869882,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-01-27",
+      "detail": "271000 duplicate update_id row(s) (total=1084817, distinct=813817)",
+      "counts": {
+        "total": 1084817,
+        "distinct": 813817,
+        "duplicates": 271000
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-27",
+      "detail": "1084816 duplicate offset row(s) — distinct(offset)=1 but 1084817 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1084817,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-29",
+      "detail": "957466 duplicate offset row(s) — distinct(offset)=1 but 957467 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 957467,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-30",
+      "detail": "849896 duplicate offset row(s) — distinct(offset)=1 but 849897 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 849897,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-01-31",
+      "detail": "946428 duplicate offset row(s) — distinct(offset)=1 but 946429 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 946429,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-01",
+      "detail": "924157 duplicate offset row(s) — distinct(offset)=1 but 924158 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 924158,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-02",
+      "detail": "945267 duplicate offset row(s) — distinct(offset)=1 but 945268 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 945268,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-04",
+      "detail": "971029 duplicate offset row(s) — distinct(offset)=1 but 971030 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 971030,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-05",
+      "detail": "914421 duplicate offset row(s) — distinct(offset)=1 but 914422 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 914422,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-06",
+      "detail": "880766 duplicate offset row(s) — distinct(offset)=1 but 880767 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 880767,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-07",
+      "detail": "902016 duplicate offset row(s) — distinct(offset)=1 but 902017 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 902017,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-08",
+      "detail": "914046 duplicate offset row(s) — distinct(offset)=1 but 914047 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 914047,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-02-03",
+      "detail": "256000 duplicate update_id row(s) (total=1198583, distinct=942583)",
+      "counts": {
+        "total": 1198583,
+        "distinct": 942583,
+        "duplicates": 256000
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-03",
+      "detail": "1198582 duplicate offset row(s) — distinct(offset)=1 but 1198583 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1198583,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-09",
+      "detail": "937635 duplicate offset row(s) — distinct(offset)=1 but 937636 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 937636,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-11",
+      "detail": "914738 duplicate offset row(s) — distinct(offset)=1 but 914739 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 914739,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-02-10",
+      "detail": "204000 duplicate update_id row(s) (total=1104124, distinct=900124)",
+      "counts": {
+        "total": 1104124,
+        "distinct": 900124,
+        "duplicates": 204000
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-10",
+      "detail": "1104123 duplicate offset row(s) — distinct(offset)=1 but 1104124 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1104124,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-12",
+      "detail": "865487 duplicate offset row(s) — distinct(offset)=1 but 865488 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 865488,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-13",
+      "detail": "937841 duplicate offset row(s) — distinct(offset)=1 but 937842 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 937842,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-14",
+      "detail": "935631 duplicate offset row(s) — distinct(offset)=1 but 935632 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 935632,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-15",
+      "detail": "893805 duplicate offset row(s) — distinct(offset)=1 but 893806 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 893806,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-16",
+      "detail": "884968 duplicate offset row(s) — distinct(offset)=1 but 884969 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 884969,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-02-17",
+      "detail": "200000 duplicate update_id row(s) (total=1060422, distinct=860422)",
+      "counts": {
+        "total": 1060422,
+        "distinct": 860422,
+        "duplicates": 200000
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-17",
+      "detail": "1060421 duplicate offset row(s) — distinct(offset)=1 but 1060422 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1060422,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-18",
+      "detail": "827132 duplicate offset row(s) — distinct(offset)=1 but 827133 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 827133,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-19",
+      "detail": "915469 duplicate offset row(s) — distinct(offset)=1 but 915470 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 915470,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-20",
+      "detail": "903989 duplicate offset row(s) — distinct(offset)=1 but 903990 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 903990,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-21",
+      "detail": "958958 duplicate offset row(s) — distinct(offset)=1 but 958959 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 958959,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-22",
+      "detail": "965371 duplicate offset row(s) — distinct(offset)=1 but 965372 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 965372,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-02-24",
+      "detail": "118828 duplicate update_id row(s) (total=1094324, distinct=975496)",
+      "counts": {
+        "total": 1094324,
+        "distinct": 975496,
+        "duplicates": 118828
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-24",
+      "detail": "1094323 duplicate offset row(s) — distinct(offset)=1 but 1094324 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1094324,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-25",
+      "detail": "907290 duplicate offset row(s) — distinct(offset)=1 but 907291 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 907291,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-02-23",
+      "detail": "56172 duplicate update_id row(s) (total=1025042, distinct=968870)",
+      "counts": {
+        "total": 1025042,
+        "distinct": 968870,
+        "duplicates": 56172
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-23",
+      "detail": "1025041 duplicate offset row(s) — distinct(offset)=1 but 1025042 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1025042,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-26",
+      "detail": "1022120 duplicate offset row(s) — distinct(offset)=1 but 1022121 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1022121,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-27",
+      "detail": "1109887 duplicate offset row(s) — distinct(offset)=1 but 1109888 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1109888,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-02-28",
+      "detail": "1099135 duplicate offset row(s) — distinct(offset)=1 but 1099136 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1099136,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-03-01",
+      "detail": "1168372 duplicate offset row(s) — distinct(offset)=1 but 1168373 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1168373,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/updates/migration=4 2026-03-02",
+      "detail": "192510 duplicate update_id row(s) (total=1318304, distinct=1125794)",
+      "counts": {
+        "total": 1318304,
+        "distinct": 1125794,
+        "duplicates": 192510
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "offsets",
+      "scope": "backfill/updates/migration=4 2026-03-02",
+      "detail": "1318303 duplicate offset row(s) — distinct(offset)=1 but 1318304 populated rows",
+      "counts": {
+        "distinct_offset": 1,
+        "populated_rows": 1318304,
+        "null_rows": 0
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2025-12-16",
+      "detail": "996646 duplicate event_id row(s) (total=6083151, distinct=5086505)",
+      "counts": {
+        "total": 6083151,
+        "distinct": 5086505,
+        "duplicates": 996646
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2025-12-16",
+      "detail": "229624 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 229624
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2025-12-17",
+      "detail": "2649281 duplicate event_id row(s) (total=6829813, distinct=4180532)",
+      "counts": {
+        "total": 6829813,
+        "distinct": 4180532,
+        "duplicates": 2649281
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2025-12-17",
+      "detail": "648376 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 648376
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2025-12-23",
+      "detail": "1351351 duplicate event_id row(s) (total=6885383, distinct=5534032)",
+      "counts": {
+        "total": 6885383,
+        "distinct": 5534032,
+        "duplicates": 1351351
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2025-12-24",
+      "detail": "2284632 duplicate event_id row(s) (total=7667701, distinct=5383069)",
+      "counts": {
+        "total": 7667701,
+        "distinct": 5383069,
+        "duplicates": 2284632
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2025-12-23",
+      "detail": "349560 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 349560
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2025-12-24",
+      "detail": "556440 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 556440
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2025-12-30",
+      "detail": "2527270 duplicate event_id row(s) (total=8130367, distinct=5603097)",
+      "counts": {
+        "total": 8130367,
+        "distinct": 5603097,
+        "duplicates": 2527270
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2025-12-31",
+      "detail": "1243733 duplicate event_id row(s) (total=5885360, distinct=4641627)",
+      "counts": {
+        "total": 5885360,
+        "distinct": 4641627,
+        "duplicates": 1243733
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2025-12-30",
+      "detail": "481562 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 481562
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2025-12-31",
+      "detail": "258438 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 258438
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-01-06",
+      "detail": "3063888 duplicate event_id row(s) (total=8426570, distinct=5362682)",
+      "counts": {
+        "total": 8426570,
+        "distinct": 5362682,
+        "duplicates": 3063888
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-01-07",
+      "detail": "715665 duplicate event_id row(s) (total=5777394, distinct=5061729)",
+      "counts": {
+        "total": 5777394,
+        "distinct": 5061729,
+        "duplicates": 715665
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-01-07",
+      "detail": "141562 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 141562
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-01-06",
+      "detail": "622438 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 622438
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-01-13",
+      "detail": "3974221 duplicate event_id row(s) (total=13124984, distinct=9150763)",
+      "counts": {
+        "total": 13124984,
+        "distinct": 9150763,
+        "duplicates": 3974221
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-01-13",
+      "detail": "672000 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 672000
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-01-20",
+      "detail": "4259633 duplicate event_id row(s) (total=14810103, distinct=10550470)",
+      "counts": {
+        "total": 14810103,
+        "distinct": 10550470,
+        "duplicates": 4259633
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-01-20",
+      "detail": "618000 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 618000
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-01-27",
+      "detail": "4318471 duplicate event_id row(s) (total=17516704, distinct=13198233)",
+      "counts": {
+        "total": 17516704,
+        "distinct": 13198233,
+        "duplicates": 4318471
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-01-27",
+      "detail": "542000 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 542000
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-02-03",
+      "detail": "4600390 duplicate event_id row(s) (total=20913099, distinct=16312709)",
+      "counts": {
+        "total": 20913099,
+        "distinct": 16312709,
+        "duplicates": 4600390
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-02-03",
+      "detail": "512000 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 512000
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-02-10",
+      "detail": "4458130 duplicate event_id row(s) (total=24057856, distinct=19599726)",
+      "counts": {
+        "total": 24057856,
+        "distinct": 19599726,
+        "duplicates": 4458130
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-02-10",
+      "detail": "408000 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 408000
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-02-17",
+      "detail": "4411614 duplicate event_id row(s) (total=23845423, distinct=19433809)",
+      "counts": {
+        "total": 23845423,
+        "distinct": 19433809,
+        "duplicates": 4411614
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-02-17",
+      "detail": "400000 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 400000
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-02-23",
+      "detail": "1497741 duplicate event_id row(s) (total=23480677, distinct=21982936)",
+      "counts": {
+        "total": 23480677,
+        "distinct": 21982936,
+        "duplicates": 1497741
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-02-24",
+      "detail": "3147438 duplicate event_id row(s) (total=27005981, distinct=23858543)",
+      "counts": {
+        "total": 27005981,
+        "distinct": 23858543,
+        "duplicates": 3147438
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-02-23",
+      "detail": "112344 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 112344
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-02-24",
+      "detail": "237656 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 237656
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "backfill/events/migration=4 2026-03-02",
+      "detail": "3941606 duplicate event_id row(s) (total=29139506, distinct=25197900)",
+      "counts": {
+        "total": 29139506,
+        "distinct": 25197900,
+        "duplicates": 3941606
+      }
+    },
+    {
+      "severity": "warn",
+      "check": "event_count",
+      "scope": "backfill/events/migration=4 2026-03-02",
+      "detail": "385020 update(s) have events.count <> updates.event_count",
+      "counts": {
+        "mismatched": 385020
+      }
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "updates/updates/migration=4 2026-04-15",
+      "detail": "5 duplicate update_id row(s) (total=1371258, distinct=1371253)",
+      "counts": {
+        "total": 1371258,
+        "distinct": 1371253,
+        "duplicates": 5
+      }
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/updates/migration=4 2026-04-18",
+      "detail": "updates query failed: DuckDB [upd updates/updates/migration=4 2026-04-18] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/updates/migration=4 2026-04-19",
+      "detail": "updates query failed: DuckDB [upd updates/updates/migration=4 2026-04-19] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/updates/migration=4 2026-04-20",
+      "detail": "updates query failed: DuckDB [upd updates/updates/migration=4 2026-04-20] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/updates/migration=4 2026-04-21",
+      "detail": "updates query failed: DuckDB [upd updates/updates/migration=4 2026-04-21] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "dups",
+      "scope": "updates/events/migration=4 2026-04-15",
+      "detail": "46 duplicate event_id row(s) (total=20226149, distinct=20226103)",
+      "counts": {
+        "total": 20226149,
+        "distinct": 20226103,
+        "duplicates": 46
+      }
+    },
+    {
+      "severity": "info",
+      "check": "orphans",
+      "scope": "updates/events/migration=4 2026-04-15",
+      "detail": "skipped orphan/event_count join — 16152 files across events day + ±1-day updates exceeds DQ_ORPHAN_MAX_FILES=15000. Run with a higher threshold or investigate this day separately.",
+      "counts": {}
+    },
+    {
+      "severity": "info",
+      "check": "orphans",
+      "scope": "updates/events/migration=4 2026-04-16",
+      "detail": "skipped orphan/event_count join — 43508 files across events day + ±1-day updates exceeds DQ_ORPHAN_MAX_FILES=15000. Run with a higher threshold or investigate this day separately.",
+      "counts": {}
+    },
+    {
+      "severity": "info",
+      "check": "orphans",
+      "scope": "updates/events/migration=4 2026-04-17",
+      "detail": "skipped orphan/event_count join — 101589 files across events day + ±1-day updates exceeds DQ_ORPHAN_MAX_FILES=15000. Run with a higher threshold or investigate this day separately.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/events/migration=4 2026-04-18",
+      "detail": "events query failed: DuckDB [evt updates/events/migration=4 2026-04-18] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/events/migration=4 2026-04-19",
+      "detail": "events query failed: DuckDB [evt updates/events/migration=4 2026-04-19] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/events/migration=4 2026-04-20",
+      "detail": "events query failed: DuckDB [evt updates/events/migration=4 2026-04-20] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "info",
+      "check": "orphans",
+      "scope": "updates/events/migration=4 2026-04-22",
+      "detail": "skipped orphan/event_count join — 72634 files across events day + ±1-day updates exceeds DQ_ORPHAN_MAX_FILES=15000. Run with a higher threshold or investigate this day separately.",
+      "counts": {}
+    },
+    {
+      "severity": "error",
+      "check": "query",
+      "scope": "updates/events/migration=4 2026-04-21",
+      "detail": "events query failed: DuckDB [evt updates/events/migration=4 2026-04-21] failed — query timed out after 1800s (SIGTERM). Increase DQ_QUERY_TIMEOUT_MS or DQ_DUCKDB_MEMORY if this day is legitimately large.",
+      "counts": {}
+    },
+    {
+      "severity": "info",
+      "check": "alignment",
+      "scope": "backfill/migration=4",
+      "detail": "updates↔events aligned (83 days)",
+      "counts": {}
+    },
+    {
+      "severity": "info",
+      "check": "alignment",
+      "scope": "updates/migration=4",
+      "detail": "updates↔events aligned (51 days)",
+      "counts": {}
+    },
+    {
+      "severity": "info",
+      "check": "boundary",
+      "scope": "boundary/migration=4",
+      "detail": "no overlap across 2 boundary day(s)",
+      "counts": {}
+    },
+    {
+      "severity": "warn",
+      "check": "acs",
+      "scope": "acs",
+      "detail": "no ACS data found under gs://canton-bucket/raw/acs/",
+      "counts": {}
+    }
+  ],
+  "per_day": [
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-10",
+      "rows": 72296,
+      "distinct_update_id": 72296,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-10T16:23:25.721Z",
+      "max_record_time": "2025-12-10T23:59:58.470Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-11",
+      "rows": 443744,
+      "distinct_update_id": 443744,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-10T23:59:58.470Z",
+      "max_record_time": "2025-12-11T23:59:59.433Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-12",
+      "rows": 506339,
+      "distinct_update_id": 506339,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-12T00:00:00.063Z",
+      "max_record_time": "2025-12-13T00:00:00.489Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-13",
+      "rows": 490250,
+      "distinct_update_id": 490250,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-13T00:00:00.179Z",
+      "max_record_time": "2025-12-13T23:59:59.548Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-14",
+      "rows": 487794,
+      "distinct_update_id": 487794,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-14T00:00:00.195Z",
+      "max_record_time": "2025-12-14T23:59:59.638Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-15",
+      "rows": 534755,
+      "distinct_update_id": 534755,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-15T00:00:00.694Z",
+      "max_record_time": "2025-12-16T00:00:00.039Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-16",
+      "rows": 715009,
+      "distinct_update_id": 600197,
+      "duplicates": 114812,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-16T00:00:00.489Z",
+      "max_record_time": "2025-12-16T23:59:59.908Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-17",
+      "rows": 852723,
+      "distinct_update_id": 528535,
+      "duplicates": 324188,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-17T00:00:00.213Z",
+      "max_record_time": "2025-12-18T00:00:00.068Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-18",
+      "rows": 498467,
+      "distinct_update_id": 498467,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-18T00:00:00.388Z",
+      "max_record_time": "2025-12-19T00:00:02.790Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-19",
+      "rows": 571436,
+      "distinct_update_id": 571436,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-19T00:00:00.477Z",
+      "max_record_time": "2025-12-19T23:59:59.936Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-20",
+      "rows": 638841,
+      "distinct_update_id": 638841,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-20T00:00:00.606Z",
+      "max_record_time": "2025-12-20T23:59:59.754Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-22",
+      "rows": 558901,
+      "distinct_update_id": 558901,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-22T00:00:00.956Z",
+      "max_record_time": "2025-12-23T00:00:00.206Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-21",
+      "rows": 676219,
+      "distinct_update_id": 676219,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-21T00:00:00.070Z",
+      "max_record_time": "2025-12-22T00:00:00.289Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-23",
+      "rows": 812645,
+      "distinct_update_id": 637865,
+      "duplicates": 174780,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-23T00:00:00.206Z",
+      "max_record_time": "2025-12-24T00:00:00.519Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-24",
+      "rows": 932526,
+      "distinct_update_id": 654306,
+      "duplicates": 278220,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-24T00:00:00.519Z",
+      "max_record_time": "2025-12-24T23:59:59.959Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-26",
+      "rows": 604877,
+      "distinct_update_id": 604877,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-26T00:00:00.266Z",
+      "max_record_time": "2025-12-27T00:00:27.989Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-25",
+      "rows": 679235,
+      "distinct_update_id": 679235,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-25T00:00:00.291Z",
+      "max_record_time": "2025-12-25T23:59:59.887Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-27",
+      "rows": 549124,
+      "distinct_update_id": 549124,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-27T00:00:00.599Z",
+      "max_record_time": "2025-12-27T23:59:59.873Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-28",
+      "rows": 623509,
+      "distinct_update_id": 623509,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-28T00:00:00.206Z",
+      "max_record_time": "2025-12-28T23:59:59.979Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-29",
+      "rows": 644163,
+      "distinct_update_id": 644163,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-29T00:00:00.311Z",
+      "max_record_time": "2025-12-30T00:00:00.580Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-30",
+      "rows": 845589,
+      "distinct_update_id": 604808,
+      "duplicates": 240781,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-30T00:00:00.580Z",
+      "max_record_time": "2025-12-30T23:59:59.478Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2025-12-31",
+      "rows": 609325,
+      "distinct_update_id": 480106,
+      "duplicates": 129219,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2025-12-31T00:00:00.141Z",
+      "max_record_time": "2026-01-01T00:00:00.112Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-01",
+      "rows": 522603,
+      "distinct_update_id": 522603,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-01T00:00:00.112Z",
+      "max_record_time": "2026-01-02T00:00:00.048Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-02",
+      "rows": 486518,
+      "distinct_update_id": 486518,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-02T00:00:00.348Z",
+      "max_record_time": "2026-01-03T00:00:00.166Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-03",
+      "rows": 523265,
+      "distinct_update_id": 523265,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-03T00:00:00.166Z",
+      "max_record_time": "2026-01-03T23:59:59.952Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-04",
+      "rows": 514535,
+      "distinct_update_id": 514535,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-04T00:00:00.253Z",
+      "max_record_time": "2026-01-05T00:00:02.239Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-05",
+      "rows": 565124,
+      "distinct_update_id": 565124,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-05T00:00:00.306Z",
+      "max_record_time": "2026-01-06T00:00:01.669Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-07",
+      "rows": 598346,
+      "distinct_update_id": 527565,
+      "duplicates": 70781,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-07T00:00:00.128Z",
+      "max_record_time": "2026-01-08T00:00:01.582Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-08",
+      "rows": 549828,
+      "distinct_update_id": 549828,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-08T00:00:00.625Z",
+      "max_record_time": "2026-01-09T00:00:09.203Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-09",
+      "rows": 634687,
+      "distinct_update_id": 634687,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-09T00:00:00.147Z",
+      "max_record_time": "2026-01-10T00:00:05.447Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-06",
+      "rows": 864072,
+      "distinct_update_id": 552853,
+      "duplicates": 311219,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-06T00:00:00.227Z",
+      "max_record_time": "2026-01-06T23:59:59.829Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-10",
+      "rows": 715995,
+      "distinct_update_id": 715995,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-10T00:00:00.599Z",
+      "max_record_time": "2026-01-10T23:59:58.514Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-11",
+      "rows": 819628,
+      "distinct_update_id": 819628,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-10T23:59:58.514Z",
+      "max_record_time": "2026-01-12T00:00:00.532Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-12",
+      "rows": 781107,
+      "distinct_update_id": 781107,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-12T00:00:00.155Z",
+      "max_record_time": "2026-01-13T00:00:03.700Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-14",
+      "rows": 780911,
+      "distinct_update_id": 780911,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-14T00:00:00.338Z",
+      "max_record_time": "2026-01-14T23:59:59.967Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-13",
+      "rows": 1137184,
+      "distinct_update_id": 801184,
+      "duplicates": 336000,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-12T23:59:59.287Z",
+      "max_record_time": "2026-01-14T00:00:07.018Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-15",
+      "rows": 761423,
+      "distinct_update_id": 761423,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-15T00:00:00.281Z",
+      "max_record_time": "2026-01-15T23:59:59.759Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-16",
+      "rows": 716736,
+      "distinct_update_id": 716736,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-16T00:00:00.333Z",
+      "max_record_time": "2026-01-17T00:00:00.307Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-17",
+      "rows": 767101,
+      "distinct_update_id": 767101,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-17T00:00:00.648Z",
+      "max_record_time": "2026-01-18T00:00:00.052Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-18",
+      "rows": 683494,
+      "distinct_update_id": 683494,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-18T00:00:00.366Z",
+      "max_record_time": "2026-01-18T23:59:59.920Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-19",
+      "rows": 735200,
+      "distinct_update_id": 735200,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-19T00:00:00.231Z",
+      "max_record_time": "2026-01-20T00:00:01.996Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-21",
+      "rows": 741525,
+      "distinct_update_id": 741525,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-21T00:00:00.174Z",
+      "max_record_time": "2026-01-21T23:59:59.683Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-20",
+      "rows": 1072033,
+      "distinct_update_id": 763033,
+      "duplicates": 309000,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-19T23:59:59.920Z",
+      "max_record_time": "2026-01-21T00:00:00.510Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-22",
+      "rows": 735113,
+      "distinct_update_id": 735113,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-22T00:00:00.322Z",
+      "max_record_time": "2026-01-23T00:00:01.136Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-23",
+      "rows": 757501,
+      "distinct_update_id": 757501,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-23T00:00:00.009Z",
+      "max_record_time": "2026-01-24T00:00:00.039Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-24",
+      "rows": 752024,
+      "distinct_update_id": 752024,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-24T00:00:00.410Z",
+      "max_record_time": "2026-01-25T00:00:00.714Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-25",
+      "rows": 755264,
+      "distinct_update_id": 755264,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-25T00:00:00.419Z",
+      "max_record_time": "2026-01-26T00:00:16.609Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-26",
+      "rows": 793679,
+      "distinct_update_id": 793679,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-26T00:00:00.512Z",
+      "max_record_time": "2026-01-27T00:00:04.339Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-28",
+      "rows": 869882,
+      "distinct_update_id": 869882,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-28T00:00:00.826Z",
+      "max_record_time": "2026-01-29T00:00:02.139Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-27",
+      "rows": 1084817,
+      "distinct_update_id": 813817,
+      "duplicates": 271000,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-27T00:00:00.224Z",
+      "max_record_time": "2026-01-28T00:00:00.511Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-29",
+      "rows": 957467,
+      "distinct_update_id": 957467,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-29T00:00:00.394Z",
+      "max_record_time": "2026-01-30T00:00:08.697Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-30",
+      "rows": 849897,
+      "distinct_update_id": 849897,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-30T00:00:00.061Z",
+      "max_record_time": "2026-01-31T00:00:00.070Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-01-31",
+      "rows": 946429,
+      "distinct_update_id": 946429,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-01-31T00:00:00.070Z",
+      "max_record_time": "2026-02-01T00:00:09.757Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-01",
+      "rows": 924158,
+      "distinct_update_id": 924158,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-01T00:00:00.094Z",
+      "max_record_time": "2026-02-02T00:00:00.068Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-02",
+      "rows": 945268,
+      "distinct_update_id": 945268,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-02T00:00:00.404Z",
+      "max_record_time": "2026-02-03T00:00:00.121Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-04",
+      "rows": 971030,
+      "distinct_update_id": 971030,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-04T00:00:00.382Z",
+      "max_record_time": "2026-02-05T00:00:04.792Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-05",
+      "rows": 914422,
+      "distinct_update_id": 914422,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-05T00:00:00.192Z",
+      "max_record_time": "2026-02-05T23:59:59.578Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-06",
+      "rows": 880767,
+      "distinct_update_id": 880767,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-06T00:00:00.189Z",
+      "max_record_time": "2026-02-07T00:00:05.729Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-07",
+      "rows": 902017,
+      "distinct_update_id": 902017,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-07T00:00:00.197Z",
+      "max_record_time": "2026-02-08T00:00:00.491Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-08",
+      "rows": 914047,
+      "distinct_update_id": 914047,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-08T00:00:00.008Z",
+      "max_record_time": "2026-02-09T00:00:00.602Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-03",
+      "rows": 1198583,
+      "distinct_update_id": 942583,
+      "duplicates": 256000,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-03T00:00:00.121Z",
+      "max_record_time": "2026-02-03T23:59:59.964Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-09",
+      "rows": 937636,
+      "distinct_update_id": 937636,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-09T00:00:00.257Z",
+      "max_record_time": "2026-02-10T00:00:46.867Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-11",
+      "rows": 914739,
+      "distinct_update_id": 914739,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-11T00:00:00.326Z",
+      "max_record_time": "2026-02-12T00:00:45.657Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-10",
+      "rows": 1104124,
+      "distinct_update_id": 900124,
+      "duplicates": 204000,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-10T00:00:00.651Z",
+      "max_record_time": "2026-02-11T00:00:07.693Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-12",
+      "rows": 865488,
+      "distinct_update_id": 865488,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-12T00:00:00.378Z",
+      "max_record_time": "2026-02-13T00:00:00.692Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-13",
+      "rows": 937842,
+      "distinct_update_id": 937842,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-13T00:00:00.328Z",
+      "max_record_time": "2026-02-14T00:00:00.422Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-14",
+      "rows": 935632,
+      "distinct_update_id": 935632,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-14T00:00:00.726Z",
+      "max_record_time": "2026-02-15T00:00:00.123Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-15",
+      "rows": 893806,
+      "distinct_update_id": 893806,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-15T00:00:00.123Z",
+      "max_record_time": "2026-02-16T00:00:09.824Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-16",
+      "rows": 884969,
+      "distinct_update_id": 884969,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-16T00:00:00.663Z",
+      "max_record_time": "2026-02-17T00:00:00.731Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-17",
+      "rows": 1060422,
+      "distinct_update_id": 860422,
+      "duplicates": 200000,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-17T00:00:00.731Z",
+      "max_record_time": "2026-02-18T00:00:04.139Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-18",
+      "rows": 827133,
+      "distinct_update_id": 827133,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-18T00:00:00.411Z",
+      "max_record_time": "2026-02-19T00:00:09.174Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-19",
+      "rows": 915470,
+      "distinct_update_id": 915470,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-19T00:00:00.188Z",
+      "max_record_time": "2026-02-20T00:00:09.092Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-20",
+      "rows": 903990,
+      "distinct_update_id": 903990,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-20T00:00:00.472Z",
+      "max_record_time": "2026-02-21T00:00:05.894Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-21",
+      "rows": 958959,
+      "distinct_update_id": 958959,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-21T00:00:00.479Z",
+      "max_record_time": "2026-02-22T00:00:08.593Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-22",
+      "rows": 965372,
+      "distinct_update_id": 965372,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-22T00:00:00.358Z",
+      "max_record_time": "2026-02-23T00:00:16.330Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-24",
+      "rows": 1094324,
+      "distinct_update_id": 975496,
+      "duplicates": 118828,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-24T00:00:00.583Z",
+      "max_record_time": "2026-02-25T00:00:08.138Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-25",
+      "rows": 907291,
+      "distinct_update_id": 907291,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-25T00:00:00.236Z",
+      "max_record_time": "2026-02-26T00:00:00.359Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-23",
+      "rows": 1025042,
+      "distinct_update_id": 968870,
+      "duplicates": 56172,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-23T00:00:00.351Z",
+      "max_record_time": "2026-02-24T00:00:08.332Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-26",
+      "rows": 1022121,
+      "distinct_update_id": 1022121,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-26T00:00:00.030Z",
+      "max_record_time": "2026-02-27T00:00:04.902Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-27",
+      "rows": 1109888,
+      "distinct_update_id": 1109888,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-27T00:00:00.453Z",
+      "max_record_time": "2026-02-28T00:00:09.556Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-02-28",
+      "rows": 1099136,
+      "distinct_update_id": 1099136,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-02-28T00:00:00.383Z",
+      "max_record_time": "2026-03-01T00:00:13.183Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-01",
+      "rows": 1168373,
+      "distinct_update_id": 1168373,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-01T00:00:00.243Z",
+      "max_record_time": "2026-03-02T00:00:02.269Z"
+    },
+    {
+      "source": "backfill",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-02",
+      "rows": 1318304,
+      "distinct_update_id": 1125794,
+      "duplicates": 192510,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-02T00:00:00.226Z",
+      "max_record_time": "2026-03-03T00:00:08.890Z"
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-10",
+      "rows": 636184,
+      "distinct_event_id": 636184,
+      "duplicates": 0,
+      "distinct_update_id": 72296,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-11",
+      "rows": 3391556,
+      "distinct_event_id": 3391556,
+      "duplicates": 0,
+      "distinct_update_id": 443744,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-12",
+      "rows": 3852853,
+      "distinct_event_id": 3852853,
+      "duplicates": 0,
+      "distinct_update_id": 506339,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-13",
+      "rows": 3883064,
+      "distinct_event_id": 3883064,
+      "duplicates": 0,
+      "distinct_update_id": 490250,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-14",
+      "rows": 3926187,
+      "distinct_event_id": 3926187,
+      "duplicates": 0,
+      "distinct_update_id": 487794,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-15",
+      "rows": 4505075,
+      "distinct_event_id": 4505075,
+      "duplicates": 0,
+      "distinct_update_id": 534755,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-16",
+      "rows": 6083151,
+      "distinct_event_id": 5086505,
+      "duplicates": 996646,
+      "distinct_update_id": 600197,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-17",
+      "rows": 6829813,
+      "distinct_event_id": 4180532,
+      "duplicates": 2649281,
+      "distinct_update_id": 528535,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-18",
+      "rows": 3840296,
+      "distinct_event_id": 3840296,
+      "duplicates": 0,
+      "distinct_update_id": 498467,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-19",
+      "rows": 4700277,
+      "distinct_event_id": 4700277,
+      "duplicates": 0,
+      "distinct_update_id": 571436,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-20",
+      "rows": 5084985,
+      "distinct_event_id": 5084985,
+      "duplicates": 0,
+      "distinct_update_id": 638841,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-21",
+      "rows": 5218945,
+      "distinct_event_id": 5218945,
+      "duplicates": 0,
+      "distinct_update_id": 676219,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-22",
+      "rows": 4737719,
+      "distinct_event_id": 4737719,
+      "duplicates": 0,
+      "distinct_update_id": 558901,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-23",
+      "rows": 6885383,
+      "distinct_event_id": 5534032,
+      "duplicates": 1351351,
+      "distinct_update_id": 637865,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-24",
+      "rows": 7667701,
+      "distinct_event_id": 5383069,
+      "duplicates": 2284632,
+      "distinct_update_id": 654306,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-25",
+      "rows": 5765718,
+      "distinct_event_id": 5765718,
+      "duplicates": 0,
+      "distinct_update_id": 679235,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-26",
+      "rows": 5149364,
+      "distinct_event_id": 5149364,
+      "duplicates": 0,
+      "distinct_update_id": 604877,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-27",
+      "rows": 4757735,
+      "distinct_event_id": 4757735,
+      "duplicates": 0,
+      "distinct_update_id": 549124,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-28",
+      "rows": 5265226,
+      "distinct_event_id": 5265226,
+      "duplicates": 0,
+      "distinct_update_id": 623509,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-29",
+      "rows": 5337245,
+      "distinct_event_id": 5337245,
+      "duplicates": 0,
+      "distinct_update_id": 644163,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-30",
+      "rows": 8130367,
+      "distinct_event_id": 5603097,
+      "duplicates": 2527270,
+      "distinct_update_id": 604808,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2025-12-31",
+      "rows": 5885360,
+      "distinct_event_id": 4641627,
+      "duplicates": 1243733,
+      "distinct_update_id": 480106,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-01",
+      "rows": 4440938,
+      "distinct_event_id": 4440938,
+      "duplicates": 0,
+      "distinct_update_id": 522603,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-02",
+      "rows": 4300302,
+      "distinct_event_id": 4300302,
+      "duplicates": 0,
+      "distinct_update_id": 486518,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-03",
+      "rows": 4786269,
+      "distinct_event_id": 4786269,
+      "duplicates": 0,
+      "distinct_update_id": 523265,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-04",
+      "rows": 4426902,
+      "distinct_event_id": 4426902,
+      "duplicates": 0,
+      "distinct_update_id": 514535,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-05",
+      "rows": 5123118,
+      "distinct_event_id": 5123118,
+      "duplicates": 0,
+      "distinct_update_id": 565124,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-07",
+      "rows": 5777394,
+      "distinct_event_id": 5061729,
+      "duplicates": 715665,
+      "distinct_update_id": 527565,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-08",
+      "rows": 5081114,
+      "distinct_event_id": 5081114,
+      "duplicates": 0,
+      "distinct_update_id": 549828,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-06",
+      "rows": 8426570,
+      "distinct_event_id": 5362682,
+      "duplicates": 3063888,
+      "distinct_update_id": 552853,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-09",
+      "rows": 6326384,
+      "distinct_event_id": 6326384,
+      "duplicates": 0,
+      "distinct_update_id": 634687,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-10",
+      "rows": 7064563,
+      "distinct_event_id": 7064563,
+      "duplicates": 0,
+      "distinct_update_id": 715995,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-11",
+      "rows": 8232368,
+      "distinct_event_id": 8232368,
+      "duplicates": 0,
+      "distinct_update_id": 819628,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-12",
+      "rows": 9186642,
+      "distinct_event_id": 9186642,
+      "duplicates": 0,
+      "distinct_update_id": 781107,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-13",
+      "rows": 13124984,
+      "distinct_event_id": 9150763,
+      "duplicates": 3974221,
+      "distinct_update_id": 801184,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-14",
+      "rows": 9112705,
+      "distinct_event_id": 9112705,
+      "duplicates": 0,
+      "distinct_update_id": 780911,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-15",
+      "rows": 8670072,
+      "distinct_event_id": 8670072,
+      "duplicates": 0,
+      "distinct_update_id": 761423,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-16",
+      "rows": 8517492,
+      "distinct_event_id": 8517492,
+      "duplicates": 0,
+      "distinct_update_id": 716736,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-17",
+      "rows": 9554398,
+      "distinct_event_id": 9554398,
+      "duplicates": 0,
+      "distinct_update_id": 767101,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-18",
+      "rows": 9508032,
+      "distinct_event_id": 9508032,
+      "duplicates": 0,
+      "distinct_update_id": 683494,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-19",
+      "rows": 9385253,
+      "distinct_event_id": 9385253,
+      "duplicates": 0,
+      "distinct_update_id": 735200,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-20",
+      "rows": 14810103,
+      "distinct_event_id": 10550470,
+      "duplicates": 4259633,
+      "distinct_update_id": 763033,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-21",
+      "rows": 9993725,
+      "distinct_event_id": 9993725,
+      "duplicates": 0,
+      "distinct_update_id": 741525,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-22",
+      "rows": 9754101,
+      "distinct_event_id": 9754101,
+      "duplicates": 0,
+      "distinct_update_id": 735113,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-23",
+      "rows": 10968817,
+      "distinct_event_id": 10968817,
+      "duplicates": 0,
+      "distinct_update_id": 757501,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-24",
+      "rows": 11433930,
+      "distinct_event_id": 11433930,
+      "duplicates": 0,
+      "distinct_update_id": 752024,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-25",
+      "rows": 11882392,
+      "distinct_event_id": 11882392,
+      "duplicates": 0,
+      "distinct_update_id": 755264,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-26",
+      "rows": 13122224,
+      "distinct_event_id": 13122224,
+      "duplicates": 0,
+      "distinct_update_id": 793679,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-27",
+      "rows": 17516704,
+      "distinct_event_id": 13198233,
+      "duplicates": 4318471,
+      "distinct_update_id": 813817,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-28",
+      "rows": 15586063,
+      "distinct_event_id": 15586063,
+      "duplicates": 0,
+      "distinct_update_id": 869882,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-29",
+      "rows": 16754397,
+      "distinct_event_id": 16754397,
+      "duplicates": 0,
+      "distinct_update_id": 957467,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-30",
+      "rows": 17785331,
+      "distinct_event_id": 17785331,
+      "duplicates": 0,
+      "distinct_update_id": 849897,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-01-31",
+      "rows": 17506404,
+      "distinct_event_id": 17506404,
+      "duplicates": 0,
+      "distinct_update_id": 946429,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-01",
+      "rows": 14562649,
+      "distinct_event_id": 14562649,
+      "duplicates": 0,
+      "distinct_update_id": 924158,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-02",
+      "rows": 16531194,
+      "distinct_event_id": 16531194,
+      "duplicates": 0,
+      "distinct_update_id": 945268,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-03",
+      "rows": 20913099,
+      "distinct_event_id": 16312709,
+      "duplicates": 4600390,
+      "distinct_update_id": 942583,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-04",
+      "rows": 18121780,
+      "distinct_event_id": 18121780,
+      "duplicates": 0,
+      "distinct_update_id": 971030,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-05",
+      "rows": 16878286,
+      "distinct_event_id": 16878286,
+      "duplicates": 0,
+      "distinct_update_id": 914422,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-06",
+      "rows": 16551697,
+      "distinct_event_id": 16551697,
+      "duplicates": 0,
+      "distinct_update_id": 880767,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-07",
+      "rows": 17905349,
+      "distinct_event_id": 17905349,
+      "duplicates": 0,
+      "distinct_update_id": 902017,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-08",
+      "rows": 18629356,
+      "distinct_event_id": 18629356,
+      "duplicates": 0,
+      "distinct_update_id": 914047,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-09",
+      "rows": 17213287,
+      "distinct_event_id": 17213287,
+      "duplicates": 0,
+      "distinct_update_id": 937636,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-10",
+      "rows": 24057856,
+      "distinct_event_id": 19599726,
+      "duplicates": 4458130,
+      "distinct_update_id": 900124,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-11",
+      "rows": 19638421,
+      "distinct_event_id": 19638421,
+      "duplicates": 0,
+      "distinct_update_id": 914739,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-12",
+      "rows": 17054576,
+      "distinct_event_id": 17054576,
+      "duplicates": 0,
+      "distinct_update_id": 865488,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-13",
+      "rows": 17765620,
+      "distinct_event_id": 17765620,
+      "duplicates": 0,
+      "distinct_update_id": 937842,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-14",
+      "rows": 16136257,
+      "distinct_event_id": 16136257,
+      "duplicates": 0,
+      "distinct_update_id": 935632,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-15",
+      "rows": 17496756,
+      "distinct_event_id": 17496756,
+      "duplicates": 0,
+      "distinct_update_id": 893806,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-16",
+      "rows": 18355606,
+      "distinct_event_id": 18355606,
+      "duplicates": 0,
+      "distinct_update_id": 884969,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-17",
+      "rows": 23845423,
+      "distinct_event_id": 19433809,
+      "duplicates": 4411614,
+      "distinct_update_id": 860422,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-18",
+      "rows": 18157546,
+      "distinct_event_id": 18157546,
+      "duplicates": 0,
+      "distinct_update_id": 827133,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-19",
+      "rows": 18507785,
+      "distinct_event_id": 18507785,
+      "duplicates": 0,
+      "distinct_update_id": 915470,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-20",
+      "rows": 19272419,
+      "distinct_event_id": 19272419,
+      "duplicates": 0,
+      "distinct_update_id": 903990,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-21",
+      "rows": 20482736,
+      "distinct_event_id": 20482736,
+      "duplicates": 0,
+      "distinct_update_id": 958959,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-22",
+      "rows": 21994734,
+      "distinct_event_id": 21994734,
+      "duplicates": 0,
+      "distinct_update_id": 965372,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-23",
+      "rows": 23480677,
+      "distinct_event_id": 21982936,
+      "duplicates": 1497741,
+      "distinct_update_id": 968870,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-24",
+      "rows": 27005981,
+      "distinct_event_id": 23858543,
+      "duplicates": 3147438,
+      "distinct_update_id": 975496,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-25",
+      "rows": 22819578,
+      "distinct_event_id": 22819578,
+      "duplicates": 0,
+      "distinct_update_id": 907291,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-26",
+      "rows": 22755218,
+      "distinct_event_id": 22755218,
+      "duplicates": 0,
+      "distinct_update_id": 1022121,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-27",
+      "rows": 25008139,
+      "distinct_event_id": 25008139,
+      "duplicates": 0,
+      "distinct_update_id": 1109888,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-02-28",
+      "rows": 26827300,
+      "distinct_event_id": 26827300,
+      "duplicates": 0,
+      "distinct_update_id": 1099136,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-01",
+      "rows": 26810895,
+      "distinct_event_id": 26810895,
+      "duplicates": 0,
+      "distinct_update_id": 1168373,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "backfill",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-02",
+      "rows": 29139506,
+      "distinct_event_id": 25197900,
+      "duplicates": 3941606,
+      "distinct_update_id": 1125794,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-03",
+      "rows": 933093,
+      "distinct_update_id": 933093,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-03T00:00:00.179Z",
+      "max_record_time": "2026-03-04T00:00:19.800Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-04",
+      "rows": 984756,
+      "distinct_update_id": 984756,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-04T00:00:00.358Z",
+      "max_record_time": "2026-03-05T00:00:02.684Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-05",
+      "rows": 939291,
+      "distinct_update_id": 939291,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-05T00:00:00.526Z",
+      "max_record_time": "2026-03-06T00:00:04.228Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-06",
+      "rows": 971247,
+      "distinct_update_id": 971247,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-06T00:00:00.566Z",
+      "max_record_time": "2026-03-07T00:00:11.895Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-07",
+      "rows": 919896,
+      "distinct_update_id": 919896,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-07T00:00:00.315Z",
+      "max_record_time": "2026-03-08T00:00:08.697Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-08",
+      "rows": 1098882,
+      "distinct_update_id": 1098882,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-08T00:00:00.481Z",
+      "max_record_time": "2026-03-09T00:00:44.723Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-09",
+      "rows": 966827,
+      "distinct_update_id": 966827,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-09T00:00:00.489Z",
+      "max_record_time": "2026-03-10T00:00:09.995Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-10",
+      "rows": 1069023,
+      "distinct_update_id": 1069023,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-10T00:00:00.386Z",
+      "max_record_time": "2026-03-11T00:00:10.646Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-11",
+      "rows": 990648,
+      "distinct_update_id": 990648,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-11T00:00:00.307Z",
+      "max_record_time": "2026-03-12T00:00:00.248Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-12",
+      "rows": 985275,
+      "distinct_update_id": 985275,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-12T00:00:00.248Z",
+      "max_record_time": "2026-03-13T00:00:06.999Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-13",
+      "rows": 951014,
+      "distinct_update_id": 951014,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-13T00:00:00.040Z",
+      "max_record_time": "2026-03-14T00:00:08.644Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-14",
+      "rows": 1056706,
+      "distinct_update_id": 1056706,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-14T00:00:00.319Z",
+      "max_record_time": "2026-03-15T00:00:09.382Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-15",
+      "rows": 1129887,
+      "distinct_update_id": 1129887,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-15T00:00:00.248Z",
+      "max_record_time": "2026-03-16T00:00:19.980Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-16",
+      "rows": 1123724,
+      "distinct_update_id": 1123724,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-16T00:00:00.225Z",
+      "max_record_time": "2026-03-17T00:00:01.423Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-17",
+      "rows": 1026671,
+      "distinct_update_id": 1026671,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-17T00:00:00.308Z",
+      "max_record_time": "2026-03-18T00:00:08.965Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-18",
+      "rows": 1171082,
+      "distinct_update_id": 1171082,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-18T00:00:00.545Z",
+      "max_record_time": "2026-03-19T00:00:25.985Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-19",
+      "rows": 1156678,
+      "distinct_update_id": 1156678,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-19T00:00:00.156Z",
+      "max_record_time": "2026-03-20T00:00:00.667Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-20",
+      "rows": 1072523,
+      "distinct_update_id": 1072523,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-20T00:00:00.376Z",
+      "max_record_time": "2026-03-21T00:00:11.060Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-21",
+      "rows": 1235740,
+      "distinct_update_id": 1235740,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-21T00:00:00.217Z",
+      "max_record_time": "2026-03-22T00:00:05.431Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-22",
+      "rows": 1175317,
+      "distinct_update_id": 1175317,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-22T00:00:00.261Z",
+      "max_record_time": "2026-03-23T00:00:05.350Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-23",
+      "rows": 1063192,
+      "distinct_update_id": 1063192,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-23T00:00:00.478Z",
+      "max_record_time": "2026-03-24T00:00:05.921Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-24",
+      "rows": 1033008,
+      "distinct_update_id": 1033008,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-24T00:00:00.415Z",
+      "max_record_time": "2026-03-25T00:00:04.355Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-25",
+      "rows": 964185,
+      "distinct_update_id": 964185,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-25T00:00:00.313Z",
+      "max_record_time": "2026-03-26T00:00:01.577Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-26",
+      "rows": 976436,
+      "distinct_update_id": 976436,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-26T00:00:00.209Z",
+      "max_record_time": "2026-03-27T00:00:03.278Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-27",
+      "rows": 1092484,
+      "distinct_update_id": 1092484,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-27T00:00:00.327Z",
+      "max_record_time": "2026-03-28T00:00:10.065Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-28",
+      "rows": 1008003,
+      "distinct_update_id": 1008003,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-28T00:00:00.297Z",
+      "max_record_time": "2026-03-29T00:00:13.226Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-29",
+      "rows": 1052920,
+      "distinct_update_id": 1052920,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-29T00:00:00.467Z",
+      "max_record_time": "2026-03-30T00:00:00.838Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-30",
+      "rows": 1098683,
+      "distinct_update_id": 1098683,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-30T00:00:00.511Z",
+      "max_record_time": "2026-03-31T00:00:51.855Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-03-31",
+      "rows": 1185104,
+      "distinct_update_id": 1185104,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-03-31T00:00:00.101Z",
+      "max_record_time": "2026-04-01T00:00:02.497Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-01",
+      "rows": 1131144,
+      "distinct_update_id": 1131144,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-01T00:00:00.165Z",
+      "max_record_time": "2026-04-02T00:00:04.570Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-02",
+      "rows": 1187664,
+      "distinct_update_id": 1187664,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-02T00:00:00.005Z",
+      "max_record_time": "2026-04-03T00:00:01.199Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-03",
+      "rows": 1256704,
+      "distinct_update_id": 1256704,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-03T00:00:00.203Z",
+      "max_record_time": "2026-04-04T00:00:01.556Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-04",
+      "rows": 1184100,
+      "distinct_update_id": 1184100,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-04T00:00:00.375Z",
+      "max_record_time": "2026-04-05T00:00:00.452Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-05",
+      "rows": 1211447,
+      "distinct_update_id": 1211447,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-05T00:00:00.178Z",
+      "max_record_time": "2026-04-06T00:00:00.544Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-06",
+      "rows": 1227279,
+      "distinct_update_id": 1227279,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-06T00:00:00.221Z",
+      "max_record_time": "2026-04-07T00:00:57.929Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-07",
+      "rows": 1282112,
+      "distinct_update_id": 1282112,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-06T23:59:58.251Z",
+      "max_record_time": "2026-04-08T00:00:01.357Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-08",
+      "rows": 1390743,
+      "distinct_update_id": 1390743,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-08T00:00:00.237Z",
+      "max_record_time": "2026-04-09T00:00:19.303Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-09",
+      "rows": 1458697,
+      "distinct_update_id": 1458697,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-09T00:00:00.292Z",
+      "max_record_time": "2026-04-10T00:00:01.808Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-10",
+      "rows": 1485674,
+      "distinct_update_id": 1485674,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-10T00:00:00.343Z",
+      "max_record_time": "2026-04-11T00:00:01.747Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-11",
+      "rows": 1547208,
+      "distinct_update_id": 1547208,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-11T00:00:00.313Z",
+      "max_record_time": "2026-04-12T00:00:00.074Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-12",
+      "rows": 1279021,
+      "distinct_update_id": 1279021,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-12T00:00:00.556Z",
+      "max_record_time": "2026-04-13T00:00:02.614Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-13",
+      "rows": 1324371,
+      "distinct_update_id": 1324371,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-13T00:00:00.330Z",
+      "max_record_time": "2026-04-14T00:00:10.205Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-14",
+      "rows": 1394679,
+      "distinct_update_id": 1394679,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-14T00:00:00.270Z",
+      "max_record_time": "2026-04-15T00:00:14.382Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-15",
+      "rows": 1371258,
+      "distinct_update_id": 1371253,
+      "duplicates": 5,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-15T00:00:00.109Z",
+      "max_record_time": "2026-04-16T00:00:03.588Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-16",
+      "rows": 1200207,
+      "distinct_update_id": 1200207,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-16T00:00:00.424Z",
+      "max_record_time": "2026-04-17T00:00:08.528Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-17",
+      "rows": 1174428,
+      "distinct_update_id": 1174428,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-16T23:59:59.945Z",
+      "max_record_time": "2026-04-18T00:00:05.451Z"
+    },
+    {
+      "source": "updates",
+      "type": "updates",
+      "migration": 4,
+      "date": "2026-04-22",
+      "rows": 109296,
+      "distinct_update_id": 109296,
+      "duplicates": 0,
+      "null_counts": {
+        "update_id": 0,
+        "record_time": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0,
+      "min_record_time": "2026-04-22T00:00:00.089Z",
+      "max_record_time": "2026-04-22T01:49:06.919Z"
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-03",
+      "rows": 18556939,
+      "distinct_event_id": 18556939,
+      "duplicates": 0,
+      "distinct_update_id": 933093,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-04",
+      "rows": 21519291,
+      "distinct_event_id": 21519291,
+      "duplicates": 0,
+      "distinct_update_id": 984756,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-05",
+      "rows": 22026710,
+      "distinct_event_id": 22026710,
+      "duplicates": 0,
+      "distinct_update_id": 939291,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-06",
+      "rows": 26082738,
+      "distinct_event_id": 26082738,
+      "duplicates": 0,
+      "distinct_update_id": 971247,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-07",
+      "rows": 19425397,
+      "distinct_event_id": 19425397,
+      "duplicates": 0,
+      "distinct_update_id": 919896,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-08",
+      "rows": 27213870,
+      "distinct_event_id": 27213870,
+      "duplicates": 0,
+      "distinct_update_id": 1098882,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-09",
+      "rows": 22458698,
+      "distinct_event_id": 22458698,
+      "duplicates": 0,
+      "distinct_update_id": 966827,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-10",
+      "rows": 22595257,
+      "distinct_event_id": 22595257,
+      "duplicates": 0,
+      "distinct_update_id": 1069023,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-11",
+      "rows": 23944450,
+      "distinct_event_id": 23944450,
+      "duplicates": 0,
+      "distinct_update_id": 990648,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-12",
+      "rows": 21394575,
+      "distinct_event_id": 21394575,
+      "duplicates": 0,
+      "distinct_update_id": 985275,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-13",
+      "rows": 21768979,
+      "distinct_event_id": 21768979,
+      "duplicates": 0,
+      "distinct_update_id": 951014,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-14",
+      "rows": 21317743,
+      "distinct_event_id": 21317743,
+      "duplicates": 0,
+      "distinct_update_id": 1056706,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-15",
+      "rows": 23076540,
+      "distinct_event_id": 23076540,
+      "duplicates": 0,
+      "distinct_update_id": 1129887,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-16",
+      "rows": 23268733,
+      "distinct_event_id": 23268733,
+      "duplicates": 0,
+      "distinct_update_id": 1123724,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-17",
+      "rows": 23633470,
+      "distinct_event_id": 23633470,
+      "duplicates": 0,
+      "distinct_update_id": 1026671,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-18",
+      "rows": 28743676,
+      "distinct_event_id": 28743676,
+      "duplicates": 0,
+      "distinct_update_id": 1171082,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-19",
+      "rows": 28158661,
+      "distinct_event_id": 28158661,
+      "duplicates": 0,
+      "distinct_update_id": 1156678,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-20",
+      "rows": 22149378,
+      "distinct_event_id": 22149378,
+      "duplicates": 0,
+      "distinct_update_id": 1072523,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-21",
+      "rows": 24281137,
+      "distinct_event_id": 24281137,
+      "duplicates": 0,
+      "distinct_update_id": 1235740,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-22",
+      "rows": 26066405,
+      "distinct_event_id": 26066405,
+      "duplicates": 0,
+      "distinct_update_id": 1175317,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-23",
+      "rows": 25872153,
+      "distinct_event_id": 25872153,
+      "duplicates": 0,
+      "distinct_update_id": 1063192,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-24",
+      "rows": 26061079,
+      "distinct_event_id": 26061079,
+      "duplicates": 0,
+      "distinct_update_id": 1033008,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-25",
+      "rows": 25331819,
+      "distinct_event_id": 25331819,
+      "duplicates": 0,
+      "distinct_update_id": 964185,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-26",
+      "rows": 25940331,
+      "distinct_event_id": 25940331,
+      "duplicates": 0,
+      "distinct_update_id": 976436,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-27",
+      "rows": 20023068,
+      "distinct_event_id": 20023068,
+      "duplicates": 0,
+      "distinct_update_id": 1092484,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-28",
+      "rows": 20035913,
+      "distinct_event_id": 20035913,
+      "duplicates": 0,
+      "distinct_update_id": 1008003,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-29",
+      "rows": 19133364,
+      "distinct_event_id": 19133364,
+      "duplicates": 0,
+      "distinct_update_id": 1052920,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-30",
+      "rows": 19731382,
+      "distinct_event_id": 19731382,
+      "duplicates": 0,
+      "distinct_update_id": 1098683,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-03-31",
+      "rows": 20192941,
+      "distinct_event_id": 20192941,
+      "duplicates": 0,
+      "distinct_update_id": 1185104,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-01",
+      "rows": 17677971,
+      "distinct_event_id": 17677971,
+      "duplicates": 0,
+      "distinct_update_id": 1131144,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-02",
+      "rows": 17935752,
+      "distinct_event_id": 17935752,
+      "duplicates": 0,
+      "distinct_update_id": 1187664,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-03",
+      "rows": 17750501,
+      "distinct_event_id": 17750501,
+      "duplicates": 0,
+      "distinct_update_id": 1256704,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-04",
+      "rows": 17056086,
+      "distinct_event_id": 17056086,
+      "duplicates": 0,
+      "distinct_update_id": 1184100,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-05",
+      "rows": 19158036,
+      "distinct_event_id": 19158036,
+      "duplicates": 0,
+      "distinct_update_id": 1211447,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-06",
+      "rows": 20144379,
+      "distinct_event_id": 20144379,
+      "duplicates": 0,
+      "distinct_update_id": 1227279,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-07",
+      "rows": 21542624,
+      "distinct_event_id": 21542624,
+      "duplicates": 0,
+      "distinct_update_id": 1282112,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-08",
+      "rows": 21726100,
+      "distinct_event_id": 21726100,
+      "duplicates": 0,
+      "distinct_update_id": 1390743,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-09",
+      "rows": 21028616,
+      "distinct_event_id": 21028616,
+      "duplicates": 0,
+      "distinct_update_id": 1458697,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-10",
+      "rows": 20497563,
+      "distinct_event_id": 20497563,
+      "duplicates": 0,
+      "distinct_update_id": 1485674,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-11",
+      "rows": 20082724,
+      "distinct_event_id": 20082724,
+      "duplicates": 0,
+      "distinct_update_id": 1547208,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-12",
+      "rows": 17247223,
+      "distinct_event_id": 17247223,
+      "duplicates": 0,
+      "distinct_update_id": 1279021,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-13",
+      "rows": 17771262,
+      "distinct_event_id": 17771262,
+      "duplicates": 0,
+      "distinct_update_id": 1324371,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-15",
+      "rows": 20226149,
+      "distinct_event_id": 20226103,
+      "duplicates": 46,
+      "distinct_update_id": 1371253,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-14",
+      "rows": 19499439,
+      "distinct_event_id": 19499439,
+      "duplicates": 0,
+      "distinct_update_id": 1394679,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-16",
+      "rows": 17642255,
+      "distinct_event_id": 17642255,
+      "duplicates": 0,
+      "distinct_update_id": 1200207,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-17",
+      "rows": 17204434,
+      "distinct_event_id": 17204434,
+      "duplicates": 0,
+      "distinct_update_id": 1174428,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    },
+    {
+      "source": "updates",
+      "type": "events",
+      "migration": 4,
+      "date": "2026-04-22",
+      "rows": 1679783,
+      "distinct_event_id": 1679783,
+      "duplicates": 0,
+      "distinct_update_id": 109296,
+      "null_counts": {
+        "event_id": 0,
+        "update_id": 0,
+        "contract_id": 0,
+        "template_id": 0,
+        "effective_at": 0,
+        "migration_id": 0
+      },
+      "mig_mismatch": 0,
+      "partition_mismatch": 0
+    }
+  ],
+  "summary": {
+    "partitions_scanned": 268,
+    "findings_total": 152,
+    "errors": 44,
+    "warnings": 101,
+    "info": 7,
+    "by_check": {
+      "offsets": 83,
+      "dups": 36,
+      "event_count": 17,
+      "query": 8,
+      "orphans": 0,
+      "alignment": 0,
+      "boundary": 0,
+      "acs": 1
+    }
+  }
+}
