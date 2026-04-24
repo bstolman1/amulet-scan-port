@@ -30,6 +30,9 @@
  *   node verify-scan-completeness.js --migration=4 --start=2026-03-01 --end=2026-04-20 --output=...
  *   node verify-scan-completeness.js --migration=4 --start=2025-12-16 --end=2026-04-22 --sample=30 --output=...
  *   node verify-scan-completeness.js --migration=4 --start=... --end=... --resume --output=...
+ *   # Dump IDs for surgical remediation when counts drift:
+ *   node verify-scan-completeness.js --migration=4 --date=2025-12-19 \
+ *        --output=/tmp/check.ndjson --dump-scan-ids=/tmp/vsc-ids --compute-missing
  *
  * Requirements
  *   - GCS_BUCKET, GCS_HMAC_KEY_ID, GCS_HMAC_SECRET env vars
@@ -39,10 +42,10 @@
 
 import { execSync, execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, unlinkSync, readFileSync, appendFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync, readFileSync, appendFileSync, writeFileSync, renameSync, createWriteStream } from 'fs';
 import { createInterface } from 'readline';
 import { createReadStream } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
 import http from 'http';
@@ -117,17 +120,19 @@ function argVal(name, def = null) {
 function hasFlag(name) { return process.argv.slice(2).some(a => a === `--${name}`); }
 
 const OPTS = {
-  migration:   argVal('migration') !== null ? parseInt(argVal('migration'), 10) : null,
-  date:        argVal('date'),
-  start:       argVal('start'),
-  end:         argVal('end'),
-  sample:      argVal('sample') !== null ? parseInt(argVal('sample'), 10) : null,
-  concurrency: parseInt(argVal('concurrency', '1'), 10),
-  output:      argVal('output'),
-  resume:      hasFlag('resume'),
-  dryRun:      hasFlag('dry-run'),
-  verbose:     hasFlag('verbose') || hasFlag('v'),
-  help:        hasFlag('help') || hasFlag('h'),
+  migration:    argVal('migration') !== null ? parseInt(argVal('migration'), 10) : null,
+  date:         argVal('date'),
+  start:        argVal('start'),
+  end:          argVal('end'),
+  sample:       argVal('sample') !== null ? parseInt(argVal('sample'), 10) : null,
+  concurrency:  parseInt(argVal('concurrency', '1'), 10),
+  output:       argVal('output'),
+  dumpScanIds:  argVal('dump-scan-ids'),
+  computeMissing: hasFlag('compute-missing'),
+  resume:       hasFlag('resume'),
+  dryRun:       hasFlag('dry-run'),
+  verbose:      hasFlag('verbose') || hasFlag('v'),
+  help:         hasFlag('help') || hasFlag('h'),
 };
 
 function printHelp() {
@@ -146,6 +151,13 @@ Target selection (one of):
 Options:
   --concurrency=N      parallel days (default 1 — Scan API rate-limits to watch)
   --resume             skip days already present in --output
+  --dump-scan-ids=DIR  stream Scan-returned update_ids to DIR/scan-ids-m<M>-<DATE>.ndjson
+                       (one {update_id, record_time, migration_id} JSON per line, deduped).
+                       Enables surgical remediation: diff against GCS to find exactly
+                       which updates are missing, instead of re-fetching whole days.
+  --compute-missing    For DRIFT days, use DuckDB to anti-join the scan dump against GCS
+                       and write DIR/missing-ids-m<M>-<DATE>.ndjson listing update_ids
+                       present in Scan but not in GCS. Requires --dump-scan-ids.
   --dry-run            plan only, no API or GCS calls
   --verbose, -v
 
@@ -165,6 +177,15 @@ if (!OPTS.date && !(OPTS.start && OPTS.end)) {
   console.error('ERROR: specify either --date or both --start and --end\n');
   printHelp();
   process.exit(2);
+}
+if (OPTS.computeMissing && !OPTS.dumpScanIds) {
+  console.error('ERROR: --compute-missing requires --dump-scan-ids=DIR\n');
+  printHelp();
+  process.exit(2);
+}
+if (OPTS.dumpScanIds) {
+  // Resolve once so relative paths don't break if we log the dir later
+  OPTS.dumpScanIds = resolve(OPTS.dumpScanIds);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -335,6 +356,104 @@ async function postUpdatesPage(afterMigrationId, afterRecordTime) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Scan-id dump helpers
+//
+// When --dump-scan-ids=DIR is passed, each day's walk writes the update_ids
+// it encounters (within the day's filter window, deduped) to a per-day ndjson
+// file. We stage to <final>.partial and rename on success; a partial left
+// behind by a crashed run is always overwritten by the next attempt.
+// ─────────────────────────────────────────────────────────────
+
+function dumpPathsFor(migrationId, dateStr) {
+  const base = OPTS.dumpScanIds;
+  return {
+    scanFinal:    join(base, `scan-ids-m${migrationId}-${dateStr}.ndjson`),
+    scanPartial:  join(base, `scan-ids-m${migrationId}-${dateStr}.ndjson.partial`),
+    missingFinal: join(base, `missing-ids-m${migrationId}-${dateStr}.ndjson`),
+  };
+}
+
+function openScanDump(migrationId, dateStr) {
+  if (!OPTS.dumpScanIds) return null;
+  if (!existsSync(OPTS.dumpScanIds)) mkdirSync(OPTS.dumpScanIds, { recursive: true });
+  const { scanPartial } = dumpPathsFor(migrationId, dateStr);
+  try { if (existsSync(scanPartial)) unlinkSync(scanPartial); } catch {}
+  // `w` truncates — we always start fresh for a day (resume is handled at the
+  // outer loop via the --output ndjson, not via presence of this dump file).
+  return createWriteStream(scanPartial, { flags: 'w' });
+}
+
+function finalizeScanDump(stream, migrationId, dateStr) {
+  return new Promise((resolveP, rejectP) => {
+    if (!stream) return resolveP();
+    stream.end(err => {
+      if (err) return rejectP(err);
+      try {
+        const { scanPartial, scanFinal } = dumpPathsFor(migrationId, dateStr);
+        renameSync(scanPartial, scanFinal);
+        resolveP();
+      } catch (e) { rejectP(e); }
+    });
+  });
+}
+
+async function computeMissingIds(migrationId, dateStr) {
+  // Anti-join: scan dump ∖ GCS. Emits one update_id per line to missing-ids-....ndjson.
+  // Uses the same ±1-day GCS glob enumeration as gcsCountForDay to catch midnight drift.
+  const { scanFinal, missingFinal } = dumpPathsFor(migrationId, dateStr);
+  if (!existsSync(scanFinal)) {
+    throw new Error(`scan-ids dump not found at ${scanFinal}`);
+  }
+  const globs = listExistingGlobs(migrationId, dateStr);
+  const { dayStart, dayEnd } = dayBoundsISO(dateStr);
+
+  // If GCS has no files for this day, every Scan id is missing.
+  const gcsReader = globs.length === 0
+    ? `SELECT NULL::VARCHAR AS update_id WHERE FALSE`
+    : `SELECT DISTINCT update_id
+         FROM read_parquet([${globs.map(g => `'${g}'`).join(', ')}], union_by_name=true)
+        WHERE record_time >= '${sqlStr(dayStart)}'
+          AND record_time <  '${sqlStr(dayEnd)}'
+          AND migration_id = ${migrationId}`;
+
+  const sql = `
+    WITH scan AS (
+      SELECT DISTINCT update_id
+      FROM read_json_auto('${sqlStr(scanFinal)}', format='newline_delimited')
+    ),
+    gcs AS (${gcsReader})
+    SELECT scan.update_id
+    FROM scan
+    LEFT JOIN gcs USING (update_id)
+    WHERE gcs.update_id IS NULL
+    ORDER BY scan.update_id
+  `;
+  const wrapped = [
+    `SET memory_limit='${DUCKDB_MEMORY}';`,
+    `SET threads=${DUCKDB_THREADS};`,
+    `SET preserve_insertion_order=false;`,
+    `SET temp_directory='${sqlStr(join(TMP_DIR, 'spill'))}';`,
+    `INSTALL httpfs; LOAD httpfs;`,
+    `CREATE OR REPLACE SECRET s (TYPE GCS, KEY_ID '${sqlStr(HMAC_KEY_ID)}', SECRET '${sqlStr(HMAC_SECRET)}');`,
+    // FORMAT JSON + ARRAY FALSE writes one JSON object per line — i.e. ndjson.
+    `COPY (${sql}) TO '${sqlStr(missingFinal)}' (FORMAT JSON, ARRAY FALSE);`,
+  ].join(' ');
+  try {
+    await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: 900_000 });
+  } catch (err) {
+    const stderr = err.stderr?.toString() || '';
+    throw new Error(`missing-ids computation failed for ${dateStr} m=${migrationId}: ${stderr.slice(0, 400) || err.message}`);
+  }
+  // Count lines for the result row — cheap even on big files.
+  let n = 0;
+  try {
+    const text = readFileSync(missingFinal, 'utf8');
+    if (text.length) n = text.split('\n').filter(l => l.trim().length).length;
+  } catch {}
+  return { path: missingFinal, missing_count: n };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Count updates for (migration, date) via paginated Scan API
 //
 // Walks forward from `after = (migrationId, dayStart)` and stops when either:
@@ -345,7 +464,7 @@ async function postUpdatesPage(afterMigrationId, afterRecordTime) {
 // Counts only records where migration_id == target AND record_time < dayEnd.
 // ─────────────────────────────────────────────────────────────
 
-async function scanCountForDay(migrationId, dateStr) {
+async function scanCountForDay(migrationId, dateStr, dumpStream = null) {
   const { dayEnd, afterCursor } = dayBoundsISO(dateStr);
   let afterMigrationId = migrationId;
   let afterRecordTime  = afterCursor;
@@ -372,6 +491,11 @@ async function scanCountForDay(migrationId, dateStr) {
       if (mig === migrationId && rt < dayEnd && uid && !seenIds.has(uid)) {
         seenIds.add(uid);
         counted += 1;
+        if (dumpStream) {
+          // One JSON per line — compact_json encoding gives plain strings for
+          // update_id/record_time, so JSON.stringify is cheap.
+          dumpStream.write(JSON.stringify({ update_id: uid, record_time: rt, migration_id: mig }) + '\n');
+        }
       }
     }
 
@@ -519,7 +643,13 @@ function fmtResultLine(r) {
   const diffPart = r.status === 'DRIFT'
     ? `  DRIFT  gcs−scan=${r.gcs - r.scan} (${(100 * (r.gcs - r.scan) / Math.max(1, r.scan)).toFixed(4)}%)`
     : r.status === 'ERROR' ? `  ERROR: ${r.error}` : '  MATCH';
-  return `  ${ico} ${r.date}  mig=${r.migration}  gcs=${r.gcs}  scan=${r.scan}${diffPart}  (${r.elapsed_s}s, ${r.pages} pages)`;
+  let missingPart = '';
+  if (r.missing_ids_count != null) {
+    missingPart = `  missing=${r.missing_ids_count}`;
+  } else if (r.missing_ids_error) {
+    missingPart = `  missing=ERROR`;
+  }
+  return `  ${ico} ${r.date}  mig=${r.migration}  gcs=${r.gcs}  scan=${r.scan}${diffPart}${missingPart}  (${r.elapsed_s}s, ${r.pages} pages)`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -553,6 +683,9 @@ async function main() {
   console.log(`  Days:        ${dates.length}  (${dates[0]} → ${dates[dates.length - 1]})${OPTS.sample ? `  [sampled from range]` : ''}`);
   console.log(`  Concurrency: ${OPTS.concurrency}`);
   console.log(`  Output:      ${OPTS.output}${OPTS.resume ? '  [resume mode]' : ''}`);
+  if (OPTS.dumpScanIds) {
+    console.log(`  Dump IDs:    ${OPTS.dumpScanIds}${OPTS.computeMissing ? '  [+compute-missing]' : ''}`);
+  }
   console.log(`  Scan page:   ${PAGE_SIZE}   Req timeout: ${REQUEST_TIMEOUT_MS/1000}s   Failover: ${ENDPOINT_ROTATE_AFTER_ERRORS} errors`);
   console.log('═'.repeat(75));
 
@@ -587,12 +720,14 @@ async function main() {
   await mapLimit(todo, OPTS.concurrency, async (date) => {
     const t0 = Date.now();
     let result;
+    const dumpStream = openScanDump(OPTS.migration, date);
     try {
       // Run GCS + Scan counts in parallel — they don't share resources
       const [gcsCount, scanResult] = await Promise.all([
         gcsCountForDay(OPTS.migration, date),
-        scanCountForDay(OPTS.migration, date),
+        scanCountForDay(OPTS.migration, date, dumpStream),
       ]);
+      await finalizeScanDump(dumpStream, OPTS.migration, date);
       const elapsed = Math.round((Date.now() - t0) / 1000);
       const status = classifyResult(gcsCount, scanResult.count);
       result = {
@@ -606,8 +741,26 @@ async function main() {
         endpoint_at_end: currentEndpointName(),
         ts: new Date().toISOString(),
       };
+      if (OPTS.dumpScanIds) {
+        result.scan_ids_file = dumpPathsFor(OPTS.migration, date).scanFinal;
+      }
+      // On DRIFT with --compute-missing, materialize the missing-ids list.
+      // We swallow its errors into the result record so one day's diff failure
+      // doesn't abort the rest of the run.
+      if (OPTS.computeMissing && status === 'DRIFT') {
+        try {
+          const m = await computeMissingIds(OPTS.migration, date);
+          result.missing_ids_file  = m.path;
+          result.missing_ids_count = m.missing_count;
+        } catch (mErr) {
+          result.missing_ids_error = (mErr.message || String(mErr)).slice(0, 600);
+        }
+      }
       if (status === 'MATCH') matches += 1; else drifts += 1;
     } catch (err) {
+      // On failure we still try to close the partial dump cleanly; leave the
+      // .partial behind — next run will truncate it before re-walking.
+      if (dumpStream && !dumpStream.destroyed) dumpStream.end();
       const elapsed = Math.round((Date.now() - t0) / 1000);
       result = {
         date, migration: OPTS.migration,
