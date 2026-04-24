@@ -703,10 +703,36 @@ function dayGlob(source, type, migration, date) {
 }
 
 /**
+ * File-count gate for the per-day aggregate. Live-ingest days emit tens of
+ * thousands of small parquet files by design (50-66k on April 2026 days),
+ * and DuckDB's per-file open/stat overhead pushes the aggregate past the
+ * 30-min timeout even with generous memory. Skip with INFO rather than
+ * burning the timeout — same pattern as the orphan-join gate at line ~936.
+ *
+ * Returns true if the gate fired (caller should short-circuit the aggregate).
+ * Override threshold via DQ_PER_DAY_MAX_FILES; set to 0 to disable.
+ */
+function perDayFileGate(kind, source, migration, date, selfIndex) {
+  const threshold = parseInt(process.env.DQ_PER_DAY_MAX_FILES || '30000', 10);
+  if (!threshold || !selfIndex) return false;
+  const { y, m, d } = parseYMD(date);
+  const n = selfIndex.get(`${y}/${m}/${d}`)?.length || 0;
+  if (n <= threshold) return false;
+  const scope = `${source}/${kind}/migration=${migration} ${date}`;
+  addFinding(SEVERITY.INFO, 'query', scope,
+    `skipped per-day ${kind} aggregate — ${n} files exceeds DQ_PER_DAY_MAX_FILES=${threshold}. ` +
+    `Bump DQ_DUCKDB_MEMORY and DQ_QUERY_TIMEOUT_MS then raise this threshold to include this day.`);
+  return true;
+}
+
+/**
  * Combined per-day query for updates: counts, nulls, partition mismatch,
  * duplicate update_id, timestamp sanity, offset monotonicity.
  */
-async function checkUpdatesDay(source, migration, date) {
+async function checkUpdatesDay(source, migration, date, selfIndex = null) {
+  if (perDayFileGate('updates', source, migration, date, selfIndex)) {
+    return { rows: 0, distinct: 0, skipped: true };
+  }
   const glob = dayGlob(source, 'updates', migration, date);
   const { y, m, d } = parseYMD(date);
   const scope = `${source}/updates/migration=${migration} ${date}`;
@@ -844,6 +870,11 @@ async function checkUpdatesDay(source, migration, date) {
  * orphan events (optional), event_count consistency (optional).
  */
 async function checkEventsDay(source, migration, date, updatesIndex = null, eventsIndex = null) {
+  if (perDayFileGate('events', source, migration, date, eventsIndex)) {
+    // Returning early also skips the orphan/event_count join below —
+    // intentional, since that join is strictly heavier than the aggregate.
+    return { rows: 0, distinct: 0, skipped: true };
+  }
   const glob = dayGlob(source, 'events', migration, date);
   const { y, m, d } = parseYMD(date);
   const scope = `${source}/events/migration=${migration} ${date}`;
@@ -1382,7 +1413,7 @@ async function main() {
           ? indexes.get(`${source}/events/${migration}`)
           : null;
         const fn = type === 'updates'
-          ? (date) => checkUpdatesDay(source, migration, date)
+          ? (date) => checkUpdatesDay(source, migration, date, idx)
           : (date) => checkEventsDay(source, migration, date, updatesIndexForJoin, eventsIndexForJoin);
         await mapLimit(eligible, OPTS.concurrency, fn);
       }
