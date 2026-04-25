@@ -1,5 +1,27 @@
 #!/usr/bin/env node
 /**
+ * ⚠️  DEPRECATED — DO NOT USE FOR NEW BACKFILL OPERATIONS  ⚠️
+ *
+ * This script has a SYSTEMATIC DATA-LOSS BUG: the cursor advancement uses
+ *   `new Date(...).setMilliseconds(getMilliseconds() - 1)`
+ * which truncates Canton's microsecond-precision record_time to milliseconds
+ * (JS `Date` only stores ms), then jumps the cursor by a full millisecond.
+ * Any records that share a millisecond with the batch's earliest record but
+ * weren't included in that batch are permanently SKIPPED.
+ *
+ * Empirically observed loss: ~0.1-0.3% of updates per backfill day, with
+ * heavier loss on busier days (more records per ms → more boundary
+ * collisions). Discovered 2026-04-25 by verify-scan-completeness.js,
+ * which compared GCS counts to Scan API counts across 5 sampled M4
+ * backfill days — every one drifted by exactly this pattern.
+ *
+ * Use `reingest-updates.js` instead for ALL historical fetches. It uses
+ * /v2/updates with full ISO precision in the cursor and has been verified
+ * to produce exact counts matching Scan API (3 sampled days, 0 drift).
+ *
+ * See scripts/ingest/DEPRECATED.md for the full incident write-up,
+ * remediation plan, and migration path.
+ *
  * Canton Ledger Backfill Script - Direct Parquet Version
  *
  * Fetches historical ledger data using the backfilling API
