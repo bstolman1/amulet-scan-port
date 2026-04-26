@@ -127,6 +127,7 @@ const OPTS = {
   sample:       argVal('sample') !== null ? parseInt(argVal('sample'), 10) : null,
   concurrency:  parseInt(argVal('concurrency', '1'), 10),
   output:       argVal('output'),
+  scope:        argVal('scope', 'all'),
   dumpScanIds:  argVal('dump-scan-ids'),
   computeMissing: hasFlag('compute-missing'),
   resume:       hasFlag('resume'),
@@ -150,6 +151,13 @@ Target selection (one of):
 
 Options:
   --concurrency=N      parallel days (default 1 — Scan API rate-limits to watch)
+  --scope=WHAT         which GCS partitions to count against Scan (default: all)
+                         all       — read raw/backfill/<day> ∪ raw/updates/<day> (DISTINCT update_id)
+                         updates   — read only raw/updates/<day> (post-reingest verification)
+                         backfill  — read only raw/backfill/<day> (forensic / pre-remediation audit)
+                       Use --scope=updates after a reingest to prove raw/updates/ alone matches Scan
+                       before destroying raw/backfill/ — a MATCH from --scope=all does NOT prove
+                       raw/updates/ is self-sufficient (the union can pass while one side is empty).
   --resume             skip days already present in --output
   --dump-scan-ids=DIR  stream Scan-returned update_ids to DIR/scan-ids-m<M>-<DATE>.ndjson
                        (one {update_id, record_time, migration_id} JSON per line, deduped).
@@ -181,6 +189,10 @@ if (!OPTS.date && !(OPTS.start && OPTS.end)) {
 if (OPTS.computeMissing && !OPTS.dumpScanIds) {
   console.error('ERROR: --compute-missing requires --dump-scan-ids=DIR\n');
   printHelp();
+  process.exit(2);
+}
+if (!['all', 'updates', 'backfill'].includes(OPTS.scope)) {
+  console.error(`ERROR: --scope must be one of: all, updates, backfill (got: ${OPTS.scope})\n`);
   process.exit(2);
 }
 if (OPTS.dumpScanIds) {
@@ -531,14 +543,26 @@ function sqlStr(s) { return String(s).replace(/'/g, "''"); }
 // Enumerate which day-partition globs ACTUALLY have files. Avoids DuckDB's
 // "No files found" error when one of the candidate globs is empty (e.g. the
 // `updates/updates/` path doesn't exist in Dec 2025 because live ingest
-// hadn't started yet). Cheap — 6 gsutil ls calls, ~2-3 s total per day.
+// hadn't started yet). Cheap — up to 6 gsutil ls calls, ~2-3 s total per day.
+//
+// Honours OPTS.scope: 'all' (both raw/backfill/ and raw/updates/), 'updates'
+// (raw/updates/ only — for post-reingest verification), 'backfill' (raw/backfill/
+// only — for forensic audit). The "post-reingest" use case is the load-bearing
+// one: --scope=updates is the only way to prove raw/updates/ is self-sufficient
+// before destroying raw/backfill/.
 function listExistingGlobs(migrationId, dateStr) {
   const candidates = [];
+  const includeBackfill = OPTS.scope === 'all' || OPTS.scope === 'backfill';
+  const includeUpdates  = OPTS.scope === 'all' || OPTS.scope === 'updates';
   for (const offset of [-1, 0, 1]) {
     const dt = addDays(dateStr, offset);
     const { y, m, d } = parseYMD(dt);
-    candidates.push(`gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
-    candidates.push(`gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+    if (includeBackfill) {
+      candidates.push(`gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+    }
+    if (includeUpdates) {
+      candidates.push(`gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+    }
   }
   const existing = [];
   for (const glob of candidates) {
@@ -683,6 +707,7 @@ async function main() {
   console.log(`  Days:        ${dates.length}  (${dates[0]} → ${dates[dates.length - 1]})${OPTS.sample ? `  [sampled from range]` : ''}`);
   console.log(`  Concurrency: ${OPTS.concurrency}`);
   console.log(`  Output:      ${OPTS.output}${OPTS.resume ? '  [resume mode]' : ''}`);
+  console.log(`  GCS scope:   ${OPTS.scope}  ${OPTS.scope === 'all' ? '(raw/backfill ∪ raw/updates)' : OPTS.scope === 'updates' ? '(raw/updates only — post-reingest)' : '(raw/backfill only — forensic)'}`);
   if (OPTS.dumpScanIds) {
     console.log(`  Dump IDs:    ${OPTS.dumpScanIds}${OPTS.computeMissing ? '  [+compute-missing]' : ''}`);
   }
@@ -732,6 +757,7 @@ async function main() {
       const status = classifyResult(gcsCount, scanResult.count);
       result = {
         date, migration: OPTS.migration,
+        scope: OPTS.scope,
         gcs: gcsCount, scan: scanResult.count,
         status,
         pages: scanResult.pages,
@@ -764,6 +790,7 @@ async function main() {
       const elapsed = Math.round((Date.now() - t0) / 1000);
       result = {
         date, migration: OPTS.migration,
+        scope: OPTS.scope,
         gcs: null, scan: null, status: 'ERROR',
         pages: 0, elapsed_s: elapsed,
         error: (err.message || String(err)).slice(0, 600),
