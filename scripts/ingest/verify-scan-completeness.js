@@ -127,7 +127,7 @@ const OPTS = {
   sample:       argVal('sample') !== null ? parseInt(argVal('sample'), 10) : null,
   concurrency:  parseInt(argVal('concurrency', '1'), 10),
   output:       argVal('output'),
-  scope:        argVal('scope', 'all'),
+  scope:        argVal('scope', 'updates'),
   dumpScanIds:  argVal('dump-scan-ids'),
   computeMissing: hasFlag('compute-missing'),
   resume:       hasFlag('resume'),
@@ -151,13 +151,11 @@ Target selection (one of):
 
 Options:
   --concurrency=N      parallel days (default 1 — Scan API rate-limits to watch)
-  --scope=WHAT         which GCS partitions to count against Scan (default: all)
-                         all       — read raw/backfill/<day> ∪ raw/updates/<day> (DISTINCT update_id)
-                         updates   — read only raw/updates/<day> (post-reingest verification)
-                         backfill  — read only raw/backfill/<day> (forensic / pre-remediation audit)
-                       Use --scope=updates after a reingest to prove raw/updates/ alone matches Scan
-                       before destroying raw/backfill/ — a MATCH from --scope=all does NOT prove
-                       raw/updates/ is self-sufficient (the union can pass while one side is empty).
+  --scope=WHAT         which GCS partition to count against Scan (default: updates)
+                         updates   — read only raw/updates/<day> (reingested / live data)
+                         backfill  — read only raw/backfill/<day> (original backfill — forensic only)
+                       No union mode: backfill is known-corrupted data being replaced by reingest.
+                       Reading both would conflate the old bad data with the new good data.
   --resume             skip days already present in --output
   --dump-scan-ids=DIR  stream Scan-returned update_ids to DIR/scan-ids-m<M>-<DATE>.ndjson
                        (one {update_id, record_time, migration_id} JSON per line, deduped).
@@ -191,8 +189,8 @@ if (OPTS.computeMissing && !OPTS.dumpScanIds) {
   printHelp();
   process.exit(2);
 }
-if (!['all', 'updates', 'backfill'].includes(OPTS.scope)) {
-  console.error(`ERROR: --scope must be one of: all, updates, backfill (got: ${OPTS.scope})\n`);
+if (!['updates', 'backfill'].includes(OPTS.scope)) {
+  console.error(`ERROR: --scope must be one of: updates, backfill (got: ${OPTS.scope})\n`);
   process.exit(2);
 }
 if (OPTS.dumpScanIds) {
@@ -545,15 +543,14 @@ function sqlStr(s) { return String(s).replace(/'/g, "''"); }
 // `updates/updates/` path doesn't exist in Dec 2025 because live ingest
 // hadn't started yet). Cheap — up to 6 gsutil ls calls, ~2-3 s total per day.
 //
-// Honours OPTS.scope: 'all' (both raw/backfill/ and raw/updates/), 'updates'
-// (raw/updates/ only — for post-reingest verification), 'backfill' (raw/backfill/
-// only — for forensic audit). The "post-reingest" use case is the load-bearing
-// one: --scope=updates is the only way to prove raw/updates/ is self-sufficient
-// before destroying raw/backfill/.
+// Honours OPTS.scope: 'updates' (raw/updates/ — reingested or live data) or
+// 'backfill' (raw/backfill/ — original fetch-backfill.js output, forensic only).
+// No union mode: backfill is known-corrupted data being replaced by reingest;
+// reading both would conflate old bad data with new good data.
 function listExistingGlobs(migrationId, dateStr) {
   const candidates = [];
-  const includeBackfill = OPTS.scope === 'all' || OPTS.scope === 'backfill';
-  const includeUpdates  = OPTS.scope === 'all' || OPTS.scope === 'updates';
+  const includeBackfill = OPTS.scope === 'backfill';
+  const includeUpdates  = OPTS.scope === 'updates';
   for (const offset of [-1, 0, 1]) {
     const dt = addDays(dateStr, offset);
     const { y, m, d } = parseYMD(dt);
@@ -707,7 +704,7 @@ async function main() {
   console.log(`  Days:        ${dates.length}  (${dates[0]} → ${dates[dates.length - 1]})${OPTS.sample ? `  [sampled from range]` : ''}`);
   console.log(`  Concurrency: ${OPTS.concurrency}`);
   console.log(`  Output:      ${OPTS.output}${OPTS.resume ? '  [resume mode]' : ''}`);
-  console.log(`  GCS scope:   ${OPTS.scope}  ${OPTS.scope === 'all' ? '(raw/backfill ∪ raw/updates)' : OPTS.scope === 'updates' ? '(raw/updates only — post-reingest)' : '(raw/backfill only — forensic)'}`);
+  console.log(`  GCS scope:   ${OPTS.scope}  ${OPTS.scope === 'updates' ? '(raw/updates only)' : '(raw/backfill only — forensic)'}`);
   if (OPTS.dumpScanIds) {
     console.log(`  Dump IDs:    ${OPTS.dumpScanIds}${OPTS.computeMissing ? '  [+compute-missing]' : ''}`);
   }
