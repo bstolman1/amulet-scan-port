@@ -363,6 +363,7 @@ async function runReingest(migration, dateStr, logPath) {
   const resuming   = existsSync(cursorPath);
 
   const args = [
+    '--max-old-space-size=8192',
     REINGEST_SCRIPT,
     `--start=${dateStr}`,
     `--end=${dateStr}`,
@@ -422,14 +423,12 @@ async function runVerify(migration, dateStr, logPath) {
   try { if (existsSync(outFile)) unlinkSync(outFile); } catch {}
 
   const args = [
+    '--max-old-space-size=4096',
     VERIFY_SCRIPT,
     `--migration=${migration}`,
     `--date=${dateStr}`,
     `--output=${outFile}`,
-    // --scope=updates: verify reads ONLY raw/updates/<day> against Scan, proving
-    // the reingested data is self-sufficient before cleanup destroys raw/backfill/.
-    // The default --scope=all (union) can MATCH while raw/updates/ is empty,
-    // which would make the subsequent cleanup catastrophic.
+    // verify's default scope is 'updates' — reads only raw/updates/<day>.
     `--scope=updates`,
   ];
   logHeader(logPath, dateStr, 'verify', `starting — scope=updates output=${outFile}`);
