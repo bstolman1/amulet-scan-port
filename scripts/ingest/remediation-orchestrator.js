@@ -292,7 +292,174 @@ async function cleanupBackfillDay(migration, dateStr, logPath) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Subprocess runners (TODO — next commit)
+// Subprocess runner — spawns a child Node script, streams stdout/stderr
+// line-by-line into the orchestrator log with a [date phase] prefix, and
+// resolves to {code, signal}. Never rejects on non-zero exit; the caller
+// inspects the returned code to decide success vs failure.
+// ─────────────────────────────────────────────────────────────
+
+function spawnWithLog(cmd, args, dateStr, phase, logPath) {
+  return new Promise((resolveP, rejectP) => {
+    const child = spawn(cmd, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    const prefix    = `[${dateStr} ${phase}]`;
+    const errPrefix = `[${dateStr} ${phase}!]`;
+    const outRl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    const errRl = createInterface({ input: child.stderr, crlfDelay: Infinity });
+    outRl.on('line', (l) => logLine(logPath, `${prefix} ${l}`));
+    errRl.on('line', (l) => logLine(logPath, `${errPrefix} ${l}`));
+    child.on('error', rejectP);
+    child.on('exit', (code, signal) => resolveP({ code, signal }));
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reingest phase
+//
+// Cursor-file path mirrors reingestCursorPath() in reingest-updates.js:
+//   ${CURSOR_DIR}/reingest-${migration}-${start}-${end}.json   (dates unpadded YYYYMMDD)
+//
+// Resume detection: if the cursor file exists when we start, a prior run
+// crashed mid-day and reingest's safety guard refuses --clean. Drop --clean
+// in that case so reingest auto-resumes from the saved cursor.
+//
+// Success requires BOTH:
+//   - subprocess exit code 0
+//   - cursor file absent after exit
+// reingest's gracefulShutdown saves cursor and exits 0 on SIGINT/SIGTERM,
+// so exit 0 alone isn't enough.
+// ─────────────────────────────────────────────────────────────
+
+function reingestCursorPath(migration, startStr, endStr) {
+  const s = startStr.replace(/-/g, '');
+  const e = endStr.replace(/-/g, '');
+  return join(CURSOR_DIR, `reingest-${migration}-${s}-${e}.json`);
+}
+
+async function runReingest(migration, dateStr, logPath) {
+  const cursorPath = reingestCursorPath(migration, dateStr, dateStr);
+  const resuming   = existsSync(cursorPath);
+
+  const args = [
+    REINGEST_SCRIPT,
+    `--start=${dateStr}`,
+    `--end=${dateStr}`,
+    `--migration=${migration}`,
+  ];
+  if (!resuming) args.push('--clean');
+
+  logHeader(logPath, dateStr, 'reingest',
+    `starting (${resuming ? 'RESUME from cursor' : 'fresh --clean'}) — cmd: node ${args.map(a => a.replace(REINGEST_SCRIPT, 'reingest-updates.js')).join(' ')}`);
+
+  const t0 = Date.now();
+  let res;
+  try {
+    res = await spawnWithLog('node', args, dateStr, 'reingest', logPath);
+  } catch (err) {
+    logHeader(logPath, dateStr, 'reingest', `subprocess spawn error: ${err.message}`);
+    return { ok: false, reason: 'spawn_error', details: { error: err.message } };
+  }
+  const elapsed_s = Math.round((Date.now() - t0) / 1000);
+
+  const cursorAfter = existsSync(cursorPath);
+  if (res.code === 0 && !cursorAfter) {
+    logHeader(logPath, dateStr, 'reingest', `OK (exit=0, cursor cleared) — ${elapsed_s}s`);
+    return { ok: true, details: { elapsed_s, was_resume: resuming } };
+  }
+  // Anything else is failure.
+  const reason = res.signal              ? `signal_${res.signal}`
+               : (res.code !== 0)        ? `exit_${res.code}`
+               : cursorAfter             ? 'cursor_persists'
+               :                           'unknown';
+  logHeader(logPath, dateStr, 'reingest',
+    `FAILED (exit=${res.code}, signal=${res.signal || 'none'}, cursor_present=${cursorAfter}) — ${elapsed_s}s`);
+  return {
+    ok: false,
+    reason,
+    details: { exit: res.code, signal: res.signal, cursor_present: cursorAfter, elapsed_s, was_resume: resuming },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Verify phase
+//
+// Runs verify-scan-completeness.js with --output=<temp>, then reads the
+// single ndjson result line for this day. Authoritative outcome is the
+// `status` field of the result, not the subprocess exit code:
+//   MATCH → ok; DRIFT → halt; ERROR → halt; missing line → halt.
+// ─────────────────────────────────────────────────────────────
+
+function verifyOutputPath(migration, dateStr) {
+  return join(VERIFY_TMP_DIR, `m${migration}-${dateStr}.ndjson`);
+}
+
+async function runVerify(migration, dateStr, logPath) {
+  if (!existsSync(VERIFY_TMP_DIR)) mkdirSync(VERIFY_TMP_DIR, { recursive: true });
+  const outFile = verifyOutputPath(migration, dateStr);
+  // Always start fresh — old content from a prior failed run would parse first.
+  try { if (existsSync(outFile)) unlinkSync(outFile); } catch {}
+
+  const args = [
+    VERIFY_SCRIPT,
+    `--migration=${migration}`,
+    `--date=${dateStr}`,
+    `--output=${outFile}`,
+  ];
+  logHeader(logPath, dateStr, 'verify', `starting — output=${outFile}`);
+
+  const t0 = Date.now();
+  let res;
+  try {
+    res = await spawnWithLog('node', args, dateStr, 'verify', logPath);
+  } catch (err) {
+    logHeader(logPath, dateStr, 'verify', `subprocess spawn error: ${err.message}`);
+    return { ok: false, reason: 'spawn_error', details: { error: err.message } };
+  }
+  const elapsed_s = Math.round((Date.now() - t0) / 1000);
+
+  // Parse the result ndjson — should have exactly one line for our day.
+  let parsed = null;
+  if (existsSync(outFile)) {
+    const text = readFileSync(outFile, 'utf8');
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const r = JSON.parse(t);
+        if (r.date === dateStr && r.migration === migration) { parsed = r; break; }
+      } catch { /* ignore */ }
+    }
+  }
+
+  if (!parsed) {
+    logHeader(logPath, dateStr, 'verify',
+      `FAILED — no result line in ${outFile} (exit=${res.code}, signal=${res.signal || 'none'}) — ${elapsed_s}s`);
+    return {
+      ok: false,
+      reason: 'no_result',
+      details: { exit: res.code, signal: res.signal, elapsed_s },
+    };
+  }
+
+  const summary = `gcs=${parsed.gcs} scan=${parsed.scan} status=${parsed.status}`;
+  logHeader(logPath, dateStr, 'verify',
+    parsed.status === 'MATCH'
+      ? `OK ${summary} — ${elapsed_s}s`
+      : `FAILED ${summary} — ${elapsed_s}s (exit=${res.code})`);
+
+  if (parsed.status === 'MATCH') {
+    return { ok: true, details: { gcs: parsed.gcs, scan: parsed.scan, elapsed_s } };
+  }
+  return {
+    ok: false,
+    reason: parsed.status === 'DRIFT' ? 'drift' : 'verify_error',
+    details: { gcs: parsed.gcs, scan: parsed.scan, status: parsed.status, elapsed_s, error: parsed.error },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Per-day driver + outer loop (TODO — next commit)
 // ─────────────────────────────────────────────────────────────
 
