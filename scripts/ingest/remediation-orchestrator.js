@@ -9,8 +9,10 @@
  *                 Wait for the script's persistent cursor file to be deleted —
  *                 that's the only reliable "completed cleanly" signal, since
  *                 reingest's SIGINT handler also exits 0.
- *   2. verify:    spawn `verify-scan-completeness.js --migration=N --date=D`.
- *                 Read its output ndjson. Halt on any drift.
+ *   2. verify:    spawn `verify-scan-completeness.js --migration=N --date=D --scope=updates`.
+ *                 --scope=updates is load-bearing: verify reads ONLY raw/updates/<day>,
+ *                 not the union with raw/backfill/. A MATCH proves raw/updates/ alone
+ *                 is self-sufficient before cleanup destroys raw/backfill/. Halt on drift.
  *   3. cleanup:   SDK-delete `raw/backfill/{updates,events}/migration=N/.../day=D/`.
  *                 The day's data now lives only in raw/updates/, which the
  *                 verify step proved matches the Scan API.
@@ -424,8 +426,13 @@ async function runVerify(migration, dateStr, logPath) {
     `--migration=${migration}`,
     `--date=${dateStr}`,
     `--output=${outFile}`,
+    // --scope=updates: verify reads ONLY raw/updates/<day> against Scan, proving
+    // the reingested data is self-sufficient before cleanup destroys raw/backfill/.
+    // The default --scope=all (union) can MATCH while raw/updates/ is empty,
+    // which would make the subsequent cleanup catastrophic.
+    `--scope=updates`,
   ];
-  logHeader(logPath, dateStr, 'verify', `starting — output=${outFile}`);
+  logHeader(logPath, dateStr, 'verify', `starting — scope=updates output=${outFile}`);
 
   const t0 = Date.now();
   let res;
