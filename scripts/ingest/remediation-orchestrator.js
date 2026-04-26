@@ -272,6 +272,24 @@ async function deletePrefix(prefix) {
 
 async function cleanupBackfillDay(migration, dateStr, logPath) {
   const { y, m, d } = parseYMD(dateStr);
+  const bucket = await getBucket();
+
+  // Defense-in-depth preflight: refuse cleanup if raw/updates/<day> is empty
+  // on either type. Verify can pass with raw/updates/ empty when raw/backfill/
+  // alone has the full record set (verify reads the union via union_by_name).
+  // Deleting raw/backfill/ in that case would destroy the only copy. The
+  // ~50 ms cost per day is negligible relative to the safety it buys.
+  for (const type of ['updates', 'events']) {
+    const updatesPrefix = `raw/updates/${type}/migration=${migration}/year=${y}/month=${m}/day=${d}/`;
+    const [files] = await bucket.getFiles({ prefix: updatesPrefix });
+    if (files.length === 0) {
+      logHeader(logPath, dateStr, 'cleanup',
+        `REFUSING — preflight: gs://${BUCKET}/${updatesPrefix} has 0 files ` +
+        `(reingest cursor was cleared but no ${type} landed)`);
+      return { deleted: 0, errors: [{ name: '<preflight>', error: `raw/updates/${type}/<day> empty after reingest` }] };
+    }
+  }
+
   const prefixes = [
     `raw/backfill/updates/migration=${migration}/year=${y}/month=${m}/day=${d}/`,
     `raw/backfill/events/migration=${migration}/year=${y}/month=${m}/day=${d}/`,
@@ -460,8 +478,59 @@ async function runVerify(migration, dateStr, logPath) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Per-day driver + outer loop (TODO — next commit)
+// Per-day driver — runs phases starting from `startPhase`, appends a state
+// record after each one, and stops at the first failure. Returns
+// {ok: true} on full success, or {ok: false, phase, reason, details} when
+// a phase fails (in which case the orchestrator halts the whole run).
+//
+// Each phase is idempotent so a state-write gap is recoverable: re-running
+// the same command at most repeats the last unrecorded phase.
 // ─────────────────────────────────────────────────────────────
+
+async function processDay(migration, dateStr, startPhase, logPath, statePath) {
+  const startIdx = PHASES.indexOf(startPhase);
+  if (startIdx < 0) {
+    return { ok: false, phase: 'driver', reason: 'unknown_start_phase', details: { startPhase } };
+  }
+
+  for (let i = startIdx; i < PHASES.length; i++) {
+    const phase = PHASES[i];
+    let result;
+    try {
+      if (phase === 'reingest') {
+        result = await runReingest(migration, dateStr, logPath);
+      } else if (phase === 'verify') {
+        result = await runVerify(migration, dateStr, logPath);
+      } else if (phase === 'cleanup') {
+        const r = await cleanupBackfillDay(migration, dateStr, logPath);
+        result = {
+          ok: r.errors.length === 0,
+          reason: r.errors.length ? 'cleanup_errors' : undefined,
+          details: { deleted: r.deleted, errors: r.errors },
+        };
+      } else {
+        result = { ok: false, reason: 'unknown_phase', details: { phase } };
+      }
+    } catch (err) {
+      result = { ok: false, reason: 'exception', details: { error: err.message } };
+    }
+
+    appendState(statePath, {
+      date:      dateStr,
+      migration,
+      phase,
+      status:    result.ok ? 'ok' : 'failed',
+      reason:    result.reason,
+      ...result.details,
+    });
+
+    if (!result.ok) {
+      return { ok: false, phase, reason: result.reason, details: result.details };
+    }
+  }
+
+  return { ok: true };
+}
 
 async function main() {
   const dates = buildDateRange(OPTS.start, OPTS.end);
@@ -508,9 +577,52 @@ async function main() {
     return 0;
   }
 
-  // TODO (next commit): per-day driver + outer loop
-  console.error('\nERROR: subprocess runners not yet implemented in this commit.\n');
-  return 3;
+  // Marker line in the log so a multi-run log file is easy to navigate.
+  logLine(OPTS.log,
+    `\n══ orchestrator run starting ${new Date().toISOString()} ` +
+    `mig=${OPTS.migration} ${OPTS.start}..${OPTS.end} ` +
+    `todo=${todo.length} max-days=${OPTS.maxDays || '∞'} ══`);
+
+  let processed = 0;
+  let halted = null;
+  const overallStart = Date.now();
+
+  for (const p of todo) {
+    if (OPTS.maxDays && processed >= OPTS.maxDays) {
+      console.log(`\n  Reached --max-days=${OPTS.maxDays}; stopping (resumable on re-run).`);
+      break;
+    }
+    const tag = p.hasFailure ? `RETRY at ${p.nextPhase}` : `from ${p.nextPhase}`;
+    console.log(`\n──── ${p.date} (${tag}) ────`);
+    const t0 = Date.now();
+    const r = await processDay(OPTS.migration, p.date, p.nextPhase, OPTS.log, OPTS.state);
+    const elapsed_s = Math.round((Date.now() - t0) / 1000);
+    processed += 1;
+
+    if (!r.ok) {
+      halted = { date: p.date, ...r, elapsed_s };
+      console.error(`❌ HALTED  ${p.date}  phase=${r.phase}  reason=${r.reason}  (${elapsed_s}s)`);
+      console.error(`   See ${OPTS.log} for subprocess output.`);
+      console.error(`   Re-run the same command to retry from this phase (each phase is idempotent).`);
+      break;
+    }
+    console.log(`✅ DONE    ${p.date}  (${elapsed_s}s)`);
+  }
+
+  const totalElapsedS = Math.round((Date.now() - overallStart) / 1000);
+  console.log('\n' + '═'.repeat(75));
+  console.log(`  REMEDIATION ${halted ? 'HALTED' : 'RUN COMPLETE'}`);
+  console.log('═'.repeat(75));
+  console.log(`  Days processed:  ${processed}`);
+  console.log(`  Elapsed:         ${Math.floor(totalElapsedS/3600)}h ${Math.floor((totalElapsedS%3600)/60)}m ${totalElapsedS%60}s`);
+  console.log(`  State:           ${OPTS.state}`);
+  console.log(`  Log:             ${OPTS.log}`);
+  if (halted) {
+    console.log(`  Halted at:       ${halted.date}  phase=${halted.phase}  reason=${halted.reason}`);
+  }
+  console.log('═'.repeat(75) + '\n');
+
+  return halted ? 1 : 0;
 }
 
 main()
