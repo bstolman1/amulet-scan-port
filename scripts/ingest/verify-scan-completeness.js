@@ -51,6 +51,7 @@ import axios from 'axios';
 import http from 'http';
 import https from 'https';
 import dotenv from 'dotenv';
+import { Storage } from '@google-cloud/storage';
 
 const execFile = promisify(execFileCb);
 const __filename = fileURLToPath(import.meta.url);
@@ -414,7 +415,7 @@ async function computeMissingIds(migrationId, dateStr) {
   if (!existsSync(scanFinal)) {
     throw new Error(`scan-ids dump not found at ${scanFinal}`);
   }
-  const globs = listExistingGlobs(migrationId, dateStr);
+  const globs = await listExistingGlobs(migrationId, dateStr);
   const { dayStart, dayEnd } = dayBoundsISO(dateStr);
 
   // If GCS has no files for this day, every Scan id is missing.
@@ -541,13 +542,24 @@ function sqlStr(s) { return String(s).replace(/'/g, "''"); }
 // Enumerate which day-partition globs ACTUALLY have files. Avoids DuckDB's
 // "No files found" error when one of the candidate globs is empty (e.g. the
 // `updates/updates/` path doesn't exist in Dec 2025 because live ingest
-// hadn't started yet). Cheap — up to 6 gsutil ls calls, ~2-3 s total per day.
+// hadn't started yet). Cheap — up to 6 SDK getFiles calls per day.
+//
+// Uses @google-cloud/storage SDK with ADC (VM service account) instead of
+// gsutil, which requires interactive reauthentication and fails silently
+// when spawned with stdin: 'ignore' in child processes.
 //
 // Honours OPTS.scope: 'updates' (raw/updates/ — reingested or live data) or
 // 'backfill' (raw/backfill/ — original fetch-backfill.js output, forensic only).
 // No union mode: backfill is known-corrupted data being replaced by reingest;
 // reading both would conflate old bad data with new good data.
-function listExistingGlobs(migrationId, dateStr) {
+
+let _storageBucket = null;
+function getStorageBucket() {
+  if (!_storageBucket) _storageBucket = new Storage().bucket(BUCKET);
+  return _storageBucket;
+}
+
+async function listExistingGlobs(migrationId, dateStr) {
   const candidates = [];
   const includeBackfill = OPTS.scope === 'backfill';
   const includeUpdates  = OPTS.scope === 'updates';
@@ -555,21 +567,24 @@ function listExistingGlobs(migrationId, dateStr) {
     const dt = addDays(dateStr, offset);
     const { y, m, d } = parseYMD(dt);
     if (includeBackfill) {
-      candidates.push(`gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+      candidates.push({
+        glob: `gs://${BUCKET}/raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`,
+        prefix: `raw/backfill/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/`,
+      });
     }
     if (includeUpdates) {
-      candidates.push(`gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`);
+      candidates.push({
+        glob: `gs://${BUCKET}/raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/*.parquet`,
+        prefix: `raw/updates/updates/migration=${migrationId}/year=${y}/month=${m}/day=${d}/`,
+      });
     }
   }
+  const bucket = getStorageBucket();
   const existing = [];
-  for (const glob of candidates) {
+  for (const { glob, prefix } of candidates) {
     try {
-      const out = execSync(`gsutil ls "${glob}" 2>/dev/null || true`, {
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 30000,
-        maxBuffer: 32 * 1024 * 1024,
-      }).toString();
-      if (out.split('\n').some(l => l.trim().endsWith('.parquet'))) {
+      const [files] = await bucket.getFiles({ prefix, maxResults: 1 });
+      if (files.length > 0 && files[0].name.endsWith('.parquet')) {
         existing.push(glob);
       }
     } catch { /* treat as empty */ }
@@ -580,7 +595,7 @@ function listExistingGlobs(migrationId, dateStr) {
 async function gcsCountForDay(migrationId, dateStr) {
   if (!existsSync(TMP_DIR)) mkdirSync(TMP_DIR, { recursive: true });
 
-  const globs = listExistingGlobs(migrationId, dateStr);
+  const globs = await listExistingGlobs(migrationId, dateStr);
   if (globs.length === 0) {
     // Genuinely no files for this day in GCS — return 0, let the comparison
     // surface it as DRIFT (if Scan has rows) or MATCH (if Scan also empty).
