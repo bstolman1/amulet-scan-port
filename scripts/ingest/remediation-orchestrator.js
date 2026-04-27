@@ -548,6 +548,8 @@ async function processDay(migration, dateStr, startPhase, logPath, statePath) {
     return { ok: false, phase: 'driver', reason: 'unknown_start_phase', details: { startPhase } };
   }
 
+  const stats = { gcs: null, scan: null, deleted: null };
+
   for (let i = startIdx; i < PHASES.length; i++) {
     const phase = PHASES[i];
     let result;
@@ -556,6 +558,10 @@ async function processDay(migration, dateStr, startPhase, logPath, statePath) {
         result = await runReingest(migration, dateStr, logPath);
       } else if (phase === 'verify') {
         result = await runVerify(migration, dateStr, logPath);
+        if (result.ok) {
+          stats.gcs  = result.details.gcs;
+          stats.scan = result.details.scan;
+        }
       } else if (phase === 'cleanup') {
         const r = await cleanupBackfillDay(migration, dateStr, logPath);
         result = {
@@ -563,6 +569,7 @@ async function processDay(migration, dateStr, startPhase, logPath, statePath) {
           reason: r.errors.length ? 'cleanup_errors' : undefined,
           details: { deleted: r.deleted, errors: r.errors },
         };
+        if (result.ok) stats.deleted = r.deleted;
       } else {
         result = { ok: false, reason: 'unknown_phase', details: { phase } };
       }
@@ -584,7 +591,7 @@ async function processDay(migration, dateStr, startPhase, logPath, statePath) {
     }
   }
 
-  return { ok: true };
+  return { ok: true, stats };
 }
 
 async function main() {
@@ -640,6 +647,7 @@ async function main() {
 
   let processed = 0;
   let halted = null;
+  const completed = [];  // {date, gcs, scan, deleted, elapsed_s}
   const overallStart = Date.now();
 
   for (const p of todo) {
@@ -661,20 +669,40 @@ async function main() {
       console.error(`   Re-run the same command to retry from this phase (each phase is idempotent).`);
       break;
     }
+    completed.push({ date: p.date, elapsed_s, ...r.stats });
     console.log(`✅ DONE    ${p.date}  (${elapsed_s}s)`);
   }
 
   const totalElapsedS = Math.round((Date.now() - overallStart) / 1000);
+  const totalUpdates  = completed.reduce((s, d) => s + (d.scan || 0), 0);
+  const totalDeleted  = completed.reduce((s, d) => s + (d.deleted || 0), 0);
+
   console.log('\n' + '═'.repeat(75));
   console.log(`  REMEDIATION ${halted ? 'HALTED' : 'RUN COMPLETE'}`);
   console.log('═'.repeat(75));
-  console.log(`  Days processed:  ${processed}`);
+  console.log(`  Migration:       ${OPTS.migration}`);
+  console.log(`  Days processed:  ${processed}  (${completed.length} completed, ${done.length} previously done)`);
+  console.log(`  Updates verified: ${totalUpdates.toLocaleString()}  (all MATCH)`);
+  console.log(`  Backfill deleted: ${totalDeleted.toLocaleString()} files`);
   console.log(`  Elapsed:         ${Math.floor(totalElapsedS/3600)}h ${Math.floor((totalElapsedS%3600)/60)}m ${totalElapsedS%60}s`);
+  console.log(`  Avg per day:     ${completed.length ? Math.round(totalElapsedS / completed.length) : 0}s`);
   console.log(`  State:           ${OPTS.state}`);
   console.log(`  Log:             ${OPTS.log}`);
   if (halted) {
     console.log(`  Halted at:       ${halted.date}  phase=${halted.phase}  reason=${halted.reason}`);
   }
+
+  if (completed.length > 0 && !halted) {
+    console.log('\n  Per-day results:');
+    console.log('  date          updates   backfill-deleted  time');
+    console.log('  ──────────    ───────   ────────────────  ────');
+    for (const d of completed) {
+      const u = d.scan != null ? String(d.scan).padStart(7) : '      ?';
+      const del = d.deleted != null ? String(d.deleted).padStart(16) : '               ?';
+      console.log(`  ${d.date}    ${u}   ${del}  ${d.elapsed_s}s`);
+    }
+  }
+
   console.log('═'.repeat(75) + '\n');
 
   return halted ? 1 : 0;
