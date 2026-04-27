@@ -1261,6 +1261,14 @@ async function processAndWrite(transactions, migrationId, afterRecordTime) {
   const batchTimestamp = new Date();
 
   for (const item of transactions) {
+    // On migration boundary days, the Scan API returns records from multiple
+    // migrations in the same time range. Only process records that belong to
+    // the target migration; the other migration's remediation run will handle
+    // the rest. Records without a migration_id (shouldn't happen) are kept.
+    if (item.migration_id != null && parseInt(item.migration_id) !== migrationId) {
+      continue;
+    }
+
     try {
       const update = normalizeUpdate({ ...item, migration_id: migrationId }, { batchTimestamp });
       updates.push(update);
