@@ -5,7 +5,12 @@
  * Drives per-day remediation of fetch-backfill.js's ms-truncation data loss
  * (see DEPRECATED.md). For each day in the requested (migration, range):
  *
- *   1. reingest:  spawn `reingest-updates.js --start=D --end=D --migration=N --clean`.
+ *   1. reingest:  spawn `reingest-updates.js --start=D --end=D --migration=N --clean
+ *                              --after=DT00:00:00.000000Z`.
+ *                 `--after` at midnight forces the walk to start from the
+ *                 beginning of the day, bypassing findBackfillBoundary(). Without
+ *                 it, boundary days (the last day of a migration's backfill) would
+ *                 start mid-day at the backfill cursor, dropping the first half.
  *                 Wait for the script's persistent cursor file to be deleted —
  *                 that's the only reliable "completed cleanly" signal, since
  *                 reingest's SIGINT handler also exits 0.
@@ -96,6 +101,7 @@ const OPTS = {
   dryRun:     hasFlag('dry-run'),
   verbose:    hasFlag('verbose') || hasFlag('v'),
   help:       hasFlag('help') || hasFlag('h'),
+  resetDay:   argVal('reset-day'),  // YYYY-MM-DD — erase all state for this day so it re-runs from scratch
 };
 
 function printHelp() {
@@ -112,10 +118,12 @@ Options:
   --log=<path>             combined log (default: ~/remediation-m<N>.log)
   --max-days=N             stop after N days have completed (resumable)
   --dry-run                plan only — list days that would be processed; no subprocess work
+  --reset-day=YYYY-MM-DD   erase all state entries for this day so it re-runs from reingest;
+                           exits immediately after rewriting the state file
   --verbose, -v
 
 Per-day flow:
-  reingest --clean  →  verify (must MATCH)  →  cleanup raw/backfill/<day>
+  reingest --clean --after=<day>T00:00:00Z  →  verify (must MATCH)  →  cleanup raw/backfill/<day>
 
 Halt-on-mismatch:
   Any DRIFT after reingest, any cursor-file persistence after reingest, or any
@@ -146,6 +154,35 @@ if (OPTS.start > OPTS.end) {
 // Defaults derived from migration
 OPTS.state = OPTS.state ? resolve(OPTS.state) : join(homedir(), `remediation-m${OPTS.migration}.ndjson`);
 OPTS.log   = OPTS.log   ? resolve(OPTS.log)   : join(homedir(), `remediation-m${OPTS.migration}.log`);
+
+// ─────────────────────────────────────────────────────────────
+// --reset-day: erase all state entries for a specific day so the
+// orchestrator re-runs it from reingest on the next invocation.
+// Operates on the state file and exits immediately.
+// ─────────────────────────────────────────────────────────────
+
+if (OPTS.resetDay) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(OPTS.resetDay)) {
+    console.error(`ERROR: --reset-day must be YYYY-MM-DD, got: ${OPTS.resetDay}`);
+    process.exit(2);
+  }
+  if (!existsSync(OPTS.state)) {
+    console.log(`State file not found: ${OPTS.state}`);
+    console.log('Nothing to reset.');
+    process.exit(0);
+  }
+  const original = readFileSync(OPTS.state, 'utf8');
+  const kept = original.split('\n').filter(line => {
+    const t = line.trim();
+    if (!t) return false;
+    try { return JSON.parse(t).date !== OPTS.resetDay; } catch { return true; }
+  });
+  writeFileSync(OPTS.state, kept.map(l => l + '\n').join(''));
+  const removed = original.split('\n').filter(l => l.trim()).length - kept.length;
+  console.log(`Removed ${removed} state line(s) for ${OPTS.resetDay} from ${OPTS.state}`);
+  console.log(`Re-run without --reset-day to process from reingest.`);
+  process.exit(0);
+}
 
 // ─────────────────────────────────────────────────────────────
 // Date helpers (local — same conventions as verify-scan)
@@ -369,7 +406,19 @@ async function runReingest(migration, dateStr, logPath) {
     `--end=${dateStr}`,
     `--migration=${migration}`,
   ];
-  if (!resuming) args.push('--clean');
+  if (!resuming) {
+    args.push('--clean');
+    // Force the walk to start from midnight even when a backfill boundary cursor
+    // exists mid-day (e.g. the last day of a migration's backfill). Without this,
+    // reingest's priority order picks up findBackfillBoundary() and uses it as
+    // rangeStart, fetching only the tail of the day. --after at 00:00:00 has the
+    // same effect as the default start-of-day cursor for non-boundary days, so
+    // this is safe to pass unconditionally.
+    // --clean wipes raw/updates/<day> and deletes the cursor file first, so the
+    // validateSafeResume check (triggered by --after) sees symmetric empty state
+    // and passes. Priority in reingest: saved cursor > --after > backfill boundary.
+    args.push(`--after=${dateStr}T00:00:00.000000Z`);
+  }
 
   logHeader(logPath, dateStr, 'reingest',
     `starting (${resuming ? 'RESUME from cursor' : 'fresh --clean'}) — cmd: node ${args.map(a => a.replace(REINGEST_SCRIPT, 'reingest-updates.js')).join(' ')}`);
