@@ -234,8 +234,7 @@ export default function SvStatus() {
         )}
 
         <p className="text-xs text-muted-foreground">
-          Status updated every 60 seconds. Data sourced from{" "}
-          <code className="text-xs">status.v2.json</code> endpoints.
+          Status updated every 60 seconds.
         </p>
       </div>
     </DashboardLayout>
