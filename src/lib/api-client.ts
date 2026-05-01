@@ -324,23 +324,15 @@ export interface ScanInfo {
   svName: string;
 }
 
-export interface SvServiceStatus {
-  ok: boolean;
-  version: string | null;
-  latency: number | null;
-}
-
-export interface SvNodeStatus {
-  name: string;
-  scanUrl: string;
-  scan: SvServiceStatus;
-  mediator: SvServiceStatus;
-  sv: SvServiceStatus;
+export interface SvServiceCheck {
+  nodes: Record<string, number>;
+  description: string;
 }
 
 export interface SvEnvStatus {
   env: string;
-  nodes: SvNodeStatus[];
+  status: { sv: SvServiceCheck; mediator: SvServiceCheck; scan: SvServiceCheck } | null;
+  error: string | null;
 }
 
 export interface SvNodeStatusResponse {
