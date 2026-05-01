@@ -24,7 +24,7 @@ function StatusCell({ value }: { value: number }) {
   return value === 0 ? (
     <span className="text-green-600 font-semibold text-sm">OK</span>
   ) : (
-    <span className="text-destructive font-semibold text-sm">FAIL</span>
+    <span className="text-destructive font-semibold text-sm">BAD</span>
   );
 }
 
