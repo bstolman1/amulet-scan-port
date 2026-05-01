@@ -79,6 +79,7 @@ const baseNavigationGroups: NavGroup[] = [
       { name: "Super Validators", href: "/validators", icon: Zap },
       { name: "Validators", href: "/validator-licenses", icon: Ticket },
       { name: "Sequencers", href: "/sequencers", icon: Network },
+      { name: "SV Status", href: "/sv-status", icon: Radio },
     ],
   },
   {

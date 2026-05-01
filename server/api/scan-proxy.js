@@ -68,120 +68,41 @@ router.post('/_endpoint', (req, res) => {
   }
 });
 
-// All known SV nodes per environment (scan URLs only; mediator/sv URLs are derived)
-const SV_NODES = {
-  dev: [
-    { name: 'C7-Technology-Services-Limited',    scanUrl: 'https://scan.sv-1.dev.global.canton.network.c7.digital' },
-    { name: 'Cumberland-1',                       scanUrl: 'https://scan.sv-1.dev.global.canton.network.cumberland.io' },
-    { name: 'Cumberland-2',                       scanUrl: 'https://scan.sv-2.dev.global.canton.network.cumberland.io' },
-    { name: 'DA-Helm-Test-Node',                  scanUrl: 'https://scan.sv.dev.global.canton.network.digitalasset.com' },
-    { name: 'Digital-Asset-1',                    scanUrl: 'https://scan.sv-1.dev.global.canton.network.digitalasset.com' },
-    { name: 'Digital-Asset-2',                    scanUrl: 'https://scan.sv-2.dev.global.canton.network.digitalasset.com' },
-    { name: 'Five-North-1',                       scanUrl: 'https://scan.sv-1.dev.global.canton.network.fivenorth.io' },
-    { name: 'Global-Synchronizer-Foundation',     scanUrl: 'https://scan.sv-1.dev.global.canton.network.sync.global' },
-    { name: 'Liberty-City-Ventures-1',            scanUrl: 'https://scan.sv-1.dev.global.canton.network.lcv.mpch.io' },
-    { name: 'MPC-Holding-Inc',                    scanUrl: 'https://scan.sv-1.dev.global.canton.network.mpch.io' },
-    { name: 'Orb-1-LP-1',                         scanUrl: 'https://scan.sv-1.dev.global.canton.network.orb1lp.mpch.io' },
-    { name: 'Proof-Group-1',                      scanUrl: 'https://scan.sv-1.dev.global.canton.network.proofgroup.xyz' },
-    { name: 'SV-Nodeops-Limited',                 scanUrl: 'https://scan.sv.dev.global.canton.network.sv-nodeops.com' },
-    { name: 'Tradeweb-Markets-1',                 scanUrl: 'https://scan.sv-1.dev.global.canton.network.tradeweb.com' },
-  ],
-  test: [
-    { name: 'C7-Technology-Services-Limited',    scanUrl: 'https://scan.sv-1.test.global.canton.network.c7.digital' },
-    { name: 'Cumberland-1',                       scanUrl: 'https://scan.sv-1.test.global.canton.network.cumberland.io' },
-    { name: 'Cumberland-2',                       scanUrl: 'https://scan.sv-2.test.global.canton.network.cumberland.io' },
-    { name: 'Digital-Asset-1',                    scanUrl: 'https://scan.sv-1.test.global.canton.network.digitalasset.com' },
-    { name: 'Digital-Asset-2',                    scanUrl: 'https://scan.sv-2.test.global.canton.network.digitalasset.com' },
-    { name: 'Five-North-1',                       scanUrl: 'https://scan.sv-1.test.global.canton.network.fivenorth.io' },
-    { name: 'Global-Synchronizer-Foundation',     scanUrl: 'https://scan.sv-1.test.global.canton.network.sync.global' },
-    { name: 'Liberty-City-Ventures-1',            scanUrl: 'https://scan.sv-1.test.global.canton.network.lcv.mpch.io' },
-    { name: 'MPC-Holding-Inc',                    scanUrl: 'https://scan.sv-1.test.global.canton.network.mpch.io' },
-    { name: 'Orb-1-LP-1',                         scanUrl: 'https://scan.sv-1.test.global.canton.network.orb1lp.mpch.io' },
-    { name: 'Proof-Group-1',                      scanUrl: 'https://scan.sv-1.test.global.canton.network.proofgroup.xyz' },
-    { name: 'SV-Nodeops-Limited',                 scanUrl: 'https://scan.sv.test.global.canton.network.sv-nodeops.com' },
-    { name: 'Tradeweb-Markets-1',                 scanUrl: 'https://scan.sv.test.global.canton.network.tradeweb.com' },
-  ],
-  main: [
-    { name: 'C7-Technology-Services-Limited',    scanUrl: 'https://scan.sv-1.global.canton.network.c7.digital' },
-    { name: 'Cumberland-1',                       scanUrl: 'https://scan.sv-1.global.canton.network.cumberland.io' },
-    { name: 'Cumberland-2',                       scanUrl: 'https://scan.sv-2.global.canton.network.cumberland.io' },
-    { name: 'Digital-Asset-1',                    scanUrl: 'https://scan.sv-1.global.canton.network.digitalasset.com' },
-    { name: 'Digital-Asset-2',                    scanUrl: 'https://scan.sv-2.global.canton.network.digitalasset.com' },
-    { name: 'Five-North-1',                       scanUrl: 'https://scan.sv-1.global.canton.network.fivenorth.io' },
-    { name: 'Global-Synchronizer-Foundation',     scanUrl: 'https://scan.sv-1.global.canton.network.sync.global' },
-    { name: 'Liberty-City-Ventures-1',            scanUrl: 'https://scan.sv-1.global.canton.network.lcv.mpch.io' },
-    { name: 'MPC-Holding-Inc',                    scanUrl: 'https://scan.sv-1.global.canton.network.mpch.io' },
-    { name: 'Orb-1-LP-1',                         scanUrl: 'https://scan.sv-1.global.canton.network.orb1lp.mpch.io' },
-    { name: 'Proof-Group-1',                      scanUrl: 'https://scan.sv-1.global.canton.network.proofgroup.xyz' },
-    { name: 'SV-Nodeops-Limited',                 scanUrl: 'https://scan.sv.global.canton.network.sv-nodeops.com' },
-    { name: 'Tradeweb-Markets-1',                 scanUrl: 'https://scan.sv-1.global.canton.network.tradeweb.com' },
-  ],
+// SV Status v2 endpoints per environment
+const SV_STATUS_URLS = {
+  dev:  'https://info.sv.dev.global.canton.network.sv-nodeops.com/runtime/status.v2.json',
+  test: 'https://info.sv.test.global.canton.network.sv-nodeops.com/runtime/status.v2.json',
+  main: 'https://info.sv.global.canton.network.sv-nodeops.com/runtime/status.v2.json',
 };
 
-// Derive mediator/sv base URLs from a scan URL by replacing the leading 'scan' subdomain
-function deriveServiceUrl(scanUrl, service) {
-  return scanUrl.replace(/^https:\/\/scan\./, `https://${service}.`);
-}
-
-// Probe a single URL, returning { ok, version, latency }
-async function probeUrl(url, versionPath) {
-  const start = Date.now();
-  try {
-    const hostname = extractHostname(url);
-    const dispatcher = hostname ? createDispatcher(hostname) : undefined;
-    const fullUrl = `${url}${versionPath}`;
-    const resp = await fetch(fullUrl, {
-      method: 'GET',
-      headers: { Accept: 'application/json', ...(hostname ? { Host: hostname } : {}) },
-      ...(dispatcher ? { dispatcher } : {}),
-      signal: AbortSignal.timeout(10000),
-    });
-    const latency = Date.now() - start;
-    if (!resp.ok) return { ok: false, version: null, latency };
-    let version = null;
-    try {
-      const text = await readBodyWithLimit(resp, 64 * 1024);
-      const data = JSON.parse(text);
-      version = data.version || null;
-    } catch (_) { /* non-JSON health endpoints are fine */ }
-    return { ok: true, version, latency };
-  } catch (_) {
-    return { ok: false, version: null, latency: Date.now() - start };
-  }
-}
-
-// GET /_sv-node-status - Probe all SV nodes across dev/test/main for SCAN, MEDIATOR, SV health
+// GET /_sv-node-status - Fetch aggregated SV status from status.v2.json per environment
 router.get('/_sv-node-status', async (req, res) => {
-  const envNames = ['dev', 'test', 'main'];
-  console.log('[Scan Proxy] SV node status check across all environments');
+  console.log('[Scan Proxy] Fetching SV status from status.v2.json endpoints');
 
-  const envResults = await Promise.all(
-    envNames.map(async (env) => {
-      const nodes = SV_NODES[env];
-      const nodeResults = await Promise.all(
-        nodes.map(async (node) => {
-          const mediatorUrl = deriveServiceUrl(node.scanUrl, 'mediator');
-          const svUrl = deriveServiceUrl(node.scanUrl, 'sv');
-          const [scan, mediator, sv] = await Promise.all([
-            probeUrl(node.scanUrl, '/api/scan/version'),
-            probeUrl(mediatorUrl, '/api/mediator/v0/health'),
-            probeUrl(svUrl, '/api/sv/v0/health'),
-          ]);
-          return {
-            name: node.name,
-            scanUrl: node.scanUrl,
-            scan:     { ok: scan.ok,     version: scan.version,     latency: scan.latency },
-            mediator: { ok: mediator.ok, version: mediator.version, latency: mediator.latency },
-            sv:       { ok: sv.ok,       version: sv.version,       latency: sv.latency },
-          };
-        })
-      );
-      return { env, nodes: nodeResults };
+  const results = await Promise.all(
+    Object.entries(SV_STATUS_URLS).map(async ([env, url]) => {
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) {
+          console.warn(`[Scan Proxy] SV status ${env}: HTTP ${resp.status}`);
+          return { env, status: null, error: `HTTP ${resp.status}` };
+        }
+        const text = await readBodyWithLimit(resp, 256 * 1024);
+        const data = JSON.parse(text);
+        return { env, status: data.status, error: null };
+      } catch (err) {
+        console.warn(`[Scan Proxy] SV status ${env}: ${err.message}`);
+        return { env, status: null, error: err.message };
+      }
     })
   );
 
-  console.log('[Scan Proxy] SV node status check complete');
-  res.json({ environments: envResults, checked_at: new Date().toISOString() });
+  console.log('[Scan Proxy] SV status fetch complete');
+  res.json({ environments: results, checked_at: new Date().toISOString() });
 });
 
 /**
