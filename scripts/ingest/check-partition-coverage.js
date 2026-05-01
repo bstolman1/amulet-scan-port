@@ -41,25 +41,21 @@ function buildDateRange(startStr, endStr) {
   return dates;
 }
 
-async function listDayPartitions(migrationId) {
-  const prefix = `raw/updates/updates/migration=${migrationId}/`;
-  const [files] = await bucket.getFiles({ prefix, delimiter: '/' });
-  // getFiles with delimiter returns prefixes (subdirectories) via apiResponse
-  // but we need to list deeper. Instead, list all files and extract unique day paths.
-  const [allFiles] = await bucket.getFiles({ prefix, maxResults: 10000 });
+async function listDayPartitions(migrationId, expectedDays) {
+  const found = new Set();
+  const concurrency = 20;
 
-  const days = new Set();
-  for (const f of allFiles) {
-    const match = f.name.match(/year=(\d+)\/month=(\d+)\/day=(\d+)\//);
-    if (match) {
-      const y = parseInt(match[1]);
-      const m = parseInt(match[2]);
-      const d = parseInt(match[3]);
-      const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      days.add(dateStr);
-    }
+  for (let i = 0; i < expectedDays.length; i += concurrency) {
+    const batch = expectedDays.slice(i, i + concurrency);
+    await Promise.all(batch.map(async (d) => {
+      const prefix = `raw/updates/updates/migration=${migrationId}/year=${d.year}/month=${d.month}/day=${d.day}/`;
+      try {
+        const [files] = await bucket.getFiles({ prefix, maxResults: 1 });
+        if (files.length > 0) found.add(d.str);
+      } catch { /* treat as missing */ }
+    }));
   }
-  return days;
+  return found;
 }
 
 async function main() {
@@ -73,26 +69,14 @@ async function main() {
     console.log('═'.repeat(60));
 
     const expected = buildDateRange(mig.start, mig.end);
-    const existing = await listDayPartitions(mig.id);
+    const existing = await listDayPartitions(mig.id, expected);
 
-    const missing = [];
-    const found = [];
-    for (const d of expected) {
-      if (existing.has(d.str)) {
-        found.push(d.str);
-      } else {
-        missing.push(d.str);
-      }
-    }
-
-    const extra = [...existing].filter(d => !expected.some(e => e.str === d)).sort();
+    const missing = expected.filter(d => !existing.has(d.str)).map(d => d.str);
+    const foundCount = expected.length - missing.length;
 
     console.log(`  Expected days:  ${expected.length}`);
-    console.log(`  Found in GCS:   ${found.length}`);
+    console.log(`  Found in GCS:   ${foundCount}`);
     console.log(`  Missing:        ${missing.length}`);
-    if (extra.length > 0) {
-      console.log(`  Extra (outside range): ${extra.length}`);
-    }
 
     if (missing.length > 0) {
       console.log(`\n  Missing days:`);
@@ -101,13 +85,6 @@ async function main() {
       }
     } else {
       console.log(`\n  ✅ All days covered`);
-    }
-
-    if (extra.length > 0) {
-      console.log(`\n  Extra days (outside expected range):`);
-      for (const d of extra) {
-        console.log(`    ${d}`);
-      }
     }
   }
 
