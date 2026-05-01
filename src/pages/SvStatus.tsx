@@ -128,8 +128,8 @@ export default function SvStatus() {
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["svNodeStatus"],
     queryFn: () => scanApi.fetchSvNodeStatus(),
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 
   const environments: SvEnvStatus[] = data?.environments ?? [];
@@ -234,7 +234,7 @@ export default function SvStatus() {
         )}
 
         <p className="text-xs text-muted-foreground">
-          Auto-refreshes every 2 minutes. Data sourced from{" "}
+          Status updated every 60 seconds. Data sourced from{" "}
           <code className="text-xs">status.v2.json</code> endpoints.
         </p>
       </div>
