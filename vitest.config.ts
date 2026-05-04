@@ -21,19 +21,6 @@ export default defineConfig({
       'server/test/e2e/**',
       // This file uses a custom check() runner, not vitest
       'scripts/ingest/test/pipeline-health.test.js',
-      // Quarantined — need test-setup rewrites or manual escaping review
-      'server/lib/sql-sanitize.test.js',
-      'scripts/ingest/test/byte-backpressure.test.js',
-      'scripts/ingest/test/write-parquet-backpressure.test.js',
-      'scripts/ingest/test/gcs-sdk-upload.test.js',
-      // DuckDB-dependent tests that have never been verified green in CI.
-      // They fail locally (no native binding) and likely fail in CI too
-      // (missing fixtures, stale assertions). Exclude until verified.
-      'server/engine/aggregations.test.js',
-      'scripts/ingest/test/parquet-worker-perf.test.js',
-      'scripts/ingest/test/encoding.test.js',
-      'scripts/ingest/test/tls-config.test.js',
-      'scripts/ingest/test/repair-partitions.test.js',
     ],
 coverage: {
       provider: 'v8',
