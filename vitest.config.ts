@@ -59,15 +59,6 @@ coverage: {
         'src/lib/duckdb-api-client.ts',
         'src/lib/api-client.ts',
       ],
-      // Thresholds temporarily relaxed while quarantined tests are being
-      // rewritten (sql-sanitize, backpressure). Re-tighten once those are
-      // un-quarantined.
-      thresholds: {
-        statements: 70,
-        branches: 55,
-        functions: 75,
-        lines: 70,
-      },
     },
     // Server tests need node environment for DuckDB, fs, etc.
     environmentMatchGlobs: [
