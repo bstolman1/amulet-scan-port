@@ -529,9 +529,8 @@ export function getACSPartitionPath(timestamp, migrationId = null) {
   }
 
   const year   = d.getUTCFullYear();
-  // FIX 1: zero-pad month and day so filesystem/string sort matches chronological order
-  const month  = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day    = String(d.getUTCDate()).padStart(2, '0');
+  const month  = d.getUTCMonth() + 1;
+  const day    = d.getUTCDate();
   const hour   = String(d.getUTCHours()).padStart(2, '0');
   const minute = String(d.getUTCMinutes()).padStart(2, '0');
   const second = String(d.getUTCSeconds()).padStart(2, '0');
