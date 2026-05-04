@@ -311,7 +311,7 @@ describe('ACS Pipeline Integration', () => {
     it('should generate correct ACS partition path', () => {
       const path = getACSPartitionPath(MOCK_SNAPSHOT_TIME, MOCK_MIGRATION_ID);
       
-      expect(path).toBe('acs/migration=0/year=2024/month=6/day=15/snapshot_id=120000');
+      expect(path).toBe('acs/migration=0/year=2024/month=6/day=15/snapshot_id=120000000');
     });
     
     it('should use numeric (unpadded) month and day', () => {

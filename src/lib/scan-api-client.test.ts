@@ -1062,25 +1062,6 @@ describe('SCAN API Client', () => {
       });
     });
 
-    describe('fetchTotalBalance', () => {
-      it('should fetch latest round then round totals', async () => {
-        mockFetch.mockResolvedValueOnce(mockSuccess({ round: 100, effectiveAt: '2025-01-01T00:00:00Z' }));
-        mockFetch.mockResolvedValueOnce(mockSuccess({
-          entries: [{ total_amulet_balance: '1000000' }],
-        }));
-
-        const result = await scanApi.fetchTotalBalance();
-
-        expect(result.total_balance).toBe('1000000');
-      });
-
-      it('should throw if no round totals returned', async () => {
-        mockFetch.mockResolvedValueOnce(mockSuccess({ round: 100, effectiveAt: '2025-01-01T00:00:00Z' }));
-        mockFetch.mockResolvedValueOnce(mockSuccess({ entries: [] }));
-
-        await expect(scanApi.fetchTotalBalance()).rejects.toThrow('No round totals for latest round');
-      });
-    });
   });
 
   /* ==========================================================

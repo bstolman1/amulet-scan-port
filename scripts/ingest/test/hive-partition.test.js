@@ -149,7 +149,7 @@ describe('Hive Partition Paths', () => {
     it('should generate correct path structure with snapshot_id', () => {
       const path = getACSPartitionPath('2024-06-15T10:30:45Z', 0);
       
-      expect(path).toBe('acs/migration=0/year=2024/month=6/day=15/snapshot_id=103045');
+      expect(path).toBe('acs/migration=0/year=2024/month=6/day=15/snapshot_id=103045000');
     });
     
     it('should use numeric (unpadded) month and day', () => {

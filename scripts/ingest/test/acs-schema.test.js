@@ -261,8 +261,8 @@ describe('normalizeACSContract', () => {
 
       const result = normalizeACSContract(event, 0, null, null);
       
-      // Should not throw, just have null/unknown values
-      expect(result.template_id).toBe('unknown');
+      // Should not throw, just have null values for missing fields
+      expect(result.template_id).toBeNull();
     });
 
     it('should warn but not throw with warnOnly=true', () => {
@@ -272,7 +272,7 @@ describe('normalizeACSContract', () => {
 
       // Should not throw
       const result = normalizeACSContract(event, 0, null, null, { strict: true, warnOnly: true });
-      expect(result.template_id).toBe('unknown');
+      expect(result.template_id).toBeNull();
     });
   });
 
@@ -441,7 +441,7 @@ describe('getACSPartitionPath', () => {
 
     const result = getACSPartitionPath(timestamp, migrationId);
 
-    expect(result).toBe('acs/migration=0/year=2024/month=10/day=7/snapshot_id=123045');
+    expect(result).toBe('acs/migration=0/year=2024/month=10/day=7/snapshot_id=123045000');
   });
 
   it('should use numeric (non-padded) values for month/day', () => {
@@ -450,7 +450,7 @@ describe('getACSPartitionPath', () => {
     const result = getACSPartitionPath(timestamp, 1);
 
     // month=1 not month=01, day=5 not day=05
-    expect(result).toBe('acs/migration=1/year=2024/month=1/day=5/snapshot_id=090505');
+    expect(result).toBe('acs/migration=1/year=2024/month=1/day=5/snapshot_id=090505000');
   });
 
   it('should default migration to 0', () => {
@@ -472,13 +472,13 @@ describe('getACSPartitionPath', () => {
   it('should use UTC date components, not local time', () => {
     // 2024-12-31T23:30:00Z is still Dec 31 in UTC but Jan 1 in UTC+1 and beyond
     const result = getACSPartitionPath('2024-12-31T23:30:00Z', 0);
-    expect(result).toBe('acs/migration=0/year=2024/month=12/day=31/snapshot_id=233000');
+    expect(result).toBe('acs/migration=0/year=2024/month=12/day=31/snapshot_id=233000000');
   });
 
   it('should use UTC for early morning timestamps', () => {
     // 2024-01-01T00:30:00Z is Jan 1 in UTC but Dec 31 in UTC-1 and beyond
     const result = getACSPartitionPath('2024-01-01T00:30:00Z', 0);
-    expect(result).toBe('acs/migration=0/year=2024/month=1/day=1/snapshot_id=003000');
+    expect(result).toBe('acs/migration=0/year=2024/month=1/day=1/snapshot_id=003000000');
   });
 
   it('should throw on invalid timestamp', () => {

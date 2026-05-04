@@ -97,6 +97,12 @@ describe('Data Authority Contract', () => {
         'announcements.js',         // Fetches from external SV announcements
         'kaiko.js',                 // Fetches from Kaiko price API
         'acs.js',                   // ACS snapshot management
+        // Internal service/utility routes (no direct data queries)
+        'auditLogRoutes.js',        // Delegates to auditLogService
+        'learningRoutes.js',        // Pattern learning, no DuckDB
+        'lifecycleRoutes.js',       // Cache lifecycle, no DuckDB
+        'overrideRoutes.js',        // Override management, no DuckDB
+        'requestValidators.js',     // Pure validation utilities
       ];
       
       const apiFiles = fs.readdirSync(apiDir).filter(f => 
