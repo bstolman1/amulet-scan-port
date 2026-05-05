@@ -418,6 +418,10 @@ async function runReingest(migration, dateStr, logPath) {
     // validateSafeResume check (triggered by --after) sees symmetric empty state
     // and passes. Priority in reingest: saved cursor > --after > backfill boundary.
     args.push(`--after=${dateStr}T00:00:00.000000Z`);
+  } else {
+    // On resume, backfill data coexists with partial updates data (cleanup hasn't
+    // run yet). Reingest's overlap check would reject this — --force bypasses it.
+    args.push('--force');
   }
 
   logHeader(logPath, dateStr, 'reingest',
