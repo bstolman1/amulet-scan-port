@@ -26,7 +26,7 @@ module.exports = {
       cwd: __dirname,
       
       // Interpreter settings
-      node_args: '--max-old-space-size=2048',
+      node_args: '--max-old-space-size=2048 --env-file=../scripts/ingest/.env',
       
       // Restart behavior
       autorestart: true,
