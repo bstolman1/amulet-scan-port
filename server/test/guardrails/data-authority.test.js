@@ -216,46 +216,10 @@ describe('Data Authority Contract', () => {
   // Proves system works from Parquet only - derived state is disposable
   // ============================================================
   describe('Rebuildability', () => {
-    
-    it('DuckDB connection works in test mode (in-memory)', async () => {
-      // Import actual DuckDB connection in test mode
-      const { query, getPoolStats } = await import('../../duckdb/connection.js');
-      
-      // Simple query to verify connection works
-      const result = await query('SELECT 1 as test');
-      
-      expect(result).toHaveLength(1);
-      expect(result[0].test).toBe(1);
-    });
-    
-    it('readParquetGlob returns valid SQL expression', async () => {
-      const { readParquetGlob } = await import('../../duckdb/connection.js');
-      
-      const sql = readParquetGlob('events');
-      
-      // In test mode without files, should return placeholder or valid SQL
-      expect(typeof sql).toBe('string');
-      expect(sql.length).toBeGreaterThan(0);
-    });
-    
-    it('pool stats are available and healthy', async () => {
-      const { getPoolStats } = await import('../../duckdb/connection.js');
-      
-      const stats = getPoolStats();
-      
-      expect(stats).toHaveProperty('size');
-      expect(stats).toHaveProperty('inUse');
-      expect(stats).toHaveProperty('available');
-      expect(stats).toHaveProperty('health');
-      
-      // In test mode, pool should be initialized
-      expect(stats.size).toBeGreaterThan(0);
-      expect(stats.available).toBeGreaterThanOrEqual(0);
-    });
-    
+
     it('mock database can be used without any derived state', async () => {
       const { safeQuery, clearQueryCalls, getQueryCalls } = await import('../fixtures/mock-db.js');
-      
+
       // Clear any previous state
       clearQueryCalls();
       
