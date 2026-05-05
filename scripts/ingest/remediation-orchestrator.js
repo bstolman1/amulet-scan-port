@@ -378,9 +378,10 @@ function spawnWithLog(cmd, args, dateStr, phase, logPath) {
 // Cursor-file path mirrors reingestCursorPath() in reingest-updates.js:
 //   ${CURSOR_DIR}/reingest-${migration}-${start}-${end}.json   (dates unpadded YYYYMMDD)
 //
-// Resume detection: if the cursor file exists when we start, a prior run
-// crashed mid-day and reingest's safety guard refuses --clean. Drop --clean
-// in that case so reingest auto-resumes from the saved cursor.
+// Crash recovery: if a cursor file exists from a prior crash, we delete it
+// and restart the day from scratch with --clean. This is safer than resuming
+// from a potentially stale cursor — the cost is one day's re-fetch but
+// there's no ambiguity about partial state.
 //
 // Success requires BOTH:
 //   - subprocess exit code 0
@@ -397,7 +398,16 @@ function reingestCursorPath(migration, startStr, endStr) {
 
 async function runReingest(migration, dateStr, logPath) {
   const cursorPath = reingestCursorPath(migration, dateStr, dateStr);
-  const resuming   = existsSync(cursorPath);
+
+  // If a cursor file exists from a prior crash, delete it and restart the day
+  // from scratch. This is safer than resuming from a potentially stale cursor —
+  // the cost is one day's re-fetch (~minutes), but there's no ambiguity about
+  // partial state. --clean wipes any partial raw/updates/<day> data first.
+  if (existsSync(cursorPath)) {
+    logHeader(logPath, dateStr, 'reingest',
+      `stale cursor found at ${cursorPath} — deleting and restarting day from scratch`);
+    try { unlinkSync(cursorPath); } catch {}
+  }
 
   const args = [
     '--max-old-space-size=8192',
@@ -405,9 +415,7 @@ async function runReingest(migration, dateStr, logPath) {
     `--start=${dateStr}`,
     `--end=${dateStr}`,
     `--migration=${migration}`,
-  ];
-  if (!resuming) {
-    args.push('--clean');
+    '--clean',
     // Force the walk to start from midnight even when a backfill boundary cursor
     // exists mid-day (e.g. the last day of a migration's backfill). Without this,
     // reingest's priority order picks up findBackfillBoundary() and uses it as
@@ -417,15 +425,11 @@ async function runReingest(migration, dateStr, logPath) {
     // --clean wipes raw/updates/<day> and deletes the cursor file first, so the
     // validateSafeResume check (triggered by --after) sees symmetric empty state
     // and passes. Priority in reingest: saved cursor > --after > backfill boundary.
-    args.push(`--after=${dateStr}T00:00:00.000000Z`);
-  } else {
-    // On resume, backfill data coexists with partial updates data (cleanup hasn't
-    // run yet). Reingest's overlap check would reject this — --force bypasses it.
-    args.push('--force');
-  }
+    `--after=${dateStr}T00:00:00.000000Z`,
+  ];
 
   logHeader(logPath, dateStr, 'reingest',
-    `starting (${resuming ? 'RESUME from cursor' : 'fresh --clean'}) — cmd: node ${args.map(a => a.replace(REINGEST_SCRIPT, 'reingest-updates.js')).join(' ')}`);
+    `starting (fresh --clean) — cmd: node ${args.map(a => a.replace(REINGEST_SCRIPT, 'reingest-updates.js')).join(' ')}`);
 
   const t0 = Date.now();
   let res;
