@@ -444,7 +444,7 @@ async function runReingest(migration, dateStr, logPath) {
   const cursorAfter = existsSync(cursorPath);
   if (res.code === 0 && !cursorAfter) {
     logHeader(logPath, dateStr, 'reingest', `OK (exit=0, cursor cleared) — ${elapsed_s}s`);
-    return { ok: true, details: { elapsed_s, was_resume: resuming } };
+    return { ok: true, details: { elapsed_s } };
   }
   // Anything else is failure.
   const reason = res.signal              ? `signal_${res.signal}`
@@ -456,7 +456,7 @@ async function runReingest(migration, dateStr, logPath) {
   return {
     ok: false,
     reason,
-    details: { exit: res.code, signal: res.signal, cursor_present: cursorAfter, elapsed_s, was_resume: resuming },
+    details: { exit: res.code, signal: res.signal, cursor_present: cursorAfter, elapsed_s },
   };
 }
 
