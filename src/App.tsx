@@ -93,7 +93,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <ErrorBoundary title="SCANTON crashed on this page">
-        <BrowserRouter>
+        <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/+$/, "")}>
           <Routes>
             {/* Core pages */}
             <Route path="/" element={<Dashboard />} />
