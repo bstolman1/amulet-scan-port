@@ -1,8 +1,16 @@
+import { useState } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -14,8 +22,9 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import type { SvEnvStatus, SvServiceCheck } from "@/lib/api-client";
-import { Activity, RefreshCw, Clock, CheckCircle2, XCircle } from "lucide-react";
+import { Activity, RefreshCw, Clock, Eye } from "lucide-react";
 
+const ALL_SVS = "__all__";
 const ENV_LABELS: Record<string, string> = { dev: "dev", test: "test", main: "main" };
 const SERVICES = ["mediator", "scan", "sv"] as const;
 type Service = (typeof SERVICES)[number];
@@ -56,7 +65,6 @@ function EnvSection({ env }: { env: SvEnvStatus }) {
     );
   }
 
-  // Get the union of all node names across services
   const nodeNames = Array.from(
     new Set([
       ...Object.keys(env.status.mediator.nodes),
@@ -125,13 +133,23 @@ function getServiceCounts(envs: SvEnvStatus[], env: string, service: Service) {
 }
 
 export default function SvStatus() {
+  const [selectedSv, setSelectedSv] = useState(ALL_SVS);
+
+  const { data: providersData } = useQuery({
+    queryKey: ["svProviders"],
+    queryFn: () => scanApi.fetchSvProviders(),
+    staleTime: 5 * 60_000,
+  });
+
+  const svParam = selectedSv === ALL_SVS ? undefined : selectedSv;
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ["svNodeStatus"],
-    queryFn: () => scanApi.fetchSvNodeStatus(),
+    queryKey: ["svNodeStatus", svParam],
+    queryFn: () => scanApi.fetchSvNodeStatus(svParam),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
 
+  const providers = providersData?.providers ?? [];
   const environments: SvEnvStatus[] = data?.environments ?? [];
   const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
 
@@ -223,6 +241,35 @@ export default function SvStatus() {
             </Table>
           </CardContent>
         </Card>
+
+        {/* SV Perspective Selector */}
+        <div className="flex items-center gap-3">
+          <Eye className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Viewing from:</span>
+          <Select value={selectedSv} onValueChange={setSelectedSv}>
+            <SelectTrigger className="w-[280px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_SVS}>All SVs</SelectItem>
+              {providers.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {selectedSv !== ALL_SVS && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedSv(ALL_SVS)}
+              className="text-xs text-muted-foreground"
+            >
+              Reset
+            </Button>
+          )}
+        </div>
 
         {/* Per-environment detail tables */}
         {isLoading ? (
