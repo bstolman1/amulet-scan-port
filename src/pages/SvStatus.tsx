@@ -276,10 +276,10 @@ export default function SvStatus() {
             <SelectTrigger className="w-[280px]">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_SVS}>All SVs</SelectItem>
+            <SelectContent className="bg-muted border-border">
+              <SelectItem value={ALL_SVS} className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary">All SVs</SelectItem>
               {allNodeNames.map((name) => (
-                <SelectItem key={name} value={name}>
+                <SelectItem key={name} value={name} className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary">
                   {name}
                 </SelectItem>
               ))}
