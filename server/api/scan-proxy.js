@@ -68,52 +68,19 @@ router.post('/_endpoint', (req, res) => {
   }
 });
 
-// SV info providers — each SV has its own status.v2.json endpoint per environment
-const SV_INFO_PROVIDERS = [
-  { name: 'SV-Nodeops-Limited', svPrefix: 'sv', domain: 'sv-nodeops.com' },
-  { name: 'Global-Synchronizer-Foundation', svPrefix: 'sv-1', domain: 'sync.global' },
-  { name: 'Digital-Asset-1', svPrefix: 'sv-1', domain: 'digitalasset.com' },
-  { name: 'Digital-Asset-2', svPrefix: 'sv-2', domain: 'digitalasset.com' },
-  { name: 'Cumberland-1', svPrefix: 'sv-1', domain: 'cumberland.io' },
-  { name: 'Cumberland-2', svPrefix: 'sv-2', domain: 'cumberland.io' },
-  { name: 'Five-North-1', svPrefix: 'sv-1', domain: 'fivenorth.io' },
-  { name: 'Tradeweb-Markets-1', svPrefix: 'sv-1', domain: 'tradeweb.com' },
-  { name: 'Proof-Group-1', svPrefix: 'sv-1', domain: 'proofgroup.xyz' },
-  { name: 'Liberty-City-Ventures-1', svPrefix: 'sv-1', domain: 'lcv.mpch.io' },
-  { name: 'MPC-Holding-Inc', svPrefix: 'sv-1', domain: 'mpch.io' },
-  { name: 'Orb-1-LP-1', svPrefix: 'sv-1', domain: 'orb1lp.mpch.io' },
-  { name: 'C7-Technology-Services-Limited', svPrefix: 'sv-1', domain: 'c7.digital' },
-];
-
-const DEFAULT_SV_PROVIDER = 'SV-Nodeops-Limited';
-
-function buildStatusUrl(svPrefix, domain, env) {
-  if (env === 'main') {
-    return `https://info.${svPrefix}.global.canton.network.${domain}/runtime/status.v2.json`;
-  }
-  return `https://info.${svPrefix}.${env}.global.canton.network.${domain}/runtime/status.v2.json`;
-}
-
-// GET /_sv-node-status/providers - List available SV perspectives
-router.get('/_sv-node-status/providers', (req, res) => {
-  res.json({ providers: SV_INFO_PROVIDERS.map(p => p.name) });
-});
+// SV Status v2 endpoints per environment
+const SV_STATUS_URLS = {
+  dev:  'https://info.sv.dev.global.canton.network.sv-nodeops.com/runtime/status.v2.json',
+  test: 'https://info.sv.test.global.canton.network.sv-nodeops.com/runtime/status.v2.json',
+  main: 'https://info.sv.global.canton.network.sv-nodeops.com/runtime/status.v2.json',
+};
 
 // GET /_sv-node-status - Fetch aggregated SV status from status.v2.json per environment
-// Optional query param: ?sv=<provider-name> (defaults to SV-Nodeops-Limited)
 router.get('/_sv-node-status', async (req, res) => {
-  const svName = req.query.sv || DEFAULT_SV_PROVIDER;
-  const provider = SV_INFO_PROVIDERS.find(p => p.name === svName);
-  if (!provider) {
-    return res.status(400).json({ error: `Unknown SV provider: ${svName}` });
-  }
+  console.log('[Scan Proxy] Fetching SV status from status.v2.json endpoints');
 
-  console.log(`[Scan Proxy] Fetching SV status from ${provider.name} endpoints`);
-
-  const envs = ['dev', 'test', 'main'];
   const results = await Promise.all(
-    envs.map(async (env) => {
-      const url = buildStatusUrl(provider.svPrefix, provider.domain, env);
+    Object.entries(SV_STATUS_URLS).map(async ([env, url]) => {
       try {
         const resp = await fetch(url, {
           method: 'GET',
@@ -134,8 +101,8 @@ router.get('/_sv-node-status', async (req, res) => {
     })
   );
 
-  console.log(`[Scan Proxy] SV status fetch complete (${provider.name})`);
-  res.json({ environments: results, provider: provider.name, checked_at: new Date().toISOString() });
+  console.log('[Scan Proxy] SV status fetch complete');
+  res.json({ environments: results, checked_at: new Date().toISOString() });
 });
 
 /**
