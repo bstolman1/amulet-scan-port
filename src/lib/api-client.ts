@@ -337,12 +337,7 @@ export interface SvEnvStatus {
 
 export interface SvNodeStatusResponse {
   environments: SvEnvStatus[];
-  provider: string;
   checked_at: string;
-}
-
-export interface SvProvidersResponse {
-  providers: string[];
 }
 
 export interface ValidatorLicensesResponse {
@@ -745,14 +740,9 @@ export const scanApi = {
     return scanGet("/v0/scans");
   },
 
-  // GET /_sv-node-status/providers - list available SV perspectives
-  async fetchSvProviders(): Promise<SvProvidersResponse> {
-    return scanGet("/_sv-node-status/providers");
-  },
-
-  // GET /_sv-node-status - fetch status from a specific SV's perspective
-  async fetchSvNodeStatus(sv?: string): Promise<SvNodeStatusResponse> {
-    return scanGet("/_sv-node-status", sv ? { sv } : undefined);
+  // GET /_sv-node-status - fetch SV status from status.v2.json endpoints
+  async fetchSvNodeStatus(): Promise<SvNodeStatusResponse> {
+    return scanGet("/_sv-node-status");
   },
 
   // GET /v0/admin/validator/licenses

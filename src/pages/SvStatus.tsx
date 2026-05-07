@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,33 @@ const ALL_SVS = "__all__";
 const ENV_LABELS: Record<string, string> = { dev: "dev", test: "test", main: "main" };
 const SERVICES = ["mediator", "scan", "sv"] as const;
 type Service = (typeof SERVICES)[number];
+
+function getAllNodeNames(environments: SvEnvStatus[]): string[] {
+  const names = new Set<string>();
+  for (const env of environments) {
+    if (!env.status) continue;
+    for (const svc of SERVICES) {
+      for (const name of Object.keys(env.status[svc].nodes)) {
+        names.add(name);
+      }
+    }
+  }
+  return Array.from(names).sort();
+}
+
+function filterEnvStatus(env: SvEnvStatus, nodeName: string): SvEnvStatus {
+  if (!env.status) return env;
+  const filtered = { ...env, status: { ...env.status } };
+  for (const svc of SERVICES) {
+    const original = env.status[svc];
+    if (nodeName in original.nodes) {
+      filtered.status![svc] = { ...original, nodes: { [nodeName]: original.nodes[nodeName] } };
+    } else {
+      filtered.status![svc] = { ...original, nodes: {} };
+    }
+  }
+  return filtered;
+}
 
 function StatusCell({ value }: { value: number }) {
   return value === 0 ? (
@@ -135,22 +162,21 @@ function getServiceCounts(envs: SvEnvStatus[], env: string, service: Service) {
 export default function SvStatus() {
   const [selectedSv, setSelectedSv] = useState(ALL_SVS);
 
-  const { data: providersData } = useQuery({
-    queryKey: ["svProviders"],
-    queryFn: () => scanApi.fetchSvProviders(),
-    staleTime: 5 * 60_000,
-  });
-
-  const svParam = selectedSv === ALL_SVS ? undefined : selectedSv;
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ["svNodeStatus", svParam],
-    queryFn: () => scanApi.fetchSvNodeStatus(svParam),
+    queryKey: ["svNodeStatus"],
+    queryFn: () => scanApi.fetchSvNodeStatus(),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
 
-  const providers = providersData?.providers ?? [];
-  const environments: SvEnvStatus[] = data?.environments ?? [];
+  const rawEnvironments: SvEnvStatus[] = data?.environments ?? [];
+  const allNodeNames = useMemo(() => getAllNodeNames(rawEnvironments), [rawEnvironments]);
+
+  const environments = useMemo(() => {
+    if (selectedSv === ALL_SVS) return rawEnvironments;
+    return rawEnvironments.map((env) => filterEnvStatus(env, selectedSv));
+  }, [rawEnvironments, selectedSv]);
+
   const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
 
   return (
@@ -242,17 +268,17 @@ export default function SvStatus() {
           </CardContent>
         </Card>
 
-        {/* SV Perspective Selector */}
+        {/* SV Filter */}
         <div className="flex items-center gap-3">
           <Eye className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Viewing from:</span>
+          <span className="text-sm font-medium">Filter by SV:</span>
           <Select value={selectedSv} onValueChange={setSelectedSv}>
             <SelectTrigger className="w-[280px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_SVS}>All SVs</SelectItem>
-              {providers.map((name) => (
+              {allNodeNames.map((name) => (
                 <SelectItem key={name} value={name}>
                   {name}
                 </SelectItem>
