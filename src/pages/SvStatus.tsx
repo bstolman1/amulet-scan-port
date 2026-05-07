@@ -273,14 +273,17 @@ export default function SvStatus() {
           <Eye className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Filter by SV:</span>
           <Select value={selectedSv} onValueChange={setSelectedSv}>
-            <SelectTrigger className="w-[280px]">
+            <SelectTrigger className="w-[280px] bg-muted/60 border-border">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="bg-muted border-border">
-              <SelectItem value={ALL_SVS} className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary">All SVs</SelectItem>
-              {allNodeNames.map((name) => (
-                <SelectItem key={name} value={name} className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary">
-                  {name}
+              {[ALL_SVS, ...allNodeNames].map((name) => (
+                <SelectItem
+                  key={name}
+                  value={name}
+                  className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary"
+                >
+                  {name === ALL_SVS ? "All SVs" : name}
                 </SelectItem>
               ))}
             </SelectContent>
