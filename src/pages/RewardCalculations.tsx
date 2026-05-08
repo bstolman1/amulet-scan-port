@@ -63,7 +63,7 @@ const RewardCalculations = () => {
     queryKey: ["rewardCalculations", partyId, startDate?.toISOString(), endDate?.toISOString(), startRound, endRound],
     queryFn: async () => {
       const url = `${getDuckDBApiUrl()}/api/rewards/calculate?${queryParams.toString()}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(25_000) });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || "Failed to fetch reward data");

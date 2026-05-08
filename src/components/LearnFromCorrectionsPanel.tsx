@@ -203,7 +203,7 @@ export function LearnFromCorrectionsPanel() {
   const fetchCurrentPatterns = async () => {
     try {
       const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/learned-patterns`);
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/learned-patterns`, { signal: AbortSignal.timeout(25_000) });
       if (response.ok) {
         const data = await response.json();
         if (data.exists) {
@@ -240,6 +240,7 @@ export function LearnFromCorrectionsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetVersion }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (response.ok) {
@@ -306,6 +307,7 @@ export function LearnFromCorrectionsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ proposedPatterns }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (response.ok) {
@@ -328,6 +330,7 @@ export function LearnFromCorrectionsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !learningMode }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (response.ok) {
@@ -356,15 +359,16 @@ export function LearnFromCorrectionsPanel() {
       const baseUrl = getDuckDBApiUrl();
       
       // First, get the improvement suggestions
-      const improvementsRes = await fetch(`${baseUrl}/api/governance-lifecycle/classification-improvements`);
+      const improvementsRes = await fetch(`${baseUrl}/api/governance-lifecycle/classification-improvements`, { signal: AbortSignal.timeout(25_000) });
       if (!improvementsRes.ok) throw new Error('Failed to fetch improvements');
       const improvementsData = await improvementsRes.json();
-      
+
       // Also do a dry run to see what patterns would be generated
       const dryRunRes = await fetch(`${baseUrl}/api/governance-lifecycle/apply-improvements`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dryRun: true }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (!dryRunRes.ok) throw new Error('Failed to generate patterns');
@@ -502,6 +506,7 @@ export function LearnFromCorrectionsPanel() {
           proposedPatterns,
           sampleSize: 100,
         }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (!response.ok) throw new Error('Failed to test proposals');
@@ -551,6 +556,7 @@ export function LearnFromCorrectionsPanel() {
           dryRun: false,
           acceptedProposals: acceptedIds,
         }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (!response.ok) throw new Error('Failed to apply improvements');

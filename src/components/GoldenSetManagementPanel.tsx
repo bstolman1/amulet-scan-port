@@ -170,9 +170,9 @@ export function GoldenSetManagementPanel() {
       const baseUrl = getDuckDBApiUrl();
       
       const [summaryRes, fullRes, historyRes] = await Promise.all([
-        fetch(`${baseUrl}/api/governance-lifecycle/golden-set`),
-        fetch(`${baseUrl}/api/governance-lifecycle/golden-set/full`),
-        fetch(`${baseUrl}/api/governance-lifecycle/golden-set/history`),
+        fetch(`${baseUrl}/api/governance-lifecycle/golden-set`, { signal: AbortSignal.timeout(25_000) }),
+        fetch(`${baseUrl}/api/governance-lifecycle/golden-set/full`, { signal: AbortSignal.timeout(25_000) }),
+        fetch(`${baseUrl}/api/governance-lifecycle/golden-set/history`, { signal: AbortSignal.timeout(25_000) }),
       ]);
       
       if (summaryRes.ok) {
@@ -200,6 +200,7 @@ export function GoldenSetManagementPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ classifierVersion: `v${Date.now()}` }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (response.ok) {
@@ -247,8 +248,9 @@ export function GoldenSetManagementPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newItem),
+        signal: AbortSignal.timeout(25_000),
       });
-      
+
       if (response.ok) {
         toast({
           title: "Item Added",
@@ -282,6 +284,7 @@ export function GoldenSetManagementPanel() {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (response.ok) {
@@ -305,7 +308,7 @@ export function GoldenSetManagementPanel() {
       const baseUrl = getDuckDBApiUrl();
       
       // Try the governance-lifecycle main endpoint which has rich items
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/`);
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/`, { signal: AbortSignal.timeout(25_000) });
       
       if (!response.ok) {
         toast({
@@ -415,6 +418,7 @@ export function GoldenSetManagementPanel() {
               category: 'standard',
               notes: 'Sampled from existing governance items',
             }),
+            signal: AbortSignal.timeout(25_000),
           });
           
           if (response.ok) {
@@ -483,6 +487,7 @@ export function GoldenSetManagementPanel() {
       const baseUrl = getDuckDBApiUrl();
       const response = await fetch(`${baseUrl}/api/governance-lifecycle/golden-set?clearHistory=true`, {
         method: 'DELETE',
+        signal: AbortSignal.timeout(25_000),
       });
       
       if (response.ok) {

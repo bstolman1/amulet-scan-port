@@ -76,6 +76,7 @@ export function DataIntegrityValidator() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sampleSize: 20 }),
+        signal: AbortSignal.timeout(25_000),
       });
       
       // Check if response is JSON (not HTML error page)
