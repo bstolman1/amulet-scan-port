@@ -187,18 +187,17 @@ export async function fetchWithFailover(path, options = {}) {
         return response;
       }
       
-      // Server returned an error status
-      if (response.status >= 500 || response.status === 429) {
-        // Server error or rate limit - rotate endpoint
+      // Server error, rate limit, or access denied — rotate endpoint
+      if (response.status >= 500 || response.status === 429 || response.status === 403) {
         console.warn(`[Endpoint Rotation] ${endpoint.name} returned ${response.status}, rotating...`);
         recordFailure(endpoint.url, new Error(`HTTP ${response.status}`));
         rotateToNextHealthy();
         lastError = new Error(`HTTP ${response.status}`);
         continue;
       }
-      
-      // Client error (4xx except 429) - don't rotate, return as-is
-      recordSuccess(endpoint.url); // The endpoint works, just bad request
+
+      // Benign client error (400, 404, etc.) - endpoint works, request was bad
+      recordSuccess(endpoint.url);
       return response;
       
     } catch (err) {

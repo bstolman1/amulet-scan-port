@@ -764,23 +764,23 @@ const GovernanceFlow = () => {
       const url = forceRefresh 
         ? `${baseUrl}/api/governance-lifecycle?refresh=true`
         : `${baseUrl}/api/governance-lifecycle`;
-      const response = await fetch(url);
-      
+      const response = await fetch(url, { signal: AbortSignal.timeout(25_000) });
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || `Failed to fetch: ${response.status}`);
       }
-      
+
       const result = await response.json();
-      
+
       if (result.warning) {
         console.warn('Governance data warning:', result.warning);
       }
-      
+
       if (result.error && (!result.lifecycleItems || result.lifecycleItems.length === 0)) {
         throw new Error(result.error);
       }
-      
+
       setData(result);
       setCachedAt(result.cachedAt || null);
     } catch (err) {
@@ -801,6 +801,7 @@ const GovernanceFlow = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ primaryId, type: newType, reason: 'Manual UI correction' }),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) throw new Error('Failed to save override');
       toast({ title: "Classification updated", description: `"${primaryId}" will now appear as ${TYPE_CONFIG[newType].label}` });
@@ -818,6 +819,7 @@ const GovernanceFlow = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topicId, newType, reason: 'Manual topic reclassification' }),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) throw new Error('Failed to save topic override');
       toast({ title: "Topic reclassified", description: `Topic will now appear as ${TYPE_CONFIG[newType].label}` });
@@ -835,6 +837,7 @@ const GovernanceFlow = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topicId, reason: 'Extracted via UI' }),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) throw new Error('Failed to save extract override');
       toast({ title: "Topic extracted", description: `"${topicSubject.slice(0, 50)}..." will now appear as its own card` });
@@ -856,7 +859,7 @@ const GovernanceFlow = () => {
   const fetchCipList = async () => {
     try {
       const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/cip-list`);
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/cip-list`, { signal: AbortSignal.timeout(25_000) });
       if (response.ok) {
         const { cips } = await response.json();
         setCipList(cips || []);
@@ -892,6 +895,7 @@ const GovernanceFlow = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sourcePrimaryId: mergeSourceId, mergeInto: Array.from(selectedMergeCips), reason: `Manual merge via UI: ${mergeSourceLabel}` }),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -936,7 +940,7 @@ const GovernanceFlow = () => {
   const fetchCardList = async () => {
     try {
       const baseUrl = getDuckDBApiUrl();
-      const response = await fetch(`${baseUrl}/api/governance-lifecycle/card-list`);
+      const response = await fetch(`${baseUrl}/api/governance-lifecycle/card-list`, { signal: AbortSignal.timeout(25_000) });
       if (response.ok) {
         const { cards } = await response.json();
         setCardList(cards || []);
@@ -964,6 +968,7 @@ const GovernanceFlow = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topicId: moveSourceId, targetCardId: selectedTargetCard, reason: `Manual move via UI: ${moveSourceLabel}` }),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -1019,6 +1024,7 @@ const GovernanceFlow = () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ primaryId, type: newType, reason: 'Bulk reclassification via UI' }),
+          signal: AbortSignal.timeout(25_000),
         })
       ));
       toast({ title: "Bulk reclassification complete", description: `${selectedItems.size} items updated to ${TYPE_CONFIG[newType].label}` });

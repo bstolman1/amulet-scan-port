@@ -77,11 +77,12 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 2,
-      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 3000),
+      retry: 3,
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10_000),
       staleTime: 60_000,
       gcTime: 5 * 60_000,
       refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
       networkMode: "offlineFirst",
     },
   },
@@ -93,7 +94,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <ErrorBoundary title="SCANTON crashed on this page">
-        <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/+$/, "")}>
+        <BrowserRouter basename={(import.meta.env.VITE_BASE_PATH || "").replace(/\/+$/, "")}>
           <Routes>
             {/* Core pages */}
             <Route path="/" element={<Dashboard />} />

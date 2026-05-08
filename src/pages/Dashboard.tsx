@@ -1,18 +1,19 @@
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
+import { QueryErrorState } from "@/components/QueryErrorState";
 import { Activity, Coins, Users, Package } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 
 const Dashboard = () => {
-  const { data: latestRound } = useQuery({
+  const { data: latestRound, isError: roundError, refetch: refetchRound } = useQuery({
     queryKey: ["latestRound"],
     queryFn: () => scanApi.fetchLatestRound(),
     retry: 3,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
     refetchInterval: 30000,
   });
-  const { data: dsoInfo } = useQuery({
+  const { data: dsoInfo, isError: dsoError, refetch: refetchDso } = useQuery({
     queryKey: ["dsoInfo"],
     queryFn: () => scanApi.fetchDsoInfo(),
     staleTime: 30000,
@@ -24,6 +25,7 @@ const Dashboard = () => {
     data: totalBalance,
     isError: balanceError,
     isLoading: balanceLoading,
+    refetch: refetchBalance,
   } = useQuery({
     queryKey: ["totalBalance"],
     queryFn: () => scanApi.fetchTotalBalance(),
@@ -31,7 +33,7 @@ const Dashboard = () => {
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
     refetchInterval: 60000,
   });
-  const { data: transactions } = useQuery({
+  const { data: transactions, isError: txError, refetch: refetchTx } = useQuery({
     queryKey: ["recentTransactions"],
     queryFn: () =>
       scanApi.fetchTransactions({
@@ -42,6 +44,8 @@ const Dashboard = () => {
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
     refetchInterval: 30000,
   });
+
+  const allFailed = balanceError && roundError && dsoError && txError;
 
   const ccPrice = (() => {
     const dsoPrice = (dsoInfo as any)?.latest_mining_round?.contract?.payload?.amuletPrice;
@@ -85,6 +89,14 @@ const Dashboard = () => {
             </p>
           </div>
         </div>
+
+        {allFailed && (
+          <QueryErrorState
+            title="Unable to reach the network"
+            message="All data sources are currently unavailable. Retrying automatically..."
+            onRetry={() => { refetchRound(); refetchDso(); refetchBalance(); refetchTx(); }}
+          />
+        )}
 
         <div>
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">

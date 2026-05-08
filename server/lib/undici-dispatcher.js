@@ -11,16 +11,24 @@ export function extractHostname(url) {
   }
 }
 
+const dispatcherCache = new Map();
+
 /**
- * Create an Undici dispatcher that fetch() actually uses (unlike https.Agent).
- * This ensures TLS handshake uses the correct SNI server name.
+ * Get or create an Undici dispatcher for a hostname.
+ * Dispatchers are cached so we reuse TCP/TLS connection pools
+ * instead of creating a new agent (and new connections) per request.
  */
 export function createDispatcher(hostname) {
-  return new UndiciAgent({
-    connect: {
-      servername: hostname,
-    },
-    keepAliveTimeout: 10_000,
-    keepAliveMaxTimeout: 10_000,
-  });
+  let dispatcher = dispatcherCache.get(hostname);
+  if (!dispatcher) {
+    dispatcher = new UndiciAgent({
+      connect: {
+        servername: hostname,
+      },
+      keepAliveTimeout: 10_000,
+      keepAliveMaxTimeout: 10_000,
+    });
+    dispatcherCache.set(hostname, dispatcher);
+  }
+  return dispatcher;
 }

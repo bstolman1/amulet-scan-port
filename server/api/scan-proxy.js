@@ -255,8 +255,9 @@ async function proxyRequest(req, res, method) {
       
       console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - reqStart}ms`);
 
-      // Check for server errors that warrant rotation
-      if (scanRes.status >= 500 || scanRes.status === 429) {
+      // Check for errors that warrant rotation:
+      // 5xx = server error, 429 = rate limit, 403 = access denied (SV blocking us)
+      if (scanRes.status >= 500 || scanRes.status === 429 || scanRes.status === 403) {
         console.warn(`[Scan Proxy] ⚠ ${endpoint.name} returned ${scanRes.status}, rotating to next endpoint...`);
         recordFailure(endpoint.url, new Error(`HTTP ${scanRes.status}`));
         const nextEndpoint = rotateToNextHealthy();
@@ -265,7 +266,7 @@ async function proxyRequest(req, res, method) {
         continue;
       }
 
-      // Success or client error - return as-is
+      // Success or benign client error (400, 404, etc.) - return as-is
       recordSuccess(endpoint.url);
 
       // FIX: Read with size limit before forwarding to the client.

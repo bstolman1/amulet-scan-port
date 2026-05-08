@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { QueryErrorState } from "@/components/QueryErrorState";
 import {
   ChevronDown,
   ChevronUp,
@@ -299,7 +300,13 @@ const Validators = () => {
   if (isError || !configData || !displayModel) {
     return (
       <DashboardLayout>
-        <div className="p-8 text-destructive">Error loading config data.</div>
+        <div className="p-8">
+          <QueryErrorState
+            title="Unable to load validator data"
+            message="Could not fetch validator configuration. Retrying automatically..."
+            onRetry={() => refetch()}
+          />
+        </div>
       </DashboardLayout>
     );
   }
