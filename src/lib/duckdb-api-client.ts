@@ -38,6 +38,7 @@ export async function apiFetch<T>(endpoint: string, options?: RequestInit): Prom
       'Content-Type': 'application/json',
       ...options?.headers,
     },
+    signal: options?.signal ?? AbortSignal.timeout(25_000),
   });
 
   if (!response.ok) {

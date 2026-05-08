@@ -5,6 +5,14 @@ import "./index.css";
 import "react-autoql/dist/autoql.esm.css";
 import "./styles/react-autoql-overrides.css";
 
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("[Global] Unhandled promise rejection:", event.reason);
+});
+
+window.addEventListener("error", (event) => {
+  console.error("[Global] Uncaught error:", event.error ?? event.message);
+});
+
 // StrictMode is disabled because react-autoql Dashboard component
 // performs direct DOM manipulation that conflicts with StrictMode's
 // double-rendering in development. This only affects development mode;

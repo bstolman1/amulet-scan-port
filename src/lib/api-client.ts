@@ -21,6 +21,7 @@ async function scanPost<T>(path: string, body: unknown = {}): Promise<T> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(25_000),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -45,6 +46,7 @@ async function scanGet<T>(path: string, queryParams?: Record<string, string | nu
   const res = await fetch(url, {
     method: "GET",
     headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(25_000),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -822,7 +824,7 @@ export const scanApi = {
       params.append("validator_ids", id);
     }
     const url = `${API_BASE}/v0/validators/validator-faucets?${params.toString()}`;
-    const res = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
+    const res = await fetch(url, { method: "GET", headers: { Accept: "application/json" }, signal: AbortSignal.timeout(25_000) });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`GET /v0/validators/validator-faucets failed (${res.status}): ${text}`);
