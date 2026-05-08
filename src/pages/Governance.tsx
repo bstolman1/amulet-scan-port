@@ -12,6 +12,7 @@ import { useActiveVoteRequests } from "@/hooks/use-active-vote-requests";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { QueryErrorState } from "@/components/QueryErrorState";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
@@ -312,10 +313,11 @@ const Governance = () => {
                 </div>
 
                 {isError ? (
-                  <div className="text-center py-12">
-                    <Vote className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-2">Unable to load proposals from Scan API.</p>
-                    <p className="text-xs text-muted-foreground">Check network connectivity to the Canton Scan API.</p>
+                  <div className="py-4">
+                    <QueryErrorState
+                      title="Unable to load proposals"
+                      message="Could not reach the Scan API. Retrying automatically..."
+                    />
                   </div>
                 ) : isLoading ? (
                   <div className="space-y-4">
