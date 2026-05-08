@@ -25,6 +25,8 @@ import type { SvEnvStatus, SvServiceCheck } from "@/lib/api-client";
 import { Activity, RefreshCw, Clock, Eye } from "lucide-react";
 
 const ALL_SVS = "__all__";
+const ALL_ENVS = "__all__";
+const ENVS = ["dev", "test", "main"] as const;
 const ENV_LABELS: Record<string, string> = { dev: "dev", test: "test", main: "main" };
 const SERVICES = ["mediator", "scan", "sv"] as const;
 type Service = (typeof SERVICES)[number];
@@ -161,6 +163,7 @@ function getServiceCounts(envs: SvEnvStatus[], env: string, service: Service) {
 
 export default function SvStatus() {
   const [selectedSv, setSelectedSv] = useState(ALL_SVS);
+  const [selectedEnv, setSelectedEnv] = useState(ALL_ENVS);
 
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ["svNodeStatus"],
@@ -173,9 +176,15 @@ export default function SvStatus() {
   const allNodeNames = useMemo(() => getAllNodeNames(rawEnvironments), [rawEnvironments]);
 
   const environments = useMemo(() => {
-    if (selectedSv === ALL_SVS) return rawEnvironments;
-    return rawEnvironments.map((env) => filterEnvStatus(env, selectedSv));
-  }, [rawEnvironments, selectedSv]);
+    let filtered = rawEnvironments;
+    if (selectedEnv !== ALL_ENVS) {
+      filtered = filtered.filter((env) => env.env === selectedEnv);
+    }
+    if (selectedSv !== ALL_SVS) {
+      filtered = filtered.map((env) => filterEnvStatus(env, selectedSv));
+    }
+    return filtered;
+  }, [rawEnvironments, selectedSv, selectedEnv]);
 
   const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
 
@@ -245,7 +254,7 @@ export default function SvStatus() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  ["dev", "test", "main"].map((env) => (
+                  (selectedEnv === ALL_ENVS ? ENVS : [selectedEnv]).map((env) => (
                     <TableRow key={env}>
                       <TableCell className="font-semibold">{env}</TableCell>
                       {SERVICES.map((svc) => {
@@ -268,9 +277,26 @@ export default function SvStatus() {
           </CardContent>
         </Card>
 
-        {/* SV Filter */}
-        <div className="flex items-center gap-3">
+        {/* Filters */}
+        <div className="flex items-center gap-3 flex-wrap">
           <Eye className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">Filter by Env:</span>
+          <Select value={selectedEnv} onValueChange={setSelectedEnv}>
+            <SelectTrigger className="w-[140px] bg-muted/60 border-border focus:ring-0 focus:ring-offset-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-muted border-border">
+              {[ALL_ENVS, ...ENVS].map((env) => (
+                <SelectItem
+                  key={env}
+                  value={env}
+                  className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary"
+                >
+                  {env === ALL_ENVS ? "All Envs" : env}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <span className="text-sm font-medium">Filter by SV:</span>
           <Select value={selectedSv} onValueChange={setSelectedSv}>
             <SelectTrigger className="w-[280px] bg-muted/60 border-border focus:ring-0 focus:ring-offset-0">
@@ -288,11 +314,11 @@ export default function SvStatus() {
               ))}
             </SelectContent>
           </Select>
-          {selectedSv !== ALL_SVS && (
+          {(selectedSv !== ALL_SVS || selectedEnv !== ALL_ENVS) && (
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setSelectedSv(ALL_SVS)}
+              onClick={() => { setSelectedSv(ALL_SVS); setSelectedEnv(ALL_ENVS); }}
               className="text-xs text-muted-foreground"
             >
               Reset
