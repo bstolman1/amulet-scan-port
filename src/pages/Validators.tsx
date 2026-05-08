@@ -306,7 +306,7 @@ const Validators = () => {
 
   const exportCSV = () => {
     const rows = [
-      ["Beneficiary", "Hosted By", "Earned Weight", "Status"],
+      ["Hosted Super Validator", "Hosted By", "Earned Weight", "Status"],
       ...displayModel.economicBeneficiaries.map((b) => [
         b.name,
         b.operatorName,
@@ -346,7 +346,7 @@ const Validators = () => {
                   </span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Beneficiaries:</span>
+                  <span className="text-muted-foreground">Hosted Super Validators:</span>
                   <span className="ml-2 font-semibold text-foreground">
                     {displayModel.beneficiaryCount}
                   </span>
@@ -404,7 +404,7 @@ const Validators = () => {
               }`}
             >
               <Users className="w-4 h-4" />
-              Beneficiaries
+              Hosted Super Validators
               <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-bold ${
                 svTab === "hosted" ? "bg-white/20" : "bg-muted"
               }`}>
@@ -427,7 +427,7 @@ const Validators = () => {
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Operator</TableHead>
                     <TableHead className="text-right">Reward Weight</TableHead>
-                    <TableHead className="text-center">Beneficiaries</TableHead>
+                    <TableHead className="text-center">Hosted Super Validators</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -467,11 +467,11 @@ const Validators = () => {
             </>
           )}
 
-          {/* ── BENEFICIARIES TABLE ───────────────────────────────────────── */}
+          {/* ── HOSTED SUPER VALIDATORS TABLE ─────────────────────────────── */}
           {svTab === "hosted" && (
             <>
               <div className="px-6 pt-4 pb-2">
-                <h3 className="text-lg font-bold">Beneficiaries</h3>
+                <h3 className="text-lg font-bold">Hosted Super Validators</h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   Parties hosted under an operator. Weights partition that operator's reward pool.
                 </p>
@@ -479,7 +479,7 @@ const Validators = () => {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[35%]">Beneficiary</TableHead>
+                    <TableHead className="w-[35%]">Hosted Super Validator</TableHead>
                     <TableHead>Hosted By</TableHead>
                     <TableHead className="text-right">Earned Weight</TableHead>
                     <TableHead className="text-center">Status</TableHead>
