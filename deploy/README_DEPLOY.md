@@ -1,6 +1,25 @@
-# Production Deployment Guide
+# Deployment Guide
 
-Deploy the Amulet Scan frontend to an Ubuntu server with nginx.
+Deploy the Amulet Scan dashboard to an Ubuntu server with nginx.
+
+Live site: `https://dashboard.canton.foundation/`
+Staging site: `https://dashboard.canton.foundation/staging/`
+
+## Architecture
+
+```
+Browser ─► nginx (port 80/443)
+              ├── /            ─► /var/www/html/          (production frontend)
+              ├── /api/        ─► localhost:3001           (production backend)
+              ├── /staging/    ─► /var/www/staging/        (staging frontend)
+              └── /staging/api/─► localhost:3002           (staging backend)
+```
+
+| Component | Production | Staging |
+|-----------|-----------|---------|
+| Frontend | `/var/www/html/` | `/var/www/staging/` |
+| Backend | PM2 `duckdb-api` on port 3001 | PM2 `duckdb-api-staging` on port 3002 |
+| URL | `dashboard.canton.foundation/` | `dashboard.canton.foundation/staging/` |
 
 ## Prerequisites
 
@@ -11,20 +30,39 @@ Deploy the Amulet Scan frontend to an Ubuntu server with nginx.
 
 ## Quick Deploy
 
+### Production
+
 ```bash
-# 1. Clone/pull the repo on your server
-git pull origin main
+cd ~/amulet-scan-port
+git checkout main
+git pull
 
-# 2. Configure environment
-cp deploy/.env.production.example .env.production
-nano .env.production  # Set your API URLs
+# Frontend
+npm install
+npx vite build
+sudo cp -r dist/* /var/www/html/
 
-# 3. Deploy
-chmod +x deploy/deploy-frontend.sh
-./deploy/deploy-frontend.sh
+# Backend
+cd server && npm install && pm2 restart duckdb-api
 ```
 
-## Step-by-Step Setup
+### Staging
+
+```bash
+cd ~/amulet-scan-port
+git checkout <your-branch>
+
+# Frontend (note the env vars for subpath routing)
+npm install
+VITE_BASE_PATH=/staging VITE_BASE=/staging/ npx vite build
+sudo rm -rf /var/www/staging/assets/
+sudo cp -r dist/* /var/www/staging/
+
+# Backend (independent of production)
+cd server && npm install && pm2 restart duckdb-api-staging
+```
+
+## Initial Server Setup
 
 ### 1. Install nginx
 
@@ -37,37 +75,36 @@ sudo systemctl enable nginx
 ### 2. Configure nginx
 
 ```bash
-# Copy the config
 sudo cp deploy/nginx-site.conf /etc/nginx/sites-available/scanton
-
-# Edit server_name to your domain
-sudo nano /etc/nginx/sites-available/scanton
-
-# Enable the site
+sudo nano /etc/nginx/sites-available/scanton  # Set server_name to your domain
 sudo ln -sf /etc/nginx/sites-available/scanton /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
-
-# Test and reload
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 3. Configure Environment
+### 3. Create directories
 
 ```bash
-cp deploy/.env.production.example .env.production
-nano .env.production
+sudo mkdir -p /var/www/html /var/www/staging
+sudo chown -R www-data:www-data /var/www/html /var/www/staging
+sudo chmod -R 755 /var/www/html /var/www/staging
 ```
 
-Set these values:
-- `VITE_API_BASE_URL` - Your API server URL (e.g., `https://api.scanton.io`)
-- `VITE_SCAN_API_URL` - Canton Scan API (if using external)
-
-### 4. Build and Deploy
+### 4. Start backend services
 
 ```bash
-chmod +x deploy/deploy-frontend.sh
-./deploy/deploy-frontend.sh
+cd ~/amulet-scan-port/server
+
+# Production backend
+pm2 start ecosystem.config.cjs --env production
+
+# Staging backend
+pm2 start ecosystem.staging.cjs
+
+# Save so they survive reboots
+pm2 save
+pm2 startup
 ```
 
 ### 5. Enable HTTPS (Recommended)
@@ -77,45 +114,92 @@ chmod +x deploy/enable-https.sh
 sudo ./deploy/enable-https.sh yourdomain.com
 ```
 
+## Staging Build Environment Variables
+
+The staging frontend needs two env vars at build time:
+
+| Variable | Purpose | Value |
+|----------|---------|-------|
+| `VITE_BASE_PATH` | Sets the React Router basename so routes work under `/staging/` | `/staging` |
+| `VITE_BASE` | Sets the Vite asset base path so JS/CSS load from `/staging/assets/` | `/staging/` |
+
+Production builds need neither (both default to `/`).
+
+## PM2 Commands
+
+| Action | Command |
+|--------|---------|
+| View all processes | `pm2 list` |
+| Production backend logs | `pm2 logs duckdb-api --lines 20 --nostream` |
+| Staging backend logs | `pm2 logs duckdb-api-staging --lines 20 --nostream` |
+| Restart production | `pm2 restart duckdb-api` |
+| Restart staging | `pm2 restart duckdb-api-staging` |
+| Stop staging | `pm2 stop duckdb-api-staging` |
+| Monitor resources | `pm2 monit` |
+
+## Health Checks
+
+```bash
+# Production backend
+curl http://localhost:3001/health
+
+# Staging backend
+curl http://localhost:3002/health
+
+# Scan proxy endpoint status
+curl http://localhost:3001/scan-proxy/_health
+curl http://localhost:3002/scan-proxy/_health
+```
+
 ## Rollback
 
-If something goes wrong, restore the backup:
+### Frontend rollback
 
 ```bash
 # Find latest backup
 ls -la /var/www/
 
-# Restore (replace timestamp)
+# Restore production (replace timestamp)
 sudo rm -rf /var/www/html/*
 sudo cp -r /var/www/html.backup.YYYYMMDD_HHMMSS/* /var/www/html/
+```
+
+### Backend rollback
+
+```bash
+cd ~/amulet-scan-port
+git checkout main -- server/
+cd server && npm install && pm2 restart duckdb-api
 ```
 
 ## Troubleshooting
 
 ### 502 Bad Gateway
-- API server not running
-- Check `VITE_API_BASE_URL` is correct
+- Backend not running: `pm2 list` to check status
+- Wrong port: verify nginx proxy_pass matches PM2 port
 
 ### Blank page / JS errors
-- Check browser console for errors
-- Verify build completed successfully
-- Check nginx error logs: `sudo tail -f /var/log/nginx/error.log`
+- Check browser console (F12) for errors
+- Verify build completed: `ls dist/index.html`
+- Check nginx logs: `sudo tail -f /var/log/nginx/error.log`
 
 ### Routes return 404
 - Ensure `try_files` is configured in nginx
+- For staging, verify build used `VITE_BASE_PATH=/staging`
 - Reload nginx: `sudo systemctl reload nginx`
 
+### Staging 404 but production works
+- Missing trailing slash: `/staging` needs a redirect to `/staging/`
+- Check nginx has `location = /staging { return 301 /staging/; }`
+
+### Backend crash on startup
+- Check logs: `pm2 logs duckdb-api --lines 20 --nostream`
+- Common cause: missing dependency — run `cd server && npm install`
+- Verify undici is in server/package.json
+
 ### Permission denied
-- Fix ownership: `sudo chown -R www-data:www-data /var/www/html`
-- Fix permissions: `sudo chmod -R 755 /var/www/html`
-
-## Updating
-
-```bash
-cd /path/to/project
-git pull origin main
-./deploy/deploy-frontend.sh
-```
+- Fix ownership: `sudo chown -R www-data:www-data /var/www/html /var/www/staging`
+- Fix permissions: `sudo chmod -R 755 /var/www/html /var/www/staging`
 
 ## Firewall
 
@@ -126,23 +210,9 @@ sudo ufw enable
 
 ## DNS Setup
 
-Add these DNS records:
-
 | Type | Name | Value |
 |------|------|-------|
 | A | @ | YOUR_SERVER_IP |
 | A | www | YOUR_SERVER_IP |
 
 Wait for DNS propagation (up to 48 hours) before enabling HTTPS.
-
-## File Structure After Deploy
-
-```
-/var/www/html/
-├── index.html
-├── assets/
-│   ├── index-[hash].js
-│   └── index-[hash].css
-├── favicon.ico
-└── robots.txt
-```
