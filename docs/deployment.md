@@ -2,12 +2,14 @@
 
 This guide covers deploying Amulet Scan to a Linux VM (Google Cloud, AWS, Azure, etc.) for production use.
 
+> **Quick reference:** For day-to-day deploy commands (production and staging), see [`deploy/README_DEPLOY.md`](../deploy/README_DEPLOY.md). This document covers full initial server setup.
+
 ## Overview
 
 The deployment consists of:
-1. **API Server** - Express.js serving the DuckDB-powered API
+1. **API Server** - Express.js serving the DuckDB-powered API (port 3001 production, port 3002 staging)
 2. **Ingestion Pipeline** - Node.js scripts for data collection
-3. **Frontend** - Static React app (served separately or via CDN)
+3. **Frontend** - Static React app served by nginx
 
 ## Prerequisites
 
@@ -98,7 +100,8 @@ pm2 logs duckdb-api
 pm2 monit
 ```
 
-See `server/pm2-setup.md` for detailed PM2 configuration and commands.
+See `server/ecosystem.config.cjs` for production config and `server/ecosystem.staging.cjs` for staging.
+See [`deploy/README_DEPLOY.md`](../deploy/README_DEPLOY.md) for PM2 commands and the staging workflow.
 
 ### Option B: Systemd
 
@@ -202,22 +205,35 @@ gcloud compute firewall-rules create allow-api-3001 \
 sudo ufw allow 3001/tcp
 ```
 
-## Frontend Configuration
+## Frontend Deployment
 
-Update `src/lib/backend-config.ts` with your VM's external IP:
+The frontend is a Vite + React SPA deployed as static files behind nginx. No direct API URLs are configured in the frontend — all API calls use relative paths (`/api/...`) and nginx proxies them to the backend.
 
-```typescript
-const CLOUDFLARE_TUNNEL_URL = 'http://YOUR_VM_EXTERNAL_IP:3001';
-```
+### Production build
 
-Get your VM's IP:
 ```bash
-gcloud compute instances describe your-vm-name \
-    --zone=us-central1-f \
-    --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+cd ~/amulet-scan-port
+npm install
+npx vite build
+sudo cp -r dist/* /var/www/html/
 ```
 
-## Optional: HTTPS with Nginx
+### Staging build (at /staging/ subpath)
+
+```bash
+VITE_BASE_PATH=/staging VITE_BASE=/staging/ npx vite build
+sudo rm -rf /var/www/staging/assets/
+sudo cp -r dist/* /var/www/staging/
+```
+
+| Env Variable | Purpose | Production | Staging |
+|-------------|---------|-----------|---------|
+| `VITE_BASE_PATH` | React Router basename | not set (defaults to `/`) | `/staging` |
+| `VITE_BASE` | Vite asset base path | not set (defaults to `/`) | `/staging/` |
+
+See [`deploy/README_DEPLOY.md`](../deploy/README_DEPLOY.md) for the full deployment workflow.
+
+## HTTPS with Nginx
 
 For production, add Nginx as a reverse proxy with SSL:
 

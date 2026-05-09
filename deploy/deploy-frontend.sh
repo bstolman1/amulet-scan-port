@@ -3,61 +3,71 @@ set -euo pipefail
 
 # =============================================================================
 # deploy-frontend.sh - Build and deploy Vite React SPA to nginx
+#
+# Usage:
+#   ./deploy/deploy-frontend.sh              # Deploy to production (/var/www/html)
+#   ./deploy/deploy-frontend.sh --staging    # Deploy to staging (/var/www/staging)
 # =============================================================================
 
-DEPLOY_DIR="/var/www/html"
-BACKUP_DIR="/var/www/html.backup.$(date +%Y%m%d_%H%M%S)"
+STAGING=false
+if [[ "${1:-}" == "--staging" ]]; then
+    STAGING=true
+fi
+
+if [ "$STAGING" = true ]; then
+    DEPLOY_DIR="/var/www/staging"
+    BACKUP_DIR="/var/www/staging.backup.$(date +%Y%m%d_%H%M%S)"
+    ENV_LABEL="STAGING"
+else
+    DEPLOY_DIR="/var/www/html"
+    BACKUP_DIR="/var/www/html.backup.$(date +%Y%m%d_%H%M%S)"
+    ENV_LABEL="PRODUCTION"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=========================================="
-echo "  Frontend Deployment Script"
+echo "  Frontend Deployment Script ($ENV_LABEL)"
 echo "=========================================="
 echo ""
 
 # Check if running from correct directory
 if [ ! -f "$PROJECT_DIR/package.json" ]; then
-    echo "❌ Error: package.json not found. Run from project root."
+    echo "Error: package.json not found. Run from project root."
     exit 1
 fi
 
 cd "$PROJECT_DIR"
 
-# Check for .env.production
-if [ ! -f ".env.production" ]; then
-    echo "⚠️  Warning: .env.production not found"
-    echo "   Copy .env.production.example to .env.production and configure it"
-    read -p "   Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
 # Step 1: Install dependencies
-echo "📦 Installing dependencies..."
+echo "Installing dependencies..."
 npm ci --prefer-offline
 
 # Step 2: Build the project
-echo "🔨 Building production bundle..."
-npm run build
+echo "Building $ENV_LABEL bundle..."
+if [ "$STAGING" = true ]; then
+    VITE_BASE_PATH=/staging VITE_BASE=/staging/ npx vite build
+else
+    npx vite build
+fi
 
 # Verify build output
 if [ ! -d "dist" ] || [ ! -f "dist/index.html" ]; then
-    echo "❌ Error: Build failed - dist/index.html not found"
+    echo "Error: Build failed - dist/index.html not found"
     exit 1
 fi
 
-echo "✅ Build successful"
+echo "Build successful"
 
 # Step 3: Backup existing deployment
 if [ -d "$DEPLOY_DIR" ] && [ "$(ls -A $DEPLOY_DIR 2>/dev/null)" ]; then
-    echo "📁 Backing up current deployment to $BACKUP_DIR..."
+    echo "Backing up current deployment to $BACKUP_DIR..."
     sudo cp -r "$DEPLOY_DIR" "$BACKUP_DIR"
 fi
 
 # Step 4: Deploy new build
-echo "🚀 Deploying to $DEPLOY_DIR..."
+echo "Deploying to $DEPLOY_DIR..."
 
 # Create deploy dir if it doesn't exist
 sudo mkdir -p "$DEPLOY_DIR"
@@ -76,7 +86,7 @@ sudo chmod -R 755 "$DEPLOY_DIR"
 if [ -f "$DEPLOY_DIR/index.html" ]; then
     echo ""
     echo "=========================================="
-    echo "  ✅ Deployment successful!"
+    echo "  Deployment successful! ($ENV_LABEL)"
     echo "=========================================="
     echo ""
     echo "  Deployed to: $DEPLOY_DIR"
@@ -85,6 +95,6 @@ if [ -f "$DEPLOY_DIR/index.html" ]; then
     echo "  To rollback: sudo cp -r $BACKUP_DIR/* $DEPLOY_DIR/"
     echo ""
 else
-    echo "❌ Error: Deployment verification failed"
+    echo "Error: Deployment verification failed"
     exit 1
 fi
