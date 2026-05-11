@@ -11,6 +11,15 @@
  */
 
 import { query } from '../duckdb/connection.js';
+import { initEngineSchema } from '../engine/schema.js';
+
+let schemaReady = false;
+
+async function ensureSchema() {
+  if (schemaReady) return;
+  await initEngineSchema();
+  schemaReady = true;
+}
 
 /**
  * Map a Scan API outcome tag to a status string.
@@ -32,6 +41,8 @@ export async function upsertVoteResults(results) {
   if (!results || !Array.isArray(results) || results.length === 0) {
     return { inserted: 0, skipped: 0 };
   }
+
+  await ensureSchema();
 
   let inserted = 0;
   let skipped = 0;
@@ -122,6 +133,8 @@ export async function upsertVoteResults(results) {
  * @returns {Array} — raw VoteResult objects
  */
 export async function getStoredVoteResults({ limit = 500, status, actionTag } = {}) {
+  await ensureSchema();
+
   const conditions = ['is_closed = TRUE'];
   const params = [];
 
@@ -159,6 +172,7 @@ export async function getStoredVoteResults({ limit = 500, status, actionTag } = 
  * Return the count of stored vote results.
  */
 export async function getVoteResultCount() {
+  await ensureSchema();
   const rows = await query('SELECT COUNT(*) AS cnt FROM vote_requests WHERE is_closed = TRUE');
   return Number(rows[0]?.cnt ?? 0);
 }
