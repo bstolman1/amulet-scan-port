@@ -17,6 +17,20 @@ import { QueryErrorState } from "@/components/QueryErrorState";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
+import type { ReactNode } from "react";
+
+function highlightMatch(text: string, query: string): ReactNode {
+  if (!query.trim() || !text) return text;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
+}
 
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
   if (!dateStr || typeof dateStr !== "string") return "N/A";
@@ -222,28 +236,9 @@ const Governance = () => {
       <div className="space-y-6">
 
         {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-bold mb-2">Governance</h2>
-            <p className="text-muted-foreground">DSO proposals and voting activity</p>
-          </div>
-          <div className="relative w-full sm:w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search proposals..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-9"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
+        <div>
+          <h2 className="text-3xl font-bold mb-2">Governance</h2>
+          <p className="text-muted-foreground">DSO proposals and voting activity</p>
         </div>
 
         {/* Summary Cards */}
@@ -303,16 +298,33 @@ const Governance = () => {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="scanapi" className="gap-1 data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
-              <Globe className="h-4 w-4" />
-              Historical Governance
-            </TabsTrigger>
-            <TabsTrigger value="active" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
-              <Clock className="h-4 w-4" />
-              Active Governance
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <TabsList>
+              <TabsTrigger value="scanapi" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
+                Historical Governance
+              </TabsTrigger>
+              <TabsTrigger value="active" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
+                Active Governance
+              </TabsTrigger>
+            </TabsList>
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search proposals..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-9 h-9"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* ── Historical Governance ── */}
           <TabsContent value="scanapi">
@@ -391,10 +403,10 @@ const Governance = () => {
                                   {getStatusIcon(proposal.status)}
                                 </div>
                                 <div>
-                                  <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                                  <h4 className="font-semibold text-lg">{highlightMatch(proposal.title, searchQuery)}</h4>
                                   <p className="text-sm text-muted-foreground">
                                     Requested by{" "}
-                                    <span className="font-medium text-foreground">{proposal.requester}</span>
+                                    <span className="font-medium text-foreground">{highlightMatch(proposal.requester, searchQuery)}</span>
                                   </p>
                                 </div>
                               </div>
@@ -407,7 +419,7 @@ const Governance = () => {
                             <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                               <p className="text-xs font-semibold text-muted-foreground mb-1">Reason</p>
                               {proposal.reasonBody && (
-                                <p className="text-sm mb-1">{proposal.reasonBody}</p>
+                                <p className="text-sm mb-1">{highlightMatch(proposal.reasonBody, searchQuery)}</p>
                               )}
                               {proposal.reasonUrl && (
                                 <a
@@ -416,7 +428,7 @@ const Governance = () => {
                                   rel="noopener noreferrer"
                                   className="text-sm text-primary hover:underline break-all"
                                 >
-                                  {proposal.reasonUrl}
+                                  {highlightMatch(proposal.reasonUrl, searchQuery)}
                                 </a>
                               )}
                               {!proposal.reasonBody && !proposal.reasonUrl && (

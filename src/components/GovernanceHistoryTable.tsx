@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,19 @@ import { CheckCircle, XCircle, Clock, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 import { cn } from "@/lib/utils";
+
+function highlightMatch(text: string, query: string): ReactNode {
+  if (!query.trim() || !text) return text;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{text.slice(idx, idx + query.length)}</mark>
+      {text.slice(idx + query.length)}
+    </>
+  );
+}
 
 interface GovernanceHistoryTableProps {
   limit?: number;
@@ -223,7 +236,7 @@ export function GovernanceHistoryTable({ limit = 500, searchQuery = "" }: Govern
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center gap-2">
                       {getOutcomeIcon(result.outcome)}
-                      <p className="text-sm font-semibold">{result.actionTitle || "Unknown Action"}</p>
+                      <p className="text-sm font-semibold">{highlightMatch(result.actionTitle || "Unknown Action", searchQuery)}</p>
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -248,7 +261,7 @@ export function GovernanceHistoryTable({ limit = 500, searchQuery = "" }: Govern
                     <div className="p-3 rounded-lg bg-background/30 border border-border/30">
                       <p className="text-xs text-muted-foreground mb-1 font-semibold">Reason</p>
                       {result.reasonBody && (
-                        <p className="text-sm mb-1">{result.reasonBody}</p>
+                        <p className="text-sm mb-1">{highlightMatch(result.reasonBody, searchQuery)}</p>
                       )}
                       {result.reasonUrl && (
                         <a
@@ -257,7 +270,7 @@ export function GovernanceHistoryTable({ limit = 500, searchQuery = "" }: Govern
                           rel="noopener noreferrer"
                           className="text-sm text-primary hover:underline break-all"
                         >
-                          {result.reasonUrl}
+                          {highlightMatch(result.reasonUrl, searchQuery)}
                         </a>
                       )}
                       {!result.reasonBody && !result.reasonUrl && (
