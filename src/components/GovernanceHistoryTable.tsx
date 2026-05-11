@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 
 interface GovernanceHistoryTableProps {
   limit?: number;
+  searchQuery?: string;
 }
 
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
@@ -24,7 +25,7 @@ const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = 
   }
 };
 
-export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTableProps) {
+export function GovernanceHistoryTable({ limit = 500, searchQuery = "" }: GovernanceHistoryTableProps) {
   const [searchParams] = useSearchParams();
   const highlightedProposalId = searchParams.get("proposal");
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -63,9 +64,23 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
 
   const filtered = useMemo(() => {
     if (!voteResults) return [];
-    if (typeFilter === "all") return voteResults;
-    return voteResults.filter((r) => r.actionTitle === typeFilter);
-  }, [voteResults, typeFilter]);
+    let results = voteResults;
+    if (typeFilter !== "all") {
+      results = results.filter((r) => r.actionTitle === typeFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      results = results.filter((r) => {
+        const fields = [
+          r.actionTitle, r.actionType, r.requester, r.reasonBody, r.reasonUrl,
+          r.trackingCid, r.outcome,
+          ...r.votes.map((v) => v.svName),
+        ];
+        return fields.some((f) => f && f.toLowerCase().includes(q));
+      });
+    }
+    return results;
+  }, [voteResults, typeFilter, searchQuery]);
 
   const getOutcomeVariant = (outcome: ParsedVoteResult["outcome"]) => {
     switch (outcome) {
@@ -177,7 +192,9 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <p className="text-center text-muted-foreground py-8">No governance history found</p>
+          <p className="text-center text-muted-foreground py-8">
+            {searchQuery ? "No results match your search" : "No governance history found"}
+          </p>
         ) : (
           filtered.map((result, idx) => {
             const proposalKey = result.trackingCid || `idx-${idx}`;

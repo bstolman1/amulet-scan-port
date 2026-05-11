@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Globe, ChevronDown, Server } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Globe, ChevronDown, Server, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +11,7 @@ import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data"
 import { useActiveVoteRequests } from "@/hooks/use-active-vote-requests";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QueryErrorState } from "@/components/QueryErrorState";
 import { format } from "date-fns";
@@ -33,6 +34,7 @@ const Governance = () => {
   const highlightedProposalId = searchParams.get("proposal");
   const activeTab = searchParams.get("tab") || "scanapi";
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [searchQuery, setSearchQuery] = useState("");
 
   const handleTabChange = (value: string) => {
     setSearchParams((prev) => {
@@ -184,6 +186,19 @@ const Governance = () => {
   const totalProposals = proposals?.length || 0;
   const activeProposals = proposals?.filter((p: any) => p.status === "pending").length || 0;
 
+  const filteredProposals = useMemo(() => {
+    if (!proposals || !searchQuery.trim()) return proposals;
+    const q = searchQuery.toLowerCase();
+    return proposals.filter((p: any) => {
+      const fields = [
+        p.title, p.actionType, p.requester, p.reasonBody, p.reasonUrl,
+        p.id, p.status,
+        ...(p.votedSvs?.map((sv: any) => sv.party) || []),
+      ];
+      return fields.some((f) => f && String(f).toLowerCase().includes(q));
+    });
+  }, [proposals, searchQuery]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "approved": return "bg-success/10 text-success border-success/20";
@@ -207,9 +222,28 @@ const Governance = () => {
       <div className="space-y-6">
 
         {/* Page Header */}
-        <div>
-          <h2 className="text-3xl font-bold mb-2">Governance</h2>
-          <p className="text-muted-foreground">DSO proposals and voting activity</p>
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold mb-2">Governance</h2>
+            <p className="text-muted-foreground">DSO proposals and voting activity</p>
+          </div>
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search proposals..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-9"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Summary Cards */}
@@ -293,7 +327,7 @@ const Governance = () => {
                     Complete governance history from the Canton Scan API
                   </p>
                 </div>
-                <GovernanceHistoryTable limit={500} />
+                <GovernanceHistoryTable limit={500} searchQuery={searchQuery} />
               </div>
             </Card>
           </TabsContent>
@@ -323,17 +357,21 @@ const Governance = () => {
                   <div className="space-y-4">
                     {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full" />)}
                   </div>
-                ) : !proposals?.length ? (
+                ) : !filteredProposals?.length ? (
                   <div className="text-center py-12">
                     <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-2">No active proposals at the moment</p>
+                    <p className="text-muted-foreground mb-2">
+                      {searchQuery ? "No proposals match your search" : "No active proposals at the moment"}
+                    </p>
                     <p className="text-sm text-muted-foreground">
-                      All governance proposals have been resolved. New proposals will appear here when submitted by DSO members.
+                      {searchQuery
+                        ? "Try a different search term."
+                        : "All governance proposals have been resolved. New proposals will appear here when submitted by DSO members."}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {proposals.map((proposal: any, index: number) => {
+                    {filteredProposals.map((proposal: any, index: number) => {
                       const isHighlighted = highlightedProposalId === proposal.id;
                       return (
                         <Collapsible key={index} defaultOpen={isHighlighted}>
