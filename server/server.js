@@ -24,6 +24,7 @@ import governanceLifecycleRouter from './api/governance-lifecycle.js';
 import kaikoRouter from './api/kaiko.js';
 import rewardsRouter from './api/rewards.js';
 import scanProxyRouter from './api/scan-proxy.js';
+import voteResultsRouter from './api/vote-results.js';
 import db, { initializeViews } from './duckdb/connection.js';
 import { getCacheStats } from './cache/stats-cache.js';
 import { checkAllEndpoints, getAllEndpoints, getCurrentEndpoint } from './lib/endpoint-rotation.js';
@@ -167,6 +168,7 @@ app.use('/governance-lifecycle', governanceLifecycleRouter);
 app.use('/kaiko', kaikoRouter);
 app.use('/rewards', rewardsRouter);
 app.use('/scan-proxy', scanProxyRouter);
+app.use('/vote-results', voteResultsRouter);
 
 // Global error handler - must be last middleware
 app.use(globalErrorHandler);

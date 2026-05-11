@@ -233,6 +233,52 @@ export function useScanVoteResults(request: VoteResultRequest = {}) {
 }
 
 // Hook to fetch all governance history (no filters)
+// Tries the local DuckDB store first for speed and resilience,
+// then falls back to the live Scan API if the local store is empty or unavailable.
 export function useGovernanceVoteHistory(limit = 500) {
-  return useScanVoteResults({ limit });
+  return useQuery({
+    queryKey: ["governanceVoteHistory", limit],
+    queryFn: async (): Promise<ParsedVoteResult[]> => {
+      // 1. Try local DuckDB store (fast, works offline)
+      try {
+        const localRes = await fetch(`/api/vote-results?limit=${limit}`, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (localRes.ok) {
+          const localData = await localRes.json();
+          const rawResults: VoteResult[] = localData.dso_rules_vote_results;
+          if (rawResults && rawResults.length > 0) {
+            const parsed = parseVoteResults(rawResults);
+            return parsed.sort((a, b) => {
+              const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+              const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+              return dateB - dateA;
+            });
+          }
+        }
+      } catch {
+        // Local store unavailable — fall through to live API
+      }
+
+      // 2. Fall back to live Scan API (existing behavior)
+      const res = await fetch(`${getScanApiBase()}/v0/admin/sv/voteresults`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to fetch vote results: ${res.status}`);
+      }
+      const data: VoteResultsResponse = await res.json();
+      const parsed = parseVoteResults(data.dso_rules_vote_results || []);
+      return parsed.sort((a, b) => {
+        const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+        const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+        return dateB - dateA;
+      });
+    },
+    staleTime: 60_000,
+    retry: 2,
+  });
 }

@@ -304,6 +304,110 @@ async function proxyRequest(req, res, method) {
   }
 }
 
+/**
+ * Write-through cache for vote results.
+ *
+ * Intercepts POST /v0/admin/sv/voteresults, proxies normally, then
+ * async-upserts the results into DuckDB so the local store stays fresh.
+ * The upsert is fire-and-forget — it never delays the response.
+ */
+router.post('/v0/admin/sv/voteresults', async (req, res) => {
+  const maxRetries = 3;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const endpoint = getCurrentEndpoint();
+    const queryString = new URLSearchParams(req.query).toString();
+    const scanUrl = queryString
+      ? `${endpoint.url}/v0/admin/sv/voteresults?${queryString}`
+      : `${endpoint.url}/v0/admin/sv/voteresults`;
+
+    const reqStart = Date.now();
+    console.log(`[Scan Proxy] POST → ${endpoint.name} | v0/admin/sv/voteresults (write-through)`);
+
+    try {
+      const hostname = extractHostname(endpoint.url);
+      const dispatcher = hostname ? createDispatcher(hostname) : undefined;
+
+      const scanRes = await fetch(scanUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(hostname ? { Host: hostname } : {}),
+        },
+        body: JSON.stringify(req.body),
+        ...(dispatcher ? { dispatcher } : {}),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      console.log(`[Scan Proxy] ✓ ${endpoint.name} responded ${scanRes.status} in ${Date.now() - reqStart}ms`);
+
+      if (scanRes.status >= 500 || scanRes.status === 429 || scanRes.status === 403) {
+        recordFailure(endpoint.url, new Error(`HTTP ${scanRes.status}`));
+        const nextEndpoint = rotateToNextHealthy();
+        console.log(`[Scan Proxy] → Now using: ${nextEndpoint.name}`);
+        lastError = new Error(`Scan API returned ${scanRes.status}`);
+        continue;
+      }
+
+      recordSuccess(endpoint.url);
+
+      let text;
+      try {
+        text = await readBodyWithLimit(scanRes, MAX_PROXY_RESPONSE_BYTES);
+      } catch (sizeErr) {
+        console.error(`[Scan Proxy] ✗ Response too large from ${endpoint.name}: ${sizeErr.message}`);
+        if (!res.headersSent) res.status(502).json({ error: 'Upstream response too large' });
+        return;
+      }
+
+      // Return response to client immediately
+      if (!res.headersSent) {
+        res.set('X-Scan-Endpoint', endpoint.name);
+        res.status(scanRes.status).send(text);
+      }
+
+      // Fire-and-forget: upsert results into DuckDB
+      if (scanRes.status >= 200 && scanRes.status < 300) {
+        try {
+          const data = JSON.parse(text);
+          const results = data?.dso_rules_vote_results;
+          if (results && results.length > 0) {
+            import('../lib/vote-result-store.js').then(({ upsertVoteResults }) => {
+              upsertVoteResults(results).then(({ inserted, skipped }) => {
+                if (inserted > 0) {
+                  console.log(`[Scan Proxy] Write-through: upserted ${inserted} vote results, skipped ${skipped}`);
+                }
+              }).catch(err => {
+                console.warn(`[Scan Proxy] Write-through upsert failed (non-fatal): ${err.message}`);
+              });
+            }).catch(err => {
+              console.warn(`[Scan Proxy] Write-through import failed (non-fatal): ${err.message}`);
+            });
+          }
+        } catch {
+          // JSON parse failed — not a valid vote results response, skip upsert
+        }
+      }
+      return;
+    } catch (err) {
+      console.error(`[Scan Proxy] ✗ ${endpoint.name} failed: ${err.message}`);
+      recordFailure(endpoint.url, err);
+      const nextEndpoint = rotateToNextHealthy();
+      console.log(`[Scan Proxy] → Rotating to: ${nextEndpoint.name}`);
+      lastError = err;
+    }
+  }
+
+  if (!res.headersSent) {
+    res.status(502).json({
+      error: lastError?.message || 'All Scan API endpoints failed',
+      endpoint: getCurrentEndpoint().name,
+    });
+  }
+});
+
 // GET requests - no body, query params preserved
 router.get('/*', (req, res) => proxyRequest(req, res, 'GET'));
 
