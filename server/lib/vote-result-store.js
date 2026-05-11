@@ -54,7 +54,9 @@ export async function upsertVoteResults(results) {
       const votes = request?.votes || [];
       const outcome = result?.outcome || {};
 
+      // API uses camelCase; trackingCid lives inside request, not at the top level
       const trackingCid =
+        request?.trackingCid ||
         result?.request_tracking_cid ||
         result?.requestTrackingCid ||
         result?.tracking_cid ||
@@ -74,6 +76,7 @@ export async function upsertVoteResults(results) {
       }
 
       const status = outcomeToStatus(outcome?.tag);
+      const completedAt = result?.completedAt || result?.completed_at || null;
 
       await query(
         `INSERT INTO vote_requests (
@@ -94,29 +97,29 @@ export async function upsertVoteResults(results) {
           payload      = EXCLUDED.payload,
           updated_at   = CURRENT_TIMESTAMP`,
         [
-          trackingCid,                                       // event_id (PK)
-          trackingCid,                                       // tracking_cid
-          trackingCid,                                       // proposal_id
-          status,                                            // status
-          action?.tag || 'Unknown',                          // action_tag
-          JSON.stringify(action?.value || null),              // action_value
-          request?.requester || '',                           // requester
-          request?.reason?.body || '',                        // reason
-          request?.reason?.url || '',                         // reason_url
-          JSON.stringify(votes),                              // votes
-          acceptCount + rejectCount,                          // vote_count
-          acceptCount,                                        // accept_count
-          rejectCount,                                        // reject_count
-          request?.vote_before || request?.voteBefore || '',  // vote_before
-          result?.completed_at || result?.completedAt || null, // effective_at
-          JSON.stringify(result),                              // payload (full raw)
-          true,                                                // is_human
+          trackingCid,                                                // event_id (PK)
+          trackingCid,                                                // tracking_cid
+          trackingCid,                                                // proposal_id
+          status,                                                     // status
+          action?.tag || 'Unknown',                                   // action_tag
+          JSON.stringify(action?.value || null),                       // action_value
+          request?.requester || '',                                    // requester
+          request?.reason?.body || '',                                 // reason
+          request?.reason?.url || '',                                  // reason_url
+          JSON.stringify(votes),                                       // votes
+          acceptCount + rejectCount,                                   // vote_count
+          acceptCount,                                                 // accept_count
+          rejectCount,                                                 // reject_count
+          request?.voteBefore || request?.vote_before || '',           // vote_before
+          completedAt,                                                 // effective_at
+          JSON.stringify(result),                                      // payload (full raw)
+          true,                                                        // is_human
         ],
       );
 
       inserted++;
     } catch (err) {
-      console.error(`[vote-result-store] Failed to upsert tracking_cid=${result?.request_tracking_cid}: ${err.message}`);
+      console.error(`[vote-result-store] Failed to upsert tracking_cid=${request?.trackingCid || result?.request_tracking_cid}: ${err.message}`);
       skipped++;
     }
   }
