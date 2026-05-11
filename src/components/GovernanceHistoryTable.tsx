@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 
 function parseSearchTerms(query: string): string[] {
   return query
-    .split(/[,;\s]+/)
+    .split(/[,;]+/)
     .map((t) => t.trim().toLowerCase())
     .filter(Boolean);
 }

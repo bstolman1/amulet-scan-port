@@ -21,7 +21,7 @@ import type { ReactNode } from "react";
 
 function parseSearchTerms(query: string): string[] {
   return query
-    .split(/[,;\s]+/)
+    .split(/[,;]+/)
     .map((t) => t.trim().toLowerCase())
     .filter(Boolean);
 }
