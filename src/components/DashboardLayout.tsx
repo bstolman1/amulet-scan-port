@@ -82,12 +82,12 @@ const baseNavigationGroups: NavGroup[] = [
       { name: "SV Status", href: "/sv-status", icon: Radio },
     ],
   },
-  {
-    label: "Exchange Data",
-    items: [
-      { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
-    ],
-  },
+  // {
+  //   label: "Exchange Data",
+  //   items: [
+  //     { name: "Kaiko Feed", href: "/kaiko-feed", icon: CandlestickChart },
+  //   ],
+  // },
   // {
   //   label: "Services",
   //   items: [
