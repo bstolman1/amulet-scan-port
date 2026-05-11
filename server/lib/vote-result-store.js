@@ -48,8 +48,8 @@ export async function upsertVoteResults(results) {
   let skipped = 0;
 
   for (const result of results) {
+    const request = result?.request || {};
     try {
-      const request = result?.request || {};
       const action = request?.action || {};
       const votes = request?.votes || [];
       const outcome = result?.outcome || {};
@@ -76,7 +76,7 @@ export async function upsertVoteResults(results) {
       }
 
       const status = outcomeToStatus(outcome?.tag);
-      const completedAt = result?.completedAt || result?.completed_at || null;
+      const completedAt = result?.completedAt || result?.completed_at || '';
 
       await query(
         `INSERT INTO vote_requests (
@@ -86,7 +86,7 @@ export async function upsertVoteResults(results) {
           votes, vote_count, accept_count, reject_count,
           vote_before, effective_at,
           payload, is_human, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRY_CAST(? AS TIMESTAMP), ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT (event_id) DO UPDATE SET
           status       = EXCLUDED.status,
           is_closed    = TRUE,
@@ -119,7 +119,7 @@ export async function upsertVoteResults(results) {
 
       inserted++;
     } catch (err) {
-      console.error(`[vote-result-store] Failed to upsert tracking_cid=${request?.trackingCid || result?.request_tracking_cid}: ${err.message}`);
+      console.error(`[vote-result-store] Failed to upsert tracking_cid=${request?.trackingCid}: ${err.message}`);
       skipped++;
     }
   }
