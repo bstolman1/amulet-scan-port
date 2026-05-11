@@ -88,6 +88,9 @@ The DuckDB server exposes these endpoints:
 | `GET /api/events/by-type/:type` | Events by type |
 | `GET /api/events/by-template/:id` | Events by template |
 | `GET /api/events/governance` | Governance events |
+| `GET /api/vote-results` | Historical vote results from local DuckDB store |
+| `GET /api/vote-results/status` | Count of locally stored vote results |
+| `POST /api/vote-results/sync` | Sync vote results from Scan API into DuckDB |
 | `GET /api/contracts/:id` | Contract lifecycle |
 | `GET /api/contracts/templates/list` | All templates |
 | `GET /api/stats/overview` | Overview statistics |
@@ -116,6 +119,21 @@ pm2 start scripts/ingest/ingest-all.js --name ingest-all
 ```
 
 Schedule via cron or CI for production. The API server does not need to be restarted after ingestion completes.
+
+## Vote Result Persistence
+
+Historical SV vote results are stored in the `vote_requests` DuckDB table for fast local queries and resilience against Scan API outages.
+
+**Initial population:**
+```bash
+node scripts/backfill-vote-results.js          # Fetch all history (~415 results)
+# Or via the API:
+curl -X POST http://localhost:3001/vote-results/sync -H "Content-Type: application/json" -d '{"limit": 1000}'
+```
+
+**Ongoing freshness:** A write-through cache in the scan-proxy automatically upserts vote results into DuckDB whenever any client fetches them via `POST /scan-proxy/v0/admin/sv/voteresults`. No cron job or manual sync needed after the initial backfill.
+
+**Frontend behavior:** The `useGovernanceVoteHistory` hook tries the local `/api/vote-results` endpoint first (fast, works offline). If the local store is empty or unavailable, it falls back transparently to the live Scan API.
 
 ## Environment Variables
 

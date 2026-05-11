@@ -136,6 +136,9 @@ ENGINE_ENABLED=true
 - Track VoteRequest lifecycle from creation to execution
 - Monitor Super Validator weight distributions
 - View proposal outcomes and voting patterns
+- Keyword search across proposals, requester names, SV voters, and reason text
+- Local DuckDB persistence for historical vote results with automatic write-through caching
+- Resilient fallback: serves from local store when Scan API is unavailable
 
 ### Supply Analytics
 - Real-time minting and burning statistics
