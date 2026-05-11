@@ -9,15 +9,27 @@ import { format } from "date-fns";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 import { cn } from "@/lib/utils";
 
+function parseSearchTerms(query: string): string[] {
+  return query
+    .split(/[,;\s]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function highlightMatch(text: string, query: string): ReactNode {
-  if (!query.trim() || !text) return text;
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return text;
+  const terms = parseSearchTerms(query);
+  if (terms.length === 0 || !text) return text;
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+  if (parts.length === 1) return text;
   return (
     <>
-      {text.slice(0, idx)}
-      <mark className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{text.slice(idx, idx + query.length)}</mark>
-      {text.slice(idx + query.length)}
+      {parts.map((part, i) =>
+        regex.test(part)
+          ? <mark key={i} className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{part}</mark>
+          : part
+      )}
     </>
   );
 }
@@ -81,15 +93,15 @@ export function GovernanceHistoryTable({ limit = 500, searchQuery = "" }: Govern
     if (typeFilter !== "all") {
       results = results.filter((r) => r.actionTitle === typeFilter);
     }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+    const terms = parseSearchTerms(searchQuery);
+    if (terms.length > 0) {
       results = results.filter((r) => {
-        const fields = [
+        const blob = [
           r.actionTitle, r.actionType, r.requester, r.reasonBody, r.reasonUrl,
           r.trackingCid, r.outcome,
           ...r.votes.map((v) => v.svName),
-        ];
-        return fields.some((f) => f && f.toLowerCase().includes(q));
+        ].filter(Boolean).join(" ").toLowerCase();
+        return terms.every((t) => blob.includes(t));
       });
     }
     return results;

@@ -19,15 +19,27 @@ import { cn } from "@/lib/utils";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
 import type { ReactNode } from "react";
 
+function parseSearchTerms(query: string): string[] {
+  return query
+    .split(/[,;\s]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function highlightMatch(text: string, query: string): ReactNode {
-  if (!query.trim() || !text) return text;
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return text;
+  const terms = parseSearchTerms(query);
+  if (terms.length === 0 || !text) return text;
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+  if (parts.length === 1) return text;
   return (
     <>
-      {text.slice(0, idx)}
-      <mark className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{text.slice(idx, idx + query.length)}</mark>
-      {text.slice(idx + query.length)}
+      {parts.map((part, i) =>
+        regex.test(part)
+          ? <mark key={i} className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{part}</mark>
+          : part
+      )}
     </>
   );
 }
@@ -201,15 +213,16 @@ const Governance = () => {
   const activeProposals = proposals?.filter((p: any) => p.status === "pending").length || 0;
 
   const filteredProposals = useMemo(() => {
-    if (!proposals || !searchQuery.trim()) return proposals;
-    const q = searchQuery.toLowerCase();
+    if (!proposals) return proposals;
+    const terms = parseSearchTerms(searchQuery);
+    if (terms.length === 0) return proposals;
     return proposals.filter((p: any) => {
-      const fields = [
+      const blob = [
         p.title, p.actionType, p.requester, p.reasonBody, p.reasonUrl,
         p.id, p.status,
         ...(p.votedSvs?.map((sv: any) => sv.party) || []),
-      ];
-      return fields.some((f) => f && String(f).toLowerCase().includes(q));
+      ].filter(Boolean).join(" ").toLowerCase();
+      return terms.every((t) => blob.includes(t));
     });
   }, [proposals, searchQuery]);
 
