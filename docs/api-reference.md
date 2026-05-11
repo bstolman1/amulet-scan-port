@@ -382,6 +382,59 @@ Get burn statistics.
 
 ## Governance
 
+### GET /api/vote-results
+Read historical vote results from the local DuckDB store. Returns raw `VoteResult` objects in the same shape as the Scan API, so the frontend's `parseVoteResults()` works identically.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | number | 500 | Max results (1–5000) |
+| `status` | string | — | Filter: `accepted`, `rejected`, or `expired` |
+| `actionTag` | string | — | Filter by `action.tag` value |
+
+**Response:**
+```json
+{
+  "dso_rules_vote_results": [ ... ],
+  "count": 415,
+  "source": "duckdb"
+}
+```
+
+### GET /api/vote-results/status
+Quick check of how many vote results are stored locally.
+
+**Response:**
+```json
+{
+  "stored": 415,
+  "source": "duckdb"
+}
+```
+
+### POST /api/vote-results/sync
+Fetch all vote results from the live Scan API and upsert into the local DuckDB store. Idempotent — safe to call repeatedly.
+
+**Request Body:**
+```json
+{
+  "limit": 1000
+}
+```
+
+**Response:**
+```json
+{
+  "synced": 415,
+  "skipped": 0,
+  "totalStored": 415,
+  "fetchedFromApi": 415,
+  "endpoint": "Global-Synchronizer-Foundation"
+}
+```
+
+**Note:** The sync also runs automatically via write-through caching. When any client POSTs to `/api/scan-proxy/v0/admin/sv/voteresults`, the proxy asynchronously upserts the response into DuckDB. This keeps the local store fresh without manual intervention.
+
 ### GET /api/governance-lifecycle
 Get governance proposal lifecycle data.
 

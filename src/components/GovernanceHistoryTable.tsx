@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,8 +9,34 @@ import { format } from "date-fns";
 import { useGovernanceVoteHistory, ParsedVoteResult } from "@/hooks/use-scan-vote-results";
 import { cn } from "@/lib/utils";
 
+function parseSearchTerms(query: string): string[] {
+  return query
+    .split(/[,;]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function highlightMatch(text: string, query: string): ReactNode {
+  const terms = parseSearchTerms(query);
+  if (terms.length === 0 || !text) return text;
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+  if (parts.length === 1) return text;
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part)
+          ? <mark key={i} className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{part}</mark>
+          : part
+      )}
+    </>
+  );
+}
+
 interface GovernanceHistoryTableProps {
   limit?: number;
+  searchQuery?: string;
 }
 
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
@@ -24,7 +50,7 @@ const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = 
   }
 };
 
-export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTableProps) {
+export function GovernanceHistoryTable({ limit = 500, searchQuery = "" }: GovernanceHistoryTableProps) {
   const [searchParams] = useSearchParams();
   const highlightedProposalId = searchParams.get("proposal");
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -63,9 +89,23 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
 
   const filtered = useMemo(() => {
     if (!voteResults) return [];
-    if (typeFilter === "all") return voteResults;
-    return voteResults.filter((r) => r.actionTitle === typeFilter);
-  }, [voteResults, typeFilter]);
+    let results = voteResults;
+    if (typeFilter !== "all") {
+      results = results.filter((r) => r.actionTitle === typeFilter);
+    }
+    const terms = parseSearchTerms(searchQuery);
+    if (terms.length > 0) {
+      results = results.filter((r) => {
+        const blob = [
+          r.actionTitle, r.actionType, r.requester, r.reasonBody, r.reasonUrl,
+          r.trackingCid, r.outcome,
+          ...r.votes.map((v) => v.svName),
+        ].filter(Boolean).join(" ").toLowerCase();
+        return terms.every((t) => blob.includes(t));
+      });
+    }
+    return results;
+  }, [voteResults, typeFilter, searchQuery]);
 
   const getOutcomeVariant = (outcome: ParsedVoteResult["outcome"]) => {
     switch (outcome) {
@@ -177,7 +217,9 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <p className="text-center text-muted-foreground py-8">No governance history found</p>
+          <p className="text-center text-muted-foreground py-8">
+            {searchQuery ? "No results match your search" : "No governance history found"}
+          </p>
         ) : (
           filtered.map((result, idx) => {
             const proposalKey = result.trackingCid || `idx-${idx}`;
@@ -206,7 +248,7 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center gap-2">
                       {getOutcomeIcon(result.outcome)}
-                      <p className="text-sm font-semibold">{result.actionTitle || "Unknown Action"}</p>
+                      <p className="text-sm font-semibold">{highlightMatch(result.actionTitle || "Unknown Action", searchQuery)}</p>
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -231,7 +273,7 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                     <div className="p-3 rounded-lg bg-background/30 border border-border/30">
                       <p className="text-xs text-muted-foreground mb-1 font-semibold">Reason</p>
                       {result.reasonBody && (
-                        <p className="text-sm mb-1">{result.reasonBody}</p>
+                        <p className="text-sm mb-1">{highlightMatch(result.reasonBody, searchQuery)}</p>
                       )}
                       {result.reasonUrl && (
                         <a
@@ -240,7 +282,7 @@ export function GovernanceHistoryTable({ limit = 500 }: GovernanceHistoryTablePr
                           rel="noopener noreferrer"
                           className="text-sm text-primary hover:underline break-all"
                         >
-                          {result.reasonUrl}
+                          {highlightMatch(result.reasonUrl, searchQuery)}
                         </a>
                       )}
                       {!result.reasonBody && !result.reasonUrl && (

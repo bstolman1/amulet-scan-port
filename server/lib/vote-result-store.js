@@ -30,6 +30,11 @@ function outcomeToStatus(outcomeTag) {
   return 'expired';
 }
 
+function esc(val) {
+  if (val === null || val === undefined || val === '') return "''";
+  return `'${String(val).replace(/'/g, "''")}'`;
+}
+
 /**
  * Upsert an array of raw Scan API VoteResult objects into the vote_requests table.
  * Fire-and-forget safe — logs errors but never throws.
@@ -76,18 +81,25 @@ export async function upsertVoteResults(results) {
       }
 
       const status = outcomeToStatus(outcome?.tag);
-      const completedAt = result?.completedAt || result?.completed_at || '';
+      const completedAt = result?.completedAt || result?.completed_at || null;
       const now = new Date().toISOString();
+      const voteBefore = request?.voteBefore || request?.vote_before || '';
 
-      await query(
-        `INSERT INTO vote_requests (
+      const sql = `INSERT INTO vote_requests (
           event_id, tracking_cid, proposal_id, status, is_closed,
           action_tag, action_value, requester,
           reason, reason_url,
           votes, vote_count, accept_count, reject_count,
           vote_before, effective_at,
           payload, is_human, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRY_CAST(? AS TIMESTAMP), ?, TRUE, TRY_CAST(? AS TIMESTAMP), TRY_CAST(? AS TIMESTAMP))
+        ) VALUES (
+          ${esc(trackingCid)}, ${esc(trackingCid)}, ${esc(trackingCid)}, ${esc(status)}, TRUE,
+          ${esc(action?.tag || 'Unknown')}, ${esc(JSON.stringify(action?.value || null))}, ${esc(request?.requester || '')},
+          ${esc(request?.reason?.body || '')}, ${esc(request?.reason?.url || '')},
+          ${esc(JSON.stringify(votes))}, ${acceptCount + rejectCount}, ${acceptCount}, ${rejectCount},
+          ${esc(voteBefore)}, ${completedAt ? `TRY_CAST(${esc(completedAt)} AS TIMESTAMP)` : 'NULL'},
+          ${esc(JSON.stringify(result))}, TRUE, TRY_CAST(${esc(now)} AS TIMESTAMP), TRY_CAST(${esc(now)} AS TIMESTAMP)
+        )
         ON CONFLICT (event_id) DO UPDATE SET
           status       = EXCLUDED.status,
           is_closed    = TRUE,
@@ -96,28 +108,9 @@ export async function upsertVoteResults(results) {
           accept_count = EXCLUDED.accept_count,
           reject_count = EXCLUDED.reject_count,
           payload      = EXCLUDED.payload,
-          updated_at   = EXCLUDED.updated_at`,
-        [
-          trackingCid,                                                // event_id (PK)
-          trackingCid,                                                // tracking_cid
-          trackingCid,                                                // proposal_id
-          status,                                                     // status
-          action?.tag || 'Unknown',                                   // action_tag
-          JSON.stringify(action?.value || null),                       // action_value
-          request?.requester || '',                                    // requester
-          request?.reason?.body || '',                                 // reason
-          request?.reason?.url || '',                                  // reason_url
-          JSON.stringify(votes),                                       // votes
-          acceptCount + rejectCount,                                   // vote_count
-          acceptCount,                                                 // accept_count
-          rejectCount,                                                 // reject_count
-          request?.voteBefore || request?.vote_before || '',           // vote_before
-          completedAt,                                                 // effective_at
-          JSON.stringify(result),                                      // payload (full raw)
-          now,                                                         // created_at
-          now,                                                         // updated_at
-        ],
-      );
+          updated_at   = EXCLUDED.updated_at`;
+
+      await query(sql);
 
       inserted++;
     } catch (err) {

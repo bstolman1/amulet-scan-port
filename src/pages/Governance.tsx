@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Vote, CheckCircle, XCircle, Clock, Users, Globe, ChevronDown, Server } from "lucide-react";
+import { Vote, CheckCircle, XCircle, Clock, Users, Globe, ChevronDown, Server, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,11 +11,38 @@ import { useAggregatedTemplateData } from "@/hooks/use-aggregated-template-data"
 import { useActiveVoteRequests } from "@/hooks/use-active-vote-requests";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QueryErrorState } from "@/components/QueryErrorState";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { GovernanceHistoryTable } from "@/components/GovernanceHistoryTable";
+import type { ReactNode } from "react";
+
+function parseSearchTerms(query: string): string[] {
+  return query
+    .split(/[,;]+/)
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function highlightMatch(text: string, query: string): ReactNode {
+  const terms = parseSearchTerms(query);
+  if (terms.length === 0 || !text) return text;
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+  if (parts.length === 1) return text;
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part)
+          ? <mark key={i} className="bg-[#F3FF97] text-[#030206] rounded-sm px-0.5">{part}</mark>
+          : part
+      )}
+    </>
+  );
+}
 
 const safeFormatDate = (dateStr: string | null | undefined, formatStr: string = "MMM d, yyyy HH:mm"): string => {
   if (!dateStr || typeof dateStr !== "string") return "N/A";
@@ -33,6 +60,7 @@ const Governance = () => {
   const highlightedProposalId = searchParams.get("proposal");
   const activeTab = searchParams.get("tab") || "scanapi";
   const proposalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [searchQuery, setSearchQuery] = useState("");
 
   const handleTabChange = (value: string) => {
     setSearchParams((prev) => {
@@ -184,6 +212,20 @@ const Governance = () => {
   const totalProposals = proposals?.length || 0;
   const activeProposals = proposals?.filter((p: any) => p.status === "pending").length || 0;
 
+  const filteredProposals = useMemo(() => {
+    if (!proposals) return proposals;
+    const terms = parseSearchTerms(searchQuery);
+    if (terms.length === 0) return proposals;
+    return proposals.filter((p: any) => {
+      const blob = [
+        p.title, p.actionType, p.requester, p.reasonBody, p.reasonUrl,
+        p.id, p.status,
+        ...(p.votedSvs?.map((sv: any) => sv.party) || []),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return terms.every((t) => blob.includes(t));
+    });
+  }, [proposals, searchQuery]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "approved": return "bg-success/10 text-success border-success/20";
@@ -269,16 +311,33 @@ const Governance = () => {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="scanapi" className="gap-1 data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
-              <Globe className="h-4 w-4" />
-              Historical Governance
-            </TabsTrigger>
-            <TabsTrigger value="active" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
-              <Clock className="h-4 w-4" />
-              Active Governance
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <TabsList>
+              <TabsTrigger value="scanapi" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
+                Historical Governance
+              </TabsTrigger>
+              <TabsTrigger value="active" className="data-[state=active]:bg-[#F3FF97] data-[state=active]:text-[#030206]">
+                Active Governance
+              </TabsTrigger>
+            </TabsList>
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search proposals..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-9 h-9"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* ── Historical Governance ── */}
           <TabsContent value="scanapi">
@@ -293,7 +352,7 @@ const Governance = () => {
                     Complete governance history from the Canton Scan API
                   </p>
                 </div>
-                <GovernanceHistoryTable limit={500} />
+                <GovernanceHistoryTable limit={500} searchQuery={searchQuery} />
               </div>
             </Card>
           </TabsContent>
@@ -323,17 +382,21 @@ const Governance = () => {
                   <div className="space-y-4">
                     {[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full" />)}
                   </div>
-                ) : !proposals?.length ? (
+                ) : !filteredProposals?.length ? (
                   <div className="text-center py-12">
                     <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-2">No active proposals at the moment</p>
+                    <p className="text-muted-foreground mb-2">
+                      {searchQuery ? "No proposals match your search" : "No active proposals at the moment"}
+                    </p>
                     <p className="text-sm text-muted-foreground">
-                      All governance proposals have been resolved. New proposals will appear here when submitted by DSO members.
+                      {searchQuery
+                        ? "Try a different search term."
+                        : "All governance proposals have been resolved. New proposals will appear here when submitted by DSO members."}
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {proposals.map((proposal: any, index: number) => {
+                    {filteredProposals.map((proposal: any, index: number) => {
                       const isHighlighted = highlightedProposalId === proposal.id;
                       return (
                         <Collapsible key={index} defaultOpen={isHighlighted}>
@@ -353,10 +416,10 @@ const Governance = () => {
                                   {getStatusIcon(proposal.status)}
                                 </div>
                                 <div>
-                                  <h4 className="font-semibold text-lg">{proposal.title}</h4>
+                                  <h4 className="font-semibold text-lg">{highlightMatch(proposal.title, searchQuery)}</h4>
                                   <p className="text-sm text-muted-foreground">
                                     Requested by{" "}
-                                    <span className="font-medium text-foreground">{proposal.requester}</span>
+                                    <span className="font-medium text-foreground">{highlightMatch(proposal.requester, searchQuery)}</span>
                                   </p>
                                 </div>
                               </div>
@@ -369,7 +432,7 @@ const Governance = () => {
                             <div className="mb-4 p-3 rounded-lg bg-background/30 border border-border/30">
                               <p className="text-xs font-semibold text-muted-foreground mb-1">Reason</p>
                               {proposal.reasonBody && (
-                                <p className="text-sm mb-1">{proposal.reasonBody}</p>
+                                <p className="text-sm mb-1">{highlightMatch(proposal.reasonBody, searchQuery)}</p>
                               )}
                               {proposal.reasonUrl && (
                                 <a
@@ -378,7 +441,7 @@ const Governance = () => {
                                   rel="noopener noreferrer"
                                   className="text-sm text-primary hover:underline break-all"
                                 >
-                                  {proposal.reasonUrl}
+                                  {highlightMatch(proposal.reasonUrl, searchQuery)}
                                 </a>
                               )}
                               {!proposal.reasonBody && !proposal.reasonUrl && (
