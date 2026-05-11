@@ -77,6 +77,7 @@ export async function upsertVoteResults(results) {
 
       const status = outcomeToStatus(outcome?.tag);
       const completedAt = result?.completedAt || result?.completed_at || '';
+      const now = new Date().toISOString();
 
       await query(
         `INSERT INTO vote_requests (
@@ -86,7 +87,7 @@ export async function upsertVoteResults(results) {
           votes, vote_count, accept_count, reject_count,
           vote_before, effective_at,
           payload, is_human, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRY_CAST(? AS TIMESTAMP), ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES ($1, $2, $3, $4, TRUE, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, TRY_CAST($15 AS TIMESTAMP), $16, TRUE, $17, $18)
         ON CONFLICT (event_id) DO UPDATE SET
           status       = EXCLUDED.status,
           is_closed    = TRUE,
@@ -95,25 +96,26 @@ export async function upsertVoteResults(results) {
           accept_count = EXCLUDED.accept_count,
           reject_count = EXCLUDED.reject_count,
           payload      = EXCLUDED.payload,
-          updated_at   = CURRENT_TIMESTAMP`,
+          updated_at   = EXCLUDED.updated_at`,
         [
-          trackingCid,                                                // event_id (PK)
-          trackingCid,                                                // tracking_cid
-          trackingCid,                                                // proposal_id
-          status,                                                     // status
-          action?.tag || 'Unknown',                                   // action_tag
-          JSON.stringify(action?.value || null),                       // action_value
-          request?.requester || '',                                    // requester
-          request?.reason?.body || '',                                 // reason
-          request?.reason?.url || '',                                  // reason_url
-          JSON.stringify(votes),                                       // votes
-          acceptCount + rejectCount,                                   // vote_count
-          acceptCount,                                                 // accept_count
-          rejectCount,                                                 // reject_count
-          request?.voteBefore || request?.vote_before || '',           // vote_before
-          completedAt,                                                 // effective_at
-          JSON.stringify(result),                                      // payload (full raw)
-          true,                                                        // is_human
+          trackingCid,                                                // $1  event_id (PK)
+          trackingCid,                                                // $2  tracking_cid
+          trackingCid,                                                // $3  proposal_id
+          status,                                                     // $4  status
+          action?.tag || 'Unknown',                                   // $5  action_tag
+          JSON.stringify(action?.value || null),                       // $6  action_value
+          request?.requester || '',                                    // $7  requester
+          request?.reason?.body || '',                                 // $8  reason
+          request?.reason?.url || '',                                  // $9  reason_url
+          JSON.stringify(votes),                                       // $10 votes
+          acceptCount + rejectCount,                                   // $11 vote_count
+          acceptCount,                                                 // $12 accept_count
+          rejectCount,                                                 // $13 reject_count
+          request?.voteBefore || request?.vote_before || '',           // $14 vote_before
+          completedAt,                                                 // $15 effective_at
+          JSON.stringify(result),                                      // $16 payload (full raw)
+          now,                                                         // $17 created_at
+          now,                                                         // $18 updated_at
         ],
       );
 
