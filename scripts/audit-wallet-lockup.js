@@ -102,13 +102,22 @@ async function fetchLatestRoundInfo() {
   return scanGet('/v0/round-of-latest-data');
 }
 
+async function fetchSnapshotTimestamp(effectiveAt) {
+  const params = new URLSearchParams({ before: effectiveAt, migration_id: '0' });
+  return scanGet(`/v0/state/acs/snapshot-timestamp?${params}`);
+}
+
 async function fetchHoldingsSummary(partyId, recordTime) {
   return scanPost('/v0/holdings/summary', {
     migration_id: 0,
     record_time: recordTime,
-    record_time_match: 'before',
+    record_time_match: 'exact',
     owner_party_ids: [partyId],
   });
+}
+
+async function fetchWalletBalance(partyId) {
+  return scanGet(`/v0/wallet-balance/${encodeURIComponent(partyId)}`);
 }
 
 async function fetchTransactionsByParty(partyId, limit = 100) {
@@ -123,7 +132,7 @@ async function fetchHoldingsState(partyId, recordTime) {
     const resp = await scanPost('/v0/holdings/state', {
       migration_id: 0,
       record_time: recordTime,
-      record_time_match: 'before',
+      record_time_match: 'exact',
       page_size: 500,
       owner_party_ids: [partyId],
       ...(nextPage !== undefined ? { after: nextPage } : {}),
@@ -212,10 +221,13 @@ async function main() {
   const endpoint = getCurrentEndpoint();
   if (!JSON_OUTPUT) console.log(`Using endpoint: ${endpoint.name}\n`);
 
-  // 2. Get current round / timestamp
+  // 2. Get current round / timestamp, then resolve exact snapshot time
   const roundInfo = await fetchLatestRoundInfo();
-  const recordTime = roundInfo.effectiveAt;
-  if (!JSON_OUTPUT) console.log(`Latest round: ${roundInfo.round}  |  Record time: ${recordTime}\n`);
+  if (!JSON_OUTPUT) console.log(`Latest round: ${roundInfo.round}  |  Effective at: ${roundInfo.effectiveAt}`);
+
+  const snapshot = await fetchSnapshotTimestamp(roundInfo.effectiveAt);
+  const recordTime = snapshot.record_time;
+  if (!JSON_OUTPUT) console.log(`Snapshot record time: ${recordTime}\n`);
 
   const results = [];
 
@@ -280,6 +292,19 @@ async function main() {
       if (!JSON_OUTPUT) console.log(`\n  Holdings: ERROR — ${err.message}`);
     }
 
+    // ── Wallet balance (quick sanity check) ──
+    try {
+      const balanceResp = await fetchWalletBalance(wallet.partyId);
+      walletResult.walletBalance = balanceResp.wallet_balance || '0';
+
+      if (!JSON_OUTPUT) {
+        console.log(`\n  Wallet Balance: ${walletResult.walletBalance} CC`);
+      }
+    } catch (err) {
+      walletResult.walletBalance = null;
+      if (!JSON_OUTPUT) console.log(`\n  Wallet Balance: unavailable (${err.message})`);
+    }
+
     // ── Transaction history ──
     try {
       const txResp = await fetchTransactionsByParty(wallet.partyId, 200);
@@ -319,8 +344,9 @@ async function main() {
         console.log('\n  [verbose] Raw transactions:', JSON.stringify(txList.slice(0, 5), null, 2));
       }
     } catch (err) {
-      walletResult.alerts.push(`TRANSACTIONS_ERROR: ${err.message}`);
-      if (!JSON_OUTPUT) console.log(`\n  Transactions: ERROR — ${err.message}`);
+      // /v0/transactions/by-party is not available on all SVs — non-fatal
+      walletResult.transactions = { total: 0, outboundTransfers: 0, inboundMints: 0, other: 0, outboundDetails: [], unavailable: true };
+      if (!JSON_OUTPUT) console.log(`\n  Transactions: endpoint unavailable (${err.message.split(':')[0]})`);
     }
 
     // ── Holdings state (lock details) ──
