@@ -480,11 +480,13 @@ async function main() {
       updateActivity: null,
       immobile: null,
       alerts: [],
+      raw: {},
     };
 
     // ── Holdings summary ──
     try {
       const holdingsResp = await fetchHoldingsSummary(wallet.partyId, recordTime, migrationId, preferredUrl);
+      walletResult.raw.holdingsSummary = holdingsResp;
       const summary = (holdingsResp.summaries || [])[0] || null;
 
       if (summary) {
@@ -518,6 +520,7 @@ async function main() {
       }
     } catch (err) {
       walletResult.alerts.push(`HOLDINGS_ERROR: ${err.message}`);
+      walletResult.raw.holdingsSummary = { error: err.message };
       log(`\n  Holdings: ERROR — ${err.message}`);
     }
 
@@ -540,6 +543,7 @@ async function main() {
             timestamp: e.timestamp || e.effective_at,
           })),
         };
+        walletResult.raw.localServer = { summary: local.summary, events: local.events };
 
         log(`\n  Local DuckDB Data (${local.source}):`);
         log(`    Total events:      ${local.summary?.total_events || 0}`);
@@ -560,6 +564,7 @@ async function main() {
     // ── Transaction history ──
     try {
       const txResp = await fetchTransactionsByParty(wallet.partyId);
+      walletResult.raw.transactionsByParty = txResp;
       const txList = txResp.transactions || [];
       const classified = classifyTransactions(txList);
 
@@ -580,8 +585,9 @@ async function main() {
           log(`      ${tx.date}: ${tx.receivers.map(r => r.amount + ' CC').join(', ')}`);
         }
       }
-    } catch {
+    } catch (err) {
       walletResult.transactions = { total: 0, outboundTransfers: 0, inboundMints: 0, other: 0, outboundDetails: [], unavailable: true };
+      walletResult.raw.transactionsByParty = { error: err.message };
       log('\n  Transactions: endpoint unavailable on this SV');
     }
 
@@ -605,6 +611,7 @@ async function main() {
     // ── Holdings state (contract-level detail) ──
     try {
       const holdingsEvents = await fetchHoldingsState(wallet.partyId, recordTime, migrationId, preferredUrl);
+      walletResult.raw.holdingsState = holdingsEvents;
       const { locked, unlocked } = analyzeLocks(holdingsEvents);
 
       walletResult.lockStatus = {
@@ -674,6 +681,12 @@ async function main() {
     totalAlerts,
     updateEventsScanned: updateEvents.length,
     wallets: results,
+    raw: {
+      roundOfLatestData: roundInfo,
+      snapshotParams,
+      migrationIds,
+      updatesScanned: updateEvents,
+    },
   };
 
   if (JSON_OUTPUT) {
