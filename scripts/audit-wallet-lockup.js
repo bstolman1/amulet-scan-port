@@ -102,18 +102,54 @@ async function fetchLatestRoundInfo() {
   return scanGet('/v0/round-of-latest-data');
 }
 
-async function fetchSnapshotTimestamp(effectiveAt) {
-  const params = new URLSearchParams({ before: effectiveAt, migration_id: '0' });
-  return scanGet(`/v0/state/acs/snapshot-timestamp?${params}`);
+/**
+ * Resolve the best available record_time for holdings queries.
+ * Tries snapshot-timestamp (before latest effectiveAt), then snapshot-timestamp-after
+ * (from epoch), and falls back to effectiveAt itself.
+ */
+async function resolveRecordTime(effectiveAt) {
+  // Try 1: most recent snapshot before effectiveAt
+  try {
+    const snap = await scanGet(
+      `/v0/state/acs/snapshot-timestamp?${new URLSearchParams({ before: effectiveAt, migration_id: '0' })}`
+    );
+    if (snap.record_time) {
+      const age = Date.now() - new Date(snap.record_time).getTime();
+      const daysOld = Math.round(age / 86_400_000);
+      if (daysOld < 30) return { recordTime: snap.record_time, source: `snapshot (${daysOld}d old)` };
+      // Snapshot is stale — try forward search
+    }
+  } catch {}
+
+  // Try 2: earliest snapshot after a recent date (30 days ago)
+  try {
+    const recent = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const snap = await scanGet(
+      `/v0/state/acs/snapshot-timestamp-after?${new URLSearchParams({ after: recent, migration_id: '0' })}`
+    );
+    if (snap.record_time) return { recordTime: snap.record_time, source: 'snapshot-after' };
+  } catch {}
+
+  // Fallback: use effectiveAt directly (no record_time_match — let API decide)
+  return { recordTime: effectiveAt, source: 'effectiveAt-fallback' };
 }
 
 async function fetchHoldingsSummary(partyId, recordTime) {
-  return scanPost('/v0/holdings/summary', {
-    migration_id: 0,
-    record_time: recordTime,
-    record_time_match: 'exact',
-    owner_party_ids: [partyId],
-  });
+  // Try without record_time_match first (let API default), fall back to "exact"
+  try {
+    return await scanPost('/v0/holdings/summary', {
+      migration_id: 0,
+      record_time: recordTime,
+      owner_party_ids: [partyId],
+    });
+  } catch {
+    return scanPost('/v0/holdings/summary', {
+      migration_id: 0,
+      record_time: recordTime,
+      record_time_match: 'exact',
+      owner_party_ids: [partyId],
+    });
+  }
 }
 
 async function fetchWalletBalance(partyId) {
@@ -129,14 +165,46 @@ async function fetchHoldingsState(partyId, recordTime) {
   let nextPage;
 
   for (let page = 0; page < 5; page++) {
-    const resp = await scanPost('/v0/holdings/state', {
+    // Try without record_time_match first, fall back to "exact"
+    let resp;
+    const body = {
       migration_id: 0,
       record_time: recordTime,
-      record_time_match: 'exact',
       page_size: 500,
       owner_party_ids: [partyId],
       ...(nextPage !== undefined ? { after: nextPage } : {}),
-    });
+    };
+    try {
+      resp = await scanPost('/v0/holdings/state', body);
+    } catch {
+      resp = await scanPost('/v0/holdings/state', { ...body, record_time_match: 'exact' });
+    }
+    allEvents.push(...(resp.created_events || []));
+    if (!resp.next_page_token) break;
+    nextPage = resp.next_page_token;
+  }
+
+  return allEvents;
+}
+
+async function fetchPartyAcsContracts(partyId, recordTime) {
+  const allEvents = [];
+  let nextPage;
+
+  for (let page = 0; page < 5; page++) {
+    const body = {
+      migration_id: 0,
+      record_time: recordTime,
+      page_size: 500,
+      party_ids: [partyId],
+      ...(nextPage !== undefined ? { after: nextPage } : {}),
+    };
+    let resp;
+    try {
+      resp = await scanPost('/v0/state/acs', body);
+    } catch {
+      resp = await scanPost('/v0/state/acs', { ...body, record_time_match: 'exact' });
+    }
     allEvents.push(...(resp.created_events || []));
     if (!resp.next_page_token) break;
     nextPage = resp.next_page_token;
@@ -221,13 +289,12 @@ async function main() {
   const endpoint = getCurrentEndpoint();
   if (!JSON_OUTPUT) console.log(`Using endpoint: ${endpoint.name}\n`);
 
-  // 2. Get current round / timestamp, then resolve exact snapshot time
+  // 2. Get current round / timestamp, then resolve best record time
   const roundInfo = await fetchLatestRoundInfo();
   if (!JSON_OUTPUT) console.log(`Latest round: ${roundInfo.round}  |  Effective at: ${roundInfo.effectiveAt}`);
 
-  const snapshot = await fetchSnapshotTimestamp(roundInfo.effectiveAt);
-  const recordTime = snapshot.record_time;
-  if (!JSON_OUTPUT) console.log(`Snapshot record time: ${recordTime}\n`);
+  const { recordTime, source: rtSource } = await resolveRecordTime(roundInfo.effectiveAt);
+  if (!JSON_OUTPUT) console.log(`Record time: ${recordTime}  (source: ${rtSource})\n`);
 
   const results = [];
 
@@ -302,7 +369,53 @@ async function main() {
       }
     } catch (err) {
       walletResult.walletBalance = null;
+      walletResult.walletBalanceError = err.message;
       if (!JSON_OUTPUT) console.log(`\n  Wallet Balance: unavailable (${err.message})`);
+    }
+
+    // ── ACS contracts fallback (if holdings summary was empty) ──
+    if (!walletResult.holdings) {
+      try {
+        const acsContracts = await fetchPartyAcsContracts(wallet.partyId, recordTime);
+        const amuletContracts = acsContracts.filter(e =>
+          (e.template_id || '').includes('Amulet')
+          && !(e.template_id || '').includes('AmuletRules')
+          && !(e.template_id || '').includes('FeaturedApp')
+        );
+
+        if (amuletContracts.length > 0) {
+          walletResult.acsContracts = amuletContracts.map(e => ({
+            contractId: e.contract_id,
+            templateId: e.template_id,
+            owner: e.create_arguments?.owner || e.create_arguments?.amulet?.owner,
+            amount: e.create_arguments?.amount?.initialAmount,
+            hasLock: !!e.create_arguments?.lock,
+            lockExpiry: e.create_arguments?.lock?.expiresAt || null,
+            createdAt: e.created_at,
+          }));
+
+          if (!JSON_OUTPUT) {
+            console.log(`\n  ACS Contracts (Amulet-related): ${amuletContracts.length}`);
+            for (const c of walletResult.acsContracts) {
+              console.log(`    ${c.templateId?.split(':').pop()}: ${c.amount || 'unknown'} CC (locked: ${c.hasLock})`);
+            }
+          }
+
+          // Remove the NO_HOLDINGS_FOUND alert since we found ACS data
+          walletResult.alerts = walletResult.alerts.filter(a => !a.startsWith('NO_HOLDINGS_FOUND'));
+        } else {
+          walletResult.acsContracts = [];
+          if (!JSON_OUTPUT) console.log(`\n  ACS Contracts: none found for this party`);
+        }
+
+        if (VERBOSE && !JSON_OUTPUT && acsContracts.length > 0) {
+          console.log('\n  [verbose] Raw ACS contracts:', JSON.stringify(acsContracts.slice(0, 3), null, 2));
+        }
+      } catch (err) {
+        walletResult.acsContracts = [];
+        walletResult.alerts.push(`ACS_QUERY_ERROR: ${err.message}`);
+        if (!JSON_OUTPUT) console.log(`\n  ACS Contracts: error (${err.message})`);
+      }
     }
 
     // ── Transaction history ──
@@ -409,6 +522,7 @@ async function main() {
     endpoint: endpoint.name,
     latestRound: roundInfo.round,
     recordTime,
+    recordTimeSource: rtSource,
     purchaseAmountCC: PURCHASE_AMOUNT_CC,
     lockupMonths: LOCKUP_MONTHS,
     walletCount: WALLETS.length,
