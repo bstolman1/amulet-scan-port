@@ -21,22 +21,31 @@ import {
 } from "@/components/ui/table";
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
-import type { SvEnvStatus, SvServiceCheck } from "@/lib/api-client";
+import type { SvEnvStatus } from "@/lib/api-client";
 import { Activity, RefreshCw, Clock, Eye } from "lucide-react";
 
 const ALL_SVS = "__all__";
 const ALL_ENVS = "__all__";
 const ENVS = ["dev", "test", "main"] as const;
 const ENV_LABELS: Record<string, string> = { dev: "dev", test: "test", main: "main" };
-const SERVICES = ["mediator", "scan", "sv"] as const;
-type Service = (typeof SERVICES)[number];
+
+function getAllServices(environments: SvEnvStatus[]): string[] {
+  const services = new Set<string>();
+  for (const env of environments) {
+    if (!env.status) continue;
+    for (const svc of Object.keys(env.status)) {
+      services.add(svc);
+    }
+  }
+  return Array.from(services).sort();
+}
 
 function getAllNodeNames(environments: SvEnvStatus[]): string[] {
   const names = new Set<string>();
   for (const env of environments) {
     if (!env.status) continue;
-    for (const svc of SERVICES) {
-      for (const name of Object.keys(env.status[svc].nodes)) {
+    for (const svc of Object.values(env.status)) {
+      for (const name of Object.keys(svc.nodes)) {
         names.add(name);
       }
     }
@@ -46,16 +55,15 @@ function getAllNodeNames(environments: SvEnvStatus[]): string[] {
 
 function filterEnvStatus(env: SvEnvStatus, nodeName: string): SvEnvStatus {
   if (!env.status) return env;
-  const filtered = { ...env, status: { ...env.status } };
-  for (const svc of SERVICES) {
-    const original = env.status[svc];
-    if (nodeName in original.nodes) {
-      filtered.status![svc] = { ...original, nodes: { [nodeName]: original.nodes[nodeName] } };
+  const newStatus: typeof env.status = {};
+  for (const [svc, check] of Object.entries(env.status)) {
+    if (nodeName in check.nodes) {
+      newStatus[svc] = { ...check, nodes: { [nodeName]: check.nodes[nodeName] } };
     } else {
-      filtered.status![svc] = { ...original, nodes: {} };
+      newStatus[svc] = { ...check, nodes: {} };
     }
   }
-  return filtered;
+  return { ...env, status: newStatus };
 }
 
 function StatusCell({ value }: { value: number }) {
@@ -78,7 +86,7 @@ function SummaryBadge({ ok, total }: { ok: number; total: number }) {
   );
 }
 
-function EnvSection({ env }: { env: SvEnvStatus }) {
+function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] }) {
   if (!env.status) {
     return (
       <Card>
@@ -95,11 +103,7 @@ function EnvSection({ env }: { env: SvEnvStatus }) {
   }
 
   const nodeNames = Array.from(
-    new Set([
-      ...Object.keys(env.status.mediator.nodes),
-      ...Object.keys(env.status.scan.nodes),
-      ...Object.keys(env.status.sv.nodes),
-    ])
+    new Set(services.flatMap((svc) => Object.keys(env.status![svc]?.nodes ?? {})))
   ).sort();
 
   return (
@@ -108,40 +112,31 @@ function EnvSection({ env }: { env: SvEnvStatus }) {
         <CardTitle className="text-base">{ENV_LABELS[env.env] ?? env.env}</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
-        <Table>
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>MEDIATOR</TableHead>
-              <TableHead>SCAN</TableHead>
-              <TableHead>SV</TableHead>
+              <TableHead className="w-2/5">Name</TableHead>
+              {services.map((svc) => (
+                <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
             {nodeNames.map((name) => (
               <TableRow key={name}>
-                <TableCell className="font-medium text-sm">{name}</TableCell>
-                <TableCell>
-                  {name in env.status!.mediator.nodes ? (
-                    <StatusCell value={env.status!.mediator.nodes[name]} />
-                  ) : (
-                    <span className="text-muted-foreground text-xs">—</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {name in env.status!.scan.nodes ? (
-                    <StatusCell value={env.status!.scan.nodes[name]} />
-                  ) : (
-                    <span className="text-muted-foreground text-xs">—</span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {name in env.status!.sv.nodes ? (
-                    <StatusCell value={env.status!.sv.nodes[name]} />
-                  ) : (
-                    <span className="text-muted-foreground text-xs">—</span>
-                  )}
-                </TableCell>
+                <TableCell className="font-medium text-sm"><span className="whitespace-nowrap">{name}</span></TableCell>
+                {services.map((svc) => {
+                  const nodes = env.status![svc]?.nodes;
+                  return (
+                    <TableCell key={svc}>
+                      {nodes && name in nodes ? (
+                        <StatusCell value={nodes[name]} />
+                      ) : (
+                        <span className="text-muted-foreground text-xs">—</span>
+                      )}
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             ))}
           </TableBody>
@@ -151,11 +146,10 @@ function EnvSection({ env }: { env: SvEnvStatus }) {
   );
 }
 
-function getServiceCounts(envs: SvEnvStatus[], env: string, service: Service) {
-  const e = envs.find((x) => x.env === env);
-  if (!e?.status) return null;
-  const check: SvServiceCheck = e.status[service];
-  const nodes = Object.values(check.nodes);
+function getServiceCounts(envs: SvEnvStatus[], envName: string, service: string) {
+  const e = envs.find((x) => x.env === envName);
+  if (!e?.status?.[service]) return null;
+  const nodes = Object.values(e.status[service].nodes);
   const total = nodes.length;
   const ok = nodes.filter((v) => v === 0).length;
   return { ok, total };
@@ -173,6 +167,7 @@ export default function SvStatus() {
   });
 
   const rawEnvironments: SvEnvStatus[] = data?.environments ?? [];
+  const allServices = useMemo(() => getAllServices(rawEnvironments), [rawEnvironments]);
   const allNodeNames = useMemo(() => getAllNodeNames(rawEnvironments), [rawEnvironments]);
 
   const environments = useMemo(() => {
@@ -187,6 +182,7 @@ export default function SvStatus() {
   }, [rawEnvironments, selectedSv, selectedEnv]);
 
   const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
+  const displayEnvs = selectedEnv === ALL_ENVS ? [...ENVS] : [selectedEnv];
 
   return (
     <DashboardLayout>
@@ -199,7 +195,7 @@ export default function SvStatus() {
               SV Status Monitor
             </h1>
             <p className="text-muted-foreground mt-1">
-              Live health of MEDIATOR, SCAN, and SV services across all environments
+              Live health of SV services across all environments
             </p>
           </div>
           <Button
@@ -228,13 +224,21 @@ export default function SvStatus() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead>Env</TableHead>
-                  <TableHead>MEDIATOR</TableHead>
-                  <TableHead>SCAN</TableHead>
-                  <TableHead>SV</TableHead>
+                  {isLoading ? (
+                    <>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                    </>
+                  ) : (
+                    allServices.map((svc) => (
+                      <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
+                    ))
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -249,15 +253,15 @@ export default function SvStatus() {
                   ))
                 ) : error ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center text-destructive py-4">
+                    <TableCell colSpan={allServices.length + 1} className="text-center text-destructive py-4">
                       Failed to load SV status
                     </TableCell>
                   </TableRow>
                 ) : (
-                  (selectedEnv === ALL_ENVS ? ENVS : [selectedEnv]).map((env) => (
+                  displayEnvs.map((env) => (
                     <TableRow key={env}>
                       <TableCell className="font-semibold">{env}</TableCell>
-                      {SERVICES.map((svc) => {
+                      {allServices.map((svc) => {
                         const counts = getServiceCounts(environments, env, svc);
                         return (
                           <TableCell key={svc}>
@@ -332,7 +336,9 @@ export default function SvStatus() {
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-64 w-full" />)}
           </div>
         ) : (
-          environments.map((env) => <EnvSection key={env.env} env={env} />)
+          environments.map((env) => (
+            <EnvSection key={env.env} env={env} services={allServices} />
+          ))
         )}
 
         <p className="text-xs text-muted-foreground">
