@@ -112,12 +112,12 @@ function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] })
         <CardTitle className="text-base">{ENV_LABELS[env.env] ?? env.env}</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
-        <Table>
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
+              <TableHead className="w-1/5">Name</TableHead>
               {services.map((svc) => (
-                <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
+                <TableHead key={svc} className="w-1/5">{svc.toUpperCase()}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -224,19 +224,19 @@ export default function SvStatus() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Env</TableHead>
+                  <TableHead className="w-1/5">Env</TableHead>
                   {isLoading ? (
                     <>
-                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
-                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
-                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead className="w-1/5"><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead className="w-1/5"><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead className="w-1/5"><Skeleton className="h-4 w-16" /></TableHead>
                     </>
                   ) : (
                     allServices.map((svc) => (
-                      <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
+                      <TableHead key={svc} className="w-1/5">{svc.toUpperCase()}</TableHead>
                     ))
                   )}
                 </TableRow>
