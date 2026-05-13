@@ -333,7 +333,7 @@ export interface SvServiceCheck {
 
 export interface SvEnvStatus {
   env: string;
-  status: { sv: SvServiceCheck; mediator: SvServiceCheck; scan: SvServiceCheck } | null;
+  status: Record<string, SvServiceCheck> | null;
   error: string | null;
 }
 
