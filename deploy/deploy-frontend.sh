@@ -47,7 +47,7 @@ npm ci --prefer-offline
 # Step 2: Build the project
 echo "Building $ENV_LABEL bundle..."
 if [ "$STAGING" = true ]; then
-    VITE_BASE_PATH=/staging VITE_BASE=/staging/ npx vite build
+    VITE_BASE_PATH=/staging npx vite build --base=/staging/
 else
     npx vite build
 fi
