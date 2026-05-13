@@ -112,10 +112,10 @@ function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] })
         <CardTitle className="text-base">{ENV_LABELS[env.env] ?? env.env}</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
-        <Table>
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[1%] whitespace-nowrap">Name</TableHead>
+              <TableHead className="w-2/5">Name</TableHead>
               {services.map((svc) => (
                 <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
               ))}
@@ -124,7 +124,7 @@ function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] })
           <TableBody>
             {nodeNames.map((name) => (
               <TableRow key={name}>
-                <TableCell className="font-medium text-sm whitespace-nowrap">{name}</TableCell>
+                <TableCell className="font-medium text-sm"><span className="whitespace-nowrap">{name}</span></TableCell>
                 {services.map((svc) => {
                   const nodes = env.status![svc]?.nodes;
                   return (
