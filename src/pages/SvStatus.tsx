@@ -115,9 +115,9 @@ function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] })
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="whitespace-nowrap">Name</TableHead>
+              <TableHead className="w-[1%] whitespace-nowrap">Name</TableHead>
               {services.map((svc) => (
-                <TableHead key={svc} className="w-[1%] text-center">{svc.toUpperCase()}</TableHead>
+                <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -128,7 +128,7 @@ function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] })
                 {services.map((svc) => {
                   const nodes = env.status![svc]?.nodes;
                   return (
-                    <TableCell key={svc} className="text-center">
+                    <TableCell key={svc}>
                       {nodes && name in nodes ? (
                         <StatusCell value={nodes[name]} />
                       ) : (
@@ -224,19 +224,19 @@ export default function SvStatus() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="whitespace-nowrap">Env</TableHead>
+                  <TableHead>Env</TableHead>
                   {isLoading ? (
                     <>
-                      <TableHead className="w-[1%] text-center"><Skeleton className="h-4 w-16" /></TableHead>
-                      <TableHead className="w-[1%] text-center"><Skeleton className="h-4 w-16" /></TableHead>
-                      <TableHead className="w-[1%] text-center"><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
                     </>
                   ) : (
                     allServices.map((svc) => (
-                      <TableHead key={svc} className="w-[1%] text-center">{svc.toUpperCase()}</TableHead>
+                      <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
                     ))
                   )}
                 </TableRow>
@@ -260,11 +260,11 @@ export default function SvStatus() {
                 ) : (
                   displayEnvs.map((env) => (
                     <TableRow key={env}>
-                      <TableCell className="font-semibold whitespace-nowrap">{env}</TableCell>
+                      <TableCell className="font-semibold">{env}</TableCell>
                       {allServices.map((svc) => {
                         const counts = getServiceCounts(environments, env, svc);
                         return (
-                          <TableCell key={svc} className="text-center">
+                          <TableCell key={svc}>
                             {counts ? (
                               <SummaryBadge ok={counts.ok} total={counts.total} />
                             ) : (
