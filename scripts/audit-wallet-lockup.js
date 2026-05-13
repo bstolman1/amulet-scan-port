@@ -387,13 +387,22 @@ function analyzeLocks(holdingsEvents) {
     const payload = ev.create_arguments || {};
     const templateId = ev.template_id || '';
     const isLocked = templateId.includes('LockedAmulet') || !!payload.lock;
-    const amount = payload.amount?.initialAmount || '0';
+    const initialAmount = payload.amount?.initialAmount || null;
+    const createdAtMicros = payload.amount?.createdAt?.microseconds || null;
+    const ratePerRound = payload.amount?.ratePerRound?.rate || null;
 
     const entry = {
       contractId: ev.contract_id,
       templateId,
-      amount,
+      packageName: ev.package_name,
+      initialAmount,
+      createdAtMicros,
+      ratePerRound,
+      owner: payload.owner,
+      dso: payload.dso,
       createdAt: ev.created_at,
+      signatories: ev.signatories,
+      observers: ev.observers,
     };
 
     if (isLocked) {
@@ -480,13 +489,17 @@ async function main() {
 
       if (summary) {
         walletResult.holdings = {
+          partyId: summary.party_id,
           totalUnlocked: summary.total_unlocked_coin,
           totalLocked: summary.total_locked_coin,
           totalHoldings: summary.total_coin_holdings,
           totalAvailable: summary.total_available_coin,
           holdingFeesUnlocked: summary.accumulated_holding_fees_unlocked,
           holdingFeesLocked: summary.accumulated_holding_fees_locked,
+          holdingFeesTotal: summary.accumulated_holding_fees_total,
           computedAsOfRound: holdingsResp.computed_as_of_round,
+          recordTime: holdingsResp.record_time,
+          migrationId: holdingsResp.migration_id,
         };
 
         log(`\n  Holdings:`);
@@ -589,7 +602,7 @@ async function main() {
       log('\n  Ledger Activity (from /v2/updates): none found in recent updates');
     }
 
-    // ── Holdings state (lock details) ──
+    // ── Holdings state (contract-level detail) ──
     try {
       const holdingsEvents = await fetchHoldingsState(wallet.partyId, recordTime, migrationId, preferredUrl);
       const { locked, unlocked } = analyzeLocks(holdingsEvents);
@@ -597,18 +610,33 @@ async function main() {
       walletResult.lockStatus = {
         lockedContracts: locked.length,
         unlockedContracts: unlocked.length,
-        locks: locked,
+        locked,
+        unlocked,
+        rawEventCount: holdingsEvents.length,
       };
 
-      log(`\n  Lock Status: ${locked.length} locked, ${unlocked.length} unlocked`);
-      for (const l of locked) {
-        log(`    Contract: ${l.contractId?.slice(0, 16)}...`);
-        log(`      Amount:  ${l.amount}`);
-        log(`      Expiry:  ${l.lockExpiry || 'none set'}`);
+      log(`\n  Contracts (from /v0/holdings/state): ${holdingsEvents.length} total`);
+      for (const c of [...locked, ...unlocked]) {
+        const type = locked.includes(c) ? 'LOCKED' : 'UNLOCKED';
+        const templateShort = c.templateId?.split(':').pop() || 'unknown';
+        log(`    [${type}] ${templateShort}`);
+        log(`      Contract:      ${c.contractId}`);
+        log(`      Initial amount: ${c.initialAmount || 'not set'}`);
+        log(`      Owner:         ${c.owner || 'not set'}`);
+        log(`      Created at:    ${c.createdAt}`);
+        log(`      Rate/round:    ${c.ratePerRound || 'not set'}`);
+        if (c.createdAtMicros) {
+          const createdDate = new Date(Number(c.createdAtMicros) / 1000).toISOString();
+          log(`      Amount created: ${createdDate}`);
+        }
+        if (type === 'LOCKED') {
+          log(`      Lock expiry:   ${c.lockExpiry || 'none'}`);
+          log(`      Lock holders:  ${(c.lockHolders || []).length}`);
+        }
       }
     } catch (err) {
       walletResult.alerts.push(`LOCK_STATUS_ERROR: ${err.message}`);
-      log(`\n  Lock Status: ERROR`);
+      log(`\n  Contracts: ERROR — ${err.message}`);
     }
 
     // ── Immobility verdict ──
