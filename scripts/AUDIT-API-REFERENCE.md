@@ -106,7 +106,7 @@ curl -s -X POST "$BASE/v0/holdings/summary" \
     "record_time": "2026-05-13T18:00:00Z",
     "record_time_match": "exact",
     "owner_party_ids": [
-      "23d169c2-0909-4c70-81d1-1922de6febaa::1220b770cd6350fe69e14bb55a42588237a15747a22392faa3fa8fe60cd83843585f"
+      "<PARTY_ID>"
     ]
   }'
 ```
@@ -120,14 +120,14 @@ Response:
   "computed_as_of_round": 95802,
   "summaries": [
     {
-      "party_id": "23d169c2-...585f",
-      "total_unlocked_coin": "31746081.7500000000",
+      "party_id": "<PARTY_ID shortened>",
+      "total_unlocked_coin": "<BALANCE>",
       "total_locked_coin": "0.0000000000",
-      "total_coin_holdings": "31746081.7500000000",
-      "total_available_coin": "31746078.6798789283",
-      "accumulated_holding_fees_unlocked": "3.0701210717",
+      "total_coin_holdings": "<BALANCE>",
+      "total_available_coin": "<AVAILABLE>",
+      "accumulated_holding_fees_unlocked": "<FEES>",
       "accumulated_holding_fees_locked": "0.0000000000",
-      "accumulated_holding_fees_total": "3.0701210717"
+      "accumulated_holding_fees_total": "<FEES>"
     }
   ]
 }
@@ -164,7 +164,7 @@ curl -s -X POST "$BASE/v0/holdings/state" \
     "record_time_match": "exact",
     "page_size": 500,
     "owner_party_ids": [
-      "23d169c2-0909-4c70-81d1-1922de6febaa::1220b770cd6350fe69e14bb55a42588237a15747a22392faa3fa8fe60cd83843585f"
+      "<PARTY_ID>"
     ]
   }'
 ```
@@ -177,35 +177,19 @@ Response:
   "migration_id": 4,
   "created_events": [
     {
-      "contract_id": "00bf993f...667b",
-      "template_id": "3ca134...bf9ec1:Splice.Amulet:Amulet",
+      "contract_id": "<CONTRACT_ID_1>",
+      "template_id": "<PKG_HASH>:Splice.Amulet:Amulet",
       "package_name": "splice-amulet",
       "create_arguments": {
-        "dso": "DSO::1220b1431ef2...accc",
-        "owner": "23d169c2-...585f",
+        "dso": "DSO::<DSO_FINGERPRINT>",
+        "owner": "<PARTY_ID>",
         "amount": {
-          "initialAmount": "50.0000000000",
-          "ratePerRound": { "rate": "0.0001106279" }
+          "initialAmount": "<INITIAL_AMOUNT>",
+          "ratePerRound": { "rate": "<RATE>" }
         }
       },
-      "created_at": "2026-01-30T14:43:31.743799Z",
-      "signatories": ["23d169c2-...585f", "DSO::..."],
-      "observers": []
-    },
-    {
-      "contract_id": "00eaca5e...f316",
-      "template_id": "3ca134...bf9ec1:Splice.Amulet:Amulet",
-      "package_name": "splice-amulet",
-      "create_arguments": {
-        "dso": "DSO::1220b1431ef2...accc",
-        "owner": "23d169c2-...585f",
-        "amount": {
-          "initialAmount": "31746031.7500000000",
-          "ratePerRound": { "rate": "0.0001076259" }
-        }
-      },
-      "created_at": "2026-02-05T01:32:36.011021Z",
-      "signatories": ["23d169c2-...585f", "DSO::..."],
+      "created_at": "<CREATED_TIMESTAMP>",
+      "signatories": ["<PARTY_ID>", "DSO::..."],
       "observers": []
     }
   ],
@@ -255,7 +239,7 @@ Not all SVs support this endpoint. Returns typed transaction history for a party
 curl -s -X POST "$BASE/v0/transactions/by-party" \
   -H 'Content-Type: application/json' \
   -d '{
-    "party": "23d169c2-0909-4c70-81d1-1922de6febaa::1220b770cd6350fe69e14bb55a42588237a15747a22392faa3fa8fe60cd83843585f",
+    "party": "<PARTY_ID>",
     "limit": 200
   }'
 ```
@@ -277,7 +261,7 @@ Response (when supported):
     {
       "transaction_type": "mint",
       "date": "2026-02-05T01:32:36Z",
-      "mint": { "amulet_owner": "...", "amulet_amount": "31746031.75" }
+      "mint": { "amulet_owner": "...", "amulet_amount": "..." }
     }
   ]
 }
@@ -355,7 +339,7 @@ Replace `$PARTY` with the wallet's party ID:
 
 ```bash
 BASE=https://scan.sv-1.global.canton.network.sync.global/api/scan
-PARTY="23d169c2-0909-4c70-81d1-1922de6febaa::1220b770cd6350fe69e14bb55a42588237a15747a22392faa3fa8fe60cd83843585f"
+PARTY="<PARTY_ID>"
 
 # 1. Get current round
 ROUND=$(curl -s "$BASE/v0/round-of-latest-data")
@@ -408,13 +392,8 @@ The Scan API computes balances from the active Amulet contracts on the ledger:
 
 ---
 
-## The 3 wallets
+## The wallets
 
-| Label | Party ID |
-|---|---|
-| Wallet 1 | `23d169c2-0909-4c70-81d1-1922de6febaa::1220b770cd6350fe69e14bb55a42588237a15747a22392faa3fa8fe60cd83843585f` |
-| Wallet 2 | `23d169c2-0909-4c70-81d1-1922de6febaa::1220e226ff1393b8a1e4954f41ccb55b9cc71b85aee2d6f6c30e4b553803e635ed22` |
-| Wallet 3 | `23d169c2-0909-4c70-81d1-1922de6febaa::12206c4c9c59523446ba3057497faeef75e589f6120e5f38121a23ad3632386a49c7` |
-
-All three share the same namespace (`23d169c2-...febaa`) — they belong to the
-same participant but are distinct parties with different fingerprints.
+The audited wallet party IDs are configured in `audit-wallet-lockup.js` in the
+`WALLETS` array. See that file for the actual values — they are not repeated
+here.
