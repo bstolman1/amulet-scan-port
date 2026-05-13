@@ -22,6 +22,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { scanApi } from "@/lib/api-client";
 import type { SvEnvStatus } from "@/lib/api-client";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Activity, RefreshCw, Clock, Eye } from "lucide-react";
 
 const ALL_SVS = "__all__";
@@ -38,6 +39,19 @@ function getAllServices(environments: SvEnvStatus[]): string[] {
     }
   }
   return Array.from(services).sort();
+}
+
+function getServiceDescriptions(environments: SvEnvStatus[]): Record<string, string> {
+  const descriptions: Record<string, string> = {};
+  for (const env of environments) {
+    if (!env.status) continue;
+    for (const [svc, check] of Object.entries(env.status)) {
+      if (check.description && !descriptions[svc]) {
+        descriptions[svc] = check.description;
+      }
+    }
+  }
+  return descriptions;
 }
 
 function getAllNodeNames(environments: SvEnvStatus[]): string[] {
@@ -86,7 +100,22 @@ function SummaryBadge({ ok, total }: { ok: number; total: number }) {
   );
 }
 
-function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] }) {
+function ServiceHeader({ name, description }: { name: string; description?: string }) {
+  const label = name.toUpperCase();
+  if (!description) return <>{label}</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help border-b border-dotted border-muted-foreground/50">
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{description}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function EnvSection({ env, services, descriptions }: { env: SvEnvStatus; services: string[]; descriptions: Record<string, string> }) {
   if (!env.status) {
     return (
       <Card>
@@ -117,7 +146,9 @@ function EnvSection({ env, services }: { env: SvEnvStatus; services: string[] })
             <TableRow>
               <TableHead className="w-2/5">Name</TableHead>
               {services.map((svc) => (
-                <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
+                <TableHead key={svc}>
+                  <ServiceHeader name={svc} description={descriptions[svc]} />
+                </TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -169,6 +200,7 @@ export default function SvStatus() {
   const rawEnvironments: SvEnvStatus[] = data?.environments ?? [];
   const allServices = useMemo(() => getAllServices(rawEnvironments), [rawEnvironments]);
   const allNodeNames = useMemo(() => getAllNodeNames(rawEnvironments), [rawEnvironments]);
+  const serviceDescriptions = useMemo(() => getServiceDescriptions(rawEnvironments), [rawEnvironments]);
 
   const environments = useMemo(() => {
     let filtered = rawEnvironments;
@@ -236,7 +268,9 @@ export default function SvStatus() {
                     </>
                   ) : (
                     allServices.map((svc) => (
-                      <TableHead key={svc}>{svc.toUpperCase()}</TableHead>
+                      <TableHead key={svc}>
+                        <ServiceHeader name={svc} description={serviceDescriptions[svc]} />
+                      </TableHead>
                     ))
                   )}
                 </TableRow>
@@ -337,7 +371,7 @@ export default function SvStatus() {
           </div>
         ) : (
           environments.map((env) => (
-            <EnvSection key={env.env} env={env} services={allServices} />
+            <EnvSection key={env.env} env={env} services={allServices} descriptions={serviceDescriptions} />
           ))
         )}
 
