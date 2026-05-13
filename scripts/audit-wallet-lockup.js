@@ -116,21 +116,66 @@ async function fetchLatestRoundInfo() {
 }
 
 /**
- * Resolve the best record_time + migration_id for ACS-based queries.
- * Probes multiple migration IDs across multiple endpoints.
+ * Discover the current migration_id by probing /v0/backfilling/migration-info
+ * and /v0/migrations/schedule across multiple endpoints.
  */
-async function resolveSnapshotParams(effectiveAt) {
-  const migrationIds = [0, 1, 2];
+async function discoverMigrationIds() {
+  const discovered = new Set([0]);
   const endpoints = getAllEndpoints().filter(e => e.health?.healthy !== false);
 
+  // Try migrations/schedule
   for (const ep of endpoints) {
-    for (const mid of migrationIds) {
+    try {
+      const res = await makeRequest(ep.url, 'GET', '/v0/migrations/schedule');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.migration_id !== undefined) discovered.add(data.migration_id);
+        logStderr(`  Migration schedule from ${ep.name}: migration_id=${data.migration_id}`);
+        break;
+      }
+    } catch {}
+  }
+
+  // Probe migration-info for IDs 0–10 to see which exist
+  for (const ep of endpoints.slice(0, 3)) {
+    for (let mid = 0; mid <= 10; mid++) {
+      try {
+        const res = await makeRequest(ep.url, 'POST', '/v0/backfilling/migration-info', { migration_id: mid });
+        if (res.ok) {
+          discovered.add(mid);
+        } else {
+          // Stop probing higher IDs on this endpoint once we get 404/400
+          if (mid > 0) break;
+        }
+      } catch { break; }
+    }
+    if (discovered.size > 1) break;
+  }
+
+  // Return sorted descending (prefer highest/newest migration)
+  return [...discovered].sort((a, b) => b - a);
+}
+
+/**
+ * Resolve the best record_time + migration_id for ACS-based queries.
+ * Probes discovered migration IDs across multiple endpoints.
+ * Prefers newest snapshot (closest to now).
+ */
+async function resolveSnapshotParams(effectiveAt, migrationIds) {
+  const endpoints = getAllEndpoints().filter(e => e.health?.healthy !== false);
+  let best = null;
+
+  for (const mid of migrationIds) {
+    for (const ep of endpoints) {
       try {
         const params = new URLSearchParams({ before: effectiveAt, migration_id: String(mid) });
         const res = await makeRequest(ep.url, 'GET', `/v0/state/acs/snapshot-timestamp?${params}`);
         if (!res.ok) continue;
         const snap = await res.json();
         if (!snap.record_time) continue;
+
+        const age = Date.now() - new Date(snap.record_time).getTime();
+        const daysOld = Math.round(age / 86_400_000);
 
         // Verify the snapshot is actually usable by doing a small probe
         const probeRes = await makeRequest(ep.url, 'POST', '/v0/holdings/summary', {
@@ -141,26 +186,36 @@ async function resolveSnapshotParams(effectiveAt) {
         });
 
         if (probeRes.ok) {
-          const age = Date.now() - new Date(snap.record_time).getTime();
-          const daysOld = Math.round(age / 86_400_000);
-          return {
+          const candidate = {
             recordTime: snap.record_time,
             migrationId: mid,
             endpointName: ep.name,
             endpointUrl: ep.url,
+            daysOld,
             source: `snapshot (migration ${mid}, ${daysOld}d old, via ${ep.name})`,
           };
+
+          // Keep the freshest usable snapshot
+          if (!best || daysOld < best.daysOld) {
+            best = candidate;
+            logStderr(`  Found snapshot: migration=${mid}, ${daysOld}d old, via ${ep.name}`);
+          }
+
+          // If fresh enough, stop searching
+          if (daysOld < 7) return best;
         }
       } catch {}
     }
   }
 
-  // Fallback: use effectiveAt with migration 0, no guarantee it works
+  if (best) return best;
+
   return {
     recordTime: effectiveAt,
-    migrationId: 0,
+    migrationId: migrationIds[0] ?? 0,
     endpointName: null,
     endpointUrl: null,
+    daysOld: null,
     source: 'effectiveAt-fallback (no usable ACS snapshot found)',
   };
 }
@@ -208,12 +263,33 @@ async function fetchHoldingsState(partyId, recordTime, migrationId, preferredUrl
   return allEvents;
 }
 
-async function fetchWalletBalance(partyId) {
-  return scanGet(`/v0/wallet-balance/${encodeURIComponent(partyId)}`);
-}
-
 async function fetchTransactionsByParty(partyId) {
   return scanPost('/v0/transactions/by-party', { party: partyId, limit: 200 });
+}
+
+/**
+ * Query the local server API (if running) for party events from DuckDB.
+ * Falls back gracefully if server isn't available.
+ */
+async function queryLocalServer(partyId) {
+  const ports = [3001, 3000];
+  for (const port of ports) {
+    try {
+      const summaryRes = await fetch(`http://localhost:${port}/api/party/${encodeURIComponent(partyId)}/summary`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!summaryRes.ok) continue;
+      const summary = await summaryRes.json();
+
+      const eventsRes = await fetch(`http://localhost:${port}/api/party/${encodeURIComponent(partyId)}?limit=50`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const events = eventsRes.ok ? await eventsRes.json() : null;
+
+      return { summary: summary.data, events: events?.data || [], port, source: `localhost:${port}/duckdb` };
+    } catch {}
+  }
+  return null;
 }
 
 /**
@@ -354,9 +430,12 @@ async function main() {
   const roundInfo = await fetchLatestRoundInfo();
   log(`Latest round: ${roundInfo.round}  |  Effective at: ${roundInfo.effectiveAt}`);
 
-  // 3. Find a usable ACS snapshot (probes multiple endpoints + migration IDs)
+  // 3. Discover migration IDs and find a usable ACS snapshot
+  log('Discovering migration IDs...');
+  const migrationIds = await discoverMigrationIds();
+  log(`Migration IDs found: [${migrationIds.join(', ')}]`);
   log('Probing for usable ACS snapshot across endpoints...');
-  const snapshotParams = await resolveSnapshotParams(roundInfo.effectiveAt);
+  const snapshotParams = await resolveSnapshotParams(roundInfo.effectiveAt, migrationIds);
   log(`Record time: ${snapshotParams.recordTime}`);
   log(`Source: ${snapshotParams.source}\n`);
 
@@ -429,14 +508,40 @@ async function main() {
       log(`\n  Holdings: ERROR — ${err.message}`);
     }
 
-    // ── Wallet balance ──
+    // ── Local server query (DuckDB parquet data) ──
     try {
-      const balanceResp = await fetchWalletBalance(wallet.partyId);
-      walletResult.walletBalance = balanceResp.wallet_balance || '0';
-      log(`\n  Wallet Balance: ${walletResult.walletBalance} CC`);
-    } catch (err) {
-      walletResult.walletBalanceError = err.message;
-      log(`\n  Wallet Balance: unavailable`);
+      const local = await queryLocalServer(wallet.partyId);
+      if (local) {
+        walletResult.localData = {
+          source: local.source,
+          totalEvents: local.summary?.total_events || 0,
+          uniqueTemplates: local.summary?.unique_templates || 0,
+          uniqueContracts: local.summary?.unique_contracts || 0,
+          firstSeen: local.summary?.first_seen,
+          lastSeen: local.summary?.last_seen,
+          createdCount: local.summary?.created_count || 0,
+          archivedCount: local.summary?.archived_count || 0,
+          recentEvents: local.events.slice(0, 10).map(e => ({
+            eventType: e.event_type,
+            templateId: e.template_id,
+            timestamp: e.timestamp || e.effective_at,
+          })),
+        };
+
+        log(`\n  Local DuckDB Data (${local.source}):`);
+        log(`    Total events:      ${local.summary?.total_events || 0}`);
+        log(`    First seen:        ${local.summary?.first_seen || 'never'}`);
+        log(`    Last seen:         ${local.summary?.last_seen || 'never'}`);
+        log(`    Created/Archived:  ${local.summary?.created_count || 0} / ${local.summary?.archived_count || 0}`);
+
+        if ((local.summary?.total_events || 0) > 0) {
+          walletResult.alerts = walletResult.alerts.filter(a => !a.startsWith('NO_HOLDINGS_FOUND'));
+        }
+      } else {
+        log('\n  Local server: not available');
+      }
+    } catch {
+      log('\n  Local server: query failed');
     }
 
     // ── Transaction history ──
