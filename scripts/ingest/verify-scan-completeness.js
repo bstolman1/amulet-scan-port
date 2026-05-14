@@ -68,6 +68,7 @@ const HMAC_SECRET   = process.env.GCS_HMAC_SECRET;
 
 const DUCKDB_MEMORY = process.env.VSC_DUCKDB_MEMORY || '6GB';
 const DUCKDB_THREADS = parseInt(process.env.VSC_DUCKDB_THREADS || '2', 10);
+const DUCKDB_TIMEOUT_MS = parseInt(process.env.VSC_DUCKDB_TIMEOUT_MS || '1800000', 10);  // 30 min default
 const TMP_DIR       = process.env.VSC_TMP_DIR || '/tmp/verify-scan';
 
 // Page size for Scan API /v2/updates — smaller = more calls, larger = heavier per-call.
@@ -450,7 +451,7 @@ async function computeMissingIds(migrationId, dateStr) {
     `COPY (${sql}) TO '${sqlStr(missingFinal)}' (FORMAT JSON, ARRAY FALSE);`,
   ].join(' ');
   try {
-    await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: 900_000 });
+    await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: DUCKDB_TIMEOUT_MS });
   } catch (err) {
     const stderr = err.stderr?.toString() || '';
     throw new Error(`missing-ids computation failed for ${dateStr} m=${migrationId}: ${stderr.slice(0, 400) || err.message}`);
@@ -626,7 +627,7 @@ async function gcsCountForDay(migrationId, dateStr) {
   ].join(' ');
 
   try {
-    await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: 900_000 });
+    await execFile('duckdb', ['-c', wrapped], { maxBuffer: 8 * 1024 * 1024, timeout: DUCKDB_TIMEOUT_MS });
     const text = readFileSync(outFile, 'utf8').trim();
     try { unlinkSync(outFile); } catch {}
     const rows = text ? JSON.parse(text) : [];
