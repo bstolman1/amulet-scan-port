@@ -385,7 +385,7 @@ async function writeBatchToGCS(updates, events, batchMigrationId, afterRecordTim
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 let activeScanUrl = process.env.SCAN_URL || 'https://scan.sv-1.global.canton.network.sync.global/api/scan';
-const BATCH_SIZE                     = parseInt(process.env.BATCH_SIZE)                     || 100;
+const BATCH_SIZE                     = parseInt(process.env.BATCH_SIZE)                     || 1000;
 const POLL_INTERVAL                  = parseInt(process.env.POLL_INTERVAL)                  || 5000;
 const FETCH_TIMEOUT_MS               = parseInt(process.env.FETCH_TIMEOUT_MS)               || 30000;
 const STALL_DETECTION_INTERVAL_MS    = parseInt(process.env.STALL_DETECTION_INTERVAL_MS)    || 30000;
