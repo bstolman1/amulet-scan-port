@@ -106,7 +106,7 @@ function ServiceHeader({ name, description }: { name: string; description?: stri
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="cursor-help border-b border-dotted border-muted-foreground/50">
+        <span className="border-b border-dotted border-muted-foreground/50">
           {label}
         </span>
       </TooltipTrigger>
