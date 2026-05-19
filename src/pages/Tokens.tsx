@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
@@ -218,14 +217,12 @@ export default function Tokens() {
                     <ArrowUpDown className="h-3 w-3" />
                   </button>
                 </TableHead>
-                <TableHead className="text-center">Decimals</TableHead>
-                <TableHead className="text-center">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                     {search ? "No tokens match your search" : "No tokens available"}
                   </TableCell>
                 </TableRow>
@@ -286,19 +283,6 @@ function TokenRow({ token }: { token: TokenInfo }) {
         {formatSupply(token.totalSupply, token.decimals)}
       </TableCell>
 
-      {/* Decimals */}
-      <TableCell className="text-center text-muted-foreground">
-        {token.decimals}
-      </TableCell>
-
-      {/* Status */}
-      <TableCell className="text-center">
-        <Badge
-          variant={token.registryHealth === "ok" ? "default" : token.registryHealth === "error" ? "destructive" : "secondary"}
-        >
-          {token.registryHealth}
-        </Badge>
-      </TableCell>
 
     </TableRow>
   );
