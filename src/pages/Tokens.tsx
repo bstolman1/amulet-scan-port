@@ -234,6 +234,19 @@ export default function Tokens() {
             </TableBody>
           </Table>
         </Card>
+
+        <p className="text-xs text-muted-foreground text-center">
+          Data source:{" "}
+          <a
+            href="https://github.com/canton-network/wallet/blob/main/api-specs/assets.json"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            canton-network/wallet/api-specs/assets.json
+          </a>
+          {" "}· Live supply from CIP-56 registry metadata APIs
+        </p>
       </div>
     </DashboardLayout>
   );
