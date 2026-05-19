@@ -64,7 +64,6 @@ export interface TokenInfo {
   registryURLs: string[];
   linkToDAR: string | null;
   assetLogo: string | null;
-  source: "seed" | "discovered";
   registryHealth: "ok" | "error" | "pending";
   issuer: string;
 }
@@ -73,7 +72,7 @@ export interface TokensResponse {
   tokens: TokenInfo[];
   lastRefreshed: string | null;
   environment: string;
-  sources: { seed: number; discovered: number };
+  assetsSource: "github" | "local";
 }
 
 export async function fetchTokens(): Promise<TokensResponse> {

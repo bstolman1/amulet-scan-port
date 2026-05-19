@@ -204,19 +204,19 @@ async function refreshTokenData() {
       for (const inst of instruments) {
         const key = `${admin}::${inst.id}`;
         const seedEntry = seedIndex.get(key);
+        if (!seedEntry) continue;
 
         allTokens.set(key, {
           instrumentId: { admin, id: inst.id },
-          symbol: inst.symbol || seedEntry?.symbol || inst.id,
+          symbol: inst.symbol || seedEntry.symbol || inst.id,
           name: inst.name || inst.id,
           totalSupply: inst.totalSupply || null,
           totalSupplyAsOf: inst.totalSupplyAsOf || null,
           decimals: inst.decimals ?? 10,
           supportedApis: inst.supportedApis || {},
-          registryURLs: seedEntry?.registryURLs || (registryUrl ? [registryUrl] : []),
-          linkToDAR: seedEntry?.linkToDAR || null,
-          assetLogo: seedEntry?.assetLogo || null,
-          source: seedEntry ? 'seed' : 'discovered',
+          registryURLs: seedEntry.registryURLs || [],
+          linkToDAR: seedEntry.linkToDAR || null,
+          assetLogo: seedEntry.assetLogo || null,
           registryHealth: error ? 'error' : 'ok',
           issuer: admin.split('::')[0],
         });
@@ -237,7 +237,6 @@ async function refreshTokenData() {
               registryURLs: seedEntry.registryURLs || [],
               linkToDAR: seedEntry.linkToDAR || null,
               assetLogo: seedEntry.assetLogo || null,
-              source: 'seed',
               registryHealth: 'error',
               issuer: seedEntry.instrumentId.admin.split('::')[0],
             });
@@ -253,9 +252,7 @@ async function refreshTokenData() {
     });
     lastRefreshed = new Date().toISOString();
 
-    const seedCount = tokenCache.filter(t => t.source === 'seed').length;
-    const discoveredCount = tokenCache.filter(t => t.source === 'discovered').length;
-    console.log(`[Tokens] Refresh complete in ${Date.now() - startTime}ms: ${tokenCache.length} tokens (${seedCount} seed, ${discoveredCount} discovered, assets from ${assetsSource})`);
+    console.log(`[Tokens] Refresh complete in ${Date.now() - startTime}ms: ${tokenCache.length} tokens (assets from ${assetsSource})`);
   } catch (err) {
     console.error('[Tokens] Refresh failed:', err.message);
     if (tokenCache.length === 0) {
@@ -270,7 +267,6 @@ async function refreshTokenData() {
         registryURLs: asset.registryURLs || [],
         linkToDAR: asset.linkToDAR || null,
         assetLogo: asset.assetLogo || null,
-        source: 'seed',
         registryHealth: 'pending',
         issuer: asset.instrumentId.admin.split('::')[0],
       }));
@@ -289,14 +285,11 @@ setInterval(refreshTokenData, REFRESH_INTERVAL_MS);
 // --- Routes ---
 
 router.get('/', (req, res) => {
-  const seedCount = tokenCache.filter(t => t.source === 'seed').length;
-  const discoveredCount = tokenCache.filter(t => t.source === 'discovered').length;
   res.json({
     tokens: tokenCache,
     lastRefreshed,
     environment: ENVIRONMENT,
     assetsSource,
-    sources: { seed: seedCount, discovered: discoveredCount },
   });
 });
 

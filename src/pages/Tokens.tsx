@@ -179,11 +179,6 @@ export default function Tokens() {
                   {data?.lastRefreshed ? formatTimeAgo(data.lastRefreshed) : "—"}
                 </p>
               </div>
-              {data?.sources && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  {data.sources.seed} registered · {data.sources.discovered} discovered
-                </p>
-              )}
             </CardContent>
           </Card>
         </div>
