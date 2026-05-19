@@ -54,32 +54,6 @@ function getServiceDescriptions(environments: SvEnvStatus[]): Record<string, str
   return descriptions;
 }
 
-function getAllNodeNames(environments: SvEnvStatus[]): string[] {
-  const names = new Set<string>();
-  for (const env of environments) {
-    if (!env.status) continue;
-    for (const svc of Object.values(env.status)) {
-      for (const name of Object.keys(svc.nodes)) {
-        names.add(name);
-      }
-    }
-  }
-  return Array.from(names).sort();
-}
-
-function filterEnvStatus(env: SvEnvStatus, nodeName: string): SvEnvStatus {
-  if (!env.status) return env;
-  const newStatus: typeof env.status = {};
-  for (const [svc, check] of Object.entries(env.status)) {
-    if (nodeName in check.nodes) {
-      newStatus[svc] = { ...check, nodes: { [nodeName]: check.nodes[nodeName] } };
-    } else {
-      newStatus[svc] = { ...check, nodes: {} };
-    }
-  }
-  return { ...env, status: newStatus };
-}
-
 function StatusCell({ value }: { value: number }) {
   return value === 0 ? (
     <span className="text-green-600 font-semibold text-sm">OK</span>
@@ -190,28 +164,30 @@ export default function SvStatus() {
   const [selectedSv, setSelectedSv] = useState(ALL_SVS);
   const [selectedEnv, setSelectedEnv] = useState(ALL_ENVS);
 
+  const { data: svList } = useQuery({
+    queryKey: ["svList"],
+    queryFn: () => scanApi.fetchSvList(),
+    staleTime: Infinity,
+  });
+
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ["svNodeStatus"],
-    queryFn: () => scanApi.fetchSvNodeStatus(),
+    queryKey: selectedSv === ALL_SVS ? ["svNodeStatus"] : ["svDsoStatus", selectedSv],
+    queryFn: () =>
+      selectedSv === ALL_SVS
+        ? scanApi.fetchSvNodeStatus()
+        : scanApi.fetchSvDsoStatus(selectedSv),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
 
   const rawEnvironments: SvEnvStatus[] = data?.environments ?? [];
   const allServices = useMemo(() => getAllServices(rawEnvironments), [rawEnvironments]);
-  const allNodeNames = useMemo(() => getAllNodeNames(rawEnvironments), [rawEnvironments]);
   const serviceDescriptions = useMemo(() => getServiceDescriptions(rawEnvironments), [rawEnvironments]);
 
   const environments = useMemo(() => {
-    let filtered = rawEnvironments;
-    if (selectedEnv !== ALL_ENVS) {
-      filtered = filtered.filter((env) => env.env === selectedEnv);
-    }
-    if (selectedSv !== ALL_SVS) {
-      filtered = filtered.map((env) => filterEnvStatus(env, selectedSv));
-    }
-    return filtered;
-  }, [rawEnvironments, selectedSv, selectedEnv]);
+    if (selectedEnv === ALL_ENVS) return rawEnvironments;
+    return rawEnvironments.filter((env) => env.env === selectedEnv);
+  }, [rawEnvironments, selectedEnv]);
 
   const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
   const displayEnvs = selectedEnv === ALL_ENVS ? [...ENVS] : [selectedEnv];
@@ -335,19 +311,25 @@ export default function SvStatus() {
               ))}
             </SelectContent>
           </Select>
-          <span className="text-sm font-medium">Filter by SV:</span>
+          <span className="text-sm font-medium">As viewed from SV:</span>
           <Select value={selectedSv} onValueChange={setSelectedSv}>
             <SelectTrigger className="w-[280px] bg-muted/60 border-border focus:ring-0 focus:ring-offset-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="bg-muted border-border">
-              {[ALL_SVS, ...allNodeNames].map((name) => (
+              <SelectItem
+                value={ALL_SVS}
+                className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary"
+              >
+                All SVs (aggregated)
+              </SelectItem>
+              {(svList ?? []).map((sv) => (
                 <SelectItem
-                  key={name}
-                  value={name}
+                  key={sv.id}
+                  value={sv.id}
                   className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary"
                 >
-                  {name === ALL_SVS ? "All SVs" : name}
+                  {sv.name}
                 </SelectItem>
               ))}
             </SelectContent>

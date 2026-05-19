@@ -747,6 +747,16 @@ export const scanApi = {
     return scanGet("/_sv-node-status");
   },
 
+  // GET /_sv-list - list of available SV DSO data sources
+  async fetchSvList(): Promise<{ id: string; name: string; envs: string[] }[]> {
+    return scanGet("/_sv-list");
+  },
+
+  // GET /_sv-dso-status?sv=<id> - fetch DSO status from a specific SV's perspective
+  async fetchSvDsoStatus(svId: string): Promise<SvNodeStatusResponse> {
+    return scanGet("/_sv-dso-status", { sv: svId });
+  },
+
   // GET /v0/admin/validator/licenses
   async fetchValidatorLicenses(after?: number, limit: number = 1000): Promise<ValidatorLicensesResponse> {
     const params: Record<string, string | number> = { limit };

@@ -105,6 +105,173 @@ router.get('/_sv-node-status', async (req, res) => {
   res.json({ environments: results, checked_at: new Date().toISOString() });
 });
 
+// SV DSO config — dso.json endpoints per SV per environment.
+// Update this list when SVs join/leave or URLs change.
+const SV_DSO_CONFIG = [
+  {
+    id: 'sv-nodeops.com',
+    name: 'sv-nodeops.com',
+    urls: {
+      dev:  'https://info.sv.dev.global.canton.network.sv-nodeops.com/runtime/dso.json',
+      test: 'https://info.sv.test.global.canton.network.sv-nodeops.com/runtime/dso.json',
+      main: 'https://info.sv.global.canton.network.sv-nodeops.com/runtime/dso.json',
+    },
+  },
+  {
+    id: 'sync.global',
+    name: 'sync.global',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.sync.global/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.sync.global/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.sync.global/runtime/dso.json',
+    },
+  },
+  {
+    id: 'c7.digital',
+    name: 'c7.digital',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.c7.digital/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.c7.digital/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.c7.digital/runtime/dso.json',
+    },
+  },
+  {
+    id: 'cumberland.io',
+    name: 'cumberland.io',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.cumberland.io/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.cumberland.io/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.cumberland.io/runtime/dso.json',
+    },
+  },
+  {
+    id: 'cumberland.io/2',
+    name: 'cumberland.io (2)',
+    urls: {
+      dev:  'https://info.sv-2.dev.global.canton.network.cumberland.io/runtime/dso.json',
+      test: 'https://info.sv-2.test.global.canton.network.cumberland.io/runtime/dso.json',
+      main: 'https://info.sv-2.global.canton.network.cumberland.io/runtime/dso.json',
+    },
+  },
+  {
+    id: 'digitalasset.com',
+    name: 'digitalasset.com',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.digitalasset.com/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.digitalasset.com/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.digitalasset.com/runtime/dso.json',
+    },
+  },
+  {
+    id: 'digitalasset.com/2',
+    name: 'digitalasset.com (2)',
+    urls: {
+      dev:  'https://info.sv-2.dev.global.canton.network.digitalasset.com/runtime/dso.json',
+      test: 'https://info.sv-2.test.global.canton.network.digitalasset.com/runtime/dso.json',
+      main: 'https://info.sv-2.global.canton.network.digitalasset.com/runtime/dso.json',
+    },
+  },
+  {
+    id: 'digitalasset.com/sv',
+    name: 'digitalasset.com (sv)',
+    urls: {
+      dev: 'https://info.sv.dev.global.canton.network.digitalasset.com/runtime/dso.json',
+    },
+  },
+  {
+    id: 'fivenorth.io',
+    name: 'fivenorth.io',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.fivenorth.io/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.fivenorth.io/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.fivenorth.io/runtime/dso.json',
+    },
+  },
+  {
+    id: 'lcv.mpch.io',
+    name: 'lcv.mpch.io',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.lcv.mpch.io/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.lcv.mpch.io/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.lcv.mpch.io/runtime/dso.json',
+    },
+  },
+  {
+    id: 'mpch.io',
+    name: 'mpch.io',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.mpch.io/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.mpch.io/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.mpch.io/runtime/dso.json',
+    },
+  },
+  {
+    id: 'orb1lp.mpch.io',
+    name: 'orb1lp.mpch.io',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.orb1lp.mpch.io/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.orb1lp.mpch.io/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.orb1lp.mpch.io/runtime/dso.json',
+    },
+  },
+  {
+    id: 'proofgroup.xyz',
+    name: 'proofgroup.xyz',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.proofgroup.xyz/runtime/dso.json',
+      test: 'https://info.sv-1.test.global.canton.network.proofgroup.xyz/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.proofgroup.xyz/runtime/dso.json',
+    },
+  },
+  {
+    id: 'tradeweb.com',
+    name: 'tradeweb.com',
+    urls: {
+      dev:  'https://info.sv-1.dev.global.canton.network.tradeweb.com/runtime/dso.json',
+      test: 'https://info.sv.test.global.canton.network.tradeweb.com/runtime/dso.json',
+      main: 'https://info.sv-1.global.canton.network.tradeweb.com/runtime/dso.json',
+    },
+  },
+];
+
+// GET /_sv-list - list of available SV data sources
+router.get('/_sv-list', (req, res) => {
+  res.json(SV_DSO_CONFIG.map(sv => ({ id: sv.id, name: sv.name, envs: Object.keys(sv.urls) })));
+});
+
+// GET /_sv-dso-status?sv=<id> - fetch dso.json from a specific SV's perspective
+router.get('/_sv-dso-status', async (req, res) => {
+  const svId = req.query.sv;
+  const svConfig = SV_DSO_CONFIG.find(s => s.id === svId);
+  if (!svConfig) return res.status(404).json({ error: `Unknown SV: ${svId}` });
+
+  console.log(`[Scan Proxy] Fetching DSO status from ${svConfig.name}`);
+
+  const results = await Promise.all(
+    Object.entries(svConfig.urls).map(async ([env, url]) => {
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!resp.ok) {
+          console.warn(`[Scan Proxy] DSO status ${svConfig.name}/${env}: HTTP ${resp.status}`);
+          return { env, status: null, error: `HTTP ${resp.status}` };
+        }
+        const text = await readBodyWithLimit(resp, 256 * 1024);
+        const data = JSON.parse(text);
+        return { env, status: data.status ?? null, error: data.status ? null : 'Unexpected response format' };
+      } catch (err) {
+        console.warn(`[Scan Proxy] DSO status ${svConfig.name}/${env}: ${err.message}`);
+        return { env, status: null, error: err.message };
+      }
+    })
+  );
+
+  res.json({ environments: results, checked_at: new Date().toISOString() });
+});
+
 /**
  * Best-of-all-SVs handler for dev fund coupons.
  * Queries all healthy endpoints in parallel, returns the largest result set.
