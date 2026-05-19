@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Layers, Search, ExternalLink, ArrowUpDown, Clock, Coins } from "lucide-react";
+import { Layers, Search, ArrowUpDown, Clock, Coins } from "lucide-react";
 import { useTokens } from "@/hooks/use-tokens";
 import type { TokenInfo } from "@/lib/duckdb-api-client";
 
@@ -220,13 +220,12 @@ export default function Tokens() {
                 </TableHead>
                 <TableHead className="text-center">Decimals</TableHead>
                 <TableHead className="text-center">Status</TableHead>
-                <TableHead className="text-center">Links</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                     {search ? "No tokens match your search" : "No tokens available"}
                   </TableCell>
                 </TableRow>
@@ -301,22 +300,6 @@ function TokenRow({ token }: { token: TokenInfo }) {
         </Badge>
       </TableCell>
 
-      {/* Links */}
-      <TableCell className="text-center">
-        <div className="flex items-center justify-center gap-2">
-          {token.linkToDAR && (
-            <a
-              href={token.linkToDAR}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground"
-              title="DAR documentation"
-            >
-              <ExternalLink className="h-4 w-4" />
-            </a>
-          )}
-        </div>
-      </TableCell>
     </TableRow>
   );
 }
