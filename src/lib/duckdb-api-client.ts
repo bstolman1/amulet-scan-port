@@ -49,6 +49,37 @@ export async function apiFetch<T>(endpoint: string, options?: RequestInit): Prom
   return response.json();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Tokens API (CIP-56 Canton Token Standard)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TokenInfo {
+  instrumentId: { admin: string; id: string };
+  symbol: string;
+  name: string;
+  totalSupply: string | null;
+  totalSupplyAsOf: string | null;
+  decimals: number;
+  supportedApis: Record<string, number>;
+  registryURLs: string[];
+  linkToDAR: string | null;
+  assetLogo: string | null;
+  source: "seed" | "discovered";
+  registryHealth: "ok" | "error" | "pending";
+  issuer: string;
+}
+
+export interface TokensResponse {
+  tokens: TokenInfo[];
+  lastRefreshed: string | null;
+  environment: string;
+  sources: { seed: number; discovered: number };
+}
+
+export async function fetchTokens(): Promise<TokensResponse> {
+  return apiFetch<TokensResponse>("/api/tokens");
+}
+
 /**
  * Invalidate server-side ACS cache (useful right after new snapshots are written).
  */

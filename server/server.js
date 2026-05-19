@@ -25,6 +25,7 @@ import kaikoRouter from './api/kaiko.js';
 import rewardsRouter from './api/rewards.js';
 import scanProxyRouter from './api/scan-proxy.js';
 import voteResultsRouter from './api/vote-results.js';
+import tokensRouter from './api/tokens.js';
 import db, { initializeViews } from './duckdb/connection.js';
 import { getCacheStats } from './cache/stats-cache.js';
 import { checkAllEndpoints, getAllEndpoints, getCurrentEndpoint } from './lib/endpoint-rotation.js';
@@ -69,6 +70,7 @@ app.use('/', apiLimiter); // General rate limiting for all routes
 // Stricter limits for expensive operations
 app.use('/search', expensiveLimiter);
 app.use('/refresh-views', expensiveLimiter);
+app.use('/tokens/refresh', expensiveLimiter);
 
 // Global BigInt serialization safety net - prevents "Do not know how to serialize a BigInt" errors
 app.set('json replacer', (key, value) => 
@@ -169,6 +171,7 @@ app.use('/kaiko', kaikoRouter);
 app.use('/rewards', rewardsRouter);
 app.use('/scan-proxy', scanProxyRouter);
 app.use('/vote-results', voteResultsRouter);
+app.use('/tokens', tokensRouter);
 
 // Global error handler - must be last middleware
 app.use(globalErrorHandler);

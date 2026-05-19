@@ -41,6 +41,9 @@ import ANS from "./pages/ANS";
 import Apps from "./pages/Apps";
 import Subscriptions from "./pages/Subscriptions";
 
+// Tokens
+import Tokens from "./pages/Tokens";
+
 // Rules & Config
 import AmuletRules from "./pages/AmuletRules";
 import ExternalPartySetup from "./pages/ExternalPartySetup";
@@ -102,6 +105,9 @@ const App = () => (
             <Route path="/issuance-curve" element={<IssuanceCurve />} />
             <Route path="/protocol-fees" element={<ProtocolFees />} />
             
+            {/* Tokens */}
+            <Route path="/tokens" element={<Tokens />} />
+
             {/* Transactions */}
             <Route path="/transactions" element={<Transactions />} />
             <Route path="/transfers" element={<Transfers />} />

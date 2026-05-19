@@ -53,6 +53,7 @@ const baseNavigationGroups: NavGroup[] = [
       { name: "Issuance Curve", href: "/issuance-curve", icon: TrendingUp },
       { name: "Protocol Fees", href: "/protocol-fees", icon: DollarSign },
       { name: "Price Votes", href: "/price-votes", icon: DollarSign },
+      { name: "Tokens", href: "/tokens", icon: Layers },
     ],
   },
   {
