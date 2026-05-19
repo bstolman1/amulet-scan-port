@@ -21,8 +21,10 @@ export function getDuckDBApiUrl(): string {
       return 'http://localhost:3001';
     }
   }
-  // Production: return empty string so paths are relative
-  return '';
+  // Staging/production: use VITE_BASE_PATH so nginx routes to the correct backend
+  // e.g. VITE_BASE_PATH="/staging" → API calls go to /staging/api/* → port 3002
+  const basePath = (import.meta.env.VITE_BASE_PATH || '').replace(/\/+$/, '');
+  return basePath;
 }
 
 /**
