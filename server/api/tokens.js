@@ -112,7 +112,10 @@ async function registryFetch(url) {
 }
 
 function normalizeRegistryUrl(url) {
-  return url.endsWith('/') ? url : url + '/';
+  let normalized = url.endsWith('/') ? url : url + '/';
+  // SV scan servers serve registry at /registry/, not /api/scan/registry/
+  normalized = normalized.replace(/\/api\/scan\/registry\//, '/registry/');
+  return normalized;
 }
 
 // --- Discovery & refresh ---
