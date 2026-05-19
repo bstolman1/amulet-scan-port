@@ -25,7 +25,7 @@ import type { SvEnvStatus } from "@/lib/api-client";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Activity, RefreshCw, Clock, Eye } from "lucide-react";
 
-const ALL_SVS = "__all__";
+const DEFAULT_SV = "SV-Nodeops-Limited";
 const ALL_ENVS = "__all__";
 const ENVS = ["dev", "test", "main"] as const;
 const ENV_LABELS: Record<string, string> = { dev: "dev", test: "test", main: "main" };
@@ -161,7 +161,7 @@ function getServiceCounts(envs: SvEnvStatus[], envName: string, service: string)
 }
 
 export default function SvStatus() {
-  const [selectedSv, setSelectedSv] = useState(ALL_SVS);
+  const [selectedSv, setSelectedSv] = useState(DEFAULT_SV);
   const [selectedEnv, setSelectedEnv] = useState(ALL_ENVS);
 
   const { data: svList } = useQuery({
@@ -171,11 +171,8 @@ export default function SvStatus() {
   });
 
   const { data, isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: selectedSv === ALL_SVS ? ["svNodeStatus"] : ["svDsoStatus", selectedSv],
-    queryFn: () =>
-      selectedSv === ALL_SVS
-        ? scanApi.fetchSvNodeStatus()
-        : scanApi.fetchSvDsoStatus(selectedSv),
+    queryKey: ["svDsoStatus", selectedSv],
+    queryFn: () => scanApi.fetchSvDsoStatus(selectedSv),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -317,12 +314,6 @@ export default function SvStatus() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="bg-muted border-border">
-              <SelectItem
-                value={ALL_SVS}
-                className="focus:bg-primary/10 focus:text-primary data-[state=checked]:text-primary"
-              >
-                All SVs (aggregated)
-              </SelectItem>
               {(svList ?? []).map((sv) => (
                 <SelectItem
                   key={sv.id}
@@ -334,11 +325,11 @@ export default function SvStatus() {
               ))}
             </SelectContent>
           </Select>
-          {(selectedSv !== ALL_SVS || selectedEnv !== ALL_ENVS) && (
+          {(selectedSv !== DEFAULT_SV || selectedEnv !== ALL_ENVS) && (
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => { setSelectedSv(ALL_SVS); setSelectedEnv(ALL_ENVS); }}
+              onClick={() => { setSelectedSv(DEFAULT_SV); setSelectedEnv(ALL_ENVS); }}
               className="text-xs text-muted-foreground"
             >
               Reset
