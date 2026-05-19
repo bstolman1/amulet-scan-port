@@ -14,22 +14,37 @@ const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_INSTRUMENTS_PER_REGISTRY = 500;
 
-// --- Seed data & hostname allowlist ---
+const GITHUB_ASSETS_URL =
+  'https://raw.githubusercontent.com/canton-network/wallet/main/api-specs/assets.json';
 
-const seedAssets = JSON.parse(
+const ENVIRONMENT = process.env.CANTON_ENVIRONMENT || 'MainNet';
+
+// --- Seed data (mutable — updated from GitHub on each refresh) ---
+
+const localAssets = JSON.parse(
   readFileSync(join(__dirname, '../data/assets.json'), 'utf-8')
 );
 
-const ENVIRONMENT = process.env.CANTON_ENVIRONMENT || 'MainNet';
-const seedList = seedAssets[ENVIRONMENT] || seedAssets['MainNet'] || [];
+let seedList = localAssets[ENVIRONMENT] || localAssets['MainNet'] || [];
+let seedIndex = new Map();
+let allowedHostnames = new Set(['raw.githubusercontent.com']);
 
-const allowedHostnames = new Set();
-for (const asset of seedList) {
-  for (const url of asset.registryURLs || []) {
-    const h = extractHostname(url);
-    if (h) allowedHostnames.add(h);
+function rebuildSeedIndex(list) {
+  seedList = list;
+  seedIndex = new Map();
+  for (const asset of seedList) {
+    seedIndex.set(`${asset.instrumentId.admin}::${asset.instrumentId.id}`, asset);
+  }
+  allowedHostnames = new Set(['raw.githubusercontent.com']);
+  for (const asset of seedList) {
+    for (const url of asset.registryURLs || []) {
+      const h = extractHostname(url);
+      if (h) allowedHostnames.add(h);
+    }
   }
 }
+
+rebuildSeedIndex(seedList);
 console.log(`[Tokens] Loaded ${seedList.length} seed assets for ${ENVIRONMENT}, ${allowedHostnames.size} allowed hostnames`);
 
 // --- In-memory cache ---
@@ -37,15 +52,7 @@ console.log(`[Tokens] Loaded ${seedList.length} seed assets for ${ENVIRONMENT}, 
 let tokenCache = [];
 let lastRefreshed = null;
 let refreshInProgress = false;
-
-function buildSeedKey(asset) {
-  return `${asset.instrumentId.admin}::${asset.instrumentId.id}`;
-}
-
-const seedIndex = new Map();
-for (const asset of seedList) {
-  seedIndex.set(buildSeedKey(asset), asset);
-}
+let assetsSource = 'local';
 
 function getUniqueRegistries() {
   const registries = new Map();
@@ -118,6 +125,33 @@ function normalizeRegistryUrl(url) {
   return normalized;
 }
 
+// --- GitHub assets.json fetch ---
+
+async function fetchAssetsFromGitHub() {
+  try {
+    console.log('[Tokens] Fetching assets.json from GitHub...');
+    const res = await fetch(GITHUB_ASSETS_URL, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const text = await readBodyWithLimit(res, MAX_RESPONSE_BYTES);
+    const data = JSON.parse(text);
+    const list = data[ENVIRONMENT] || data['MainNet'] || [];
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new Error('Empty or invalid asset list');
+    }
+    console.log(`[Tokens] GitHub assets.json: ${list.length} assets for ${ENVIRONMENT}`);
+    rebuildSeedIndex(list);
+    assetsSource = 'github';
+  } catch (err) {
+    console.warn(`[Tokens] GitHub fetch failed, using local fallback: ${err.message}`);
+    assetsSource = 'local';
+  }
+}
+
 // --- Discovery & refresh ---
 
 async function fetchRegistryInstruments(registryUrls) {
@@ -134,11 +168,6 @@ async function fetchRegistryInstruments(registryUrls) {
   return { instruments: [], registryUrl: null, error: 'All registry URLs failed' };
 }
 
-async function fetchInstrumentDetail(registryUrl, instrumentId) {
-  const base = normalizeRegistryUrl(registryUrl);
-  return registryFetch(`${base}metadata/v1/instruments/${encodeURIComponent(instrumentId)}`);
-}
-
 async function refreshTokenData() {
   if (refreshInProgress) {
     console.log('[Tokens] Refresh already in progress, skipping');
@@ -149,6 +178,10 @@ async function refreshTokenData() {
   console.log('[Tokens] Starting token data refresh...');
 
   try {
+    // Step 1: refresh seed from GitHub (updates seedList, seedIndex, allowedHostnames)
+    await fetchAssetsFromGitHub();
+
+    // Step 2: query each registry for live instrument data
     const registries = getUniqueRegistries();
     const allTokens = new Map();
 
@@ -222,7 +255,7 @@ async function refreshTokenData() {
 
     const seedCount = tokenCache.filter(t => t.source === 'seed').length;
     const discoveredCount = tokenCache.filter(t => t.source === 'discovered').length;
-    console.log(`[Tokens] Refresh complete in ${Date.now() - startTime}ms: ${tokenCache.length} tokens (${seedCount} seed, ${discoveredCount} discovered)`);
+    console.log(`[Tokens] Refresh complete in ${Date.now() - startTime}ms: ${tokenCache.length} tokens (${seedCount} seed, ${discoveredCount} discovered, assets from ${assetsSource})`);
   } catch (err) {
     console.error('[Tokens] Refresh failed:', err.message);
     if (tokenCache.length === 0) {
@@ -262,6 +295,7 @@ router.get('/', (req, res) => {
     tokens: tokenCache,
     lastRefreshed,
     environment: ENVIRONMENT,
+    assetsSource,
     sources: { seed: seedCount, discovered: discoveredCount },
   });
 });
@@ -280,7 +314,7 @@ router.get('/:id', (req, res) => {
 router.post('/refresh', async (req, res) => {
   try {
     await refreshTokenData();
-    res.json({ status: 'ok', tokenCount: tokenCache.length, lastRefreshed });
+    res.json({ status: 'ok', tokenCount: tokenCache.length, lastRefreshed, assetsSource });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
