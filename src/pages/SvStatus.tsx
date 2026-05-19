@@ -177,7 +177,11 @@ export default function SvStatus() {
     refetchInterval: 60_000,
   });
 
-  const rawEnvironments: SvEnvStatus[] = data?.environments ?? [];
+  const ENV_ORDER: Record<string, number> = { dev: 0, test: 1, main: 2 };
+  const rawEnvironments: SvEnvStatus[] = useMemo(
+    () => [...(data?.environments ?? [])].sort((a, b) => (ENV_ORDER[a.env] ?? 99) - (ENV_ORDER[b.env] ?? 99)),
+    [data],
+  );
   const allServices = useMemo(() => getAllServices(rawEnvironments), [rawEnvironments]);
   const serviceDescriptions = useMemo(() => getServiceDescriptions(rawEnvironments), [rawEnvironments]);
 
