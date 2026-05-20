@@ -56,7 +56,7 @@ CREATE TABLE `${PROJECT_ID}.transformed.events_parsed` (
   month INT64,
   day INT64
 )
-PARTITION BY DATE(timestamp)
+PARTITION BY DATE(effective_at)
 CLUSTER BY template_id, event_type, migration_id;
 
 INSERT INTO `${PROJECT_ID}.transformed.events_parsed`
@@ -155,7 +155,7 @@ CREATE TABLE `${PROJECT_ID}.transformed.updates_parsed` (
   month INT64,
   day INT64
 )
-PARTITION BY DATE(timestamp)
+PARTITION BY DATE(effective_at)
 CLUSTER BY update_type, migration_id;
 
 INSERT INTO `${PROJECT_ID}.transformed.updates_parsed`
