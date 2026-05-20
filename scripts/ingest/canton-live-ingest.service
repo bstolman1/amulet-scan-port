@@ -13,8 +13,6 @@ WorkingDirectory=/home/josefin/amulet-scan-port/scripts/ingest
 # Environment: load both .env (Scan API config) and HMAC keys (for DuckDB/GCS)
 EnvironmentFile=/home/josefin/amulet-scan-port/scripts/ingest/.env
 EnvironmentFile=/home/josefin/.gcs_hmac_env.systemd
-# Skip gsutil-based preflight (uses interactive auth incompatible with systemd)
-Environment=SKIP_GCS_PREFLIGHT=true
 
 # Run with 4GB heap (live ingest is lighter than reingest)
 ExecStart=/usr/bin/node --max-old-space-size=4096 fetch-updates.js
