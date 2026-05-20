@@ -1360,12 +1360,8 @@ async function runIngestion() {
   try {
     if (GCS_MODE) {
       validateGCSBucket(true);
-      if (process.env.SKIP_GCS_PREFLIGHT === 'true') {
-        console.log('\n☁️  GCS preflight skipped (SKIP_GCS_PREFLIGHT=true)');
-      } else {
-        console.log('\n🔍 Running GCS preflight checks...');
-        runPreflightChecks({ quick: false, throwOnFail: true });
-      }
+      console.log('\n🔍 Running GCS preflight checks...');
+      runPreflightChecks({ quick: false, throwOnFail: true });
       console.log('\n☁️  GCS Mode ENABLED:');
       console.log(`   Bucket: gs://${process.env.GCS_BUCKET}/`);
       console.log('   Local scratch: /tmp/ledger_raw');
