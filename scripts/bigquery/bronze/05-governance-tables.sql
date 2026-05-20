@@ -152,7 +152,10 @@ CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.governance_action_summary` AS
 SELECT
   DATE(effective_at) AS action_date,
   JSON_VALUE(payload, '$.action.tag') AS action_category,
-  JSON_VALUE(payload, '$.action.value.tag') AS action_type,
+  COALESCE(
+    JSON_VALUE(payload, '$.action.value.dsoAction.tag'),
+    JSON_VALUE(payload, '$.action.value.amuletRulesAction.tag')
+  ) AS action_type,
   event_type,
   COUNT(*) AS action_count,
   COUNT(DISTINCT JSON_VALUE(payload, '$.requester')) AS unique_requesters
