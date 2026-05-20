@@ -1,14 +1,17 @@
 -- Create External Tables for Canton Ledger Parquet Data
 -- Points to GCS Hive-partitioned Parquet under raw/updates/
+-- These are raw Parquet tables — timestamps are strings, arrays are
+-- Parquet LIST structs, JSON fields are strings. Use 02-transform-raw-data.sql
+-- to materialize properly typed tables before querying.
 
-CREATE SCHEMA IF NOT EXISTS `${PROJECT_ID}.canton_ledger`
+CREATE SCHEMA IF NOT EXISTS `${PROJECT_ID}.raw`
 OPTIONS (
   location = 'US',
-  description = 'Canton Network ledger data warehouse'
+  description = 'Canton Network raw external tables on GCS Parquet'
 );
 
 -- Events External Table
-CREATE OR REPLACE EXTERNAL TABLE `${PROJECT_ID}.canton_ledger.events_raw`
+CREATE OR REPLACE EXTERNAL TABLE `${PROJECT_ID}.raw.events`
 WITH PARTITION COLUMNS (
   migration INT64,
   year INT64,
@@ -23,7 +26,7 @@ OPTIONS (
 );
 
 -- Updates External Table
-CREATE OR REPLACE EXTERNAL TABLE `${PROJECT_ID}.canton_ledger.updates_raw`
+CREATE OR REPLACE EXTERNAL TABLE `${PROJECT_ID}.raw.updates`
 WITH PARTITION COLUMNS (
   migration INT64,
   year INT64,

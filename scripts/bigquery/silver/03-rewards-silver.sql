@@ -18,7 +18,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number,
   CAST(JSON_VALUE(payload, '$.amount') AS NUMERIC) AS reward_amount,
   CAST(JSON_VALUE(payload, '$.featured') AS BOOL) AS is_featured
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:AppRewardCoupon';
 
 
@@ -39,7 +39,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number,
   CAST(JSON_VALUE(payload, '$.weight') AS INT64) AS sv_weight,
   CAST(JSON_VALUE(payload, '$.beneficiary') AS STRING) AS beneficiary_party
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:SvRewardCoupon';
 
 
@@ -59,7 +59,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.user') AS STRING) AS user_party,
   CAST(JSON_VALUE(payload, '$.validator') AS STRING) AS validator_party,
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ValidatorRewardCoupon';
 
 
@@ -76,7 +76,7 @@ SELECT
   event_type,
   CAST(JSON_VALUE(payload, '$.dso') AS STRING) AS dso_party,
   CAST(JSON_VALUE(payload, '$.amount') AS NUMERIC) AS reward_amount
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:UnclaimedReward';
 
 
@@ -95,7 +95,7 @@ SELECT
   CAST(NULL AS INT64) AS sv_weight,
   CAST(JSON_VALUE(payload, '$.featured') AS BOOL) AS is_featured,
   CAST(NULL AS STRING) AS user_party
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:AppRewardCoupon'
 
 UNION ALL
@@ -110,7 +110,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.weight') AS INT64) AS sv_weight,
   CAST(NULL AS BOOL) AS is_featured,
   CAST(NULL AS STRING) AS user_party
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:SvRewardCoupon'
 
 UNION ALL
@@ -125,7 +125,7 @@ SELECT
   CAST(NULL AS INT64) AS sv_weight,
   CAST(NULL AS BOOL) AS is_featured,
   CAST(JSON_VALUE(payload, '$.user') AS STRING) AS user_party
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ValidatorRewardCoupon';
 
 

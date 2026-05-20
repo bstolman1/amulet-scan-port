@@ -3,7 +3,7 @@
 -- (ACS-dependent views removed — no ACS data in current GCS layout)
 
 -- Amulet Creation Events
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.amulet_creations` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.amulet_creations` AS
 SELECT
   event_id,
   update_id,
@@ -14,34 +14,34 @@ SELECT
   CAST(JSON_VALUE(payload, '$.amount.initialAmount') AS NUMERIC) AS initial_amount,
   CAST(JSON_VALUE(payload, '$.amount.createdAt.number') AS INT64) AS created_at_round,
   CAST(JSON_VALUE(payload, '$.amount.ratePerRound.rate') AS NUMERIC) AS rate_per_round
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:Amulet'
   AND template_id NOT LIKE '%LockedAmulet%'
   AND event_type = 'created';
 
 
 -- Amulet Archives
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.amulet_archives` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.amulet_archives` AS
 SELECT
   event_id,
   update_id,
   contract_id,
   effective_at,
   migration_id
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:Amulet'
   AND template_id NOT LIKE '%LockedAmulet%'
   AND event_type = 'archived';
 
 
 -- Daily Mint/Burn
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.daily_mint_burn` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.daily_mint_burn` AS
 WITH mints AS (
   SELECT
     DATE(effective_at) AS event_date,
     SUM(CAST(JSON_VALUE(payload, '$.amount.initialAmount') AS NUMERIC)) AS minted_amount,
     COUNT(*) AS mint_count
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:Amulet'
     AND template_id NOT LIKE '%LockedAmulet%'
     AND event_type = 'created'
@@ -51,7 +51,7 @@ burns AS (
   SELECT
     DATE(effective_at) AS event_date,
     COUNT(*) AS burn_count
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:Amulet'
     AND template_id NOT LIKE '%LockedAmulet%'
     AND event_type = 'archived'
@@ -68,7 +68,7 @@ ORDER BY event_date DESC;
 
 
 -- Transfer Commands
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.parsed_transfer_commands` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.parsed_transfer_commands` AS
 SELECT
   event_id,
   update_id,
@@ -81,12 +81,12 @@ SELECT
   JSON_VALUE(payload, '$.receiverParty') AS receiver_party,
   CAST(JSON_VALUE(payload, '$.nonce') AS INT64) AS nonce,
   payload
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:TransferCommand';
 
 
 -- Transfer Counters
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.parsed_transfer_counters` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.parsed_transfer_counters` AS
 SELECT
   event_id,
   update_id,
@@ -97,12 +97,12 @@ SELECT
   JSON_VALUE(payload, '$.provider') AS provider_party,
   CAST(JSON_VALUE(payload, '$.nextNonce') AS INT64) AS next_nonce,
   payload
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:TransferCommandCounter';
 
 
 -- Locked Amulet Analysis
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.locked_amulet_analysis` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.locked_amulet_analysis` AS
 SELECT
   contract_id,
   event_id,
@@ -113,12 +113,12 @@ SELECT
   CAST(JSON_VALUE(payload, '$.lock.expiresAt.number') AS INT64) AS expires_at_round,
   JSON_VALUE_ARRAY(payload, '$.lock.holders') AS lock_holders,
   payload
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:LockedAmulet';
 
 
 -- Supply Over Time
-CREATE OR REPLACE VIEW `${PROJECT_ID}.canton_ledger.supply_over_time` AS
+CREATE OR REPLACE VIEW `${PROJECT_ID}.transformed.supply_over_time` AS
 SELECT
   DATE(effective_at) AS event_date,
   SUM(CASE
@@ -128,7 +128,7 @@ SELECT
   COUNT(CASE WHEN event_type = 'created' THEN 1 END) AS contracts_created,
   COUNT(CASE WHEN event_type = 'archived' THEN 1 END) AS contracts_archived,
   COUNT(*) AS total_events
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:Amulet'
   AND template_id NOT LIKE '%LockedAmulet%'
 GROUP BY 1

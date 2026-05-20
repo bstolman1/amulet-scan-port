@@ -32,7 +32,7 @@ SELECT
   ) AS total_votes,
   TO_JSON_STRING(JSON_QUERY(payload, '$.action')) AS action_json,
   TO_JSON_STRING(JSON_QUERY(payload, '$.votes')) AS votes_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:VoteRequest'
   AND event_type = 'created';
 
@@ -52,7 +52,7 @@ WITH vote_requests AS (
     JSON_VALUE(payload, '$.action.value.tag') AS action_type,
     JSON_VALUE(payload, '$.reason.url') AS proposal_url,
     JSON_QUERY(payload, '$.votes') AS votes_map
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:VoteRequest'
 )
 SELECT
@@ -99,7 +99,7 @@ SELECT
   ) AS sv_count,
   TO_JSON_STRING(JSON_QUERY(payload, '$.svs')) AS svs_json,
   TO_JSON_STRING(JSON_QUERY(payload, '$.config')) AS config_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:DsoRules';
 
 
@@ -114,7 +114,7 @@ WITH dso_snapshots AS (
     contract_id AS dso_rules_contract_id,
     CAST(JSON_VALUE(payload, '$.epoch') AS INT64) AS epoch,
     JSON_QUERY(payload, '$.svs') AS svs_map
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:DsoRules'
     AND event_type = 'created'
 )
@@ -155,7 +155,7 @@ SELECT
   ) AS confirmed_by_parties,
   ARRAY_LENGTH(JSON_VALUE_ARRAY(payload, '$.confirmedBy')) AS confirmation_count,
   TO_JSON_STRING(JSON_QUERY(payload, '$.action')) AS action_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:Confirmation';
 
 
@@ -179,7 +179,7 @@ SELECT
     FROM UNNEST(JSON_QUERY_ARRAY(payload, '$.ranking')) AS r
   ) AS ranking,
   ARRAY_LENGTH(JSON_QUERY_ARRAY(payload, '$.ranking')) AS candidates_count
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ElectionRequest';
 
 
@@ -200,12 +200,12 @@ WITH proposals AS (
     JSON_VALUE(payload, '$.reason.body') AS reason_body,
     CAST(JSON_VALUE(payload, '$.expiresAt') AS TIMESTAMP) AS expires_at,
     event_type
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:VoteRequest'
 ),
 archives AS (
   SELECT contract_id, effective_at AS archived_at
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:VoteRequest'
     AND event_type = 'archived'
 )

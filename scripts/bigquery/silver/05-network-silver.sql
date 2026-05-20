@@ -19,7 +19,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number,
   CAST(JSON_VALUE(payload, '$.totalTrafficPurchased') AS INT64) AS total_traffic_purchased,
   CAST(JSON_VALUE(payload, '$.migrationId') AS INT64) AS traffic_migration_id
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:MemberTraffic';
 
 
@@ -44,7 +44,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.transferConfigUsd.createFee.fee') AS NUMERIC) AS create_fee_usd,
   CAST(JSON_VALUE(payload, '$.transferConfigUsd.holdingFee.rate') AS NUMERIC) AS holding_fee_rate,
   CAST(JSON_VALUE(payload, '$.transferConfigUsd.transferFee.initialRate') AS NUMERIC) AS transfer_fee_rate
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:OpenMiningRound';
 
 
@@ -62,7 +62,7 @@ SELECT
   event_type,
   CAST(JSON_VALUE(payload, '$.dso') AS STRING) AS dso_party,
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ClosedMiningRound';
 
 
@@ -84,7 +84,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.issuanceConfig.validatorRewardPercentage') AS NUMERIC) AS validator_reward_pct,
   CAST(JSON_VALUE(payload, '$.issuanceConfig.appRewardPercentage') AS NUMERIC) AS app_reward_pct,
   CAST(JSON_VALUE(payload, '$.issuanceConfig.svRewardPercentage') AS NUMERIC) AS sv_reward_pct
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:IssuingMiningRound';
 
 
@@ -100,7 +100,7 @@ WITH opens AS (
     CAST(JSON_VALUE(payload, '$.amuletPrice') AS NUMERIC) AS amulet_price,
     CAST(JSON_VALUE(payload, '$.targetClosesAt') AS TIMESTAMP) AS target_closes_at,
     contract_id
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:OpenMiningRound'
     AND event_type = 'created'
 ),
@@ -108,7 +108,7 @@ closes AS (
   SELECT
     CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number,
     effective_at AS round_closed_at
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:ClosedMiningRound'
     AND event_type = 'created'
 )
@@ -149,7 +149,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.url') AS STRING) AS ans_url,
   CAST(JSON_VALUE(payload, '$.description') AS STRING) AS description,
   CAST(JSON_VALUE(payload, '$.expiresAt') AS TIMESTAMP) AS expires_at
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:AnsEntry';
 
 
@@ -169,7 +169,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.sv') AS STRING) AS sv_party,
   CAST(JSON_VALUE(payload, '$.name') AS STRING) AS sv_name,
   TO_JSON_STRING(JSON_QUERY(payload, '$.state.synchronizerNodes')) AS synchronizer_nodes_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:SvNodeState';
 
 
@@ -189,7 +189,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.sv') AS STRING) AS sv_party,
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number,
   CAST(JSON_VALUE(payload, '$.amuletPrice') AS NUMERIC) AS voted_price
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:AmuletPriceVote';
 
 
@@ -208,7 +208,7 @@ SELECT
   END) AS unique_traffic_members,
   COUNTIF(template_id LIKE '%:AnsEntry' AND event_type = 'created') AS ans_entries_created,
   COUNTIF(template_id LIKE '%:AmuletPriceVote' AND event_type = 'created') AS price_votes_cast
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:OpenMiningRound'
    OR template_id LIKE '%:ClosedMiningRound'
    OR template_id LIKE '%:MemberTraffic'

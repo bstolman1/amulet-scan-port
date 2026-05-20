@@ -25,7 +25,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.metadata.lastUpdatedAt') AS TIMESTAMP) AS metadata_last_updated,
   CAST(JSON_VALUE(payload, '$.faucetState.value.lastReceivedFor.number') AS INT64) -
   CAST(JSON_VALUE(payload, '$.faucetState.value.firstReceivedFor.number') AS INT64) AS active_round_span
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ValidatorLicense';
 
 
@@ -44,7 +44,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.dso') AS STRING) AS dso_party,
   CAST(JSON_VALUE(payload, '$.user') AS STRING) AS user_party,
   CAST(JSON_VALUE(payload, '$.validator') AS STRING) AS validator_party
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ValidatorRight';
 
 
@@ -63,7 +63,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.dso') AS STRING) AS dso_party,
   CAST(JSON_VALUE(payload, '$.validator') AS STRING) AS validator_party,
   CAST(JSON_VALUE(payload, '$.round.number') AS INT64) AS round_number
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ValidatorFaucetCoupon';
 
 
@@ -84,7 +84,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.domain') AS STRING) AS synchronizer_id,
   CAST(JSON_VALUE(payload, '$.activityRecord.trafficReceived') AS INT64) AS traffic_received,
   CAST(JSON_VALUE(payload, '$.activityRecord.lastActiveAt') AS TIMESTAMP) AS last_active_at
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:ValidatorLivenessActivityRecord';
 
 
@@ -101,13 +101,13 @@ WITH license_creates AS (
     JSON_VALUE(payload, '$.sponsor') AS sponsor_party,
     JSON_VALUE(payload, '$.metadata.contactPoint') AS contact_point,
     migration_id
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:ValidatorLicense'
     AND event_type = 'created'
 ),
 license_archives AS (
   SELECT contract_id, effective_at AS license_archived_at
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:ValidatorLicense'
     AND event_type = 'archived'
 ),
@@ -115,7 +115,7 @@ user_counts AS (
   SELECT
     JSON_VALUE(payload, '$.validator') AS validator_party,
     COUNT(DISTINCT JSON_VALUE(payload, '$.user')) AS user_count
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:ValidatorRight'
     AND event_type = 'created'
   GROUP BY 1
@@ -126,7 +126,7 @@ reward_counts AS (
     COUNT(*) AS reward_count,
     MIN(CAST(JSON_VALUE(payload, '$.round.number') AS INT64)) AS first_reward_round,
     MAX(CAST(JSON_VALUE(payload, '$.round.number') AS INT64)) AS last_reward_round
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE template_id LIKE '%:ValidatorRewardCoupon'
     AND event_type = 'created'
   GROUP BY 1

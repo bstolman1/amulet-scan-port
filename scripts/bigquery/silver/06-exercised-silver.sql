@@ -32,7 +32,7 @@ SELECT
   ARRAY_LENGTH(child_event_ids) AS child_event_count,
   payload AS choice_argument_json,
   exercise_result AS exercise_result_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised';
 
 
@@ -57,7 +57,7 @@ SELECT
   CAST(JSON_VALUE(exercise_result, '$.round.number') AS INT64) AS round_number,
   CAST(JSON_VALUE(payload, '$.provider') AS STRING) AS provider_party,
   exercise_result AS full_result_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
   AND choice IN ('AmuletRules_Transfer', 'Transfer');
 
@@ -79,7 +79,7 @@ SELECT
   CAST(JSON_VALUE(payload, '$.trafficAmount') AS INT64) AS traffic_amount,
   CAST(JSON_VALUE(exercise_result, '$.summary.inputAmuletAmount') AS NUMERIC) AS amulet_paid,
   CAST(JSON_VALUE(exercise_result, '$.round.number') AS INT64) AS round_number
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
   AND choice LIKE '%BuyMemberTraffic%';
 
@@ -105,7 +105,7 @@ SELECT
     FROM UNNEST(acting_parties) AS p
   ) AS acting_parties,
   exercise_result AS result_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
   AND (template_id LIKE '%:DsoRules' OR choice LIKE 'DsoRules_%');
 
@@ -134,7 +134,7 @@ SELECT
     FROM UNNEST(acting_parties) AS p
   ) AS claimant_parties,
   exercise_result AS result_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
   AND (
     choice LIKE '%Claim%'
@@ -162,7 +162,7 @@ SELECT
     CAST(JSON_VALUE(exercise_result, '$.round.number') AS INT64)
   ) AS round_number,
   exercise_result AS result_json
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
   AND template_id LIKE '%Round:%';
 
@@ -180,7 +180,7 @@ SELECT
   COUNT(DISTINCT update_id) AS unique_transactions,
   SUM(ARRAY_LENGTH(child_event_ids)) AS total_child_events,
   AVG(ARRAY_LENGTH(child_event_ids)) AS avg_child_events_per_choice
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
 GROUP BY 1, 2;
 
@@ -196,7 +196,7 @@ SELECT
   MIN(effective_at) AS first_execution,
   MAX(effective_at) AS last_execution,
   COUNT(DISTINCT DATE(effective_at)) AS active_days
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'exercised'
 GROUP BY 1, 2
 ORDER BY total_executions DESC;

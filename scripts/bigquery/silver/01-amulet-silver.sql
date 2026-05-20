@@ -34,7 +34,7 @@ SELECT
     SELECT CAST(o AS STRING)
     FROM UNNEST(JSON_VALUE_ARRAY(raw_event, '$.created_event.observers')) AS o
   ) AS observers
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'created'
   AND (template_id LIKE '%Splice.Amulet:Amulet' OR template_id LIKE '%:Amulet')
   AND template_id NOT LIKE '%LockedAmulet%';
@@ -53,7 +53,7 @@ SELECT
   synchronizer_id,
   CAST(effective_at AS TIMESTAMP) AS effective_at,
   CAST(timestamp AS TIMESTAMP) AS ingested_at
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'archived'
   AND (template_id LIKE '%Splice.Amulet:Amulet' OR template_id LIKE '%:Amulet')
   AND template_id NOT LIKE '%LockedAmulet%';
@@ -86,7 +86,7 @@ SELECT
     WHEN ARRAY_LENGTH(JSON_VALUE_ARRAY(payload, '$.lock.holders')) > 0 THEN 'holder_locked'
     ELSE 'unknown'
   END AS lock_type
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE event_type = 'created'
   AND template_id LIKE '%:LockedAmulet';
 
@@ -107,7 +107,7 @@ WITH creates AS (
     CAST(JSON_VALUE(payload, '$.amount.createdAt.number') AS INT64) AS created_at_round,
     CAST(JSON_VALUE(payload, '$.amount.ratePerRound.rate') AS NUMERIC) AS holding_fee_rate,
     migration_id
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE event_type = 'created'
     AND template_id LIKE '%:Amulet'
     AND template_id NOT LIKE '%LockedAmulet%'
@@ -118,7 +118,7 @@ archives AS (
     event_id AS archive_event_id,
     update_id AS archive_update_id,
     effective_at AS archived_at
-  FROM `${PROJECT_ID}.canton_ledger.events_raw`
+  FROM `${PROJECT_ID}.transformed.events_parsed`
   WHERE event_type = 'archived'
     AND template_id LIKE '%:Amulet'
     AND template_id NOT LIKE '%LockedAmulet%'
@@ -162,7 +162,7 @@ SELECT
   END) AS unique_mint_recipients,
   MIN(CAST(JSON_VALUE(payload, '$.amount.createdAt.number') AS INT64)) AS min_round,
   MAX(CAST(JSON_VALUE(payload, '$.amount.createdAt.number') AS INT64)) AS max_round
-FROM `${PROJECT_ID}.canton_ledger.events_raw`
+FROM `${PROJECT_ID}.transformed.events_parsed`
 WHERE template_id LIKE '%:Amulet'
   AND template_id NOT LIKE '%LockedAmulet%'
 GROUP BY 1, 2;
