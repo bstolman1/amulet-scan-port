@@ -74,10 +74,10 @@ SELECT
   interface_id,
   CAST(consuming AS BOOL) AS consuming,
 
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_at) AS effective_at,
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', recorded_at) AS recorded_at,
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', timestamp) AS timestamp,
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', created_at_ts) AS created_at_ts,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_at) AS effective_at,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', recorded_at) AS recorded_at,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', timestamp) AS timestamp,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', created_at_ts) AS created_at_ts,
 
   CASE
     WHEN signatories IS NOT NULL THEN
@@ -168,10 +168,10 @@ SELECT
   command_id,
   CAST(offset AS INT64) AS offset,
 
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', record_time) AS record_time,
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_at) AS effective_at,
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', recorded_at) AS recorded_at,
-  PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', timestamp) AS timestamp,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', record_time) AS record_time,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_at) AS effective_at,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', recorded_at) AS recorded_at,
+  SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', timestamp) AS timestamp,
 
   kind,
 
