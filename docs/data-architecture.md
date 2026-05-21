@@ -117,6 +117,34 @@ The BigQuery transform step (`02-transform-raw-data.sql`) handles these:
 
 `SAFE.*` variants return NULL on parse failure instead of killing the query.
 
+### Timestamp Semantics
+
+Two distinct timestamp concepts exist in the data:
+
+| Field | Meaning | Use for |
+|-------|---------|---------|
+| `effective_at` | When the ledger event actually happened | Partitioning, date queries, time-series |
+| `recorded_at` / `timestamp` | When the ingestion batch wrote the record | Debugging ingestion timing only |
+
+These diverge significantly for remediated data: events from 2024-2025 have
+`recorded_at` in April–May 2026 (when remediation ran). This is why tables
+are partitioned by `DATE(effective_at)`, not `DATE(timestamp)`.
+
+### Event Type Semantics
+
+Events have three types with different payload structures:
+
+| `event_type` | Payload contains | Template fields extractable |
+|-------------|-----------------|---------------------------|
+| `created` | Contract create arguments | Yes — provider, amount, owner, etc. |
+| `archived` | (empty/minimal) | No — only event metadata available |
+| `exercised` | Choice arguments (different structure) | No — template-specific fields are NULL |
+
+When querying bronze views for template-specific data (reward amounts, SV weights,
+owner parties), always filter `WHERE event_type = 'created'`. Exercised events
+appear in the views but their `provider_party`, `reward_amount`, `sv_weight` etc.
+will be NULL because the payload contains the choice argument, not the contract fields.
+
 ---
 
 ## Live Ingestion
@@ -170,11 +198,15 @@ Partitioned by `effective_at` (ledger event time), not `timestamp`/`recorded_at`
 (ingestion time). The remediation re-ingested all historical data in April–May 2026,
 so `timestamp` would clump 697 days of data into a few partitions.
 
-### Bronze Views (in `transformed` dataset)
+### Bronze Views (deployed in `transformed` dataset)
 
 Only views that provide historical analysis the Scan API cannot serve.
 Current-state queries (leaderboards, per-round lookups, featured apps, validator
 rankings) are served directly by the Scan API and not replicated here.
+
+These 6 views are the only ones **actually created in BigQuery**. The bronze
+scripts (03–08) contain many additional view definitions that were not deployed
+— they can be added later if needed.
 
 | View | Source | Purpose |
 |------|--------|---------|
@@ -188,7 +220,13 @@ rankings) are served directly by the Scan API and not replicated here.
 Views are zero storage cost — they're saved SQL definitions executed at query time.
 Date filters on `effective_at` use partition pruning for efficient scans.
 
-**Scan API endpoints NOT replicated** (available directly):
+**JSON path notes for governance views**: VoteRequest payloads nest the action
+type under category-specific keys, not a flat `$.action.value.tag`:
+- `ARC_DsoRules` actions → `$.action.value.dsoAction.tag` (e.g., `SRARC_GrantFeaturedAppRight`)
+- `ARC_AmuletRules` actions → `$.action.value.amuletRulesAction.tag` (e.g., `CRARC_SetConfig`)
+
+**Scan API endpoints NOT replicated** (available directly via Scan API;
+see `docs/scan-api-reference.pdf` for full API documentation):
 - `GET /v0/top-providers-by-app-rewards` — current app reward leaderboard
 - `GET /v0/top-validators-by-validator-rewards` — current validator leaderboard
 - `GET /v0/top-validators-by-validator-faucets` — validator liveness ranking
@@ -342,6 +380,12 @@ Credentials (ADC). No script depends on gsutil.
 2. **Shared access** — BigQuery external tables read directly from GCS
 3. **Live ingest** — systemd service writes continuously, BigQuery picks up new files
 4. **Cost** — External tables avoid BigQuery storage costs for raw data
+
+**Note**: BigQuery caches external table file metadata for up to several hours.
+Newly written Parquet files in GCS are not immediately visible to queries against
+`raw.events` / `raw.updates`. This is fine for the daily scheduled refresh (runs
+at 03:00 UTC, hours after files are written), but matters for ad-hoc queries
+expecting real-time data.
 
 ### Why Two BigQuery Datasets?
 
