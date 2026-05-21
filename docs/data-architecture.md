@@ -15,9 +15,8 @@ Canton ledger data flows through a three-stage pipeline:
 > **Parquet files on GCS are the sole authoritative data source.**
 >
 > All governance, rewards, party state, and analytics **must** be derived from
-> Parquet files — either via DuckDB (local API) or BigQuery (analytics).
-> Legacy binary formats (JSONL, PBZST) are **deprecated** and must not be
-> read by API routes or business logic.
+> Parquet files — either via BigQuery (analytics) or direct Parquet queries.
+> Legacy binary formats (JSONL, PBZST) are **deprecated**.
 
 ### Enforcement
 
@@ -25,8 +24,6 @@ Canton ledger data flows through a three-stage pipeline:
 |-----------|-------------------|
 | `scripts/ingest/` | Write-only (produces Parquet → GCS) |
 | `scripts/bigquery/` | BigQuery DDL, transforms, and scheduled queries |
-
-CI enforces this via `data-authority-check` in `.github/workflows/test.yml`.
 
 ---
 
