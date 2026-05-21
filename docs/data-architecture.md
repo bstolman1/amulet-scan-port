@@ -8,8 +8,6 @@ Canton ledger data flows through a three-stage pipeline:
 2. **Transformation** — Raw Parquet → typed BigQuery tables (timestamps, arrays, JSON)
 3. **Analytical views** — Bronze views in BigQuery for historical analysis the Scan API cannot serve
 
-A local DuckDB API server also queries the same Parquet files directly for the frontend.
-
 ---
 
 ## Data Authority Contract
@@ -25,8 +23,6 @@ A local DuckDB API server also queries the same Parquet files directly for the f
 
 | Directory | Allowed Operations |
 |-----------|-------------------|
-| `server/api/` | DuckDB queries over Parquet **only** |
-| `server/engine/` | DuckDB analytical queries **only** |
 | `scripts/ingest/` | Write-only (produces Parquet → GCS) |
 | `scripts/bigquery/` | BigQuery DDL, transforms, and scheduled queries |
 
@@ -57,20 +53,20 @@ Canton Scan API
 │  697+ days ingested (2024-06-24 → present), 3.6B+ events            │
 │  5 migrations (M0–M4)                                                │
 └─────────────────────────────────────────────────────────────────────┘
-      │                                    │
-      ▼                                    ▼
-┌──────────────────┐         ┌──────────────────────────────────────┐
-│  DuckDB Server   │         │  BigQuery (governence-483517)        │
-│  (local API)     │         │                                      │
-│  Port 3001       │         │  raw.events / raw.updates            │
-│  Read-only       │         │    ↓ 02-transform-raw-data.sql      │
-└──────────────────┘         │  transformed.events_parsed (3.6B)    │
-      │                      │  transformed.updates_parsed (250M)   │
-      ▼                      │    ↓ bronze views                    │
-┌──────────────────┐         │  transformed.parsed_*                │
-│  React Frontend  │         │    ↓ daily scheduled refresh         │
-└──────────────────┘         │  03:00 UTC, ~$0.16/day               │
-                             └──────────────────────────────────────┘
+      │
+      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  BigQuery (governence-483517)                                    │
+│                                                                   │
+│  raw.events / raw.updates            (external tables on GCS)    │
+│    ↓ 02-transform-raw-data.sql                                   │
+│  transformed.events_parsed (3.6B)    (materialized, typed)       │
+│  transformed.updates_parsed (250M)                               │
+│    ↓ bronze views                                                │
+│  transformed.parsed_*               (analytical views)           │
+│    ↓ daily scheduled refresh                                     │
+│  03:00 UTC, ~$0.16/day              (INSERT NOT EXISTS)          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -123,7 +119,6 @@ The BigQuery transform step (`02-transform-raw-data.sql`) handles these:
 - `SAFE.PARSE_JSON(...)` for JSON fields
 
 `SAFE.*` variants return NULL on parse failure instead of killing the query.
-DuckDB reads these types natively without issues.
 
 ---
 
@@ -292,48 +287,6 @@ PROJECT_ID=governence-483517 BUCKET_NAME=canton-bucket ./scripts/bigquery/deploy
 
 ---
 
-## Local DuckDB API
-
-The API server queries the same Parquet files directly via DuckDB for the React frontend.
-
-| Characteristic | Value |
-|---------------|-------|
-| Port | 3001 |
-| Mode | Read-only, request-driven, stateless |
-| Connection | `server/duckdb/connection.js` |
-| Query style | `db.safeQuery()` with parameterized queries |
-| Data source | `db.getEventsSource()` → Parquet glob |
-
-### Query Patterns
-
-```javascript
-// Template-filtered query
-const events = await db.safeQuery(`
-  SELECT * FROM ${db.getEventsSource()}
-  WHERE template_name = $1
-  ORDER BY record_time DESC
-  LIMIT $2
-`, [templateName, limit]);
-
-// Direct Parquet glob
-const result = await db.safeQuery(`
-  SELECT COUNT(*) as count
-  FROM read_parquet('${basePath}/**/events-*.parquet', union_by_name=true)
-  WHERE migration_id = $1
-`, [migrationId]);
-```
-
-### Performance
-
-| Metric | Value |
-|--------|-------|
-| Cold query | 100–500ms |
-| Warm query | 10–50ms |
-| Full table scan | 2–10s |
-| Template-filtered | 50–200ms |
-
----
-
 ## Archive Remediation History
 
 The full archive (2024-06-24 → 2026-05-17) was re-ingested via
@@ -381,11 +334,10 @@ Credentials (ADC). No script depends on gsutil.
 
 ### Why Parquet?
 
-1. **Direct SQL** — DuckDB and BigQuery read Parquet natively
+1. **Direct SQL** — BigQuery reads Parquet natively via external tables
 2. **Column pruning** — Only reads columns needed for each query
 3. **Predicate pushdown** — Filters applied at file level
-4. **Schema evolution** — `union_by_name=true` handles schema changes
-5. **Dual use** — Same files serve local DuckDB and cloud BigQuery
+4. **Schema evolution** — Handles schema changes across migrations
 
 ### Why GCS as Source of Truth?
 
